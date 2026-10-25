@@ -10,10 +10,11 @@ Initial implementation, October 24, 2026.
 - JavaScript syntax check and shell syntax check for the Docker entrypoint.
 - Chromium/Playwright desktop and mobile smoke checks: login, overview, create enrollment, generate curl link, open settings, and mobile navigation. **No browser JavaScript exceptions; no page-level horizontal overflow at 390px.**
 - Manual visual review of desktop overview, settings, and mobile screenshots.
+- **GitHub Actions passed** for implementation commit `7e45cdcd6cec4710c84468d61eb35bf862e585a3`, including pytest, compilation/syntax checks, Compose configuration validation, and Docker image build. [Successful run](https://github.com/StealthCat/MrPatchy/actions/runs/40148567352).
 
 ## Not executed in the development workspace
 
-- Docker image/Compose startup: Docker was unavailable. GitHub Actions contains a Compose validation and image-build job; its result must be checked separately.
+- A full running Docker Compose deployment: Docker was unavailable locally. The image build and Compose configuration were validated successfully in GitHub Actions, but service startup/end-to-end networking were not exercised there.
 - Actual systemd target enrollment, reboot persistence, sudo/SSH execution on a real Ubuntu/Raspberry Pi OS host, or a live package upgrade.
 - Live MySQL connection/migration.
 - Caddy runtime reload or real ACME certificate issuance; TLS validation and generated configuration boundaries were tested with a mocked Caddy endpoint.
