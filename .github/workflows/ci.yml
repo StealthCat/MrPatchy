@@ -23,6 +23,12 @@ jobs:
       - run: node --check app/static/app.js
       - run: docker compose --env-file .env.example config --quiet
       - run: docker build -t mrpatchy:test .
+      - name: Native Caddy dual-issuer adapter checks
+        run: |
+          docker create --name mrpatchy-caddy-adapter caddy:2.10
+          docker cp mrpatchy-caddy-adapter:/usr/bin/caddy /tmp/mrpatchy-caddy
+          docker rm mrpatchy-caddy-adapter
+          CADDY_BIN=/tmp/mrpatchy-caddy python -m pytest tests/test_tls_profiles.py -k native_caddy -q
       - name: Compose HTTPS startup smoke test
         run: |
           printf '%s\n' 'ADMIN_PASSWORD=ci-disposable-password-only' 'DOMAIN=localhost' 'PUBLIC_URL=https://localhost' > .env.ci
@@ -35,6 +41,8 @@ jobs:
           docker compose --env-file .env.ci exec -T app python -c "from pathlib import Path; uid=next(x.split()[1:] for x in Path('/proc/1/status').read_text().splitlines() if x.startswith('Uid:')); assert uid == ['10001']*4, uid"
       - name: Verify real Caddy client identity and spoof rejection
         run: python tests/integration_proxy.py
+      - name: Verify custom bindings and dual TLS profiles
+        run: python tests/integration_tls.py
       - name: Compose diagnostics and cleanup
         if: always()
         run: |

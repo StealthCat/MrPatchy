@@ -7,7 +7,7 @@ const assert=require('assert/strict');
 (async()=>{
   const data=fs.mkdtempSync(path.join(os.tmpdir(),'mrpatchy-ui-'));
   const server=spawn(process.env.PYTHON||'python',['-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8097','--no-access-log'],{
-    cwd:path.resolve(__dirname,'..'),env:{...process.env,DATA_DIR:data,COOKIE_SECURE:'false',ADMIN_PASSWORD:'ui-test-password-long',DISABLE_SCHEDULER:'1'},stdio:'ignore'});
+    cwd:path.resolve(__dirname,'..'),env:{...process.env,DATA_DIR:data,TLS_DIR:path.join(data,'tls'),COOKIE_SECURE:'false',ADMIN_PASSWORD:'ui-test-password-long',DISABLE_SCHEDULER:'1'},stdio:'ignore'});
   let browser;
   try{
     for(let n=0;n<100;n++){try{await fetch('http://127.0.0.1:8097/healthz');break;}catch{await new Promise(r=>setTimeout(r,100));}}
@@ -15,7 +15,7 @@ const assert=require('assert/strict');
     const page=await browser.newPage({viewport:{width:1440,height:1000}});
     const shots=process.env.SCREENSHOT_DIR;
     if(shots)fs.mkdirSync(shots,{recursive:true});
-    const capture=async name=>{if(shots)await page.screenshot({path:path.join(shots,name+'.png'),fullPage:true});};
+    const capture=async(name,fullPage=true)=>{if(shots)await page.screenshot({path:path.join(shots,name+'.png'),fullPage});};
     const errors=[];page.on('pageerror',e=>errors.push(String(e)));
     await page.goto('http://127.0.0.1:8097');
     await page.getByRole('button',{name:'Open your workspace'}).waitFor();
@@ -52,6 +52,7 @@ const assert=require('assert/strict');
     await capture('settings');
     await page.getByRole('button',{name:'Save monitoring settings'}).click();
     await page.getByRole('status').filter({hasText:'Monitoring settings saved'}).waitFor();
+    await require('./ui_tls.cjs')(page,capture);
     await page.locator('[data-nav=repositories]').click();
     await page.getByRole('button',{name:'Repository access',exact:true}).click();
     await page.locator('#access-form [name=default_release]').fill('stable');

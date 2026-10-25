@@ -22,7 +22,7 @@ def test_acme_credentials_are_rejected_even_with_empty_username(tmp_path,monkeyp
 
 def test_failed_tls_persistence_restores_previous_live_config(tmp_path,monkeypatch):
     monkeypatch.setenv('TLS_DIR',str(tmp_path))
-    previous='previous validated configuration'
+    previous='previous.example.org {\n tls internal\n reverse_proxy app:8000\n}\n'
     (tmp_path/'Caddyfile').write_text(previous)
     calls=[]
     monkeypatch.setattr(tls.httpx,'post',lambda *a,**kw:calls.append(kw['content']) or OK())
@@ -37,7 +37,7 @@ def test_failed_tls_persistence_restores_previous_live_config(tmp_path,monkeypat
     assert [p.name for p in tmp_path.iterdir()]==['Caddyfile']
 
 def test_uncertain_caddy_state_preserves_recovery_material(tmp_path,monkeypatch):
-    monkeypatch.setenv('TLS_DIR',str(tmp_path));(tmp_path/'Caddyfile').write_text('previous')
+    monkeypatch.setenv('TLS_DIR',str(tmp_path));(tmp_path/'Caddyfile').write_text('previous.example.org {\n tls internal\n reverse_proxy app:8000\n}\n')
     def timeout(*a,**kw): raise httpx.TimeoutException('Timeout after possible apply')
     monkeypatch.setattr(tls.httpx,'post',timeout)
     with pytest.raises(RuntimeError,match='rollback'):
