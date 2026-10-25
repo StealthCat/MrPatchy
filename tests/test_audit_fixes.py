@@ -122,7 +122,7 @@ def test_failed_postboot_health_requests_one_rollback(admin,monkeypatch):
     with Session() as s:
         h=host(s);j=Job(id='b'*36,host_id=h.id,action='patch',state='running');s.add(j);s.commit()
         waits=[];calls=[]
-        def wait(h,result,job_id):
+        def wait(h,result,job_id,**kwargs):
             waits.append(result)
             if len(waits)==1:raise worker.RecoveryTimeout('unhealthy')
             return {'outcome':'rolled_back','reboot_verified':True}
@@ -138,11 +138,15 @@ def test_failed_postboot_health_requests_one_rollback(admin,monkeypatch):
 def test_rollback_verification_survives_reverted_target_journal(monkeypatch):
     calls=[]
     def call(h,req,**kw):
-        calls.append(req['action']);return {'boot_id':'restored-boot'} if req['action']=='recovery-status' else healthy()
+        calls.append(req['action'])
+        if req['action']=='patch-restored':
+            assert req['original']=={'version':1}
+            return {'outcome':'rolled_back','original_state_verified':True}
+        return {'boot_id':'restored-boot'} if req['action']=='recovery-status' else healthy()
     monkeypatch.setattr(worker.ssh,'call',call);monkeypatch.setattr(worker.time,'sleep',lambda _:None)
-    result=worker.wait_for_reboot(None,{'outcome':'rollback_pending','boot_before':'failed-boot'},'a'*36)
+    result=worker.wait_for_reboot(None,{'outcome':'rollback_pending','boot_before':'failed-boot'},'a'*36,original={'version':1})
     assert result['outcome']=='rolled_back' and result['reboot_verified']
-    assert calls==['recovery-status','health']
+    assert calls==['recovery-status','health','patch-restored']
 
 
 def test_postboot_rollback_requires_changed_boot_and_never_repeats(tmp_path,monkeypatch):
@@ -152,6 +156,7 @@ def test_postboot_rollback_requires_changed_boot_and_never_repeats(tmp_path,monk
     journal.write_text(json.dumps(state));calls=[]
     monkeypatch.setattr(bridge,'recovery_hook',lambda *a:calls.append(a) or {'reboot_required':False})
     monkeypatch.setattr(bridge,'handle',lambda req:healthy())
+    monkeypatch.setattr(bridge,'verify_patch_original',lambda original: {'outcome':'rolled_back','original_state_verified':True})
     with pytest.raises(RuntimeError,match='observed reboot'):bridge.rollback_after_reboot({'job_id':'a'*36})
     assert not calls
     monkeypatch.setattr(bridge,'boot_id',lambda:'new')

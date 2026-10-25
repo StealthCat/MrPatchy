@@ -72,7 +72,8 @@ def test_protected_patch_rolls_back_and_never_replays(tmp_path,monkeypatch):
         return {'ready':True} if operation=='probe' else {'snapshot':'42'} if operation=='snapshot' else {'reboot_required':False}
     monkeypatch.setattr(bridge,'recovery_hook',hook)
     monkeypatch.setattr(bridge,'handle',lambda request: (_ for _ in ()).throw(RuntimeError('apt failure')) if request['action']=='patch' else {'failed_units':'','collector_active':True})
-    request={'job_id':'a'*36,'packages':['test=2'],'policy':{'rollback':True}}
+    monkeypatch.setattr(bridge,'verify_patch_original',lambda original: {'outcome':'rolled_back','original_state_verified':True})
+    request={'job_id':'a'*36,'packages':['test=2'],'policy':{'rollback':True},'original':{'version':1}}
     assert bridge.protected_patch(request)['outcome']=='rolled_back'
     assert calls==['probe','snapshot','rollback']
     with pytest.raises(RuntimeError,match='incomplete'):bridge.protected_patch(request)

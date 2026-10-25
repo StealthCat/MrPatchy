@@ -4,11 +4,17 @@ import time
 import httpx
 from .apt import paragraphs
 
-def ecosystem(os_release):
+def ecosystem(os_release,inventory=None):
     values={}
     for line in os_release.splitlines():
         if '=' in line:
             key,value=line.split('=',1);values[key]=value.strip('"')
+    inv=inventory or {}
+    packages={p.get('Package') for p in paragraphs(inv.get('status',''))}
+    if packages & {'raspberrypi-sys-mods','raspi-config'} or any(
+            'raspberrypi.' in value.lower() or 'raspbian.' in value.lower()
+            for value in inv.get('files',{}).values()):
+        raise ValueError('No verified advisory ecosystem mapping for Raspberry Pi OS vendor packages/repositories')
     name=values.get('ID');version=values.get('VERSION_ID','')
     if name=='debian' and re.fullmatch(r'\d+',version):return 'Debian:'+version
     if name=='ubuntu' and re.fullmatch(r'\d{2}\.\d{2}',version):
@@ -16,7 +22,7 @@ def ecosystem(os_release):
     raise ValueError('No verified advisory ecosystem mapping for this OS; derivative distributions are not silently treated as Debian')
 
 def scan(inventory,names):
-    eco=ecosystem(inventory.get('os',''));queries=[];mapped=[]
+    eco=ecosystem(inventory.get('os',''),inventory);queries=[];mapped=[]
     packages={p['Package']+':'+p['Architecture']:p for p in paragraphs(inventory['status']) if 'Package' in p and 'Architecture' in p}
     for name in names:
         package=packages.get(name)

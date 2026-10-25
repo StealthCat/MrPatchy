@@ -49,4 +49,27 @@ Acceptance testing is still required for real Raspberry Pi/systemd devices, live
 - Existing queued patches cannot inherit an enabled recovery policy without new approval.
 - Reconcile orphaned jobs only after inspecting target state and pending reboot timers through a trusted console.
 - Re-review changed provenance identities; uncertainty must not inherit an old known-good approval automatically.
-- Preserve all existing branches; this update is committed directly to `main`.
+- The preceding update preserved all existing branches and was committed to `main`; the follow-up below is proposed on a separate branch.
+
+
+## Full-review remediation follow-up
+
+This change is on `fix/review-security-and-recovery`, proposed through a PR to `main`.
+
+| Finding | Fix and regression evidence |
+|---|---|
+| Deb822 whitespace bypassed signature/expiry guards | Reject noncanonical field names before native APT and key remapping; native unsigned fixtures demonstrate APT accepts the malicious spelling while Mr Patchy rejects it; signed expired metadata also fails |
+| Ordinary rollback verified only health | Persist original-state evidence centrally before patching, recheck before snapshots, and verify package/source/key/configuration/service restoration after immediate or rebooted rollback; no-op rollback and lost-SSH receipt tests |
+| Interpreter flags hid script identity | Conservative interpreter-aware option parsing, bounded command-line reads and explicit uncertainty for inline/module/preload/unknown layouts; no argument leakage |
+| Executable hashing was unbounded and racy | Descriptor-based size/time/inode/change checks shared by sampling, eBPF and investigations; sparse oversized files, FIFOs, changed files and sweep continuation tested |
+| Remote running releases starved other worker queues | Reserve host ownership before consuming local capacity, release on submission/execution failure, preserve observation-only release resume |
+| All Caddy clients shared a login-rate bucket | Trust only a dedicated configurable Caddy IP; test independent forwarded clients and spoof rejection; real Compose/Caddy smoke test checks audited client identity |
+| Eight-record polls could not drain normal exec traffic | Bounded multi-batch event-only catch-up with commit-before-ack and replay deduplication; sustained traffic and failed acknowledgement tests |
+| Queued cancellation left approved/planning release plans | Cancel job and linked plan in one transaction; reject GO for cancelled or stale approved jobs; require a fresh plan |
+| Pi OS reporting Debian received misleading advisory mapping | Check vendor package/source markers before any OSV request and reject unsupported derivative mapping |
+
+After updating the central services, **finish/verify installation on each idle target** to deploy these helpers. Do not redeploy during an active patch/upgrade. Regenerate unexecuted release plans after helper changes. Existing interrupted patches without original-state receipts cannot be retroactively verified; reconcile through a trusted console. Re-review changed behavior identities. Existing noncanonical Deb822 fields must be corrected before the next repository refresh.
+
+The Caddy control subnet defaults to `172.30.254.0/24` with Caddy at `172.30.254.2`. For an overlapping network, change `CONTROL_SUBNET` and `CADDY_CONTROL_IP` together. A custom deployment must set Uvicorn's `FORWARDED_ALLOW_IPS` to only its actual trusted proxy addresses; never use `*` for a reachable backend.
+
+No visual UI changes are included, so existing screenshots remain applicable. Real kernel eBPF attachment and bootable filesystem rollback remain platform acceptance tests; fixtures do not claim to prove those conditions.

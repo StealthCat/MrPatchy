@@ -532,7 +532,12 @@ def cancel_job(job_id:str,user=Depends(auth)):
     with host_change(host_id),Session() as s:
         job=s.get(Job,job_id)
         if job.state!='queued':raise HTTPException(409,'Only queued operations can be cancelled')
-        job.state='cancelled';audit(s,'cancel job',user['username']+' '+job_id);s.commit()
+        job.state='cancelled'
+        if job.action in ('release-plan','release-upgrade'):
+            plan=s.get(releases.ReleasePlan,job.payload.get('plan_id'))
+            if plan and plan.host_id==host_id and plan.job_id==job.id:
+                plan.state='cancelled';plan.error='Operation cancelled; prepare a new release plan'
+        audit(s,'cancel job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
 @app.get('/api/hosts/{host_id}/sbom')
@@ -719,7 +724,11 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(aut
         if body.decision=='no-go':
             if row.state not in ('ready','blocked'):raise HTTPException(409,'Only an unapproved completed plan can be declined')
             row.state='declined';audit(s,'decline distribution upgrade',user['username']+' '+row.id);s.commit();return {'state':row.state}
-        if row.state=='approved':return {'state':row.state,'job_id':row.job_id}
+        if row.state=='approved':
+            job=s.get(Job,row.job_id)
+            if not job or job.state not in ('queued','running'):
+                raise HTTPException(409,'Approved operation is no longer pending; prepare a new release plan')
+            return {'state':row.state,'job_id':row.job_id}
         if row.state!='ready' or plan.get('blockers'):raise HTTPException(409,'Resolve every blocker and regenerate the plan before GO')
         if plan['expires']<time.time():raise HTTPException(409,'Plan expired; regenerate it')
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Wait for existing host operations before GO')

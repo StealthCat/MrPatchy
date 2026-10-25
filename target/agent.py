@@ -19,10 +19,7 @@ import re
 ROOT = Path('/opt/drpatch')
 MANAGED = ['/usr/local/lib/mrpatchy/release.py', '/usr/local/lib/mrpatchy/agent.py', '/usr/local/lib/mrpatchy/bridge.py', '/etc/systemd/system/mrpatchy-agent.service', '/etc/sudoers.d/mrpatchy', '/opt/drpatch/.ssh/authorized_keys']
 def digest(path):
-    h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(1024*1024), b''): h.update(chunk)
-    return h.hexdigest()
+    return hash_artifact(path,{})
 def read(path):
     return Path(path).read_text(errors='replace')
 def inventory():
@@ -66,7 +63,7 @@ def sockets(base=Path('/proc/net')):
     return result, errors
 
 def collect(hash_cache):
-    errors=[]; processes=[]; namespaces={}
+    errors=[]; processes=[]; namespaces={};deadline=time.monotonic()+10
     for p in Path('/proc').iterdir():
         if not p.name.isdigit(): continue
         try:
@@ -75,9 +72,11 @@ def collect(hash_cache):
                 net,net_errors=sockets(p/'net');namespaces[namespace]=net;errors.extend(net_errors)
             net=namespaces[namespace]
             exe = os.readlink(p/'exe')
-            stat = (p/'exe').stat()
-            identity = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size)
-            if identity not in hash_cache: hash_cache[identity] = digest(p/'exe')
+            sha='unavailable';verified=False
+            try:
+                sha=hash_artifact(p/'exe',hash_cache,deadline=deadline);verified=True
+            except (OSError,ValueError) as error:
+                errors.append({'pid':p.name,'error':'Executable identity unverified: '+type(error).__name__})
             connections = []
             for fd in (p/'fd').iterdir():
                 try:
@@ -86,7 +85,7 @@ def collect(hash_cache):
                 except FileNotFoundError: pass
                 except OSError as e: errors.append({'pid':p.name,'error':str(e)})
             uid = next(x.split()[2] for x in read(p/'status').splitlines() if x.startswith('Uid:'))
-            processes.append({'pid':int(p.name),'executable':exe,'sha256':hash_cache[identity],'uid':uid,'network_namespace':namespace,'connections':connections,'provenance':provenance(p,hash_cache)})
+            processes.append({'pid':int(p.name),'executable':exe,'sha256':sha,'identity_verified':verified,'uid':uid,'network_namespace':namespace,'connections':connections,'provenance':provenance(p,hash_cache,deadline=deadline)})
         except FileNotFoundError: pass # short-lived process / kernel thread
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
     return processes, errors
@@ -138,9 +137,11 @@ def acknowledge(ids):
     with spool_db() as db: db.executemany('DELETE FROM events WHERE id=?',[(x,) for x in ids])
     return {'acknowledged':len(ids)}
 
-def hash_artifact(path,cache,expected=None):
+def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
     # Read through one descriptor: pathname replacement cannot change the inode
     # between validation and hashing. O_NONBLOCK prevents FIFO substitution hangs.
+    deadline=min(deadline if deadline is not None else float('inf'),time.monotonic()+2)
+    if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
     fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as stream:
         info=os.fstat(stream.fileno())
@@ -152,6 +153,7 @@ def hash_artifact(path,cache,expected=None):
         if identity not in cache:
             checksum=hashlib.sha256();total=0
             for chunk in iter(lambda:stream.read(1024*1024),b''):
+                if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
                 total+=len(chunk)
                 if total>128*1024*1024:raise ValueError('File grew beyond the hash limit')
                 checksum.update(chunk)
@@ -159,10 +161,48 @@ def hash_artifact(path,cache,expected=None):
             if (after.st_mtime_ns,after.st_ctime_ns,after.st_size)!=(info.st_mtime_ns,info.st_ctime_ns,info.st_size):
                 raise ValueError('File changed during hashing')
             cache[identity]=checksum.hexdigest()
+        if metadata is not None:
+            metadata.update(uid=info.st_uid,gid=info.st_gid,mode=stat.S_IMODE(info.st_mode),size=info.st_size)
         return cache[identity]
 
 
-def provenance(proc,cache):
+def interpreter_family(executable):
+    for name,pattern in (('python',r'python(?:[0-9]+(?:\.[0-9]+)*)?'),('bash',r'bash'),
+                         ('sh',r'(?:sh|dash)'),('node',r'node(?:js)?'),
+                         ('ruby',r'ruby(?:[0-9]+(?:\.[0-9]+)*)?'),('perl',r'perl(?:[0-9]+(?:\.[0-9]+)*)?')):
+        if re.fullmatch(pattern,executable):return name
+    return None
+
+
+def script_operand(executable,args):
+    """Conservative interpreter parsing. Never export raw options or arguments."""
+    family=interpreter_family(executable)
+    if family is None:return None
+    flags={'python':set('bBdEhiIOPqRsSuvVx'), 'bash':set('abefhkmnptuvxBCEHPT'),
+           'sh':set('abefhkmnptuvx'), 'node':set(), 'ruby':set('dw'), 'perl':set('wW')}
+    index=1
+    while index<len(args):
+        arg=os.fsdecode(args[index]);index+=1
+        if arg=='--':
+            if index<len(args) and args[index] not in (b'',b'-'):return os.fsdecode(args[index])
+            break
+        if arg=='-' or not arg:break
+        if not arg.startswith(('-', '+')):return arg
+        if family=='python' and (arg.startswith('-W') or arg.startswith('-X')):
+            if len(arg)==2:
+                if index>=len(args):break
+                index+=1
+            continue
+        if family in ('bash','sh') and arg in ('--noprofile','--norc'):continue
+        if family=='node' and arg in ('--no-warnings','--trace-warnings','--use-strict'):continue
+        if arg.startswith('-') and len(arg)>1 and set(arg[1:])<=flags[family]:continue
+        # Inline code, modules, preloads and unknown options cannot be attested
+        # as one script. Do not mistake an option's value for the entry point.
+        raise ValueError('Interpreter entry point or options cannot be verified')
+    raise ValueError('Interpreter has no verifiable script entry point')
+
+
+def provenance(proc,cache,deadline=None):
     """Mapped file identities and script files; never claim memory attestation."""
     result=[];candidates={}
     try:
@@ -175,22 +215,26 @@ def provenance(proc,cache):
             expected=(os.makedev(major,minor),int(fields[4]))
             candidates[('library',name,expected)]=(proc/'map_files'/fields[0],expected)
         executable=os.path.basename(os.readlink(proc/'exe'))
-        if executable.startswith(('python','bash','sh','node','ruby','perl')):
-            args=(proc/'cmdline').read_bytes().split(b'\0')
-            if len(args)>1:
-                operand=os.fsdecode(args[1])
-                if operand and not operand.startswith('-'):
-                    absolute=operand if operand.startswith('/') else os.path.normpath(os.readlink(proc/'cwd')+'/'+operand)
-                    candidates[('script',absolute,None)]=(proc/'root'/absolute.lstrip('/'),None)
+        try:
+            raw=b''
+            if interpreter_family(executable):
+                with (proc/'cmdline').open('rb') as stream:raw=stream.read(65537)
+            if len(raw)>65536:raise ValueError('Interpreter command line exceeds capture limit')
+            operand=script_operand(executable,raw.rstrip(b'\0').split(b'\0'))
+            if operand:
+                absolute=os.path.normpath(operand if operand.startswith('/') else os.readlink(proc/'cwd')+'/'+operand)
+                candidates[('script',absolute,None)]=(proc/'root'/absolute.lstrip('/'),None)
+        except (OSError,ValueError) as error:
+            result.append({'kind':'script','identity_verified':False,'error':type(error).__name__ if isinstance(error,OSError) else str(error)})
         for (kind,name,_),(path,expected) in sorted(candidates.items())[:128]:
             entry={'kind':kind,'path':name,'identity_verified':False}
             try:
-                try:sha=hash_artifact(path,cache,expected)
+                try:sha=hash_artifact(path,cache,expected,deadline=deadline)
                 except (OSError,ValueError):
                     if kind!='library' or name.endswith(' (deleted)'):raise
                     # map_files may require an extra kernel capability. A pathname
                     # fallback is safe only when it still refers to the mapped inode.
-                    sha=hash_artifact(proc/'root'/name.lstrip('/'),cache,expected)
+                    sha=hash_artifact(proc/'root'/name.lstrip('/'),cache,expected,deadline=deadline)
                 entry.update(sha256=sha,identity_verified=True,source='mapped-file' if kind=='library' else 'script-file')
             except (OSError,ValueError) as e:
                 entry['error']=type(e).__name__ if isinstance(e,OSError) else str(e)[:300]
@@ -239,8 +283,8 @@ def ebpf_loop():
                         pid,uid,filename=event['data'].rstrip('\n').split('\t',2)
                         proc=Path('/proc')/str(int(pid));sha=None
                         try:
-                            if os.readlink(proc/'exe')==filename:sha=digest(proc/'exe')
-                        except OSError:pass
+                            if os.readlink(proc/'exe')==filename:sha=hash_artifact(proc/'exe',{})
+                        except (OSError,ValueError):pass
                         # Exited processes remain events even when their executable is no longer readable.
                         spool([{'pid':int(pid),'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
                                 'connections':[],'capture':'ebpf','identity_verified':sha is not None}],time.time())
@@ -270,7 +314,7 @@ def main():
                         hashes[p] = digest(p)
                         info=Path(p).stat()
                         metadata[p]={'uid':info.st_uid,'gid':info.st_gid,'mode':stat.S_IMODE(info.st_mode)}
-                    except OSError as e: hashes[p] = 'ERROR: '+str(e)
+                    except (OSError,ValueError) as e: hashes[p] = 'ERROR: '+str(e)
                 hashed_at = time.time(); next_hash = started+300
             procs, errors = collect(cache)
             spool(procs,time.time())

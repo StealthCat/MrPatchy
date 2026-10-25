@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import stat
 import time
 import tempfile
 
@@ -93,21 +94,20 @@ def process_evidence(req):
     if not isinstance(path,str) or not path.startswith('/') or len(path)>4096 or not re.fullmatch('[a-f0-9]{64}',expected):
         raise ValueError('Invalid executable identity')
     if not isinstance(checks,list) or not set(checks)<={'package','service','executable'}: raise ValueError('Invalid evidence checks')
-    result={'identity_verified':False,'checks':checks}
+    result={'identity_verified':False,'checks':checks};deadline=time.monotonic()+10
     for proc in Path('/proc').iterdir():
         if not proc.name.isdigit(): continue
         try:
             if os.readlink(proc/'exe')!=path: continue
             # Open the process executable, not an arbitrary caller-provided file.
-            with open(proc/'exe','rb') as stream:
-                checksum=hashlib.sha256()
-                for chunk in iter(lambda:stream.read(1024*1024),b''): checksum.update(chunk)
-                digest=checksum.hexdigest()
-                info=os.fstat(stream.fileno())
+            sys.path.insert(0,'/usr/local/lib/mrpatchy')
+            from agent import hash_artifact
+            metadata={}
+            digest=hash_artifact(proc/'exe',{},deadline=deadline,metadata=metadata)
             if digest!=expected: continue
             result['identity_verified']=True
             if 'executable' in checks:
-                result['executable']={'sha256':digest,'uid':info.st_uid,'gid':info.st_gid,'mode':info.st_mode & 0o7777,'size':info.st_size,
+                result['executable']={'sha256':digest,**metadata,
                     'status':[line for line in (proc/'status').read_text().splitlines() if line.split(':')[0] in ('Uid','Gid','CapEff','NoNewPrivs','Seccomp')]}
             if 'package' in checks:
                 try: result['package']=run(['dpkg-query','-S','--',path],timeout=15)[:8000]
@@ -120,6 +120,8 @@ def process_evidence(req):
                     result['service'].append(run(['systemctl','show',unit,'--property=Id,LoadState,ActiveState,SubState,FragmentPath,User,Group,NoNewPrivileges,ProtectSystem'],timeout=15)[:8000])
             return result
         except (FileNotFoundError,ProcessLookupError): continue
+        except ValueError:
+            result['unverified_processes']=result.get('unverified_processes',0)+1
         except PermissionError:
             result['inaccessible_processes']=result.get('inaccessible_processes',0)+1
     result['reason']='No running executable matches the recorded path and SHA-256; process may have exited or changed'
@@ -157,6 +159,57 @@ def schedule_reboot(journal,state,rollback=False):
             'reboot_scheduled':True,'boot_before':state['boot_before']}
 
 
+PATCH_CONFIG_ROOT=Path('/etc')
+
+
+def patch_evidence():
+    """Content/metadata only: no configuration plaintext crosses the SSH boundary."""
+    sys.path.insert(0,'/usr/local/lib/mrpatchy')
+    try:
+        from agent import hash_artifact,MANAGED
+        from release import fingerprint,conffiles,service_inventory
+    except ImportError:
+        from target.agent import hash_artifact,MANAGED
+        from target.release import fingerprint,conffiles,service_inventory
+    inv=handle({'action':'inventory'})
+    if run(['dpkg','--audit'],timeout=60).strip():raise ValueError('Package state must be clean before recovery verification')
+    services=service_inventory(run(['systemctl','list-units','--type=service','--state=running','--no-legend','--plain'],timeout=30))
+    health=handle({'action':'health'})
+    if health.get('failed_units') or not health.get('collector_active'):raise ValueError('Service health must be clean before recovery verification')
+    names=set(conffiles(inv['status'])) | set(MANAGED)
+    deadline=time.monotonic()+30
+    def walk_error(error):raise error
+    for directory,dirs,files in os.walk(PATCH_CONFIG_ROOT,followlinks=False,onerror=walk_error):
+        names.update(str(Path(directory)/name) for name in dirs+files)
+        if len(names)>10000 or time.monotonic()>deadline:raise ValueError('Configuration recovery manifest exceeds capture budget')
+    configs={};cache={}
+    for name in sorted(names):
+        if time.monotonic()>deadline:raise ValueError('Configuration recovery manifest exceeds capture budget')
+        path=Path(name)
+        try:info=path.lstat()
+        except FileNotFoundError:
+            configs[name]={'missing':True};continue
+        entry={'mode':info.st_mode,'uid':info.st_uid,'gid':info.st_gid}
+        if stat.S_ISLNK(info.st_mode):entry['link']=os.readlink(path)
+        elif stat.S_ISREG(info.st_mode):entry['sha256']=hash_artifact(path,cache,expected=(info.st_dev,info.st_ino),deadline=deadline)
+        elif not stat.S_ISDIR(info.st_mode):raise ValueError('Unsupported configuration file type: '+name)
+        configs[name]=entry
+    result={'version':1,'inventory_hash':fingerprint(inv),'configs':configs,'services':services}
+    if len(json.dumps(result).encode())>3_000_000:raise ValueError('Configuration recovery manifest is too large')
+    return result
+
+
+def verify_patch_original(original):
+    if not isinstance(original,dict) or original.get('version')!=1 or not original.get('configs'):
+        raise ValueError('Original patch recovery evidence is missing; reconcile target state')
+    current=patch_evidence()
+    if any(current.get(key)!=original.get(key) for key in ('inventory_hash','configs')):
+        raise ValueError('Original packages, repositories, trust or configurations were not restored')
+    if not set(original.get('services',[]))<=set(current['services']):
+        raise ValueError('Previously running services were not restored')
+    return {'outcome':'rolled_back','original_state_verified':True,'boot_after':boot_id()}
+
+
 def rollback_transaction(journal,state):
     if not state.get('snapshot') or not state['policy'].get('rollback'):
         raise RuntimeError('No approved snapshot rollback is available; reconcile target state')
@@ -172,7 +225,8 @@ def rollback_transaction(journal,state):
     health=handle({'action':'health'})
     if health['failed_units'] or not health['collector_active']:
         raise RuntimeError('Rollback health could not be verified; reconcile target state')
-    state['state']='rolled_back';state['result'].update(outcome='rolled_back',health=health)
+    verified=verify_patch_original(state.get('original'))
+    state['state']='rolled_back';state['result'].update(**verified,health=health)
     atomic(journal,json.dumps(state).encode());return state['result']
 
 
@@ -185,6 +239,7 @@ def complete_recovery(req):
     health=handle({'action':'health'})
     if health['failed_units'] or not health['collector_active']:raise RuntimeError('Post-reboot health is not ready')
     rolled_back=state['state'].startswith('rollback_')
+    if rolled_back:state['result'].update(verify_patch_original(state.get('original')))
     state['state']='rolled_back' if rolled_back else 'complete'
     state['result'].update(outcome=state['state'],reboot_verified=True,health=health)
     atomic(journal,json.dumps(state).encode());return state['result']
@@ -208,6 +263,10 @@ def protected_patch(req):
     state={'state':'preparing','job':job,'policy':policy,'boot_before':boot_id()}
     atomic(journal,json.dumps(state).encode())
     if policy.get('rollback'):
+        original=req.get('original')
+        verify_patch_original(original)
+        state['original']=original
+        atomic(journal,json.dumps(state).encode())
         probe=recovery_hook('probe',job)
         if probe.get('ready') is not True:raise ValueError('Rollback adapter is not ready')
         snapshot=recovery_hook('snapshot',job).get('snapshot')
@@ -258,6 +317,8 @@ def handle(req):
         else:dropin.unlink(missing_ok=True)
         run(['systemctl','daemon-reload']);run(['systemctl','restart','mrpatchy-agent'])
         return {'configured':True,'ebpf':req['ebpf']}
+    if action == 'patch-inspect':return patch_evidence()
+    if action == 'patch-restored':return verify_patch_original(req.get('original'))
     if action == 'protected-patch':return protected_patch(req)
     if action == 'complete-recovery':return complete_recovery(req)
     if action == 'rollback-patch':return rollback_after_reboot(req)
@@ -321,6 +382,10 @@ def handle(req):
             from agent import pending_events
             result.update(pending_events())
         return result
+    if action == 'events':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import pending_events
+        return pending_events()
     if action == 'ack':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import acknowledge
@@ -369,7 +434,7 @@ def main():
     if len(raw)>4_000_000: raise ValueError('Request too large')
     request = json.loads(raw)
     if not isinstance(request, dict): raise ValueError('Request must be a JSON object')
-    if request.get('action') in ('snapshot','ack','evidence','backups','operation-status','release-status'):
+    if request.get('action') in ('snapshot','events','ack','evidence','backups','operation-status','release-status'):
         # The collector writes snapshots atomically. Reading them must never
         # wait behind a long APT installation holding the mutation lock.
         print(json.dumps(handle(request)))

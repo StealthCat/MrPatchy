@@ -9,6 +9,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mrpatchy.db}
       COOKIE_SECURE: "true"
       DISABLE_SCHEDULER: "1"
+      # Trust only our dedicated Caddy hop, never arbitrary management clients.
+      FORWARDED_ALLOW_IPS: ${CADDY_CONTROL_IP:-172.30.254.2}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
@@ -50,7 +52,10 @@ services:
       - tls-config:/tls:ro
       - caddy-data:/data
       - caddy-config:/config
-    networks: [control, edge]
+    networks:
+      control:
+        ipv4_address: ${CADDY_CONTROL_IP:-172.30.254.2}
+      edge: {}
     security_opt: [no-new-privileges:true]
 volumes:
   app-data:
@@ -60,5 +65,8 @@ volumes:
 networks:
   control:
     internal: true
+    ipam:
+      config:
+        - subnet: ${CONTROL_SUBNET:-172.30.254.0/24}
   management: {}
   edge: {}

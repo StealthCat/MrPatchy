@@ -45,6 +45,16 @@ def main():
         ids=[event['id'] for event in snapshot['events']]
         ssh.call(host,{'action':'ack','ids':ids})
         assert not set(ids)&{event['id'] for event in ssh.call(host,{'action':'snapshot'})['events']}
+        assert isinstance(ssh.call(host,{'action':'events'})['events'],list)
+        original=ssh.call(host,{'action':'patch-inspect'},timeout=120)
+        assert original['version']==1 and original['configs']
+        assert ssh.call(host,{'action':'patch-restored','original':original},timeout=120)['original_state_verified']
+        run('docker','exec',name,'sh','-c','printf changed > /etc/mrpatchy-recovery-fixture')
+        try:ssh.call(host,{'action':'patch-restored','original':original},timeout=120)
+        except RuntimeError as error:assert 'not restored' in str(error)
+        else:raise AssertionError('Changed configuration was accepted as restored')
+        run('docker','exec',name,'rm','/etc/mrpatchy-recovery-fixture')
+        assert ssh.call(host,{'action':'patch-restored','original':original},timeout=120)['original_state_verified']
         key=next(iter(snapshot['inventory']['keys'].values()))
         ssh.call(host,{'action':'key','name':'review-fixture.gpg','data':key})
         ssh.call(host,{'action':'repository','path':'/etc/apt/sources.list.d/review.sources','content':'Types: deb\nURIs: https://example.invalid\nSuites: stable\nComponents: main\nEnabled: no\n'})
