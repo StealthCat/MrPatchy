@@ -17,7 +17,7 @@ import uuid
 import re
 
 ROOT = Path('/opt/drpatch')
-MANAGED = ['/usr/local/lib/mrpatchy/agent.py', '/usr/local/lib/mrpatchy/bridge.py', '/etc/systemd/system/mrpatchy-agent.service', '/etc/sudoers.d/mrpatchy', '/opt/drpatch/.ssh/authorized_keys']
+MANAGED = ['/usr/local/lib/mrpatchy/release.py', '/usr/local/lib/mrpatchy/agent.py', '/usr/local/lib/mrpatchy/bridge.py', '/etc/systemd/system/mrpatchy-agent.service', '/etc/sudoers.d/mrpatchy', '/opt/drpatch/.ssh/authorized_keys']
 def digest(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:

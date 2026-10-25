@@ -45,6 +45,9 @@ def atomic(path, data, mode=0o600):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        directory_fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(directory_fd)
+        finally:os.close(directory_fd)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -228,6 +231,16 @@ def protected_patch(req):
 
 def handle(req):
     action = req.get('action')
+    if isinstance(action,str) and action.startswith('release-'):
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        import release
+        if action=='release-inspect':return release.inspection()
+        if action=='release-configs':return release.configurations(req.get('paths'))
+        if action=='release-status':return release.read_state(req.get('job_id'))
+        if action=='release-start':return release.start(req)
+        if action=='release-verify':return release.verify(req.get('job_id'))
+        if action=='release-rollback':return release.rollback(req.get('job_id'))
+        raise ValueError('Unsupported release action')
     if action == 'evidence': return process_evidence(req)
     if action == 'operation-status':
         with open(ROOT/'bridge.lock','a') as lock:
@@ -282,15 +295,21 @@ def handle(req):
             if len(bridge)>1_000_000 or hashlib.sha256(bridge).hexdigest()!=req.get('bridge_sha256'):
                 raise ValueError('Invalid bridge digest')
             compile(bridge,'bridge.py','exec')
+        release_code=None
+        if 'release' in req:
+            release_code=base64.b64decode(req['release'],validate=True)
+            if len(release_code)>1_000_000 or hashlib.sha256(release_code).hexdigest()!=req.get('release_sha256'):raise ValueError('Invalid release runner digest')
+            compile(release_code,'release.py','exec')
         unit = req.get('unit',UNIT).encode()
         if len(unit)>100_000 or ('unit' in req and hashlib.sha256(unit).hexdigest()!=req.get('unit_sha256')):
             raise ValueError('Invalid systemd unit digest')
         # Validate the complete deployment before replacing any managed file.
+        if release_code is not None:atomic('/usr/local/lib/mrpatchy/release.py',release_code,0o644)
         if bridge is not None: atomic('/usr/local/lib/mrpatchy/bridge.py',bridge,0o644)
         atomic('/usr/local/lib/mrpatchy/agent.py',code,0o644)
         atomic('/etc/systemd/system/mrpatchy-agent.service',unit,0o644)
         run(['systemctl','daemon-reload']); run(['systemctl','enable','--now','mrpatchy-agent']); run(['systemctl','restart','mrpatchy-agent'])
-        return {'deployed':req['sha256'],'unit_sha256':hashlib.sha256(unit).hexdigest(),'bridge_sha256':hashlib.sha256(Path('/usr/local/lib/mrpatchy/bridge.py').read_bytes()).hexdigest()}
+        return {**({'release_sha256':req['release_sha256']} if release_code is not None else {}),'deployed':req['sha256'],'unit_sha256':hashlib.sha256(unit).hexdigest(),'bridge_sha256':hashlib.sha256(Path('/usr/local/lib/mrpatchy/bridge.py').read_bytes()).hexdigest()}
     if action == 'snapshot':
         result = {}
         for k in ['inventory','telemetry','collector-error','ebpf-status','ebpf-diagnostic']:
@@ -349,7 +368,7 @@ def main():
     if len(raw)>4_000_000: raise ValueError('Request too large')
     request = json.loads(raw)
     if not isinstance(request, dict): raise ValueError('Request must be a JSON object')
-    if request.get('action') in ('snapshot','ack','evidence','backups','operation-status'):
+    if request.get('action') in ('snapshot','ack','evidence','backups','operation-status','release-status'):
         # The collector writes snapshots atomically. Reading them must never
         # wait behind a long APT installation holding the mutation lock.
         print(json.dumps(handle(request)))

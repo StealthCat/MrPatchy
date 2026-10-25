@@ -72,10 +72,15 @@ def deploy(host):
     from target.bridge import UNIT
     code=(TARGET/'agent.py').read_bytes()
     bridge=(TARGET/'bridge.py').read_bytes()
-    expected={'deployed':hashlib.sha256(code).hexdigest(),'bridge_sha256':hashlib.sha256(bridge).hexdigest(),'unit_sha256':hashlib.sha256(UNIT.encode()).hexdigest()}
-    result=call(host,{'action':'deploy','agent':base64.b64encode(code).decode(),'sha256':expected['deployed'],
+    release=(TARGET/'release.py').read_bytes()
+    expected={'release_sha256':hashlib.sha256(release).hexdigest(),'deployed':hashlib.sha256(code).hexdigest(),'bridge_sha256':hashlib.sha256(bridge).hexdigest(),'unit_sha256':hashlib.sha256(UNIT.encode()).hexdigest()}
+    payload={'action':'deploy','agent':base64.b64encode(code).decode(),'sha256':expected['deployed'],
                       'bridge':base64.b64encode(bridge).decode(),'bridge_sha256':expected['bridge_sha256'],
-                      'unit':UNIT,'unit_sha256':expected['unit_sha256']})
+                      'unit':UNIT,'unit_sha256':expected['unit_sha256'],'release':base64.b64encode(release).decode(),'release_sha256':expected['release_sha256']}
+    result=call(host,payload)
+    if result.get('bridge_sha256')==expected['bridge_sha256'] and 'release_sha256' not in result:
+        # Older bridges accept their own replacement before understanding runner deployment.
+        result=call(host,payload)
     if result.get('bridge_sha256') is None:
         raise RuntimeError('Target uses the legacy bootstrap bridge. Download and rerun its installer through a trusted console, then finish installation again.')
     if any(result.get(key)!=value for key,value in expected.items()):

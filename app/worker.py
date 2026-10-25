@@ -9,7 +9,7 @@ import math
 import subprocess
 from sqlalchemy import select, delete, update
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import apt, ssh, operations
+from . import apt, ssh, operations, releases
 from target.agent import MANAGED
 from target.bridge import UNIT
 from .security import unseal
@@ -204,30 +204,37 @@ def finish_recovery(s,host,job,result,policy):
 def execute(job_id):
     with Session() as s:
         job=s.get(Job,job_id)
-        if not job or job.state!='queued': return
+        if not job or (job.state!='queued' and not (job.action=='release-upgrade' and job.state=='running')): return
         lock=host_lock(job.host_id)
         if not lock.acquire(False):return
         try:
             # End a pre-lock MySQL REPEATABLE READ snapshot before quarantine checks.
             s.rollback()
             s.refresh(job)
-            if job.state!='queued': return
+            resuming=job.action=='release-upgrade' and job.state=='running'
+            if job.state!='queued' and not resuming:return
             if operations.host_quarantined(s,job.host_id,exclude=job.id):return
-            if not operations.eligible(s,job): return
-            claimed=s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
+            if not resuming and not operations.eligible(s,job): return
+            claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
             s.commit()
             if claimed!=1:return
             s.refresh(job)
-            h=s.get(Host,job.host_id);protected=False;result={}
+            h=s.get(Host,job.host_id);protected=job.action=='release-upgrade';result={}
             try:
                 if not h: raise ValueError('Host no longer exists')
-                if job.action=='deploy':
+                if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
+                elif job.action=='release-upgrade':
+                    result=releases.execute(s,h,job)
+                    job.output=json.dumps(result)
+                    save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0
+                elif job.action=='deploy':
                     result=ssh.deploy(h)
                     # Known managed artifact digests; never trust target hashes as the expected baseline.
                     auth=f'restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" {ssh.public_key(h.id)} mrpatchy\n'
                     sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
                     optional={k:v for k,v in h.baseline.items() if k=='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'}
                     h.baseline={**optional,
+                        '/usr/local/lib/mrpatchy/release.py':hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest(),
                         '/usr/local/lib/mrpatchy/agent.py':hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest(),
                         '/usr/local/lib/mrpatchy/bridge.py':hashlib.sha256((ssh.TARGET/'bridge.py').read_bytes()).hexdigest(),
                         '/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(UNIT.encode()).hexdigest(),
@@ -274,6 +281,9 @@ def execute(job_id):
                 job=s.get(Job,job_id)
                 h=s.get(Host,job.host_id)
                 job.state='recovery_required' if protected else 'failed'
+                if job.action in ('release-plan','release-upgrade'):
+                    plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
+                    if plan:plan.state=job.state;plan.error=str(e)[:1000]
                 receipt=job.output if protected else ''
                 job.output=(str(e)+'\n'+receipt).encode()[:48000].decode(errors='ignore')
                 if h:
@@ -372,6 +382,10 @@ def loop():
                                 if not existing and (not latest or now-latest.created>300): enqueue(s,h.id,'refresh')
                         last_poll=now
                         operations.collect_alerts()
+                    # Resume observation, never the package transaction, after worker loss.
+                    for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade')):
+                        if len(active_jobs)>=2:break
+                        if j.id not in active_jobs:active_jobs[j.id]=(jobs.submit(execute,j.id),j.host_id)
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts)).order_by(Job.created)):
                         if len(active_jobs)>=2: break
                         if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):

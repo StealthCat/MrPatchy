@@ -13,6 +13,7 @@ Mr Patchy is a self-hosted, Dockerized application for managing Ubuntu, Debian a
 | Enrollment | Three-step endpoint → offline preparation → SSH completion; downloadable per-server Bash installer; expiring curl links; independent installation verification |
 | Package management | Installed/held/broken package inventory, inventory history, exact-version updates, dependency simulation, repair, configurable deadlines and priority overrides |
 | Repositories | Central native APT signature/index verification; `.list` and Deb822 `.sources`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
+| Distribution upgrades | Adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, fixed read-only evidence checks, explicit known-good approvals, durable observation spool and retained history |
@@ -88,6 +89,16 @@ Configure each host under **Account → Operations → SSO, SMTP & target polici
 
 A host that never returns over SSH cannot be automatically repaired from the central service. Keep an out-of-band recovery path. See [recovery contracts and procedures](docs/ENTERPRISE_RECOVERY.md).
 
+## Distribution release upgrades
+
+Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
+
+One GO authorizes the named release transition, displayed configuration edits, service interruption, reboot and one snapshot rollback. The detached target runner survives SSH disconnects; workers resume observation after a central restart. Configuration/inventory drift, expired approval or an unverified recovery stops the operation rather than silently changing its scope.
+
+Supported paths are Ubuntu **22.04 → 24.04 → 26.04 LTS** (only when offered by Ubuntu) and Debian **11 → 12 → 13**, one hop at a time on amd64/arm64 systemd hosts. Ubuntu uses its official release upgrader; its package list is labeled an estimate. Raspberry Pi OS major versions are flagged as requiring a new-image migration.
+
+A tested release-capable snapshot adapter is mandatory. Generic root-only Snapper snapshots do not automatically qualify. AI review sends configuration text to your API provider and covers package-owned conffiles; custom applications, data migrations and external volumes require site-specific validation/recovery. Blockers disable GO. See [release upgrades, privacy, adapter contracts and limits](docs/RELEASE_UPGRADES.md) before enabling this workflow.
+
 ## Repository management
 
 Use **Repositories** to inspect, add, edit or disable sources, upload signing keys and restore reviewed source backups. **Repository access** configures scoped HTTPS credentials, private CA bundles, proxies, default release and exact-URI mirror mappings. Secrets are encrypted in the database and staged in a private central APT auth file.
@@ -104,7 +115,7 @@ The collector hashes Mr Patchy's managed files and readable running executables.
 
 Optional bpftrace exec capture retains short-lived observations. Unverifiable identities stay marked unverified through central processing. Enabling eBPF relaxes the collector sandbox for kernel tracing; kernel support and acceptance testing are required. It is not guaranteed lossless capture or hardware attestation.
 
-Enable AI in **Settings** with an OpenAI API key and a compatible Responses API model. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
+Enable AI in **Settings** with an OpenAI API key and a compatible Responses API model. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Process-investigation evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent by that workflow. Release configuration planning separately sends eligible configuration text, as disclosed before planning. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
 
 The target's durable spool acknowledges batches only after central commit; overflow is visible. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
 
@@ -171,6 +182,7 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 - [Operations and troubleshooting](docs/OPERATIONS.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)
+- [Distribution release upgrades](docs/RELEASE_UPGRADES.md)
 - [Post-review fixes](docs/REVIEW_FIXES.md)
 - [Historical reviews](docs/COMPLETION_REVIEW.md) and [expansion checkpoint](docs/OPERATIONS_EXPANSION.md)
 

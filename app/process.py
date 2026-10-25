@@ -5,8 +5,8 @@ import signal
 import subprocess
 import time
 
-def bounded(args,timeout=900,env=None,limit=16_000_000):
-    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,start_new_session=True)
+def bounded(args,timeout=900,env=None,limit=16_000_000,cwd=None):
+    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,start_new_session=True,cwd=cwd)
     output=bytearray();errors=bytearray();selector=selectors.DefaultSelector()
     selector.register(process.stdout,selectors.EVENT_READ,output)
     selector.register(process.stderr,selectors.EVENT_READ,errors)

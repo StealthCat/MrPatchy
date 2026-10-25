@@ -74,7 +74,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/history' in path or path.endswith(('/installer','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations'))
+        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -666,6 +666,63 @@ def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
         job=s.get(Job,job_id);h=host_or_404(s,host_id)
         if job.state not in operations.QUARANTINE_STATES:raise HTTPException(409,'Only running or recovery-required jobs require reconciliation')
         if ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
+        if job.action in ('release-plan','release-upgrade'):
+            plan=s.get(worker.releases.ReleasePlan,job.payload.get('plan_id'))
+            if plan:plan.state='interrupted'
         job.state='interrupted';job.output='Operator reviewed target after worker interruption; operation was not automatically replayed'
         audit(s,'reconcile job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
+
+
+# Administrator-only release plans expose configuration diffs and authorize reboots.
+from . import releases
+
+@app.get('/api/hosts/{host_id}/releases')
+def release_plans(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=s.scalars(select(releases.ReleasePlan).where(releases.ReleasePlan.host_id==host_id).order_by(releases.ReleasePlan.created.desc()).limit(20))
+        return [{'id':r.id,'state':r.state,'created':r.created,'job_id':r.job_id,'error':r.error} for r in rows]
+
+@app.post('/api/hosts/{host_id}/releases')
+def plan_release(host_id:str,user=Depends(auth)):
+    with host_change(host_id),Session() as s:
+        h=host_or_404(s,host_id)
+        required='/usr/local/lib/mrpatchy/release.py'
+        if h.baseline.get(required)!=hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest():
+            raise HTTPException(409,'Finish / verify installation to install the current release runner first')
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running'])).limit(1)):
+            raise HTTPException(409,'Wait for existing host operations before preparing a release plan')
+        row=releases.ReleasePlan(id=str(uuid.uuid4()),host_id=host_id)
+        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-plan',payload={'plan_id':row.id})
+        row.job_id=job.id;s.add_all([row,job]);audit(s,'plan distribution upgrade',user['username']+' '+host_id);s.commit()
+        return {'plan_id':row.id,'job_id':job.id}
+
+@app.get('/api/hosts/{host_id}/releases/{plan_id}')
+def release_plan(host_id:str,plan_id:str,user=Depends(auth)):
+    with Session() as s:
+        row=s.get(releases.ReleasePlan,plan_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Release plan not found')
+        return releases.public(row)
+
+class ReleaseDecision(BaseModel):
+    decision:str=Field(pattern='^(go|no-go)$')
+    digest:str=Field(pattern='^[a-f0-9]{64}$')
+
+@app.post('/api/hosts/{host_id}/releases/{plan_id}/decision')
+def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(auth)):
+    with host_change(host_id),Session() as s:
+        host_or_404(s,host_id);row=s.get(releases.ReleasePlan,plan_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Release plan not found')
+        plan=releases.body(row)
+        if body.digest!=row.digest or releases.digest(releases.canonical(plan))!=row.digest:raise HTTPException(409,'Plan changed; review it again')
+        if body.decision=='no-go':
+            if row.state not in ('ready','blocked'):raise HTTPException(409,'Only an unapproved completed plan can be declined')
+            row.state='declined';audit(s,'decline distribution upgrade',user['username']+' '+row.id);s.commit();return {'state':row.state}
+        if row.state=='approved':return {'state':row.state,'job_id':row.job_id}
+        if row.state!='ready' or plan.get('blockers'):raise HTTPException(409,'Resolve every blocker and regenerate the plan before GO')
+        if plan['expires']<time.time():raise HTTPException(409,'Plan expired; regenerate it')
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Wait for existing host operations before GO')
+        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-upgrade',payload={'plan_id':row.id,'digest':row.digest})
+        row.job_id=job.id;row.state='approved';s.add(job);audit(s,'approve distribution upgrade',user['username']+' '+row.id+' '+row.digest);s.commit()
+        return {'state':row.state,'job_id':job.id}

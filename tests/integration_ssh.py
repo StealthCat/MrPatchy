@@ -31,6 +31,7 @@ def main():
         host.fingerprint=run('docker','exec',name,'ssh-keygen','-lf','/etc/ssh/ssh_host_ed25519_key.pub','-E','sha256').split()[1]
         ssh.deploy(host)
         verification=ssh.call(host,{'action':'verify'})
+        assert verification['files']['/usr/local/lib/mrpatchy/release.py']=={'uid':0,'gid':0,'mode':0o644,'sha256':ssh.hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest()}
         assert verification['active'] and verification['files']['/usr/local/lib/mrpatchy/agent.py']['uid']==0
         run('docker','exec','-d',name,'/usr/bin/python3','-I','/usr/local/lib/mrpatchy/agent.py')
         snapshot={}
@@ -65,6 +66,7 @@ def main():
             if run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/opt/drpatch/lock-ready').exists())")=='True': break
             time.sleep(.1)
         assert ssh.call(host,{'action':'snapshot'},timeout=3)['telemetry']
+        assert ssh.call(host,{'action':'release-status','job_id':str(uuid.uuid4())},timeout=3)=={'state':'absent'}
         old_key=workspace/'old-identity.key';old_key.write_bytes(ssh.key_path(host.id).read_bytes());old_key.chmod(0o600)
         old_public=ssh.public_key(host.id)
         rotated=ssh.rotate(host)

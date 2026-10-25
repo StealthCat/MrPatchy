@@ -41,7 +41,7 @@ def recovery_policy(s,host_id):
     return {name:bool(row and row.value.get(name)) for name in ('reboot','rollback')}
 
 def eligible(s,job):
-    if job.action not in ('patch','repair'): return True
+    if job.action not in ('patch','repair','release-upgrade'): return True
     dependencies=job.payload.get('_depends_on',[])
     for dep in dependencies:
         previous=s.get(Job,dep)

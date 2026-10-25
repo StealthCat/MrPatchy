@@ -105,6 +105,23 @@ const assert=require('assert/strict');
     await page.waitForFunction(()=>!document.querySelector('#recovery-policy [name=reboot]').checked);
     assert.equal(await page.locator('#recovery-policy [name=rollback]').isChecked(),false);
     await page.locator('#close-modal').click();
+    // Release-plan review authorizes exactly one immutable plan, never an arbitrary command.
+    const releaseId='f'.repeat(36),releaseDigest='a'.repeat(64),releaseDecisions=[];
+    let releaseState='ready';
+    await page.route('**/api/hosts/*/releases',route=>route.fulfill({json:[{id:releaseId,state:releaseState,created:Date.now()/1000,job_id:''}]}));
+    await page.route('**/api/hosts/*/releases/'+releaseId,route=>route.fulfill({json:{id:releaseId,state:releaseState,digest:releaseDigest,job_id:'',plan:{target:{distribution:'Debian',from_version:'12',version:'13'},expires:Date.now()/1000+3600,blockers:[],warnings:['A tested snapshot and reboot are included in this approval.'],authorization:'GO authorizes this release transition, reviewed configuration edits, reboot and one snapshot rollback.',transaction:[{action:'install',package:'nginx',version:'1.26.3'}],reviews:[{path:'/etc/nginx/nginx.conf',reason:'Preserve local settings while updating the package configuration.',changed:true}],edits:[{path:'/etc/nginx/nginx.conf',diff:'--- current\n+++ planned\n-old directive\n+new directive'}],sources:{'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main'}}}}));
+    await page.route('**/api/hosts/*/releases/'+releaseId+'/decision',route=>{releaseDecisions.push(route.request().postDataJSON());releaseState='complete';return route.fulfill({json:{state:'approved',job_id:'fixture'}});});
+    await page.locator('[data-nav=servers]').click();
+    await page.getByRole('button',{name:'Manage ↗'}).first().click();
+    await page.getByRole('button',{name:'Plan distribution upgrade',exact:true}).click();
+    await page.getByRole('button',{name:'Review plan',exact:true}).click();
+    await page.getByRole('heading',{name:'Debian 12 → 13'}).waitFor();
+    await page.locator('summary').filter({hasText:'/etc/nginx/nginx.conf'}).click();
+    await capture('release-upgrade');
+    await page.getByRole('button',{name:'GO · Execute approved plan',exact:true}).click();
+    await page.getByRole('heading',{name:'Debian 12 → 13'}).waitFor();
+    assert.deepEqual(releaseDecisions,[{decision:'go',digest:releaseDigest}]);
+    await page.locator('#close-modal').click();
     {
       // Illustrative fixture responses also exercise populated mobile tables in CI.
       const demoHosts=await (await page.request.get('http://127.0.0.1:8097/api/hosts')).json();
