@@ -45,6 +45,15 @@ const assert=require('assert/strict');
     await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
     await page.getByRole('button',{name:'Save monitoring settings'}).click();
     await page.getByRole('status').filter({hasText:'Monitoring settings saved'}).waitFor();
+    await page.locator('[data-nav=repositories]').click();
+    await page.getByRole('button',{name:'Repository access',exact:true}).click();
+    await page.locator('#access-form [name=default_release]').fill('stable');
+    await page.locator('#access-form [name=mirrors]').fill('{"file:/srv/repo":"https://mirror.example.test/repo"}');
+    await page.getByRole('button',{name:'Save repository access',exact:true}).click();
+    await page.getByRole('status').filter({hasText:'Repository access saved'}).waitFor();
+    await page.getByRole('button',{name:'Repository access',exact:true}).click();
+    assert.equal(await page.locator('#access-form [name=default_release]').inputValue(),'stable');
+    await page.locator('#close-modal').click();
     // Reproduce a delayed A response arriving after switching the selector to B.
     const ids=await page.evaluate(async()=>{
       const session=await (await fetch('/api/session')).json();

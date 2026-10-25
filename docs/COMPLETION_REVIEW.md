@@ -37,7 +37,7 @@ The following issues were addressed while adding the features:
 6. **Configuration races:** access/fingerprint/priority changes cannot race a host's active operation. Freshness is invalidated after access changes.
 7. **Stale signing material and central path confusion:** removed keys fail closed; external public keys receive isolated hashed filenames rather than arbitrary central paths.
 8. **History deduplication hiding reversions:** revisions track changes, not merely unique content hashes, so repeated states remain historical events.
-9. **Unbounded subprocess output/MySQL TEXT overflow:** central/target subprocess output has explicit byte and time limits; successful job output is capped by bytes before persistence.
+9. **Unbounded subprocess output/MySQL TEXT overflow:** central/target subprocess output has explicit byte and time limits; successful and failed job output is capped by bytes before persistence.
 10. **Recovery ordering:** missing dependencies can prevent dpkg configuration. Explicit recovery resolves dependencies first, then configures packages.
 11. **Unrestricted AI tool risk:** the model can request only fixed evidence categories; the bridge re-identifies an executable by path/hash and reads selected metadata. No model-provided executable command or arbitrary file path is executed/read.
 12. **History response amplification:** history lists return small metadata records; large details load individually and are host-scoped.
@@ -48,7 +48,7 @@ The existing single-administrator security model remains. Central administrators
 
 ## Validation
 
-- Local Python suite: **87 passed, one MySQL-only test skipped** at the completion checkpoint.
+- Local Python suite: **89 passed, one MySQL-only test skipped** at the completion checkpoint.
 - Native APT integration checks both a public HTTP signed ARM64 repository and an authenticated HTTPS fixture with a private CA and local-source mirror mapping. Tampered index and signature tests fail closed.
 - Browser test covers all three enrollment steps, generated installer download, curl delivery option, verification result, persistent Manage download, settings and the prior wrong-server response regression.
 - Docker CI adds real OpenSSH/sudo verification, durable batch acknowledgement, source backup/restore and existing ownership/pinning checks on Ubuntu 24.04 and Debian Bookworm.

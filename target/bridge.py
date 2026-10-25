@@ -187,7 +187,7 @@ def handle(req):
         return {'backups':rows}
     if action == 'repair':
         # Explicit operator action; potentially runs maintainer scripts.
-        return {'output':run(['apt-get','-y','--no-remove','--fix-broken','-o','Dpkg::Options::=--force-confold','install'])+run(['dpkg','--configure','-a'])}
+        return {'output':run(['apt-get','-y','--no-remove','--fix-broken','-o','Dpkg::Options::=--force-confold','install'])+run(['dpkg','--force-confold','--configure','-a'])}
     if action == 'key':
         name = req['name']
         if not re.fullmatch(r'[A-Za-z0-9_-]+\.(gpg|asc)',name): raise ValueError('Invalid key filename')

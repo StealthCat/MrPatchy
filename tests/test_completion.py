@@ -192,3 +192,25 @@ def test_broken_package_requires_repair_before_patch(admin):
         h.last_repo=time.time();s.commit()
     result=admin.post('/api/hosts/review-host/patch',json={'packages':['example:arm64']})
     assert result.status_code==400 and 'broken' in result.json()['detail']
+
+
+def test_failed_operation_log_fits_mysql_text_bytes(admin,monkeypatch):
+    from app.db import Job
+    with Session() as s:
+        h=create_host(s);job_id=worker.enqueue(s,h.id,'deploy')
+    def fail(host): raise RuntimeError('😀'*20000)
+    monkeypatch.setattr(worker.ssh,'deploy',fail)
+    worker.execute(job_id)
+    with Session() as s:
+        job=s.get(Job,job_id)
+        assert job.state=='failed' and len(job.output.encode())<=48000
+
+def test_older_replayed_behavior_keeps_earliest_observation(admin):
+    process={'executable':'/bin/test','sha256':'b'*64,'uid':'0','connections':[]}
+    with Session() as s:
+        h=create_host(s);now=time.time()
+        worker.record_behavior(s,h,process,now)
+        worker.record_behavior(s,h,process,now-300)
+        s.commit()
+        row=s.scalar(select(Behavior))
+        assert row.first_seen==now-300 and row.last_seen==now
