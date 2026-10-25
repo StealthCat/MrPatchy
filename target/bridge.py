@@ -239,6 +239,7 @@ def handle(req):
         if action=='release-status':return release.read_state(req.get('job_id'))
         if action=='release-start':return release.start(req)
         if action=='release-verify':return release.verify(req.get('job_id'))
+        if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
     if action == 'evidence': return process_evidence(req)

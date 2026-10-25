@@ -1,8 +1,8 @@
 # Mr Patchy
 
-**Central APT patch management and security monitoring for your Linux fleet.**
+**Patch management, release upgrades and security monitoring for your Linux fleet.**
 
-Mr Patchy is a self-hosted, Dockerized application for managing Ubuntu, Debian and Raspberry Pi OS / Raspbian servers over pinned-key SSH. It discovers available package updates centrally, tracks patch deadlines, manages repositories, and records process and network behavior. Optional OpenAI investigations help explain unfamiliar activity; administrators retain control over trust decisions and system changes.
+Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian and Raspberry Pi OS. Manage packages and repositories over SSH, plan AI-assisted release upgrades with one go/no-go approval, monitor system integrity and process behavior, and coordinate patching, alerts and recovery across your fleet.
 
 ![Fleet overview with illustrative documentation data](docs/screenshots/overview.webp)
 
@@ -18,8 +18,10 @@ Mr Patchy is a self-hosted, Dockerized application for managing Ubuntu, Debian a
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, fixed read-only evidence checks, explicit known-good approvals, durable observation spool and retained history |
 | Identity | Named administrator/operator/viewer accounts, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
-| Notifications | Persistent alerts with acknowledgements and retries; verified-TLS SMTP or HTTPS webhook delivery |
+| Notifications | Persistent monitoring and recovery-required alerts with acknowledgements and retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
+
+[Quick start](#quick-start) · [Enrollment](#enroll-a-server-in-three-steps) · [Release upgrades](#distribution-release-upgrades) · [Recovery](#workers-databases-and-backups) · [Documentation](#documentation)
 
 ## Quick start
 
@@ -93,9 +95,11 @@ A host that never returns over SSH cannot be automatically repaired from the cen
 
 Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
 
-One GO authorizes the named release transition, displayed configuration edits, service interruption, reboot and one snapshot rollback. The detached target runner survives SSH disconnects; workers resume observation after a central restart. Configuration/inventory drift, expired approval or an unverified recovery stops the operation rather than silently changing its scope.
+One GO authorizes the named release transition, displayed configuration edits, service interruption, reboot and one snapshot rollback. The detached target runner survives SSH disconnects; workers resume observation after a central restart without replaying installation or resetting recovery deadlines. The approved plan binds configuration, inventory and executable recovery/validation hooks. A rollback is successful only when the original inventory, repository trust, configuration and services have been verified. Uncertain recovery quarantines the host and creates an alert.
 
 Supported paths are Ubuntu **22.04 → 24.04 → 26.04 LTS** (only when offered by Ubuntu) and Debian **11 → 12 → 13**, one hop at a time on amd64/arm64 systemd hosts. Ubuntu uses its official release upgrader; its package list is labeled an estimate. Raspberry Pi OS major versions are flagged as requiring a new-image migration.
+
+![Release upgrade review and configuration diff](docs/screenshots/release-upgrade.webp)
 
 A tested release-capable snapshot adapter is mandatory. Generic root-only Snapper snapshots do not automatically qualify. AI review sends configuration text to your API provider and covers package-owned conffiles; custom applications, data migrations and external volumes require site-specific validation/recovery. Blockers disable GO. See [release upgrades, privacy, adapter contracts and limits](docs/RELEASE_UPGRADES.md) before enabling this workflow.
 
@@ -154,8 +158,9 @@ The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.
 1. Back up the database and all persistent volumes with app/workers stopped.
 2. Pull `main`, review `.env`, then run `docker compose up -d --build`.
 3. Use **Servers → Manage → Finish / verify installation** to upgrade each managed bridge/collector. Legacy bootstrap targets may require a fresh installer run through a trusted console first.
-4. Review queued jobs: jobs created before recovery-policy capture cannot inherit an enabled reboot/rollback policy; resubmit them after reviewing the policy.
-5. Reconcile interrupted/recovery-required jobs before resuming those hosts. Review new provenance identities rather than automatically transferring old approvals.
+4. Regenerate unexecuted release plans after updating helpers; old plans cannot authorize changed runner, bridge or recovery/validation code. Do not update helpers while a release upgrade is running.
+5. Review queued jobs: jobs created before recovery-policy capture cannot inherit an enabled reboot/rollback policy; resubmit them after reviewing the policy.
+6. Reconcile interrupted/recovery-required jobs before resuming those hosts. Review new provenance identities rather than automatically transferring old approvals.
 
 Schema initialization is idempotent. MySQL upgrades need ALTER privileges for existing timestamp/package-state migrations.
 
@@ -171,9 +176,9 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-CI covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu and Debian, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, crash-before-reboot, health retries/rollback, missing-database refusal, deadline continuity, exact OIDC issuers and provenance uncertainty.
+CI covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu and Debian, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
 
-Real Raspberry Pi/systemd hardware, live IdP/SMTP/custom-ACME services, kernel eBPF attachment, bootable filesystem rollback and real off-host provider connectivity require acceptance tests in your environment. The existing MySQL CI suite does not constitute a MySQL dump/import disaster-recovery drill.
+Real distribution release upgrades, Raspberry Pi/systemd hardware, live IdP/SMTP/custom-ACME services, kernel eBPF attachment, bootable filesystem rollback and off-host provider connectivity require acceptance tests in your environment. The existing MySQL CI suite does not constitute a MySQL dump/import disaster-recovery drill.
 
 Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm run test:ui`. Screenshots use illustrative fixtures and documentation-only addresses, not live infrastructure.
 

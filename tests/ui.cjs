@@ -109,7 +109,7 @@ const assert=require('assert/strict');
     const releaseId='f'.repeat(36),releaseDigest='a'.repeat(64),releaseDecisions=[];
     let releaseState='ready';
     await page.route('**/api/hosts/*/releases',route=>route.fulfill({json:[{id:releaseId,state:releaseState,created:Date.now()/1000,job_id:''}]}));
-    await page.route('**/api/hosts/*/releases/'+releaseId,route=>route.fulfill({json:{id:releaseId,state:releaseState,digest:releaseDigest,job_id:'',plan:{target:{distribution:'Debian',from_version:'12',version:'13'},expires:Date.now()/1000+3600,blockers:[],warnings:['A tested snapshot and reboot are included in this approval.'],authorization:'GO authorizes this release transition, reviewed configuration edits, reboot and one snapshot rollback.',transaction:[{action:'install',package:'nginx',version:'1.26.3'}],reviews:[{path:'/etc/nginx/nginx.conf',reason:'Preserve local settings while updating the package configuration.',changed:true}],edits:[{path:'/etc/nginx/nginx.conf',diff:'--- current\n+++ planned\n-old directive\n+new directive'}],sources:{'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main'}}}}));
+    await page.route('**/api/hosts/*/releases/'+releaseId,route=>route.fulfill({json:{id:releaseId,state:releaseState,digest:releaseDigest,job_id:'',plan:{target:{distribution:'Debian',from_version:'12',version:'13'},expires:Date.now()/1000+3600,blockers:[],warnings:['A tested snapshot and reboot are included in this approval.'],authorization:'GO authorizes this release transition, reviewed configuration edits, reboot and one snapshot rollback.',transaction:[{action:'install',package:'nginx',version:'1.26.3'}],reviews:[{path:'/etc/nginx/nginx.conf',reason:'Preserve local settings while updating the package configuration.',changed:true}],edits:[{path:'/etc/nginx/nginx.conf',diff:'--- current\n+++ planned\n-    listen 443 ssl http2;\n+    listen 443 ssl;\n+    http2 on;'}],sources:{'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main'}}}}));
     await page.route('**/api/hosts/*/releases/'+releaseId+'/decision',route=>{releaseDecisions.push(route.request().postDataJSON());releaseState='complete';return route.fulfill({json:{state:'approved',job_id:'fixture'}});});
     await page.locator('[data-nav=servers]').click();
     await page.getByRole('button',{name:'Manage ↗'}).first().click();
@@ -122,6 +122,30 @@ const assert=require('assert/strict');
     await page.getByRole('heading',{name:'Debian 12 → 13'}).waitFor();
     assert.deepEqual(releaseDecisions,[{decision:'go',digest:releaseDigest}]);
     await page.locator('#close-modal').click();
+    // A delayed progress response must never rebind a newer plan's GO button.
+    const oldId='b'.repeat(36),newId='c'.repeat(36),newDigest='c'.repeat(64);
+    let resolveJob,jobStarted;const delayedJob=new Promise(resolve=>resolveJob=resolve),jobStart=new Promise(resolve=>jobStarted=resolve);
+    await page.route('**/api/jobs/delayed-release-job',async route=>{jobStarted();await delayedJob;await route.fulfill({json:{state:'complete',output:'old plan preparation'}});});
+    for(const [id,digest,job_id] of [[oldId,'b'.repeat(64),'delayed-release-job'],[newId,newDigest,'']]){
+      await page.route('**/api/hosts/*/releases/'+id,route=>route.fulfill({json:{id,state:'ready',digest,job_id,plan:{target:{distribution:'Debian',from_version:'12',version:'13'},authorization:'Illustrative plan '+id}}}));
+    }
+    await page.evaluate(({host,id})=>{reviewRelease(host,id);},{host:ids.a,id:oldId});
+    await jobStart;
+    await page.evaluate(({host,id})=>reviewRelease(host,id),{host:ids.a,id:newId});
+    resolveJob();await page.waitForTimeout(100);
+    const raceDecisions=[];
+    await page.route('**/api/hosts/*/releases/*/decision',route=>{raceDecisions.push({url:route.request().url(),body:route.request().postDataJSON()});return route.fulfill({json:{state:'approved'}});});
+    await page.getByRole('button',{name:'GO · Execute approved plan',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#approve-release').disabled);
+    assert.equal(raceDecisions.length,1);assert.ok(raceDecisions[0].url.includes(newId));
+    assert.deepEqual(raceDecisions[0].body,{decision:'go',digest:newDigest});
+    // Closing a dialog also invalidates an in-flight plan fetch.
+    const slowId='d'.repeat(36);let resolvePlan,planStarted;
+    const delayedPlan=new Promise(resolve=>resolvePlan=resolve),planStart=new Promise(resolve=>planStarted=resolve);
+    await page.route('**/api/hosts/*/releases/'+slowId,async route=>{planStarted();await delayedPlan;await route.fulfill({json:{id:slowId,state:'ready',digest:newDigest,plan:{}}});});
+    await page.evaluate(({host,id})=>{reviewRelease(host,id);},{host:ids.a,id:slowId});
+    await planStart;await page.locator('#close-modal').click();resolvePlan();await page.waitForTimeout(100);
+    assert.equal(await page.locator('#modal').evaluate(node=>node.open),false);
     {
       // Illustrative fixture responses also exercise populated mobile tables in CI.
       const demoHosts=await (await page.request.get('http://127.0.0.1:8097/api/hosts')).json();

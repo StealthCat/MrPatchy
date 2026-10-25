@@ -16,6 +16,8 @@ ROOT=Path('/opt/drpatch')
 LIB=Path('/usr/local/lib/mrpatchy')
 OS_RELEASE=Path('/etc/os-release')
 SERVICE_POLICY_PATH=Path('/usr/sbin/policy-rc.d')
+STATUS_PATH=Path('/var/lib/dpkg/status')
+EXTENDED_STATES_PATH=Path('/var/lib/apt/extended_states')
 PATHS=('/etc/nginx/','/etc/apache2/','/etc/postfix/','/etc/dovecot/','/etc/chrony/')
 FORBIDDEN=('/etc/apt/','/etc/sudoers','/etc/pam.d/','/etc/systemd/','/etc/init','/etc/cron','/etc/mrpatchy/','/etc/ld.so','/etc/profile','/etc/bash','/etc/ssh/ssh_host_')
 TRANSITIONS={'debian':{'11':('12','bullseye','bookworm'),'12':('13','bookworm','trixie')},'ubuntu':{'22.04':('24.04','jammy','noble'),'24.04':('26.04','noble','resolute')}}
@@ -81,6 +83,18 @@ def custom_validator():
         return bool(info.st_mode & 0o100)
     except (OSError,ValueError):return False
 
+def execution_files():
+    paths=[str(LIB/'bridge.py'),'/etc/mrpatchy/rollback']
+    if custom_validator():paths.append('/etc/mrpatchy/release-validate')
+    result={}
+    for name in paths:
+        path,info=safe_file(name)
+        result[name]={'sha256':digest(path.read_bytes()),'mode':stat.S_IMODE(info.st_mode),'uid':info.st_uid,'gid':info.st_gid}
+    return result
+
+def check_execution_files(plan):
+    if plan.get('execution_files')!=execution_files():raise ValueError('Release helper or recovery/validation hook changed; prepare a new plan')
+
 def fingerprint(inv):
     return digest(canonical({k:inv[k] for k in ('os','architecture','foreign_architectures','status','files','keys','machine_id')}))
 def service_inventory(output):
@@ -116,7 +130,9 @@ def inspection():
             offer=b.run(['do-release-upgrade','-c'],timeout=180)
             if not re.search(r"['\"]"+re.escape(destination['version'])+r"(?:\.\d+)?(?: LTS)?['\"]",offer):blockers.append('Ubuntu has not offered the expected stable LTS upgrade')
         except Exception:blockers.append('Install update-manager-core and enable the supported LTS upgrade before planning')
-    return {'inventory':inv,'fingerprint':fingerprint(inv),'target':destination,'blockers':blockers,'custom_validator':custom_validator(),'services':services,'boot_id':b.boot_id(),'runner_sha256':digest(Path(__file__).read_bytes())}
+    try:files=execution_files()
+    except (OSError,ValueError) as error:files={};blockers.append('Unable to bind release helpers: '+str(error)[:300])
+    return {'inventory':inv,'fingerprint':fingerprint(inv),'target':destination,'blockers':blockers,'custom_validator':custom_validator(),'services':services,'execution_files':files,'boot_id':b.boot_id(),'runner_sha256':digest(Path(__file__).read_bytes())}
 
 def configurations(names):
     known=conffiles(Path('/var/lib/dpkg/status').read_text());result={}
@@ -153,6 +169,7 @@ def validate_plan(plan):
     if len(canonical(plan))>3_000_000:raise ValueError('Release plan too large')
     if plan.get('blockers'):raise ValueError('Blocked release plan')
     if plan.get('runner_sha256')!=digest(Path(__file__).read_bytes()):raise ValueError('Release runner changed since planning')
+    check_execution_files(plan)
     target=plan['target']
     if TRANSITIONS.get(target['distribution'],{}).get(target['from_version'])!=(target['version'],target['from_suite'],target['suite']):raise ValueError('Unsupported release transition')
     for edit in plan['edits']:
@@ -200,6 +217,7 @@ def command(args,folder,timeout=10800):
                 os.killpg(child.pid,signal.SIGKILL);child.wait()
 
 def validate_configs(plan,folder):
+    check_execution_files(plan)
     commands={tuple(validator(x['path'])) for x in plan['edits'] if validator(x['path'])}
     for cmd in sorted(commands):command(list(cmd),folder,120)
     if plan.get('custom_validation'):
@@ -208,22 +226,39 @@ def validate_configs(plan,folder):
 
 def schedule(folder,state,rollback=False):
     state.update(state='rollback_reboot_pending' if rollback else 'reboot_pending',boot_before=bridge().boot_id());save(folder,state)
-    bridge().run(['systemd-run','--unit=mrpatchy-release-reboot-'+state['job'],'--on-active=15s','/usr/bin/systemctl','reboot'],timeout=30)
+    prefix='mrpatchy-release-rollback-reboot-' if rollback else 'mrpatchy-release-reboot-'
+    bridge().run(['systemd-run','--unit='+prefix+state['job'],'--on-active=15s','/usr/bin/systemctl','reboot'],timeout=30)
     return state
 
 def rollback(identifier):
     folder=directory(identifier);state=read_state(identifier)
     if state['state'] in ('rolled_back','rollback_reboot_pending'):return state
     if not state.get('snapshot') or state.get('rollback_attempted'):raise ValueError('Rollback unavailable or already attempted; reconcile target')
+    plan=json.loads((folder/'plan.json').read_text());check_execution_files(plan)
+    # Cancel an outstanding normal reboot before touching the snapshot. A new,
+    # distinct timer is used if the rollback adapter requires a reboot.
+    if state['state']=='reboot_pending' and state.get('boot_before')==bridge().boot_id():
+        unit='mrpatchy-release-reboot-'+identifier+'.timer'
+        timers=bridge().run(['systemctl','list-timers','--all','--no-legend','--plain',unit],timeout=30)
+        if unit in timers.split():bridge().run(['systemctl','stop',unit],timeout=30)
     state.update(state='rolling_back',rollback_attempted=True);save(folder,state)
     result=bridge().recovery_hook('rollback',state['snapshot'])
     state['rollback']=result
     if result.get('reboot_required'):return schedule(folder,state,True)
-    health=bridge().handle({'action':'health'})
-    if health.get('failed_units') or not health.get('collector_active'):raise ValueError('Rollback service health failed')
+    restored(plan)
     state['state']='rolled_back';save(folder,state);return state
 
 SERVICE_POLICY=b'#!/bin/sh\n# Mr Patchy temporary release service-start guard\nexit 101\n'
+
+def remove_service_guard():
+    policy=SERVICE_POLICY_PATH
+    if not policy.exists() and not policy.is_symlink():return
+    if policy.is_symlink() or not policy.is_file() or policy.read_bytes()!=SERVICE_POLICY:
+        raise ValueError('Service-start guard changed; console recovery is required')
+    policy.unlink()
+    fd=os.open(str(policy.parent),os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
 
 def run_upgrade(identifier):
     folder=directory(identifier);state=read_state(identifier);plan=json.loads((folder/'plan.json').read_text())
@@ -240,8 +275,8 @@ def run_upgrade(identifier):
         # Defer maintainer-script service starts until the reviewed configuration is installed.
         policy=SERVICE_POLICY_PATH
         with policy.open('xb') as stream:
+            guarded=True
             stream.write(SERVICE_POLICY);stream.flush();os.fsync(stream.fileno());os.fchmod(stream.fileno(),0o755)
-        guarded=True
         if plan['target']['distribution']=='ubuntu':
             command(['do-release-upgrade','-f','DistUpgradeViewNonInteractive'],folder)
         else:
@@ -250,10 +285,7 @@ def run_upgrade(identifier):
             # Verify the native resolver still produces the reviewed package transaction.
             raw=bridge().bounded(['apt-get','-s','dist-upgrade'],env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'},timeout=300)[0]
             if parse_transaction(raw)!=plan['transaction']:raise ValueError('Repository candidates changed; rolling back rather than expanding approval')
-            opts=['apt-get','-y','-o','Dpkg::Options::=--force-confold']
-            command([*opts,'upgrade'],folder)
-            specs=[x['package']+'='+x['version'] if x['action']=='install' else x['package']+'-' for x in plan['transaction']]
-            command([*opts,'install','--',*specs],folder)
+            debian_transaction(plan['transaction'],folder)
         info=os_info(OS_RELEASE.read_text())
         if info.get('ID')!=plan['target']['distribution'] or info.get('VERSION_ID')!=plan['target']['version']:raise ValueError('Expected release was not installed')
         state['state']='configuring';save(folder,state)
@@ -264,17 +296,18 @@ def run_upgrade(identifier):
             bridge().atomic(path,edit['after'].encode(),edit['mode']);os.chown(path,edit['uid'],edit['gid'])
         validate_configs(plan,folder)
         if bridge().run(['dpkg','--audit'],timeout=60).strip():raise ValueError('dpkg audit failed before reboot')
+        remove_service_guard();guarded=False
         schedule(folder,state)
     except Exception as error:
         state=read_state(identifier);state['error']=str(error)[:1000];save(folder,state)
+        if guarded:
+            try:remove_service_guard();guarded=False
+            except Exception as cleanup_error:
+                state.update(state='recovery_required',error='Service-start guard cleanup failed: '+str(cleanup_error)[:500]);save(folder,state);return
         if state.get('snapshot'):
             try:rollback(identifier);return
             except Exception as rollback_error:state=read_state(identifier);state['rollback_error']=str(rollback_error)[:500]
         state['state']='recovery_required';save(folder,state)
-    finally:
-        if guarded:
-            policy=SERVICE_POLICY_PATH
-            if policy.is_file() and not policy.is_symlink() and policy.read_bytes()==SERVICE_POLICY:policy.unlink()
 
 def parse_transaction(output):
     rows=[]
@@ -285,6 +318,43 @@ def parse_transaction(output):
             rows.append({'action':'install','package':match[1].split(':')[0],'version':match[3]})
         elif line.startswith('Remv '):rows.append({'action':'remove','package':line.split()[1].split(':')[0],'version':''})
     return sorted(rows,key=lambda x:(x['package'],x['action'],x['version']))
+
+def records(text):
+    for paragraph in text.split('\n\n'):
+        yield dict(line.split(': ',1) for line in paragraph.splitlines() if ': ' in line and not line.startswith(' '))
+
+def installed_versions():
+    return {p['Package']:p['Version'] for p in records(STATUS_PATH.read_text())
+            if p.get('Status','').endswith(' ok installed')}
+
+def debian_transaction(transaction,folder):
+    """Pin both upgrade stages and preserve APT's dependency bookkeeping."""
+    before=installed_versions()
+    automatic={p['Package'] for p in records(EXTENDED_STATES_PATH.read_text() if EXTENDED_STATES_PATH.exists() else '')
+               if p.get('Auto-Installed')=='1' and p.get('Package')}
+    opts=['apt-get','-y','-o','Dpkg::Options::=--force-confold']
+    def simulate(args):
+        return parse_transaction(bridge().bounded(['apt-get','-s',*args],env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'},timeout=300)[0])
+    def apply(rows,expected,minimal=False):
+        if not rows:return
+        specs=[x['package']+'='+x['version'] if x['action']=='install' else x['package']+'-' for x in rows]
+        args=[*(['--no-remove'] if minimal else []),'install','--',*specs]
+        if simulate(args)!=expected:raise ValueError('Pinned package transaction differs from approval')
+        command([*opts,*args],folder)
+    minimal=simulate(['upgrade'])
+    if any(row['action']!='install' or row not in transaction for row in minimal):
+        raise ValueError('Minimal upgrade exceeds the approved transaction')
+    apply(minimal,minimal,True)
+    current=installed_versions()
+    remaining=[row for row in transaction if (current.get(row['package'])!=row['version'] if row['action']=='install' else row['package'] in current)]
+    apply(transaction,remaining)
+    after=installed_versions()
+    if any((after.get(row['package'])!=row['version'] if row['action']=='install' else row['package'] in after) for row in transaction):
+        raise ValueError('Installed packages do not match the approved transaction')
+    # Explicit version-pinned installs otherwise turn dependencies into manual
+    # packages, preventing future autoremove. Keep existing manual packages so.
+    auto=sorted((automatic | (after.keys()-before.keys())) & after.keys())
+    if auto:command(['apt-mark','auto','--',*auto],folder,120)
 
 def verify(identifier):
     folder=directory(identifier);state=read_state(identifier);plan=json.loads((folder/'plan.json').read_text())
@@ -301,6 +371,19 @@ def verify(identifier):
     for edit in plan['edits']:
         if digest(Path(edit['path']).read_bytes())!=digest(edit['after'].encode()):raise ValueError('Applied configuration changed after reboot')
     state.update(state='complete',health=health,boot_after=bridge().boot_id());save(folder,state);return state
+
+def restored(plan):
+    """Verify the original system even when snapshot restore reverted our journal.
+
+    Recovery must work after approval expiry; no mutation or AI call happens here.
+    """
+    check_execution_files(plan);check_drift(plan)
+    if bridge().run(['dpkg','--audit'],timeout=60).strip():raise ValueError('Restored package state is not clean')
+    health=bridge().handle({'action':'health'})
+    if health.get('failed_units') or not health.get('collector_active'):raise ValueError('Restored service health failed')
+    for unit in plan.get('services',[]):
+        if bridge().run(['systemctl','is-active','--',unit],timeout=15).strip()!='active':raise ValueError('Restored service is not active: '+unit)
+    return {'state':'rolled_back','health':health,'boot_after':bridge().boot_id()}
 
 if __name__=='__main__':
     os.umask(0o077)

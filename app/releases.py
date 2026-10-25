@@ -142,7 +142,7 @@ def vendor_files(root,cfg,package,version,names):
         for old in archive.glob('*.deb'):old.unlink()
     return found
 
-SECRET=re.compile(r'(?im)^(?!\s*[#;]).*\b(?:password|passwd|secret|token|authorization)\s*[:=\s]\s*\S+.*$|-----BEGIN [^-]*PRIVATE KEY-----')
+SECRET=re.compile(r'(?im)^(?!\s*[#;]).*(?:password|passwd|secret|token|authorization|api[_-]?key)[\w-]*[\"\']?\s*[:=\s]\s*\S+.*$|[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|-----BEGIN [^-]*PRIVATE KEY-----')
 def ai_review(s,target,path,current,vendor,news):
     settings=config(s);key=s.get(Setting,'openai_key')
     if not settings['ai_enabled'] or not settings['ai_model'] or not key:raise ValueError('Enable the OpenAI API integration to generate release configuration plans')
@@ -167,7 +167,7 @@ def build(s,host,identifier):
     inv=inspection['inventory'];save_inventory(s,host,inv);s.commit()
     plan={'format':1,'host_id':host.id,'target':inspection['target'],'created':time.time(),'expires':time.time()+86400,
           'runner_sha256':inspection['runner_sha256'],'ai_model':config(s)['ai_model'],'inventory_hash':inspection['fingerprint'],'blockers':list(inspection['blockers']),'warnings':['Service starts are temporarily deferred with policy-rc.d until configuration validation; the final reboot starts services.'],
-          'services':inspection.get('services',[]),'sources':{},'transaction':[],'configs':[],'edits':[],'reviews':[],'custom_validation':False,
+          'services':inspection.get('services',[]),'execution_files':inspection['execution_files'],'sources':{},'transaction':[],'configs':[],'edits':[],'reviews':[],'custom_validation':bool(inspection.get('custom_validator')),
           'authorization':'One GO authorizes this release transition, package additions/removals, the displayed configuration edits, service restarts, reboot and one snapshot rollback. Unexpected state stops for recovery.'}
     try:
         if not plan['target']:raise ValueError('No supported release path')
@@ -223,50 +223,80 @@ def build(s,host,identifier):
     store(row,plan);row.state='blocked' if plan['blockers'] else 'ready';s.commit()
     return {'plan_id':identifier,'state':row.state,'blockers':plan['blockers']}
 
+RECEIPT_PHASES={'accepted','snapshotting','upgrading','configuring','reboot_pending',
+                'rolling_back','rollback_reboot_pending','rolled_back','complete','recovery_required'}
+TRANSPORT_ERRORS=(OSError,RuntimeError,ValueError,ssh.paramiko.SSHException)
+
 def execute(s,host,job):
     """Resume observation after central restarts; accepted target jobs are never replayed."""
     row=s.get(ReleasePlan,job.payload['plan_id']);plan=body(row)
     if row.digest!=job.payload['digest'] or digest(canonical(plan))!=row.digest:raise ValueError('Approved plan changed')
     if '_release_started' not in job.payload:job.payload={**job.payload,'_release_started':time.time()}
     row.state='running';s.commit()
-    try:saved=json.loads(job.output) if job.output else {}
-    except ValueError:saved={}
-    state=saved if saved.get('state')=='rollback_reboot_pending' else ssh.call(host,{'action':'release-status','job_id':job.id})
-    if state['state']=='absent':
-        if job.output:raise RuntimeError('Target receipt disappeared after submission; refusing to replay release upgrade')
-        job.output=json.dumps({'state':'submitting','digest':row.digest});s.commit()
-        state=ssh.call(host,{'action':'release-start','job_id':job.id,'plan':plan,'digest':row.digest},timeout=180)
-    deadline=job.payload['_release_started']+4*3600;health_deadline=None;last_state=None
+    # Receipts belong in durable structured state, never in a truncated display log.
+    saved=job.payload.get('_release_receipt',{})
+    if not saved:
+        try:saved=json.loads(job.output) if job.output else {}
+        except ValueError:saved={}
+    state=saved if saved.get('state')=='rollback_reboot_pending' else None
+    submitted=bool(job.payload.get('_release_submitted') or job.output or saved)
+    deadline=job.payload['_release_started']+4*3600
+
+    def remember(receipt):
+        if receipt.get('state') not in RECEIPT_PHASES or receipt.get('digest')!=row.digest or receipt.get('job',job.id)!=job.id:
+            raise ValueError('Target release receipt mismatch')
+        small={k:receipt[k] for k in ('state','digest','job','boot_before','boot_after','snapshot','error','rollback_attempted','updated') if k in receipt}
+        if 'error' in small:small['error']=str(small['error'])[:1000]
+        if job.payload.get('_release_receipt')!=small:
+            job.payload={**job.payload,'_release_receipt':small};job.output=json.dumps(small);s.commit()
+
     while time.time()<deadline:
-        if state.get('digest') not in (None,row.digest):raise ValueError('Target release receipt mismatch')
-        if state!=last_state:
-            job.output=json.dumps(state)[:48000];s.commit();last_state=state
+        if state is None:
+            try:state=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+            except TRANSPORT_ERRORS:time.sleep(5);continue
+        if state.get('state')=='absent':
+            if submitted:raise RuntimeError('Target receipt disappeared after submission; refusing to replay release upgrade')
+            job.payload={**job.payload,'_release_submitted':True};s.commit();submitted=True
+            try:state=ssh.call(host,{'action':'release-start','job_id':job.id,'plan':plan,'digest':row.digest},timeout=180)
+            except TRANSPORT_ERRORS:
+                # The detached process may have accepted the command before SSH
+                # disconnected. Query its receipt; never send start a second time.
+                state=None;time.sleep(5);continue
+        remember(state)
         phase=state['state']
-        if phase=='absent':raise RuntimeError('Target release journal disappeared; refusing to replay the upgrade')
         if phase in ('complete','rolled_back'):
-            if phase=='rolled_back':
-                health=ssh.call(host,{'action':'health'},timeout=30)
-                if health.get('failed_units') or not health.get('collector_active'):raise RuntimeError('Rolled back target is not healthy')
+            if phase=='rolled_back':ssh.call(host,{'action':'release-restored','plan':plan},timeout=120)
             row.state=phase;s.commit();return {'outcome':phase,'release_plan':row.id}
         if phase=='recovery_required':raise RuntimeError(state.get('error','Release upgrade needs recovery'))
         if phase in ('reboot_pending','rollback_reboot_pending'):
-            if health_deadline is None:health_deadline=time.monotonic()+900
+            key=phase+':'+str(state.get('boot_before',''))
+            health=job.payload.get('_release_health',{})
+            if health.get('key')!=key:
+                health={'key':key,'deadline':time.time()+900}
+                job.payload={**job.payload,'_release_health':health};s.commit()
             try:
                 if phase=='rollback_reboot_pending':
                     # Filesystem rollback can remove its own target receipt.
                     boot=ssh.call(host,{'action':'recovery-status'},timeout=15)
-                    health=ssh.call(host,{'action':'health'},timeout=15)
-                    if boot['boot_id']!=state['boot_before'] and health.get('collector_active') and not health.get('failed_units'):
+                    if state.get('boot_before') and boot.get('boot_id') and boot['boot_id']!=state['boot_before']:
+                        ssh.call(host,{'action':'release-restored','plan':plan},timeout=120)
+                        state={**state,'state':'rolled_back','boot_after':boot['boot_id']};remember(state)
                         row.state='rolled_back';s.commit();return {'outcome':'rolled_back','release_plan':row.id}
                 else:
                     completed=ssh.call(host,{'action':'release-verify','job_id':job.id},timeout=600)
-                    if completed['state']=='complete':state=completed;continue
-            except (OSError,RuntimeError,ValueError,ssh.paramiko.SSHException):pass
-            if time.monotonic()>health_deadline:
-                if phase=='rollback_reboot_pending':raise RuntimeError('Release rollback reboot/health could not be verified')
-                state=ssh.call(host,{'action':'release-rollback','job_id':job.id},timeout=1900);health_deadline=None;continue
+                    if completed.get('state')=='complete':state=completed;continue
+            except TRANSPORT_ERRORS:pass
+            if time.time()>health['deadline']:
+                if phase=='rollback_reboot_pending':raise RuntimeError('Release rollback reboot/original-system verification failed')
+                # Save intent and the current boot before the one allowed rollback.
+                # A lost reply or journal reverted by a snapshot cannot replay it.
+                boot=ssh.call(host,{'action':'recovery-status'},timeout=15)
+                if not boot.get('boot_id'):raise RuntimeError('Cannot record pre-rollback boot identity')
+                state={**state,'state':'rollback_reboot_pending','boot_before':boot['boot_id'],'rollback_attempted':True}
+                remember(state)
+                try:state=ssh.call(host,{'action':'release-rollback','job_id':job.id},timeout=1900)
+                except TRANSPORT_ERRORS:pass
+                continue
         time.sleep(5)
-        try:
-            if phase!='rollback_reboot_pending':state=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
-        except (OSError,RuntimeError,ValueError,ssh.paramiko.SSHException):pass
+        if phase!='rollback_reboot_pending':state=None
     raise RuntimeError('Release exceeded its four-hour observation window; inspect target before reconciliation')

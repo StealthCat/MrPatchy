@@ -14,7 +14,7 @@ Mr Patchy can prepare and execute an adjacent release transition from a single *
 
 Execution supports single-architecture amd64 and arm64 systemd hosts. It does not skip releases, enable development releases, or guess a derivative's upgrade procedure. Raspberry Pi OS is detected through OS identity, vendor packages and repository definitions, including 64-bit installations identifying as Debian.
 
-Ubuntu's native upgrader can make additional package decisions through vendor migration hooks. The plan clearly labels the central APT package list as an **estimate** for Ubuntu; GO authorizes the named release transition. Debian re-simulates the complete transaction on the target and rejects candidate drift before installing packages.
+Ubuntu's native upgrader can make additional package decisions through vendor migration hooks. The plan clearly labels the central APT package list as an **estimate** for Ubuntu; GO authorizes the named release transition. Debian re-simulates the complete transaction on the target, verifies that the minimal stage is a subset of approval, and pins exact versions in both stages. Each pinned stage is simulated before execution; additions/removals outside its approved transaction trigger recovery. Installed versions are verified afterward. Existing automatic/manual dependency markings are preserved, and newly introduced dependencies are marked automatic.
 
 ## Use the workflow
 
@@ -26,7 +26,7 @@ Ubuntu's native upgrader can make additional package decisions through vendor mi
 
 ![Release upgrade review with illustrative fixture data](screenshots/release-upgrade.webp)
 
-The target runner verifies inventory, repository keys, configuration hashes/ownership/modes and its own code against the approved plan. Approval is bound to a SHA-256 digest and expires after 24 hours. A changed target or expired plan requires regeneration and another GO. Maintenance windows gate job start; they do not terminate an upgrade already in progress.
+The target runner verifies inventory, repository keys, configuration hashes/ownership/modes and its own code against the approved plan. The bridge and root-owned recovery/validation hooks are bound by SHA-256, owner and mode too; replacing them requires a new plan. Update helpers and regenerate old, unexecuted plans before using this release. Do not redeploy helpers while an upgrade is running. Approval is bound to a SHA-256 digest and expires after 24 hours. A changed target or expired plan requires regeneration and another GO. Maintenance windows gate job start; they do not terminate an upgrade already in progress.
 
 ## What the plan contains
 
@@ -36,6 +36,7 @@ The target runner verifies inventory, repository keys, configuration hashes/owne
 - Package-owned conffiles for changed installed packages, current SHA-256/metadata, authenticated new package defaults and available packaged `NEWS` material.
 - AI-proposed complete configuration content, reasons, blockers and unified diffs. The AI cannot choose commands, target paths or validators.
 - The set of previously running services required to recover after reboot; transient login/SSH session units are excluded.
+- Hashes and metadata of the bridge, rollback adapter and optional site-validation hook.
 - Explicit authorization for reboot and one snapshot rollback, independent of routine patch settings.
 
 Protected/executable configuration such as PAM, sudoers, systemd and cron is never rewritten by the AI. Unmodified vendor-owned protected files remain under distribution package management. Locally modified protected files block the plan. Deleted/moved vendor conffiles, unreadable/symlinked files, unsupported validators and uncertain AI migrations also block GO.
@@ -46,7 +47,7 @@ AI review covers **installed package-owned configuration files**, not every arbi
 
 Preparing a plan sends eligible configuration **contents**, new vendor defaults and package news to the configured OpenAI Responses API. This differs from process investigations, which do not send file contents. The preparation screen discloses this before planning starts. Do not use it for configurations your API provider may not process.
 
-Potential password/token/private-key material blocks automatic AI review. Detection is heuristic, not guaranteed secret discovery. No AI-generated shell command is executed. Proposed configuration can still change service behavior, so administrators must review the actual diff before GO. The exact approved content is frozen; the model is not asked to improvise repairs during execution.
+Potential password/token/private-key material, compound keys such as `db_password`/`client_secret`, and credentials embedded in URLs block automatic AI review. Detection is heuristic, not guaranteed secret discovery. No AI-generated shell command is executed. Proposed configuration can still change service behavior, so administrators must review the actual diff before GO. The exact approved content is frozen; the model is not asked to improvise repairs during execution.
 
 Limits: 256 configuration files, 128 KiB per file, 2 MiB collected configuration evidence, 32 AI file reviews per plan, 3 MiB final plan, 512 MiB individual downloaded archive and 1 GiB expanded archive stream. Limits fail closed. Release planning has its own per-plan request cap; the process-investigation hourly cap does not cover these calls. API usage incurs the configured account's normal charges. Plans are encrypted in the database; plan/diff APIs are administrator-only.
 
@@ -68,19 +69,19 @@ For configuration types without a built-in syntax validator, install a root-owne
 /etc/mrpatchy/release-validate validate /opt/drpatch/releases/JOB_ID/plan.json
 ```
 
-Return zero only when the planned deployment is valid. The hook runs after configuration writes and again after reboot. It should verify site-specific configurations/data migrations and reject unsupported changes. Built-in validators cover SSH server, nginx, Apache, Postfix, Dovecot and Chrony configuration paths. Application migration code is administrator-provided; the AI does not install arbitrary executable hooks.
+Return zero only when the planned deployment is valid. When present during planning, the hook runs after configuration writes and again after reboot, including plans with no edited files or only built-in validators. Its hash/metadata must still match the approved plan. Rollback verifies the original inventory/configurations and running services separately; the forward-migration validator is not used to validate the older restored configuration. It should verify site-specific configurations/data migrations and reject unsupported changes. Built-in validators cover SSH server, nginx, Apache, Postfix, Dovecot and Chrony configuration paths. Application migration code is administrator-provided; the AI does not install arbitrary executable hooks.
 
 Preflight requires healthy services, clean dpkg state, no held/broken packages, at least 8 GiB free on `/` and 512 MiB on `/boot`, no existing `policy-rc.d`, and an offered Ubuntu LTS path where applicable. Keep the installed release fully updated and reboot any pending kernel update before planning. Disk thresholds are floors, not a calculated guarantee for every workload.
 
 ## Execution and recovery states
 
-The detached systemd service holds the target mutation lock while upgrading. It journals snapshot creation, package execution, configuration application and reboot intent. A temporary `policy-rc.d` returns 101 to defer maintainer-script service starts until configuration is ready; it is removed on normal completion/error handling. Package maintainer scripts may still stop services or perform other migrations.
+The detached systemd service holds the target mutation lock while upgrading. It journals snapshot creation, package execution, configuration application and reboot intent. A temporary `policy-rc.d` returns 101 to defer maintainer-script service starts until configuration is ready; its exact owned content is removed and the directory synced **before** any reboot is scheduled or rollback hook is called. A replaced guard is preserved and quarantines the operation for console recovery. Package maintainer scripts may still stop services or perform other migrations.
 
-After the upgrade, the runner writes the frozen configuration edits, invokes fixed validators, checks dpkg, records reboot intent and schedules reboot. The central worker verifies the release, reviewed configuration hashes, collector health and previously running services before marking the plan complete. Transient reboot/health errors are retried for 15 minutes; the overall observation budget is four hours from execution start.
+After the upgrade, the runner writes the frozen configuration edits, invokes fixed validators, checks dpkg, records reboot intent and schedules reboot. The central worker verifies the release, reviewed configuration hashes, collector health and previously running services before marking the plan complete. Transient reboot/health errors are retried for 15 minutes; the overall observation budget is four hours from execution start. These deadlines and structured recovery receipts are persisted separately from presentation logs, so a worker restart cannot reset the budget or lose a receipt to log truncation.
 
-A package/configuration failure invokes one snapshot rollback. Persistent post-reboot failure also requests that rollback. The central receipt survives a root filesystem rollback and can verify the restored boot even when the target journal has reverted. A verified rollback leaves the upgrade job failed and the plan `rolled_back`.
+A package/configuration failure invokes one snapshot rollback. Persistent post-reboot failure also requests that rollback. The central receipt survives a root filesystem rollback and can verify the restored boot even when the target journal has reverted. Verification requires the original inventory fingerprint (OS, package database, repositories and keys), approved configuration hashes/metadata, clean dpkg state, healthy collector and original running services. A changed boot ID and generic health alone are insufficient. Normal and rollback reboots use distinct timers; an outstanding normal reboot timer is stopped before an explicitly requested rollback. A verified rollback leaves the upgrade job failed and the plan `rolled_back`.
 
-After a central worker restart, workers resume **observing** running release jobs under the host lock. They never replay an accepted package transaction. Ambiguous submission, missing receipts, unverified rollback or a target that never returns become `recovery_required`; subsequent host mutations remain quarantined. If power is lost mid-upgrade, a transient systemd service does not replay on boot: inspect the journal and recover through the trusted console.
+After a central worker restart, workers resume **observing** running release jobs under the host lock. They never replay an accepted package transaction. Lost SSH replies are followed by receipt observation, never blind resubmission. Missing receipts after submission, unverified rollback or a target that never returns become `recovery_required` and generate a persistent recovery alert; subsequent host mutations remain quarantined. If power is lost mid-upgrade, a transient systemd service does not replay on boot: inspect the journal and recover through the trusted console.
 
 Use Activity's reconciliation only after inspecting target package/service/boot state, snapshot status, `mrpatchy-release-*` services/timers and `/usr/sbin/policy-rc.d`. A process/power failure may leave the temporary service-start guard in place; verify its exact Mr Patchy contents before removing it. Do not release the queue while an upgrade or delayed reboot is still active.
 
@@ -88,7 +89,7 @@ Protected diagnostics are under `/opt/drpatch/releases/JOB_ID/`: `plan.json`, `s
 
 ## Validation and references
 
-Automated tests exercise source transformation, Pi identification, immutable approval, expiry/roles, detached submission, package-default extraction, upgrade/rollback sequencing, crash/restart receipts and browser GO submission. CI runs the normal MySQL, SSH enrollment and deployment suites as well. These tests do not perform a real operating-system release upgrade or boot a real rollback snapshot. Validate each supported path and adapter in a disposable clone matching the production workload before use.
+Automated tests exercise source transformation, Pi identification, immutable approval, expiry/roles, detached submission, package-default extraction, upgrade/rollback sequencing, crash/restart receipts and deadlines, original-system rollback checks, helper binding, both pinned Debian stages and auto/manual dependency markings, guard cleanup, credential filtering, lock-resource cleanup and delayed browser GO responses. CI runs the normal MySQL, SSH enrollment and deployment suites as well. These tests do not perform a real operating-system release upgrade or boot a real rollback snapshot. Validate each supported path and adapter in a disposable clone matching the production workload before use.
 
 Primary references:
 

@@ -64,6 +64,8 @@ def collect_alerts():
                 alert.message=message
                 if alert.state=='resolved':alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
         for host in s.scalars(select(Host)):
+            recovery=list(s.scalars(select(Job.id).where(Job.host_id==host.id,Job.state=='recovery_required')))
+            if recovery:record(host,'recovery',str(len(recovery))+' operation(s) require console recovery/reconciliation. See Activity: '+', '.join(recovery[:10]))
             if host.state=='enrolling':continue
             if now-host.last_seen>120:record(host,'stale','Telemetry has not arrived within 120 seconds')
             if host.integrity:record(host,'integrity',json.dumps(host.integrity)[:8000])
