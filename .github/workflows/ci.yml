@@ -33,6 +33,8 @@ jobs:
           done
           curl --fail --retry 10 --retry-delay 1 --retry-all-errors --cacert /tmp/mrpatchy-ci-root.crt https://localhost/healthz
           docker compose --env-file .env.ci exec -T app python -c "from pathlib import Path; uid=next(x.split()[1:] for x in Path('/proc/1/status').read_text().splitlines() if x.startswith('Uid:')); assert uid == ['10001']*4, uid"
+      - name: Verify real Caddy client identity and spoof rejection
+        run: python tests/integration_proxy.py
       - name: Compose diagnostics and cleanup
         if: always()
         run: |

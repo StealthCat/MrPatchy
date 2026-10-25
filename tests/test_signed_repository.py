@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import http.server
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -78,4 +79,35 @@ def test_central_apt_verifies_signatures_and_package_hashes(tmp_path,monkeypatch
         (dist/'InRelease').write_text((dist/'InRelease').read_text().replace('Origin: Patchy Test','Origin: Forged Test'))
         shutil.rmtree(tmp_path/'central/apt/signed-test/var/lib/apt/lists')
         with pytest.raises(RuntimeError): apt.refresh('signed-test',inv,access)
+        # Authenticated but expired metadata must also fail closed.
+        expired=re.sub(r'^Valid-Until:.*$', 'Valid-Until: '+format_datetime(datetime.now(timezone.utc)-timedelta(days=1)), release, flags=re.M)
+        signed_expired=PGPMessage.new(expired,cleartext=True);signed_expired |= signing.sign(signed_expired,hash=HashAlgorithm.SHA256)
+        (dist/'InRelease').write_text(str(signed_expired))
+        shutil.rmtree(tmp_path/'central/apt/signed-test/var/lib/apt/lists')
+        with pytest.raises(RuntimeError,match='expired'):apt.refresh('signed-test',inv,access)
     finally: server.shutdown();server.server_close()
+
+@pytest.mark.parametrize('separator',[' ', '\t'])
+def test_native_apt_trusted_whitespace_bypass_is_blocked(tmp_path,monkeypatch,separator):
+    """Native APT accepts the dangerous spelling; our trust boundary must not."""
+    repo=tmp_path/'repo';dist=repo/'dists/stable';binary=dist/'main/binary-amd64';binary.mkdir(parents=True)
+    (binary/'Packages').write_bytes(b'')
+    (dist/'Release').write_text('Suite: stable\nCodename: stable\nArchitectures: amd64\nComponents: main\nDate: '+format_datetime(datetime.now(timezone.utc))+'\nSHA256:\n '+hashlib.sha256(b'').hexdigest()+' 0 main/binary-amd64/Packages\n')
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self,*args):pass
+    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Quiet,directory=str(repo)))
+    threading.Thread(target=server.serve_forever,daemon=True).start()
+    monkeypatch.setattr(apt,'DATA',tmp_path/'central')
+    source=f'Types: deb\nURIs: http://127.0.0.1:{server.server_port}\nSuites: stable\nComponents: main\n'
+    name='/etc/apt/sources.list.d/test.sources'
+    inv={'architecture':'amd64','foreign_architectures':[],'status':'','files':{name:source},'keys':{}}
+    try:
+        root,cfg=apt.prepare('whitespace',inv)
+        with pytest.raises(RuntimeError,match='not signed'):apt.run(cfg,['apt-get','update'])
+        malicious=source+'Trusted'+separator+': yes\n'
+        # Write directly to the native fixture to demonstrate APT's interpretation.
+        (root/name.lstrip('/')).write_text(malicious)
+        apt.run(cfg,['apt-get','update'])
+        inv['files'][name]=malicious
+        with pytest.raises(ValueError,match='Deb822 field'):apt.prepare('whitespace',inv)
+    finally:server.shutdown();server.server_close()

@@ -25,7 +25,7 @@ Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian and Ras
 
 ## Quick start
 
-Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Publish ports 80/443 for Caddy; keep the app and Caddy administration ports private.
+Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Publish ports 80/443 for Caddy; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
 
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
@@ -85,6 +85,7 @@ Configure each host under **Account → Operations → SSO, SMTP & target polici
 - Rollback requires a validated root-owned `/etc/mrpatchy/rollback` adapter and a bootable snapshot layout. A Snapper/Btrfs adapter is included; arbitrary ext4 systems do not gain snapshot rollback automatically.
 - The target journals reboot intent **before** submitting a reboot. Completion requires a changed boot ID and healthy services.
 - Transient SSH/health failures are retried for up to ten minutes. Persistent post-reboot health failure requests one approved snapshot rollback; a rollback reboot is verified separately.
+- Before a rollback-enabled patch, the central database durably records the original inventory fingerprint, configuration hashes/ownership/modes and running services. Rollback must restore that evidence, clean dpkg state and service health; a healthy boot alone is insufficient. Missing or changed evidence requires reconciliation.
 - A verified rollback leaves the patch job failed and blocks later rollout stages. Uncertain recovery becomes `recovery_required`.
 - Orphaned `running` and `recovery_required` jobs block further queued work and configuration mutations for that host. Monitoring continues. Busy workers skip the host instead of tying up another worker slot.
 - After inspecting package/service state, snapshots and pending reboot timers through a trusted console, use **Activity → Review interrupted operation**. Reconciliation also requires idle central and target mutation locks. It releases the queue without replaying the interrupted job.
@@ -94,6 +95,8 @@ A host that never returns over SSH cannot be automatically repaired from the cen
 ## Distribution release upgrades
 
 Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
+
+Cancelling a queued planning or upgrade job also cancels its linked plan. Prepare a fresh plan before another GO; cancellation does not preserve approval.
 
 One GO authorizes the named release transition, displayed configuration edits, service interruption, reboot and one snapshot rollback. The detached target runner survives SSH disconnects; workers resume observation after a central restart without replaying installation or resetting recovery deadlines. The approved plan binds configuration, inventory and executable recovery/validation hooks. A rollback is successful only when the original inventory, repository trust, configuration and services have been verified. Uncertain recovery quarantines the host and creates an alert.
 
@@ -107,7 +110,7 @@ A tested release-capable snapshot adapter is mandatory. Generic root-only Snappe
 
 Use **Repositories** to inspect, add, edit or disable sources, upload signing keys and restore reviewed source backups. **Repository access** configures scoped HTTPS credentials, private CA bundles, proxies, default release and exact-URI mirror mappings. Secrets are encrypted in the database and staged in a private central APT auth file.
 
-HTTP(S) repositories are supported directly. Local/media sources require an administrator-provisioned HTTP(S) mirror containing the same signed metadata. Arbitrary target `apt.conf` hooks and executable authentication/transport helpers are never imported. Unsupported configurations remain visible and fail closed; “all repositories” is not an unconditional transport-compatibility claim.
+HTTP(S) repositories are supported directly. Local/media sources require an administrator-provisioned HTTP(S) mirror containing the same signed metadata. Arbitrary target `apt.conf` hooks and executable authentication/transport helpers are never imported. Deb822 field names must use canonical spelling without spaces or tabs before the colon; ambiguous or duplicate fields are rejected before native APT. Unsupported configurations remain visible and fail closed; “all repositories” is not an unconditional transport-compatibility claim.
 
 **Servers → Manage → Repair broken package state** explicitly performs dependency repair and dpkg configuration. It can install dependencies and run maintainer scripts; inspect failed results before retrying.
 
@@ -115,13 +118,13 @@ HTTP(S) repositories are supported directly. Local/media sources require an admi
 
 Default cadences are **60 minutes** for configurable repository checks, **30 seconds** for process/socket sampling, and **five minutes** for integrity sweeps. Slow targets or large fleets can delay them; stale telemetry and overdue sweeps are reported.
 
-The collector hashes Mr Patchy's managed files and readable running executables. Script operands and executable-mapped libraries contribute to behavior identity. Libraries are read through `/proc/PID/map_files` where permitted, or through a pathname only when its device/inode still matches. Deleted/inaccessible/replaced mappings remain explicit unverified evidence. Script hashes describe files, not the interpreter's live memory. Limits are 128 provenance files per process and 128 MiB per file.
+The collector hashes Mr Patchy's managed files and readable running executables. Script operands, including supported interpreter options such as Python `-I`/`-u`, and executable-mapped libraries contribute to behavior identity. Inline code, modules, preloads and unrecognized option layouts retain explicit unverified entries without exporting argument values. Libraries are read through `/proc/PID/map_files` where permitted, or through a pathname only when its device/inode still matches. Deleted/inaccessible/replaced mappings remain explicit unverified evidence. Script hashes describe files, not the interpreter's live memory. Limits are 128 provenance files per process and 128 MiB per file. Descriptor-based hashing checks inode changes and uses a two-second per-file and ten-second per-sweep elapsed budget. Oversized, inaccessible or changed executables remain visible as unverified; these cooperative budgets cannot interrupt a kernel-stalled filesystem read.
 
 Optional bpftrace exec capture retains short-lived observations. Unverifiable identities stay marked unverified through central processing. Enabling eBPF relaxes the collector sandbox for kernel tracing; kernel support and acceptance testing are required. It is not guaranteed lossless capture or hardware attestation.
 
 Enable AI in **Settings** with an OpenAI API key and a compatible Responses API model. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Process-investigation evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent by that workflow. Release configuration planning separately sends eligible configuration text, as disclosed before planning. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
 
-The target's durable spool acknowledges batches only after central commit; overflow is visible. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
+The target's durable spool acknowledges batches only after central commit; overflow is visible. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
 
 ## Accounts, SSO, notifications and keys
 

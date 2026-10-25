@@ -21,6 +21,10 @@ def paragraphs(text):
             if line[:1].isspace() and key: item[key]+='\n'+line
             elif ':' in line:
                 key,value=line.split(':',1)
+                # APT tolerates whitespace before ':'. Reject it rather than let
+                # validation and native APT disagree about security fields.
+                if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*',key):
+                    raise ValueError('Invalid Deb822 field name')
                 if key.lower() in {k.lower() for k in item}: raise ValueError('Duplicate Deb822 field: '+key)
                 item[key]=value.strip()
         if item: yield item

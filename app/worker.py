@@ -147,6 +147,19 @@ def ingest(s,h,snapshot,include_inventory=True):
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
     s.commit()
 
+def drain_events(s,h,snapshot,max_batches=32,budget=10):
+    """Commit before acknowledgement; bounded catch-up without full inventories."""
+    deadline=time.monotonic()+budget
+    for index in range(max_batches):
+        events=snapshot.get('events',[])
+        if not events:return
+        ids=ingest_events(s,h,snapshot);s.commit()
+        ssh.call(h,{'action':'ack','ids':ids},timeout=max(1,deadline-time.monotonic()))
+        if snapshot.get('spool',{}).get('pending',len(events))<=len(events):return
+        if index+1==max_batches or time.monotonic()>=deadline:return
+        snapshot=ssh.call(h,{'action':'events'},timeout=max(1,deadline-time.monotonic()))
+
+
 def poll_host(host_id):
     lock=host_lock(host_id)
     locked=lock.acquire(False)
@@ -157,7 +170,7 @@ def poll_host(host_id):
             try:
                 snapshot=ssh.call(h,{'action':'snapshot'})
                 ingest(s,h,snapshot,include_inventory=locked)
-                if snapshot.get('events'): ssh.call(h,{'action':'ack','ids':[e['id'] for e in snapshot['events']]})
+                drain_events(s,h,snapshot)
             except Exception as e:
                 s.rollback()
                 h=s.get(Host,host_id)
@@ -168,7 +181,9 @@ def poll_host(host_id):
 class RecoveryTimeout(RuntimeError):pass
 
 
-def wait_for_reboot(host,result,job_id,timeout=600):
+def wait_for_reboot(host,result,job_id,timeout=600,original=None):
+    if result.get('outcome')=='rollback_pending' and (not isinstance(original,dict) or original.get('version')!=1):
+        raise ValueError('Original recovery evidence is missing; reconcile target state')
     deadline=time.monotonic()+timeout;last_error='Waiting for a changed boot ID'
     while time.monotonic()<deadline:
         time.sleep(5)
@@ -181,117 +196,159 @@ def wait_for_reboot(host,result,job_id,timeout=600):
             if result.get('outcome')=='rollback_pending':
                 # A root filesystem rollback can also revert the target journal.
                 # The centrally persisted rollback receipt survives that rollback.
-                return {**result,'outcome':'rolled_back','reboot_verified':True,'health':health}
+                verified=verify_patch_recovery(host,original)
+                return {**result,**verified,'reboot_verified':True,'health':health}
             return ssh.call(host,{'action':'complete-recovery','job_id':job_id},timeout=15)
         except (OSError,ssh.paramiko.SSHException,RuntimeError,ValueError) as error:
             last_error=str(error)[:1000]
     raise RecoveryTimeout('Reboot/health not verified within the recovery window: '+last_error)
 
 
+def verify_patch_recovery(host,original):
+    if not isinstance(original,dict) or original.get('version')!=1:
+        raise ValueError('Original recovery evidence is missing; reconcile target state')
+    verified=ssh.call(host,{'action':'patch-restored','original':original},timeout=120)
+    if verified.get('outcome')!='rolled_back' or verified.get('original_state_verified') is not True:
+        raise ValueError('Original target state has not been verified')
+    return verified
+
+
 def finish_recovery(s,host,job,result,policy):
-    if not result.get('reboot_scheduled'):return result
+    original=job.payload.get('_patch_original')
+    if not result.get('reboot_scheduled'):
+        if result.get('outcome')=='rolled_back':result={**result,**verify_patch_recovery(host,original)}
+        return result
     job.output=json.dumps(result);s.commit() # Persist receipt before the target can reboot.
-    try:return wait_for_reboot(host,result,job.id)
+    try:return wait_for_reboot(host,result,job.id,original=original)
     except RecoveryTimeout:
         if not policy.get('rollback') or result.get('outcome')=='rollback_pending':raise
         # The target refuses this if it has not rebooted, has no snapshot, or
         # rollback was already attempted. Never repeat a snapshot rollback.
         recovery=ssh.call(host,{'action':'rollback-patch','job_id':job.id},timeout=1900)
         job.output=json.dumps(recovery);s.commit()
-        return wait_for_reboot(host,recovery,job.id) if recovery.get('reboot_scheduled') else recovery
+        if recovery.get('reboot_scheduled'):return wait_for_reboot(host,recovery,job.id,original=original)
+        return {**recovery,**verify_patch_recovery(host,original)}
 
 
-def execute(job_id):
+def submit_job(pool,job,active,busy):
+    if job.id in active or job.host_id in busy:return False
+    lock=host_lock(job.host_id)
+    if not lock.acquire(False):return False
+    try:future=pool.submit(execute,job.id,lock)
+    except BaseException:
+        lock.release();raise
+    active[job.id]=(future,job.host_id);busy.add(job.host_id)
+    return True
+
+
+def execute(job_id,reserved_lock=None):
+    lock=reserved_lock
+    if lock is None:
+        with Session() as s:
+            job=s.get(Job,job_id)
+            if not job:return
+            lock=host_lock(job.host_id)
+        if not lock.acquire(False):return
+    try:return execute_locked(job_id)
+    finally:lock.release()
+
+
+def execute_locked(job_id):
     with Session() as s:
         job=s.get(Job,job_id)
-        if not job or (job.state!='queued' and not (job.action=='release-upgrade' and job.state=='running')): return
-        lock=host_lock(job.host_id)
-        if not lock.acquire(False):return
+        if not job or (job.state!='queued' and not (job.action=='release-upgrade' and job.state=='running')):return
+        # End a pre-lock MySQL REPEATABLE READ snapshot before quarantine checks.
+        s.rollback()
+        s.refresh(job)
+        resuming=job.action=='release-upgrade' and job.state=='running'
+        if job.state!='queued' and not resuming:return
+        if operations.host_quarantined(s,job.host_id,exclude=job.id):return
+        if not resuming and not operations.eligible(s,job): return
+        claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
+        s.commit()
+        if claimed!=1:return
+        s.refresh(job)
+        h=s.get(Host,job.host_id);protected=job.action=='release-upgrade';result={}
         try:
-            # End a pre-lock MySQL REPEATABLE READ snapshot before quarantine checks.
-            s.rollback()
-            s.refresh(job)
-            resuming=job.action=='release-upgrade' and job.state=='running'
-            if job.state!='queued' and not resuming:return
-            if operations.host_quarantined(s,job.host_id,exclude=job.id):return
-            if not resuming and not operations.eligible(s,job): return
-            claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
-            s.commit()
-            if claimed!=1:return
-            s.refresh(job)
-            h=s.get(Host,job.host_id);protected=job.action=='release-upgrade';result={}
-            try:
-                if not h: raise ValueError('Host no longer exists')
-                if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
-                elif job.action=='release-upgrade':
-                    result=releases.execute(s,h,job)
-                    job.output=json.dumps(result)
-                    save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0
-                elif job.action=='deploy':
-                    result=ssh.deploy(h)
-                    # Known managed artifact digests; never trust target hashes as the expected baseline.
-                    auth=f'restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" {ssh.public_key(h.id)} mrpatchy\n'
-                    sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
-                    optional={k:v for k,v in h.baseline.items() if k=='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'}
-                    h.baseline={**optional,
-                        '/usr/local/lib/mrpatchy/release.py':hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest(),
-                        '/usr/local/lib/mrpatchy/agent.py':hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest(),
-                        '/usr/local/lib/mrpatchy/bridge.py':hashlib.sha256((ssh.TARGET/'bridge.py').read_bytes()).hexdigest(),
-                        '/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(UNIT.encode()).hexdigest(),
-                        '/opt/drpatch/.ssh/authorized_keys':hashlib.sha256(auth.encode()).hexdigest(),
-                        '/etc/sudoers.d/mrpatchy':hashlib.sha256(sudo.encode()).hexdigest()}
-                    verification=ssh.call(h,{'action':'verify'})
-                    if not verification.get('active'): raise ValueError('Collector service did not become active')
-                    for path,digest in h.baseline.items():
-                        expected={'sha256':digest,'uid':0,'gid':0,'mode':0o440 if path=='/etc/sudoers.d/mrpatchy' else 0o644}
-                        if verification.get('files',{}).get(path)!=expected: raise ValueError('Installation verification failed: '+path)
-                    h.state='waiting'; job.output=json.dumps({'deployment':result,'verification':verification})
+            if not h: raise ValueError('Host no longer exists')
+            if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
+            elif job.action=='release-upgrade':
+                result=releases.execute(s,h,job)
+                job.output=json.dumps(result)
+                save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0
+            elif job.action=='deploy':
+                result=ssh.deploy(h)
+                # Known managed artifact digests; never trust target hashes as the expected baseline.
+                auth=f'restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" {ssh.public_key(h.id)} mrpatchy\n'
+                sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
+                optional={k:v for k,v in h.baseline.items() if k=='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'}
+                h.baseline={**optional,
+                    '/usr/local/lib/mrpatchy/release.py':hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest(),
+                    '/usr/local/lib/mrpatchy/agent.py':hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest(),
+                    '/usr/local/lib/mrpatchy/bridge.py':hashlib.sha256((ssh.TARGET/'bridge.py').read_bytes()).hexdigest(),
+                    '/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(UNIT.encode()).hexdigest(),
+                    '/opt/drpatch/.ssh/authorized_keys':hashlib.sha256(auth.encode()).hexdigest(),
+                    '/etc/sudoers.d/mrpatchy':hashlib.sha256(sudo.encode()).hexdigest()}
+                verification=ssh.call(h,{'action':'verify'})
+                if not verification.get('active'): raise ValueError('Collector service did not become active')
+                for path,digest in h.baseline.items():
+                    expected={'sha256':digest,'uid':0,'gid':0,'mode':0o440 if path=='/etc/sudoers.d/mrpatchy' else 0o644}
+                    if verification.get('files',{}).get(path)!=expected: raise ValueError('Installation verification failed: '+path)
+                h.state='waiting'; job.output=json.dumps({'deployment':result,'verification':verification})
+                save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
+            elif job.action=='rotate-key':
+                result=ssh.rotate(h)
+                h.baseline={**h.baseline,'/opt/drpatch/.ssh/authorized_keys':result['authorized_keys_sha256']}
+                job.output=json.dumps(result)
+            elif job.action=='refresh': job.output=update_repos(s,h)
+            elif job.action in ('patch','repository','key','repair'):
+                if job.action=='patch':
                     save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
-                elif job.action=='rotate-key':
-                    result=ssh.rotate(h)
-                    h.baseline={**h.baseline,'/opt/drpatch/.ssh/authorized_keys':result['authorized_keys_sha256']}
-                    job.output=json.dumps(result)
-                elif job.action=='refresh': job.output=update_repos(s,h)
-                elif job.action in ('patch','repository','key','repair'):
-                    if job.action=='patch':
-                        save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
-                        s.commit()
-                        validate_patch(s,h,job.payload['packages'])
-                    policy=operations.recovery_policy(s,h.id)
-                    if job.action=='patch':
-                        approved=job.payload.get('_recovery_policy',{'reboot':False,'rollback':False})
-                        if approved!=policy:raise ValueError('Recovery policy changed; review and submit this patch again')
-                    protected=job.action=='patch' and any(policy.values())
-                    request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
-                    if protected:request.update(action='protected-patch',job_id=job.id,policy=policy)
-                    result=ssh.call(h,request,timeout=7500 if protected else 3700)
-                    if protected:result=finish_recovery(s,h,job,result,policy)
-                    job.output=json.dumps(result)
-                    save_inventory(s,h,ssh.call(h,{'action':'inventory'})); h.last_repo=0
-                    if job.action=='patch' and '_depends_on' in job.payload:
-                        health=ssh.call(h,{'action':'health'})
-                        if health.get('failed_units') or not health.get('collector_active'):raise RuntimeError('Post-patch service health failed; rollout stopped: '+json.dumps(health))
-                        job.output+='\nPost-patch health: '+json.dumps(health)
-                else: raise ValueError('Unsupported job')
-                job.output=job.output.encode()[:48000].decode(errors='ignore')
-                job.state='failed' if result.get('outcome')=='rolled_back' else 'complete'
-                audit(s,('rolled back ' if job.state=='failed' else 'complete ')+job.action,h.id)
-            except Exception as e:
-                s.rollback()
-                job=s.get(Job,job_id)
-                h=s.get(Host,job.host_id)
-                job.state='recovery_required' if protected else 'failed'
-                if job.action in ('release-plan','release-upgrade'):
-                    plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
-                    if plan:plan.state=job.state;plan.error=str(e)[:1000]
-                receipt=job.output if protected else ''
-                job.output=(str(e)+'\n'+receipt).encode()[:48000].decode(errors='ignore')
-                if h:
-                    h.error=str(e)[:4000]
-                    if job.action=='refresh': h.repo_error=str(e)[:16000]
-                audit(s,'failed '+job.action,str(e)[:4000])
-            s.commit()
-        finally:lock.release()
+                    s.commit()
+                    validate_patch(s,h,job.payload['packages'])
+                policy=operations.recovery_policy(s,h.id)
+                if job.action=='patch':
+                    approved=job.payload.get('_recovery_policy',{'reboot':False,'rollback':False})
+                    if approved!=policy:raise ValueError('Recovery policy changed; review and submit this patch again')
+                protected=job.action=='patch' and any(policy.values())
+                request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
+                if protected:
+                    if policy.get('rollback'):
+                        original=ssh.call(h,{'action':'patch-inspect'},timeout=120)
+                        if original.get('version')!=1 or not original.get('configs'):
+                            raise ValueError('Upgrade target helpers before using verified rollback')
+                        # This receipt must survive both a target snapshot restore and
+                        # a central crash; never store it only in truncated job output.
+                        job.payload={**job.payload,'_patch_original':original};s.commit()
+                        request['original']=original
+                    request.update(action='protected-patch',job_id=job.id,policy=policy)
+                result=ssh.call(h,request,timeout=7500 if protected else 3700)
+                if protected:result=finish_recovery(s,h,job,result,policy)
+                job.output=json.dumps(result)
+                save_inventory(s,h,ssh.call(h,{'action':'inventory'})); h.last_repo=0
+                if job.action=='patch' and '_depends_on' in job.payload:
+                    health=ssh.call(h,{'action':'health'})
+                    if health.get('failed_units') or not health.get('collector_active'):raise RuntimeError('Post-patch service health failed; rollout stopped: '+json.dumps(health))
+                    job.output+='\nPost-patch health: '+json.dumps(health)
+            else: raise ValueError('Unsupported job')
+            job.output=job.output.encode()[:48000].decode(errors='ignore')
+            job.state='failed' if result.get('outcome')=='rolled_back' else 'complete'
+            audit(s,('rolled back ' if job.state=='failed' else 'complete ')+job.action,h.id)
+        except Exception as e:
+            s.rollback()
+            job=s.get(Job,job_id)
+            h=s.get(Host,job.host_id)
+            job.state='recovery_required' if protected else 'failed'
+            if job.action in ('release-plan','release-upgrade'):
+                plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
+                if plan:plan.state=job.state;plan.error=str(e)[:1000]
+            receipt=job.output if protected else ''
+            job.output=(str(e)+'\n'+receipt).encode()[:48000].decode(errors='ignore')
+            if h:
+                h.error=str(e)[:4000]
+                if job.action=='refresh': h.repo_error=str(e)[:16000]
+            audit(s,'failed '+job.action,str(e)[:4000])
+        s.commit()
 
 def validate_patch(s,h,specs):
     cfg=config(s)
@@ -383,14 +440,14 @@ def loop():
                         last_poll=now
                         operations.collect_alerts()
                     # Resume observation, never the package transaction, after worker loss.
+                    resume_busy={host_id for _,host_id in active_jobs.values()}
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade')):
                         if len(active_jobs)>=2:break
-                        if j.id not in active_jobs:active_jobs[j.id]=(jobs.submit(execute,j.id),j.host_id)
+                        if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts)).order_by(Job.created)):
                         if len(active_jobs)>=2: break
                         if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
-                            active_jobs[j.id]=(jobs.submit(execute,j.id),j.host_id)
-                            busy_hosts.add(j.host_id)
+                            submit_job(jobs,j,active_jobs,busy_hosts)
                 if is_leader and now-last_cleanup>3600:
                     with Session() as s:
                         cutoff=now-config(s)['history_days']*86400
