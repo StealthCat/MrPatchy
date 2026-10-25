@@ -1,7 +1,7 @@
 import os
 import time
 from pathlib import Path
-from sqlalchemy import create_engine, String, Text, JSON, Integer, Float, Boolean, event
+from sqlalchemy import create_engine, String, Text, JSON, Integer, Double, Boolean, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 DATA = Path(os.getenv('DATA_DIR', '/data'))
@@ -29,8 +29,8 @@ class Host(Base):
     state: Mapped[str] = mapped_column(String(40), default='enrolling')
     error: Mapped[str] = mapped_column(Text, default='')
     repo_error: Mapped[str] = mapped_column(Text, default='')
-    last_seen: Mapped[float] = mapped_column(Float, default=0)
-    last_repo: Mapped[float] = mapped_column(Float, default=0)
+    last_seen: Mapped[float] = mapped_column(Double, default=0)
+    last_repo: Mapped[float] = mapped_column(Double, default=0)
     inventory: Mapped[dict] = mapped_column(JSON, default=dict)
     telemetry: Mapped[dict] = mapped_column(JSON, default=dict)
     baseline: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -44,7 +44,7 @@ class Package(Base):
     candidate: Mapped[str] = mapped_column(String(240), default='')
     priority: Mapped[str] = mapped_column(String(20), default='normal')
     priority_manual: Mapped[bool] = mapped_column(Boolean, default=False)
-    available_since: Mapped[float] = mapped_column(Float, default=0)
+    available_since: Mapped[float] = mapped_column(Double, default=0)
     held: Mapped[bool] = mapped_column(Boolean, default=False)
     origin: Mapped[str] = mapped_column(Text, default='')
 class Behavior(Base):
@@ -55,9 +55,9 @@ class Behavior(Base):
     verdict: Mapped[str] = mapped_column(String(30), default='pending')
     analysis: Mapped[str] = mapped_column(Text, default='Awaiting investigation')
     approved: Mapped[bool] = mapped_column(Boolean, default=False)
-    first_seen: Mapped[float] = mapped_column(Float, default=time.time)
-    last_seen: Mapped[float] = mapped_column(Float, default=time.time)
-    attempted: Mapped[float] = mapped_column(Float, default=0)
+    first_seen: Mapped[float] = mapped_column(Double, default=time.time)
+    last_seen: Mapped[float] = mapped_column(Double, default=time.time)
+    attempted: Mapped[float] = mapped_column(Double, default=0)
 class Job(Base):
     __tablename__ = 'jobs'
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -66,11 +66,11 @@ class Job(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     state: Mapped[str] = mapped_column(String(30), default='queued')
     output: Mapped[str] = mapped_column(Text, default='')
-    created: Mapped[float] = mapped_column(Float, default=time.time)
+    created: Mapped[float] = mapped_column(Double, default=time.time)
 class Audit(Base):
     __tablename__ = 'audit'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    created: Mapped[float] = mapped_column(Float, default=time.time)
+    created: Mapped[float] = mapped_column(Double, default=time.time)
     action: Mapped[str] = mapped_column(String(120))
     detail: Mapped[str] = mapped_column(Text)
 DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20}
@@ -78,4 +78,19 @@ def config(s):
     item = s.get(Setting, 'config')
     return {**DEFAULTS, **(item.value if item else {})}
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
-def init(): Base.metadata.create_all(engine)
+def init():
+    Base.metadata.create_all(engine)
+    # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
+    # SQLite already stores these values as 64-bit REAL. This migration is
+    # idempotent and runs before workers start, with only one app replica.
+    if engine.dialect.name in ('mysql', 'mariadb'):
+        from sqlalchemy.dialects.mysql import FLOAT
+        inspector = inspect(engine)
+        with engine.begin() as connection:
+            for model in (Host, Package, Behavior, Job, Audit):
+                for column in inspector.get_columns(model.__tablename__):
+                    if isinstance(column['type'], FLOAT):
+                        table_name = model.__tablename__
+                        column_name = column['name']
+                        connection.execute(text(f'ALTER TABLE `{table_name}` MODIFY COLUMN `{column_name}` DOUBLE NOT NULL'))
+

@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import socket
-import struct
+import stat
 import subprocess
 import time
 
@@ -42,7 +42,7 @@ def address(value, ipv6):
     else: raw = raw[::-1]
     return socket.inet_ntop(socket.AF_INET6 if ipv6 else socket.AF_INET, raw), int(port,16)
 def sockets():
-    result = {}
+    result = {}; errors = []
     for proto in ['tcp','tcp6','udp','udp6']:
         try:
             for line in read('/proc/net/'+proto).splitlines()[1:]:
@@ -50,11 +50,12 @@ def sockets():
                 local, lp = address(fields[1], proto.endswith('6'))
                 remote, rp = address(fields[2], proto.endswith('6'))
                 result[fields[9]] = {'protocol':proto, 'local':local, 'local_port':lp, 'remote':remote, 'remote_port':rp, 'state':fields[3]}
-        except OSError: pass
-    return result
+        except FileNotFoundError: pass
+        except OSError as e: errors.append({'path':'/proc/net/'+proto,'error':str(e)})
+    return result, errors
 
 def collect(hash_cache):
-    net = sockets(); processes = []; errors = []
+    net, errors = sockets(); processes = []
     for p in Path('/proc').iterdir():
         if not p.name.isdigit(): continue
         try:
@@ -67,8 +68,9 @@ def collect(hash_cache):
                 try:
                     link = os.readlink(fd)
                     if link.startswith('socket:[') and link[8:-1] in net: connections.append(net[link[8:-1]])
-                except OSError: pass
-            uid = next(x.split()[1] for x in read(p/'status').splitlines() if x.startswith('Uid:'))
+                except FileNotFoundError: pass
+                except OSError as e: errors.append({'pid':p.name,'error':str(e)})
+            uid = next(x.split()[2] for x in read(p/'status').splitlines() if x.startswith('Uid:'))
             processes.append({'pid':int(p.name),'executable':exe,'sha256':hash_cache[identity],'uid':uid,'connections':connections})
         except FileNotFoundError: pass # short-lived process / kernel thread
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
@@ -78,18 +80,21 @@ def atomic(path, value):
     tmp = path.with_suffix('.tmp'); tmp.write_text(json.dumps(value)); tmp.chmod(0o600); tmp.replace(path)
 def main():
     ROOT.mkdir(exist_ok=True)
-    cache = {}; hashes = {}; next_hash = 0; next_inventory = 0
+    cache = {}; hashes = {}; metadata = {}; next_hash = 0; next_inventory = 0
     while True:
         started = time.monotonic()
         try:
             if started >= next_hash:
-                cache = {}; hashes = {}
+                cache = {}; hashes = {}; metadata = {}
                 for p in MANAGED:
-                    try: hashes[p] = digest(p)
+                    try:
+                        hashes[p] = digest(p)
+                        info=Path(p).stat()
+                        metadata[p]={'uid':info.st_uid,'gid':info.st_gid,'mode':stat.S_IMODE(info.st_mode)}
                     except OSError as e: hashes[p] = 'ERROR: '+str(e)
                 hashed_at = time.time(); next_hash = started+300
             procs, errors = collect(cache)
-            atomic(ROOT/'telemetry.json', {'collected':time.time(),'hashed_at':hashed_at,'managed':hashes,'processes':procs,'errors':errors})
+            atomic(ROOT/'telemetry.json', {'collected':time.time(),'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,'processes':procs,'errors':errors})
             if started >= next_inventory:
                 atomic(ROOT/'inventory.json', inventory()); next_inventory = started+300
             (ROOT/'collector-error.json').unlink(missing_ok=True)

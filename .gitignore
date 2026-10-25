@@ -8,3 +8,4 @@ data/
 *.key
 node_modules/
 .artifacts/
+.env.ci

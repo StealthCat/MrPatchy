@@ -5,9 +5,13 @@ import logging
 import threading
 import time
 import uuid
+import math
+import subprocess
 from sqlalchemy import select, delete
 from .db import Session, Host, Package, Behavior, Job, Setting, config, audit
 from . import apt, ssh
+from target.agent import MANAGED
+from target.bridge import UNIT
 from .security import unseal
 import httpx
 log=logging.getLogger(__name__)
@@ -20,10 +24,13 @@ def enqueue(s,host_id,action,payload=None):
     s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
 
 def save_inventory(s,h,inv):
+    items=apt.installed(inv['status'])
+    if h.inventory and any(h.inventory.get(key)!=inv.get(key) for key in ('status','files','keys','architecture','foreign_architectures','machine_id')):
+        h.last_repo=0
     h.inventory=inv
     old={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     names=set()
-    for item in apt.installed(inv['status']):
+    for item in items:
         names.add(item['name']); p=old.get(item['name'])
         if not p:
             p=Package(id=h.id+':'+item['name'],host_id=h.id,**item); s.add(p)
@@ -31,7 +38,8 @@ def save_inventory(s,h,inv):
         else:
             if p.installed!=item['installed']: audit(s,'package version changed',h.name+' '+p.name+' '+p.installed+' → '+item['installed'])
             p.installed=item['installed']; p.held=item['held']
-            if p.candidate==p.installed: p.candidate=''; p.available_since=0
+            if p.candidate and subprocess.run(['/usr/bin/dpkg','--compare-versions',p.candidate,'gt',p.installed]).returncode!=0:
+                p.candidate=''; p.available_since=0
     for name,p in old.items():
         if name not in names:
             audit(s,'package removed',h.name+' '+p.name+' '+p.installed); s.delete(p)
@@ -52,23 +60,32 @@ def behavior_evidence(p):
     # Exclude PID and ephemeral client ports so expected reconnects do not flood the queue.
     connections=[]
     for c in p.get('connections',[]):
-        connections.append({'protocol':c['protocol'],'remote':c['remote'],'remote_port':c['remote_port'], 'listen_port':c['local_port'] if c['state']=='0A' or c['remote_port']==0 else None})
+        connections.append({'protocol':c['protocol'],'remote':c['remote'],'remote_port':c['remote_port'], 'listen_port':c['local_port'] if c['state']=='0A' or c['remote_port']==0 else None, 'bind_address':c['local'] if c['state']=='0A' or c['remote_port']==0 else None})
     connections=sorted({json.dumps(c,sort_keys=True) for c in connections})
     return {'executable':p['executable'],'sha256':p['sha256'],'uid':p['uid'],'connections':[json.loads(c) for c in connections]}
 
-def ingest(s,h,snapshot):
-    if 'inventory' in snapshot and snapshot['inventory'].get('collected',0)>h.inventory.get('collected',0): save_inventory(s,h,snapshot['inventory'])
+def ingest(s,h,snapshot,include_inventory=True):
+    if include_inventory and 'inventory' in snapshot and snapshot['inventory'].get('collected',0)>h.inventory.get('collected',0): save_inventory(s,h,snapshot['inventory'])
     t=snapshot.get('telemetry',{})
     if not t: raise RuntimeError('Collector has not produced telemetry yet')
-    if t.get('collected',0)<=h.telemetry.get('collected',0):
-        if time.time()-t.get('collected',0)>120: raise RuntimeError('Collector telemetry is stale')
-        return
+    for name in ('collected','hashed_at'):
+        value=t.get(name,0)
+        if not isinstance(value,(int,float)) or not math.isfinite(value):
+            raise ValueError('Invalid telemetry timestamp: '+name)
     if t.get('collected',0)>time.time()+120: raise RuntimeError('Target clock is ahead; cannot verify telemetry freshness')
+    if t.get('collected',0)<h.telemetry.get('collected',0):
+        raise RuntimeError('Collector snapshot timestamp moved backwards')
     issues=[]
     if time.time()-t.get('collected',0)>120: issues.append({'path':'collector','issue':'Telemetry older than 120 seconds'})
     if time.time()-t.get('hashed_at',0)>360: issues.append({'path':'integrity','issue':'Hash sweep is overdue'})
+    if t.get('hashed_at',0)>time.time()+120: issues.append({'path':'integrity','issue':'Hash sweep timestamp is in the future'})
+    for error in t.get('errors',[]): issues.append({'path':'collector','issue':str(error)[:1000]})
     for name,expected in h.baseline.items():
         if t.get('managed',{}).get(name)!=expected: issues.append({'path':name,'issue':'SHA-256 differs from enrolled version or file is missing'})
+        if name in MANAGED:
+            expected_mode=0o440 if name=='/etc/sudoers.d/mrpatchy' else 0o644
+            if t.get('managed_metadata',{}).get(name)!={'uid':0,'gid':0,'mode':expected_mode}:
+                issues.append({'path':name,'issue':'Managed file ownership/permissions changed or metadata is missing; upgrade the collector if needed'})
     if not h.baseline: issues.append({'path':'baseline','issue':'Managed baseline missing; finish installation'})
     for p in t.get('processes',[]):
         e=behavior_evidence(p)
@@ -82,20 +99,26 @@ def ingest(s,h,snapshot):
 
 def poll_host(host_id):
     lock=host_lock(host_id)
-    if not lock.acquire(False): return
+    locked=lock.acquire(False)
     try:
         with Session() as s:
             h=s.get(Host,host_id)
             if not h or h.state=='enrolling': return
-            try: ingest(s,h,ssh.call(h,{'action':'snapshot'}))
-            except Exception as e: h.state='offline'; h.error=str(e)[:4000]; s.commit()
-    finally: lock.release()
+            try: ingest(s,h,ssh.call(h,{'action':'snapshot'}),include_inventory=locked)
+            except Exception as e:
+                s.rollback()
+                h=s.get(Host,host_id)
+                if h: h.state='offline'; h.error=str(e)[:4000]; s.commit()
+    finally:
+        if locked: lock.release()
 
 def execute(job_id):
     with Session() as s:
         job=s.get(Job,job_id)
         if not job or job.state!='queued': return
         with host_lock(job.host_id):
+            s.refresh(job)
+            if job.state!='queued': return
             job.state='running'; s.commit()
             h=s.get(Host,job.host_id)
             try:
@@ -103,30 +126,47 @@ def execute(job_id):
                 if job.action=='deploy':
                     result=ssh.deploy(h)
                     # Known managed artifact digests; never trust target hashes as the expected baseline.
-                    script=ssh.bootstrap(h)
                     auth=f'restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" {ssh.public_key(h.id)} mrpatchy\n'
                     sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
                     h.baseline={
                         '/usr/local/lib/mrpatchy/agent.py':hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest(),
                         '/usr/local/lib/mrpatchy/bridge.py':hashlib.sha256((ssh.TARGET/'bridge.py').read_bytes()).hexdigest(),
-                        '/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(__import__('target.bridge',fromlist=['UNIT']).UNIT.encode()).hexdigest(),
+                        '/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(UNIT.encode()).hexdigest(),
                         '/opt/drpatch/.ssh/authorized_keys':hashlib.sha256(auth.encode()).hexdigest(),
                         '/etc/sudoers.d/mrpatchy':hashlib.sha256(sudo.encode()).hexdigest()}
                     h.state='waiting'; job.output=json.dumps(result)
                     save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
                 elif job.action=='refresh': job.output=update_repos(s,h)
                 elif job.action in ('patch','repository','key'):
-                    job.output=json.dumps(ssh.call(h,{'action':job.action,**job.payload},timeout=1900))
+                    if job.action=='patch':
+                        save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
+                        s.commit()
+                        validate_patch(s,h,job.payload['packages'])
+                    job.output=json.dumps(ssh.call(h,{'action':job.action,**job.payload},timeout=3700))
                     save_inventory(s,h,ssh.call(h,{'action':'inventory'})); h.last_repo=0
                 else: raise ValueError('Unsupported job')
                 job.state='complete'; audit(s,'complete '+job.action,h.id)
             except Exception as e:
+                s.rollback()
+                job=s.get(Job,job_id)
+                h=s.get(Host,job.host_id)
                 job.state='failed'; job.output=str(e)[:20000]
                 if h:
                     h.error=str(e)[:4000]
                     if job.action=='refresh': h.repo_error=str(e)[:16000]
                 audit(s,'failed '+job.action,str(e)[:4000])
             s.commit()
+
+def validate_patch(s,h,specs):
+    cfg=config(s)
+    if h.repo_error or not h.last_repo or time.time()-h.last_repo>cfg['repo_minutes']*120:
+        raise ValueError('Refresh repositories before patching; metadata is stale, changed, or the latest check failed')
+    for spec in specs:
+        name,version=spec.rsplit('=',1)
+        p=s.get(Package,h.id+':'+name)
+        if not p or p.held or not p.candidate or p.candidate!=version:
+            raise ValueError('Queued patch is no longer valid; review package '+name)
+
 
 def investigate_one():
     with Session() as s:
@@ -158,7 +198,12 @@ def loop():
         while not stop.wait(1):
             try:
                 now=time.time()
-                active_jobs={k:v for k,v in active_jobs.items() if not v.done()}
+                for key,(future,_) in list(active_jobs.items()):
+                    if future.done():
+                        try: future.result()
+                        except Exception: log.exception('Job worker failed outside its operation handler')
+                        del active_jobs[key]
+                busy_hosts={host_id for _,host_id in active_jobs.values()}
                 with Session() as s:
                     if now-last_poll>=30:
                         for h in s.scalars(select(Host)):
@@ -169,9 +214,11 @@ def loop():
                                 latest=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh').order_by(Job.created.desc()))
                                 if not existing and (not latest or now-latest.created>300): enqueue(s,h.id,'refresh')
                         last_poll=now
-                    for j in s.scalars(select(Job).where(Job.state=='queued').order_by(Job.created).limit(4)):
+                    for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts)).order_by(Job.created)):
                         if len(active_jobs)>=2: break
-                        if j.id not in active_jobs: active_jobs[j.id]=jobs.submit(execute,j.id)
+                        if j.id not in active_jobs and j.host_id not in busy_hosts:
+                            active_jobs[j.id]=(jobs.submit(execute,j.id),j.host_id)
+                            busy_hosts.add(j.host_id)
                 if ai_task is None or ai_task.done(): ai_task=ai.submit(investigate_one)
             except Exception: log.exception('Scheduler tick failed')
 def start():
