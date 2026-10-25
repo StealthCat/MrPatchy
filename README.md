@@ -25,7 +25,7 @@ Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian and Ras
 
 ## Quick start
 
-Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Publish ports 80/443 for Caddy; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change both `CONTROL_SUBNET` and `CADDY_CONTROL_IP` in `.env` before starting.
+Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Publish ports 80/443 for Caddy; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
 
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
