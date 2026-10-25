@@ -13,11 +13,11 @@ from .security import token_hash
 
 router=APIRouter()
 oauth=OAuth()
-issuer=os.getenv('OIDC_ISSUER','').rstrip('/')
+issuer=os.getenv('OIDC_ISSUER','')
 if issuer:
     if not issuer.startswith('https://'):raise RuntimeError('OIDC_ISSUER must use HTTPS')
     oauth.register('provider',client_id=os.environ['OIDC_CLIENT_ID'],client_secret=os.environ['OIDC_CLIENT_SECRET'],
-        server_metadata_url=issuer+'/.well-known/openid-configuration',
+        server_metadata_url=issuer.rstrip('/')+'/.well-known/openid-configuration',
         client_kwargs={'scope':'openid profile email','code_challenge_method':'S256'})
 
 def binding_key(subject):return 'oidc:'+hashlib.sha256((issuer+'\0'+subject).encode()).hexdigest()

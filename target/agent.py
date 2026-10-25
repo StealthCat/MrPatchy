@@ -138,14 +138,42 @@ def acknowledge(ids):
     with spool_db() as db: db.executemany('DELETE FROM events WHERE id=?',[(x,) for x in ids])
     return {'acknowledged':len(ids)}
 
+def hash_artifact(path,cache,expected=None):
+    # Read through one descriptor: pathname replacement cannot change the inode
+    # between validation and hashing. O_NONBLOCK prevents FIFO substitution hangs.
+    fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as stream:
+        info=os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size>128*1024*1024:
+            raise ValueError('Not a regular file within the 128 MiB hash limit')
+        if expected and (info.st_dev,info.st_ino)!=expected:
+            raise ValueError('On-disk inode differs from the running mapping')
+        identity=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns,info.st_size)
+        if identity not in cache:
+            checksum=hashlib.sha256();total=0
+            for chunk in iter(lambda:stream.read(1024*1024),b''):
+                total+=len(chunk)
+                if total>128*1024*1024:raise ValueError('File grew beyond the hash limit')
+                checksum.update(chunk)
+            after=os.fstat(stream.fileno())
+            if (after.st_mtime_ns,after.st_ctime_ns,after.st_size)!=(info.st_mtime_ns,info.st_ctime_ns,info.st_size):
+                raise ValueError('File changed during hashing')
+            cache[identity]=checksum.hexdigest()
+        return cache[identity]
+
+
 def provenance(proc,cache):
-    """Hash mapped executable libraries and a script operand without exporting argv."""
-    result=[];candidates=set()
+    """Mapped file identities and script files; never claim memory attestation."""
+    result=[];candidates={}
     try:
         for line in read(proc/'maps').splitlines():
             fields=line.split(maxsplit=5)
-            if len(fields)==6 and 'x' in fields[1] and fields[5].startswith('/') and not fields[5].endswith(' (deleted)'):
-                candidates.add(('library',fields[5]))
+            if len(fields)!=6 or 'x' not in fields[1] or not fields[5].startswith('/'):
+                continue
+            name=fields[5]
+            major,minor=(int(x,16) for x in fields[3].split(':'))
+            expected=(os.makedev(major,minor),int(fields[4]))
+            candidates[('library',name,expected)]=(proc/'map_files'/fields[0],expected)
         executable=os.path.basename(os.readlink(proc/'exe'))
         if executable.startswith(('python','bash','sh','node','ruby','perl')):
             args=(proc/'cmdline').read_bytes().split(b'\0')
@@ -153,17 +181,22 @@ def provenance(proc,cache):
                 operand=os.fsdecode(args[1])
                 if operand and not operand.startswith('-'):
                     absolute=operand if operand.startswith('/') else os.path.normpath(os.readlink(proc/'cwd')+'/'+operand)
-                    candidates.add(('script',absolute))
-        for kind,name in sorted(candidates)[:128]:
-            path=proc/'root'/name.lstrip('/')
+                    candidates[('script',absolute,None)]=(proc/'root'/absolute.lstrip('/'),None)
+        for (kind,name,_),(path,expected) in sorted(candidates.items())[:128]:
+            entry={'kind':kind,'path':name,'identity_verified':False}
             try:
-                info=path.stat()
-                if not path.is_file() or info.st_size>128*1024*1024:continue
-                identity=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_size)
-                if identity not in cache:cache[identity]=digest(path)
-                result.append({'kind':kind,'path':name,'sha256':cache[identity]})
-            except OSError as e:result.append({'kind':kind,'path':name,'error':type(e).__name__})
-    except OSError as e:result.append({'error':type(e).__name__})
+                try:sha=hash_artifact(path,cache,expected)
+                except (OSError,ValueError):
+                    if kind!='library' or name.endswith(' (deleted)'):raise
+                    # map_files may require an extra kernel capability. A pathname
+                    # fallback is safe only when it still refers to the mapped inode.
+                    sha=hash_artifact(proc/'root'/name.lstrip('/'),cache,expected)
+                entry.update(sha256=sha,identity_verified=True,source='mapped-file' if kind=='library' else 'script-file')
+            except (OSError,ValueError) as e:
+                entry['error']=type(e).__name__ if isinstance(e,OSError) else str(e)[:300]
+            result.append(entry)
+        if len(candidates)>128:result.append({'identity_verified':False,'error':'Provenance file limit exceeded','omitted':len(candidates)-128})
+    except (OSError,ValueError) as e:result.append({'identity_verified':False,'error':type(e).__name__ if isinstance(e,OSError) else str(e)[:300]})
     return result
 
 def decode_bpf_events(pending,chunk):

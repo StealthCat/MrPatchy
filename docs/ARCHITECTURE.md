@@ -6,7 +6,7 @@
 |---|---|---|
 | Caddy | HTTPS termination, certificate management, reverse proxy | Separate Docker container |
 | FastAPI application | Admin authentication, UI/API, configuration, job/audit records | Unprivileged `mrpatchy` user in the app container |
-| Scheduler | SSH polling, queued target operations, repository refreshes, AI investigation dispatch | One process with separate bounded thread pools |
+| Scheduler | SSH polling, queued target operations, repository refreshes, AI investigation dispatch | Elected coordinator plus job-worker replicas with bounded thread pools |
 | Central APT resolver | Fetch/verify repository metadata and derive candidates for each target inventory | Native APT subprocesses in isolated per-target directories |
 | Bootstrap bridge | Fixed JSON actions over forced-command SSH | Root via a fixed sudoers entry |
 | Collector | Inventory, process/connection snapshots, SHA-256 sweeps | Root-owned systemd service, no outbound networking |
@@ -39,9 +39,9 @@ Only an operator-requested patch or repair job invokes target `apt-get update` f
 
 Managed artifact manifest: collector source, bridge source, systemd unit, sudoers entry, and authorized_keys. Every five minutes the collector clears its executable-hash cache, rehashes managed files, and hashes each running executable. Between sweeps, a newly observed inode/mtime/size identity is hashed immediately. A five-minute sweep detects changed bytes even if their metadata was preserved, provided the collector/kernel remain honest.
 
-Behavior identity is SHA-256 over host ID plus executable path/hash, UID and normalized network endpoints. PIDs and ephemeral client source ports are excluded. Listening ports remain part of the identity. The database retains first/last observation times, evidence, AI result, and the administrator's approval bit. Approval never propagates across hosts or changed identities.
+Behavior identity is SHA-256 over host ID plus executable path/hash, UID, network namespace, provenance, capture/verification state and normalized network endpoints. PIDs and ephemeral client source ports are excluded. Listening ports remain part of the identity. The database retains first/last observation times, evidence, AI result, and the administrator's approval bit. Approval never propagates across hosts or changed identities.
 
-This is periodic observation, not EDR or hardware-backed attestation. It can miss short-lived processes, mmap'ed code, libraries, deleted executable content unavailable through procfs, scripts interpreted by a trusted interpreter, and sockets outside the current network namespace. Read/collection errors and stale timestamps are surfaced.
+This is periodic observation, not EDR or hardware-backed attestation. Optional eBPF reduces short-lived process blind spots. Network namespaces, mapped-file inode identities and common script operands are collected; inaccessible/deleted mappings remain explicit uncertainty. This does not attest process memory, arbitrary interpreter inputs or every kernel event. Read/collection errors and stale timestamps are surfaced.
 
 ## AI boundary
 
@@ -53,7 +53,7 @@ An AI classification is a triage aid, not proof that a binary is benign. Approva
 
 Password hashes use scrypt. Sessions are random opaque tokens stored only as token hashes, with expiration, HttpOnly/SameSite=Strict/Secure cookies, and CSRF tokens on mutations. Login attempts are rate-limited. The UI escapes server-controlled text, uses a restrictive CSP, and does not load third-party scripts. API keys and TLS private keys are not returned through settings APIs.
 
-Caddy and the app share only a TLS configuration volume; Caddy does not mount the app's database/SSH secrets. Its administration port exists only on Docker networks and is not host-published. The app runs as an unprivileged UID after entrypoint volume preparation. The Docker socket is never mounted. A single worker is required because scheduler ownership/locks are in-process.
+Caddy and the app share only a TLS configuration volume; Caddy does not mount the app's database/SSH secrets. Its administration port exists only on Docker networks and is not host-published. The app runs as an unprivileged UID after entrypoint volume preparation. The Docker socket is never mounted. Workers coordinate with MySQL named locks or shared-local-volume filesystem locks and atomic SQL job claims. One web process remains the supported deployment. Orphaned running and recovery-required jobs quarantine a host until explicit reconciliation.
 
 Local audit records support review but are not immutable against a database administrator. Session and enrollment tokens are stored hashed. Installer links expire after an hour and may be reused during that hour; they contain no client private key.
 

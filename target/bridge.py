@@ -132,47 +132,99 @@ def recovery_hook(operation,identifier):
     if not isinstance(result,dict):raise ValueError('Invalid rollback adapter response')
     return result
 
-def protected_patch(req):
-    policy=req.get('policy',{})
-    job=req.get('job_id','')
-    if not re.fullmatch(r'[a-f0-9-]{36}',job):raise ValueError('A durable job ID is required')
+def transaction_path(job):
+    if not isinstance(job,str) or not re.fullmatch(r'[a-f0-9-]{36}',job):raise ValueError('A durable job ID is required')
     directory=ROOT/'transactions';directory.mkdir(mode=0o700,exist_ok=True)
-    journal=directory/(job+'.json')
+    return directory/(job+'.json')
+
+
+def boot_id():return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+def schedule_reboot(journal,state,rollback=False):
+    # Persist intent before the side effect. If submission is interrupted or
+    # ambiguous, the journal cannot be mistaken for a completed transaction.
+    prefix='rollback_reboot' if rollback else 'reboot'
+    state['state']=prefix+'_pending';state['boot_before']=boot_id()
+    atomic(journal,json.dumps(state).encode())
+    run(['systemd-run','--unit=mrpatchy-'+prefix.replace('_','-')+'-'+state['job'],
+         '--on-active=10s','/usr/bin/systemctl','reboot'],timeout=15)
+    state['state']=prefix+'_scheduled';atomic(journal,json.dumps(state).encode())
+    return {**state.get('result',{}),'outcome':'rollback_pending' if rollback else 'reboot_pending',
+            'reboot_scheduled':True,'boot_before':state['boot_before']}
+
+
+def rollback_transaction(journal,state):
+    if not state.get('snapshot') or not state['policy'].get('rollback'):
+        raise RuntimeError('No approved snapshot rollback is available; reconcile target state')
+    state['state']='rollback_pending';atomic(journal,json.dumps(state).encode())
+    recovery=recovery_hook('rollback',state['snapshot'])
+    state['rollback']=recovery;state['state']='rollback_prepared'
+    state['result']={'outcome':'rollback_pending','patch_error':state.get('error','Post-reboot health failed'),'rollback':recovery}
+    atomic(journal,json.dumps(state).encode())
+    if recovery.get('reboot_required'):
+        if not state['policy'].get('reboot'):
+            raise RuntimeError('Rollback prepared; reboot required but policy forbids automatic reboot')
+        return schedule_reboot(journal,state,rollback=True)
+    health=handle({'action':'health'})
+    if health['failed_units'] or not health['collector_active']:
+        raise RuntimeError('Rollback health could not be verified; reconcile target state')
+    state['state']='rolled_back';state['result'].update(outcome='rolled_back',health=health)
+    atomic(journal,json.dumps(state).encode());return state['result']
+
+
+def complete_recovery(req):
+    journal=transaction_path(req.get('job_id'));state=json.loads(journal.read_text())
+    if state['state'] in ('complete','rolled_back'):return state['result']
+    if state['state'] not in ('reboot_pending','reboot_scheduled','rollback_reboot_pending','rollback_reboot_scheduled'):
+        raise RuntimeError('Recovery has no recorded reboot intent')
+    if boot_id()==state['boot_before']:raise RuntimeError('Target has not rebooted yet')
+    health=handle({'action':'health'})
+    if health['failed_units'] or not health['collector_active']:raise RuntimeError('Post-reboot health is not ready')
+    rolled_back=state['state'].startswith('rollback_')
+    state['state']='rolled_back' if rolled_back else 'complete'
+    state['result'].update(outcome=state['state'],reboot_verified=True,health=health)
+    atomic(journal,json.dumps(state).encode());return state['result']
+
+
+def rollback_after_reboot(req):
+    journal=transaction_path(req.get('job_id'));state=json.loads(journal.read_text())
+    if state['state']=='rolled_back':return state['result']
+    if state['state'] not in ('reboot_pending','reboot_scheduled') or boot_id()==state['boot_before']:
+        raise RuntimeError('Post-reboot rollback requires an observed reboot and an unrecovered patch transaction')
+    state['error']='Post-reboot health did not recover within the central verification window'
+    return rollback_transaction(journal,state)
+
+
+def protected_patch(req):
+    policy=req.get('policy',{});job=req.get('job_id','');journal=transaction_path(job)
     if journal.exists():
         state=json.loads(journal.read_text())
         if state.get('state')=='complete':return state['result']
         raise RuntimeError('Prior patch attempt is incomplete; reconcile target state before retrying')
-    state={'state':'preparing','job':job,'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
-    snapshot=None
+    state={'state':'preparing','job':job,'policy':policy,'boot_before':boot_id()}
+    atomic(journal,json.dumps(state).encode())
     if policy.get('rollback'):
         probe=recovery_hook('probe',job)
         if probe.get('ready') is not True:raise ValueError('Rollback adapter is not ready')
         snapshot=recovery_hook('snapshot',job).get('snapshot')
         if not isinstance(snapshot,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',snapshot):raise ValueError('Invalid snapshot ID')
         state['snapshot']=snapshot
-    atomic(journal,json.dumps(state).encode())
+    state['state']='patching';atomic(journal,json.dumps(state).encode())
     try:
         result=handle({'action':'patch','packages':req['packages']})
         health=handle({'action':'health'})
         if health['failed_units'] or not health['collector_active']:raise RuntimeError('Post-patch health failed: '+json.dumps(health))
-        result['health']=health
-        state.update(state='complete',result=result)
-        atomic(journal,json.dumps(state).encode())
-        if policy.get('reboot') and health['reboot_required']:
-            run(['systemd-run','--unit=mrpatchy-reboot-'+job,'--on-active=10s','/usr/bin/systemctl','reboot'],timeout=15)
-            result['reboot_scheduled']=True;result['boot_before']=state['boot_id']
-            state['result']=result;atomic(journal,json.dumps(state).encode())
-        return result
     except Exception as error:
-        state.update(state='failed',error=str(error)[:4000])
-        atomic(journal,json.dumps(state).encode())
-        if snapshot and policy.get('rollback'):
-            recovery=recovery_hook('rollback',snapshot)
-            state['rollback']=recovery;state['state']='rolled-back';atomic(journal,json.dumps(state).encode())
-            if recovery.get('reboot_required'):
-                if not policy.get('reboot'):raise RuntimeError('Rollback prepared; reboot required but policy forbids automatic reboot')
-                run(['systemd-run','--unit=mrpatchy-rollback-'+job,'--on-active=10s','/usr/bin/systemctl','reboot'],timeout=15)
-        raise RuntimeError('Patch failed; recovery state: '+json.dumps(state))
+        state.update(state='failed',error=str(error)[:4000]);atomic(journal,json.dumps(state).encode())
+        if state.get('snapshot'):return rollback_transaction(journal,state)
+        raise RuntimeError('Patch failed; recovery state: '+json.dumps(state)) from error
+    state['result']={**result,'health':health}
+    state['state']='patched';atomic(journal,json.dumps(state).encode())
+    if policy.get('reboot') and health['reboot_required']:
+        return schedule_reboot(journal,state)
+    state['state']='complete';state['result']['outcome']='complete'
+    atomic(journal,json.dumps(state).encode());return state['result']
 
 def handle(req):
     action = req.get('action')
@@ -193,6 +245,8 @@ def handle(req):
         run(['systemctl','daemon-reload']);run(['systemctl','restart','mrpatchy-agent'])
         return {'configured':True,'ebpf':req['ebpf']}
     if action == 'protected-patch':return protected_patch(req)
+    if action == 'complete-recovery':return complete_recovery(req)
+    if action == 'rollback-patch':return rollback_after_reboot(req)
     if action == 'recovery-status':
         return {'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'rollback_adapter':Path('/etc/mrpatchy/rollback').is_file(),'systemd':Path('/run/systemd/system').exists()}
     if action == 'authorized-keys':

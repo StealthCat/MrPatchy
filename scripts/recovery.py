@@ -11,6 +11,17 @@ import tempfile
 from sqlalchemy.engine import make_url
 
 def run(args,**kwargs):return subprocess.run(args,check=True,**kwargs)
+def open_sqlite(path):
+    path=Path(path)
+    if not path.is_file() or path.is_symlink():raise ValueError('Existing SQLite database required')
+    db=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+    try:
+        if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('Database integrity check failed')
+        tables={row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {'settings','hosts','packages','jobs'}<=tables:raise ValueError('Database is missing Mr Patchy application tables')
+        return db
+    except Exception:
+        db.close();raise
 def remote():
     repo=os.environ.get('RESTIC_REPOSITORY','')
     if not repo.startswith(('sftp:','s3:','rest:https://','b2:','azure:','gs:')):raise ValueError('Configure an off-host RESTIC_REPOSITORY')
@@ -39,7 +50,8 @@ def backup(data,tls,caddy_data,caddy_config):
         root=Path(temporary);bundle=root/'bundle';bundle.mkdir(mode=0o700)
         data=Path(data);url=make_url(os.getenv('DATABASE_URL','sqlite:///'+str(data/'mrpatchy.db')))
         if url.get_backend_name()=='sqlite':
-            with sqlite3.connect(url.database) as source,sqlite3.connect(bundle/'database.sqlite') as destination:source.backup(destination)
+            from contextlib import closing
+            with closing(open_sqlite(url.database)) as source,sqlite3.connect(bundle/'database.sqlite') as destination:source.backup(destination)
             backend='sqlite'
         elif url.get_backend_name()=='mysql':
             options=mysql_options(url,root)
@@ -65,10 +77,9 @@ def restore(snapshot,destination):
         if len(candidates)!=1:raise ValueError('Restore must contain exactly one recovery bundle')
         shutil.move(str(candidates[0].parent),str(bundle))
     manifest=json.loads((bundle/'manifest.json').read_text())
-    if manifest.get('format')!=1:raise ValueError('Unsupported backup format')
+    if manifest.get('format')!=1 or manifest.get('database') not in ('sqlite','mysql'):raise ValueError('Unsupported backup format')
     if manifest['database']=='sqlite':
-        with sqlite3.connect(bundle/'database.sqlite') as db:
-            if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('Database integrity check failed')
+        open_sqlite(bundle/'database.sqlite').close()
     return bundle
 def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
     bundle=Path(bundle);data=Path(data);tls=Path(tls)
@@ -76,6 +87,14 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
     for location in (caddy_data,caddy_config):
         if Path(location).exists() and any(Path(location).iterdir()):raise ValueError('Caddy destinations must be empty')
     manifest=json.loads((bundle/'manifest.json').read_text())
+    if manifest.get('format')!=1 or manifest.get('database') not in ('sqlite','mysql'):raise ValueError('Unsupported backup format')
+    # Validate the whole bundle before touching destination volumes or MySQL.
+    for name in ('secret.key','database.sql' if manifest['database']=='mysql' else 'database.sqlite'):
+        if not (bundle/name).is_file() or (bundle/name).is_symlink():raise ValueError('Missing or unsafe bundle file: '+name)
+    for name in ('ssh','tls','caddy-data','caddy-config'):
+        folder=bundle/name
+        if not folder.is_dir() or folder.is_symlink() or any(p.is_symlink() for p in folder.rglob('*')):raise ValueError('Missing or unsafe bundle directory: '+name)
+    if manifest['database']=='sqlite':open_sqlite(bundle/'database.sqlite').close()
     data.mkdir(mode=0o700,parents=True,exist_ok=True)
     if manifest['database']=='mysql':
         url=make_url(os.environ['DATABASE_URL'])

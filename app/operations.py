@@ -29,6 +29,17 @@ def in_window(windows,now=None):
     minute=date.hour*60+date.minute
     return any(date.weekday() in w['days'] and w['start']<=minute<w['end'] for w in windows)
 
+QUARANTINE_STATES=('running','recovery_required')
+
+def host_quarantined(s,host_id,exclude=None):
+    query=select(Job.id).where(Job.host_id==host_id,Job.state.in_(QUARANTINE_STATES))
+    if exclude:query=query.where(Job.id!=exclude)
+    return s.scalar(query.limit(1)) is not None
+
+def recovery_policy(s,host_id):
+    row=s.get(Setting,'recovery:'+host_id)
+    return {name:bool(row and row.value.get(name)) for name in ('reboot','rollback')}
+
 def eligible(s,job):
     if job.action not in ('patch','repair'): return True
     dependencies=job.payload.get('_depends_on',[])
@@ -36,6 +47,8 @@ def eligible(s,job):
         previous=s.get(Job,dep)
         if not previous or previous.state in ('failed','blocked','interrupted','cancelled'):
             job.state='blocked';job.output='Canary/dependency did not complete successfully';s.commit();return False
+        if previous.state=='recovery_required':
+            job.state='blocked';job.output='Canary requires recovery reconciliation';s.commit();return False
         if previous.state!='complete':return False
     row=s.get(Setting,'window:'+job.host_id)
     return in_window(row.value['windows'] if row else [])

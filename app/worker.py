@@ -66,7 +66,9 @@ def update_repos(s,h):
     for item in packages:
         p=s.get(Package,h.id+':'+item['name'])
         if not p: continue
-        if item['candidate']!=p.candidate: p.available_since=time.time() if item['candidate'] else 0
+        # Superseding a still-outstanding update must not postpone its deadline.
+        if not item['candidate']: p.available_since=0
+        elif not p.candidate or not p.available_since: p.available_since=time.time()
         for key in ['candidate','origin']: setattr(p,key,item[key])
         if not p.priority_manual: p.priority=item['priority']
     h.last_repo=time.time(); h.repo_error=''; s.commit(); return output
@@ -106,7 +108,10 @@ def behavior_evidence(p):
     for c in p.get('connections',[]):
         connections.append({'protocol':c['protocol'],'remote':c['remote'],'remote_port':c['remote_port'], 'listen_port':c['local_port'] if c['state']=='0A' or c['remote_port']==0 else None, 'bind_address':c['local'] if c['state']=='0A' or c['remote_port']==0 else None})
     connections=sorted({json.dumps(c,sort_keys=True) for c in connections})
-    return {'executable':p['executable'],'sha256':p['sha256'],'uid':p['uid'],'network_namespace':p.get('network_namespace'),'provenance':p.get('provenance',[]),'capture':p.get('capture','sample'),'connections':[json.loads(c) for c in connections]}
+    evidence={'executable':p['executable'],'sha256':p['sha256'],'uid':p['uid'],'network_namespace':p.get('network_namespace'),'provenance':p.get('provenance',[]),'capture':p.get('capture','sample'),'connections':[json.loads(c) for c in connections]}
+    if p.get('capture')=='ebpf' or 'identity_verified' in p:
+        evidence['identity_verified']=p.get('identity_verified') is True
+    return evidence
 
 def ingest(s,h,snapshot,include_inventory=True):
     if include_inventory and 'inventory' in snapshot and snapshot['inventory'].get('collected',0)>h.inventory.get('collected',0): save_inventory(s,h,snapshot['inventory'])
@@ -160,19 +165,60 @@ def poll_host(host_id):
     finally:
         if locked: lock.release()
 
+class RecoveryTimeout(RuntimeError):pass
+
+
+def wait_for_reboot(host,result,job_id,timeout=600):
+    deadline=time.monotonic()+timeout;last_error='Waiting for a changed boot ID'
+    while time.monotonic()<deadline:
+        time.sleep(5)
+        try:
+            status=ssh.call(host,{'action':'recovery-status'},timeout=15)
+            if status['boot_id']==result['boot_before']:continue
+            health=ssh.call(host,{'action':'health'},timeout=15)
+            if health.get('failed_units') or not health.get('collector_active'):
+                last_error='Services are not healthy yet';continue
+            if result.get('outcome')=='rollback_pending':
+                # A root filesystem rollback can also revert the target journal.
+                # The centrally persisted rollback receipt survives that rollback.
+                return {**result,'outcome':'rolled_back','reboot_verified':True,'health':health}
+            return ssh.call(host,{'action':'complete-recovery','job_id':job_id},timeout=15)
+        except (OSError,ssh.paramiko.SSHException,RuntimeError,ValueError) as error:
+            last_error=str(error)[:1000]
+    raise RecoveryTimeout('Reboot/health not verified within the recovery window: '+last_error)
+
+
+def finish_recovery(s,host,job,result,policy):
+    if not result.get('reboot_scheduled'):return result
+    job.output=json.dumps(result);s.commit() # Persist receipt before the target can reboot.
+    try:return wait_for_reboot(host,result,job.id)
+    except RecoveryTimeout:
+        if not policy.get('rollback') or result.get('outcome')=='rollback_pending':raise
+        # The target refuses this if it has not rebooted, has no snapshot, or
+        # rollback was already attempted. Never repeat a snapshot rollback.
+        recovery=ssh.call(host,{'action':'rollback-patch','job_id':job.id},timeout=1900)
+        job.output=json.dumps(recovery);s.commit()
+        return wait_for_reboot(host,recovery,job.id) if recovery.get('reboot_scheduled') else recovery
+
+
 def execute(job_id):
     with Session() as s:
         job=s.get(Job,job_id)
         if not job or job.state!='queued': return
-        with host_lock(job.host_id):
+        lock=host_lock(job.host_id)
+        if not lock.acquire(False):return
+        try:
+            # End a pre-lock MySQL REPEATABLE READ snapshot before quarantine checks.
+            s.rollback()
             s.refresh(job)
             if job.state!='queued': return
+            if operations.host_quarantined(s,job.host_id,exclude=job.id):return
             if not operations.eligible(s,job): return
             claimed=s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
             s.commit()
             if claimed!=1:return
             s.refresh(job)
-            h=s.get(Host,job.host_id)
+            h=s.get(Host,job.host_id);protected=False;result={}
             try:
                 if not h: raise ValueError('Host no longer exists')
                 if job.action=='deploy':
@@ -204,23 +250,15 @@ def execute(job_id):
                         save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
                         s.commit()
                         validate_patch(s,h,job.payload['packages'])
-                    policy=s.get(Setting,'recovery:'+h.id)
-                    protected=job.action=='patch' and policy and (policy.value.get('rollback') or policy.value.get('reboot'))
+                    policy=operations.recovery_policy(s,h.id)
+                    if job.action=='patch':
+                        approved=job.payload.get('_recovery_policy',{'reboot':False,'rollback':False})
+                        if approved!=policy:raise ValueError('Recovery policy changed; review and submit this patch again')
+                    protected=job.action=='patch' and any(policy.values())
                     request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
-                    if protected:request.update(action='protected-patch',job_id=job.id,policy=policy.value)
+                    if protected:request.update(action='protected-patch',job_id=job.id,policy=policy)
                     result=ssh.call(h,request,timeout=7500 if protected else 3700)
-                    if result.get('reboot_scheduled'):
-                        deadline=time.monotonic()+600
-                        while time.monotonic()<deadline:
-                            time.sleep(5)
-                            try:
-                                status=ssh.call(h,{'action':'recovery-status'},timeout=15)
-                                if status['boot_id']!=result['boot_before']:
-                                    health=ssh.call(h,{'action':'health'})
-                                    if health.get('failed_units') or not health.get('collector_active'):raise ValueError('Post-reboot health check failed')
-                                    result['reboot_verified']=True;break
-                            except (OSError,ssh.paramiko.SSHException):continue
-                        if not result.get('reboot_verified'):raise RuntimeError('Reboot not verified within 10 minutes; rollout blocked')
+                    if protected:result=finish_recovery(s,h,job,result,policy)
                     job.output=json.dumps(result)
                     save_inventory(s,h,ssh.call(h,{'action':'inventory'})); h.last_repo=0
                     if job.action=='patch' and '_depends_on' in job.payload:
@@ -229,17 +267,21 @@ def execute(job_id):
                         job.output+='\nPost-patch health: '+json.dumps(health)
                 else: raise ValueError('Unsupported job')
                 job.output=job.output.encode()[:48000].decode(errors='ignore')
-                job.state='complete'; audit(s,'complete '+job.action,h.id)
+                job.state='failed' if result.get('outcome')=='rolled_back' else 'complete'
+                audit(s,('rolled back ' if job.state=='failed' else 'complete ')+job.action,h.id)
             except Exception as e:
                 s.rollback()
                 job=s.get(Job,job_id)
                 h=s.get(Host,job.host_id)
-                job.state='failed'; job.output=str(e).encode()[:48000].decode(errors='ignore')
+                job.state='recovery_required' if protected else 'failed'
+                receipt=job.output if protected else ''
+                job.output=(str(e)+'\n'+receipt).encode()[:48000].decode(errors='ignore')
                 if h:
                     h.error=str(e)[:4000]
                     if job.action=='refresh': h.repo_error=str(e)[:16000]
                 audit(s,'failed '+job.action,str(e)[:4000])
             s.commit()
+        finally:lock.release()
 
 def validate_patch(s,h,specs):
     cfg=config(s)
@@ -319,6 +361,7 @@ def loop():
                         del active_jobs[key]
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
                 with Session() as s:
+                    busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:
                         for h in s.scalars(select(Host)):
                             if h.id not in active_polls or active_polls[h.id].done(): active_polls[h.id]=polls.submit(poll_host,h.id)

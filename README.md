@@ -1,95 +1,68 @@
 # Mr Patchy
 
-**A little care. A healthier Linux fleet.**
+**Central APT patch management and security monitoring for your Linux fleet.**
 
-Mr Patchy is a self-hosted, Dockerized dashboard for Ubuntu and Raspberry Pi OS / Raspbian servers. It collects inventory over pinned-key SSH, resolves available APT versions centrally, tracks patch deadlines, and investigates unfamiliar process behavior through the OpenAI API.
+Mr Patchy is a self-hosted, Dockerized application for managing Ubuntu, Debian and Raspberry Pi OS / Raspbian servers over pinned-key SSH. It discovers available package updates centrally, tracks patch deadlines, manages repositories, and records process and network behavior. Optional OpenAI investigations help explain unfamiliar activity; administrators retain control over trust decisions and system changes.
 
-![Mr Patchy overview](docs/screenshots/overview.webp)
+![Fleet overview with illustrative documentation data](docs/screenshots/overview.webp)
 
-See the [v0.2 completion and security review](docs/COMPLETION_REVIEW.md) for current requirement coverage, test evidence, remaining limits, and suggested expansions. The [original review](docs/REVIEW.md) is retained as historical evidence.
+## Features
 
-See [operational expansion status](docs/OPERATIONS_EXPANSION.md) for the new identity, alert, rollout, advisory and recovery controls and the explicitly unfinished expansion items.
+| Area | Capabilities |
+|---|---|
+| Enrollment | Three-step endpoint → offline preparation → SSH completion; downloadable per-server Bash installer; expiring curl links; independent installation verification |
+| Package management | Installed/held/broken package inventory, inventory history, exact-version updates, dependency simulation, repair, configurable deadlines and priority overrides |
+| Repositories | Central native APT signature/index verification; `.list` and Deb822 `.sources`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
+| Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
+| Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
+| Investigations | Optional two-stage OpenAI triage, fixed read-only evidence checks, explicit known-good approvals, durable observation spool and retained history |
+| Identity | Named administrator/operator/viewer accounts, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
+| Notifications | Persistent alerts with acknowledgements and retries; verified-TLS SMTP or HTTPS webhook delivery |
+| Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
-See [enterprise and recovery deployment](docs/ENTERPRISE_RECOVERY.md) for SSO, SSH rotation, SMTP, distributed workers, reboot/rollback policy, eBPF/provenance and encrypted off-host recovery.
+## Quick start
 
-## What is implemented
-
-- Responsive dashboard: fleet overview, enrollment, searchable installed packages, updates, repositories, investigations, operation results, and audit trail.
-- A dedicated SSH key per target, verified host-key fingerprints, a forced SSH command, and a fixed sudo entry point.
-- Downloadable **offline enrollment script** containing the public key and bootstrap bridge. The same script is available through an expiring curl link served by the running application.
-- Central deployment/repair of a root-owned Python collector, bootstrap bridge, and systemd service, with `/opt/drpatch` as the target account home and spool directory.
-- Persistent SQLite inventory by default; MySQL through SQLAlchemy. Inventory includes held, multi-architecture, unpacked, half-configured, and other broken package states, with retained revisions. Package changes/removals are audited after initial discovery.
-- Native APT runs **inside the central container** with isolated per-host status, source files, keys, preferences, architecture, and machine ID. The collector never runs `apt update`, `apt list`, or `apt-cache` for discovery.
-- APT signature and index-hash verification. Failed repository refreshes stay visible and do not advance the last-success timestamp.
-- Inspect/edit/add/disable repository definitions in `.list` and Deb822 `.sources` format; upload scoped signing keys; back up source files before changes and review/restore backups from the UI. Central access supports scoped HTTPS credentials, private CA bundles, proxies, default-release policy, and exact-URI mirror mappings for local/media sources.
-- Operator-selected exact-version upgrades, with package-removal protection and respect for holds. Target APT runs only during an explicitly requested installation or dependency-repair operation.
-- Configurable repository refresh interval (**60 minutes** default), priority deadlines, and per-package priority overrides.
-- Target process and TCP/UDP connection sampling every **30 seconds**. SHA-256 sweeps of Mr Patchy's installed artifacts and running executables every **five minutes**, with ownership/mode checks for managed artifacts.
-- Central two-stage AI investigations with allowlisted read-only follow-up evidence, queue visibility, structured results, encrypted API-key storage, a configurable rate limit, retry backoff, and explicit known-good approval/revocation.
-- Durable target observation spool with acknowledgement only after database commit; replay deduplication, explicit overflow reporting, and configurable central history retention.
-- HTTPS via Caddy: upload a certificate/private key, use public or custom ACME, and upload a private ACME root CA.
-
-## Start the application
-
-Requires Docker Engine with Compose v2 on a Linux host that can reach your targets over SSH and their configured repositories over HTTP(S).
+Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Publish ports 80/443 for Caddy; keep the app and Caddy administration ports private.
 
 ```bash
-git clone git@github.com:StealthCat/MrPatchy.git
+git clone https://github.com/StealthCat/MrPatchy.git
 cd MrPatchy
 cp .env.example .env
-# Edit .env: choose a unique ADMIN_PASSWORD, DOMAIN, and PUBLIC_URL.
+# Edit ADMIN_PASSWORD, DOMAIN and PUBLIC_URL before starting.
 docker compose up -d --build
 ```
 
-Open `https://YOUR_DOMAIN` and sign in with `ADMIN_PASSWORD`. The password must be at least 12 characters. It is hashed on first startup; later environment changes do not reset it.
+Open `https://YOUR_DOMAIN`. Sign in as **admin** using your initial `ADMIN_PASSWORD` (at least 12 characters). The database stores the password hash; changing `.env` afterward does not reset the account.
 
-The initial certificate uses Caddy's local CA so the first administrator can configure HTTPS without an HTTP password exchange. Trust that CA on your administrator device before signing in. Export its public certificate:
+The initial certificate uses Caddy's local CA. Trust its public root certificate on your administrator device before signing in:
 
 ```bash
 docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./mrpatchy-local-ca.crt
 ```
 
-Ensure `DOMAIN` resolves to the Docker host. In **Settings → Configure HTTPS**, choose uploaded certificates or your ACME directory. Public/custom ACME must be able to validate this hostname using HTTP or TLS-ALPN challenges on ports 80/443. The private Caddy admin endpoint is not published to the host. Set `PUBLIC_URL` to the final browser-facing URL so enrollment links use the correct hostname.
+In **Settings → Configure HTTPS**, upload your certificate/key or configure public/custom ACME and an optional private root CA. ACME requires reachable HTTP/TLS-ALPN challenges. Keep `PUBLIC_URL` aligned with the browser-facing address. Do not disable certificate verification.
 
-## Upgrading an existing installation
+## Enroll a server in three steps
 
-Back up your volumes/database, then rebuild. MySQL timestamps are migrated from FLOAT to DOUBLE at startup (ALTER privileges required). Existing targets need one trusted-console rerun of the newly downloaded installer, followed by **Finish / repair installation**, to replace the legacy bridge. New behavior identities may require review after the effective-UID and listener-bind-address improvements. The v0.2 startup also adds the package-state column and history tables idempotently. v0.1.1 targets can use Finish / verify installation to upgrade their managed bridge and collector. See [upgrade details](docs/COMPLETION_REVIEW.md#upgrade).
+Targets need systemd, Python 3, OpenSSH server, sudo, OpenSSL and dpkg installed already. Offline preparation does not download missing prerequisites.
 
-## Enroll a target: three steps
+1. **Endpoint:** select **Add server** and enter a name, IP/hostname and SSH port.
+2. **Prepare:** download the personalized Bash script, transfer it to the target and run `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, its public SSH key, the root-owned bridge and restricted sudo permissions. The script performs no downloads, APT queries or callbacks. Click **I ran the script · Proceed to step 3**. Curl and ordinary-download delivery use the same bootstrap; curl links expire after one hour.
+3. **Connect and verify:** verify the printed ED25519 SHA256 host fingerprint through a trusted console, enter it, and click **Finish and verify installation**. Mr Patchy installs its collector/service over SSH and verifies file hashes, ownership, modes and service state.
 
-Target prerequisites: a systemd-based Ubuntu or Raspberry Pi OS machine with **Python 3, OpenSSH server, sudo, OpenSSL and dpkg** already installed.
+**Servers → Manage → Download Bash installer** remains available for every configured server. A fresh download contains the server's current SSH identity; download again after key rotation. Re-running an old saved script can reinstall its old public key.
 
-1. **Endpoint:** select Add server and enter its IP address or hostname, display name, and SSH port.
-2. **Prepare:** select one of three delivery modes: curl from the running app, downloaded script, or **offline preparation**. Download the personalized Bash script and run it with `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, public SSH key, root-owned bootstrap bridge and restricted sudo permissions. It makes no outbound connection or APT query. Click **I ran the script · Proceed to step 3**.
-3. **Connect and verify:** paste the ED25519 SHA256 host fingerprint printed on the target, verify it through a trusted console, and click **Finish and verify installation**. Mr Patchy connects over SSH, installs its collector and service, and checks installed hashes, owner/group, permissions and active service state. The wizard displays the job result.
+![Offline enrollment wizard](docs/screenshots/enrollment.webp)
 
-**Servers → Manage → Download Bash installer** is always available for every configured server, including already-enrolled servers. Re-downloading preserves that server's existing SSH identity. The installer is repeatable; it does not rotate keys.
+## Review and install updates
 
-All three modes use the same offline-safe bootstrap. Curl links expire after one hour; authenticated downloads remain available. For a private HTTPS CA, use curl's `--cacert`; never disable TLS verification. Ongoing management requires central-to-target SSH access.
+Package discovery runs native APT **centrally**, using isolated target inventories, architectures, source definitions, keys and preferences. The collector does not run target APT queries for discovery. An offline target can still have repository metadata checked against its last saved inventory.
 
-## Repository access and recovery
+In **Packages**, select a server, review candidates and choose updates. Confirmation displays the effective reboot and snapshot-rollback policy. That policy is recorded with the job; if it changes before execution, the job fails for reapproval rather than silently adopting different behavior. Staged rollouts require the same policy review for every server.
 
-In **Repositories → Repository access**, configure scoped HTTPS credentials, a CA bundle, an HTTP(S) proxy, an optional default release, and exact source-URI mirror mappings. Secrets are encrypted in the database, never returned by the access API, and staged in a mode-0600 central APT auth file. Saving access invalidates existing candidate freshness.
+Explicit installation refreshes target metadata and requests the recorded exact versions. Package removal and forced changes to holds are prohibited; existing configuration files are retained with `--force-confold`. Maintainer scripts may restart services. **Automatic reboot is available only under an explicitly reviewed, enabled policy.**
 
-A mapping such as `{"file:/srv/repo":"https://mirror.example.com/repo"}` lets central APT check the same signed metadata through an accessible mirror. You must provision that mirror; Mr Patchy does not expose target filesystem content as an HTTP server. Original target sources are preserved. Referenced public keys outside normal directories are captured and safely remapped centrally.
-
-Sources show disabled, blocked, unverified, checked or check-failed status. A blocked source remains visible and fails the aggregate refresh. Use the editor to repair or disable it; **Restore backup** reviews a prior configuration before applying it. Legacy unstructured backups remain available on the target for manual recovery.
-
-**Servers → Manage → Repair broken package state** explicitly runs APT dependency repair with removal prohibited, then dpkg configuration. It may install dependencies and run maintainer scripts. Ordinary update selection rejects broken packages until repaired.
-
-Central repository refreshes can use the last saved inventory while a target is offline. Candidate data describes that inventory; patch execution always reconnects and validates current state.
-
-## Observation and inventory history
-
-The target keeps observation batches in a transactional SQLite spool (48 MB payload budget, at most 2 MB per batch). The central server acknowledges only committed batches, and duplicate delivery is idempotent. Capacity overflow is counted persistently and shown as an integrity finding; storage is bounded, not lossless forever.
-
-Inventory changes, including reversions, create historical revisions. **Servers → Manage → Observation & inventory history** browses paginated records. Settings controls retention (30 days default). Time is target-reported, and periodic sampling cannot see every short-lived process.
-
-## Patch workflow
-
-Open **Packages**, choose a server, and filter to available updates. Assign priorities if needed, select packages, and review the installation confirmation. Explicit patch installation refreshes the target's APT metadata and installs the recorded exact versions. `--no-remove`, `--only-upgrade`, and default hold protection apply; existing configuration files are preserved with `--force-confold`. Maintainer scripts may restart services. Mr Patchy never automatically reboots a target.
-
-Deadlines are measured from the first central discovery of each candidate version:
+![Patch approval showing reboot and rollback policy](docs/screenshots/patch-review.webp)
 
 | Priority | Default deadline |
 |---|---:|
@@ -98,55 +71,107 @@ Deadlines are measured from the first central discovery of each candidate versio
 | Normal | 168 hours |
 | Low | 720 hours |
 
-Security-origin candidates default to high, other candidates to normal. These are **scheduling heuristics, not CVSS/CVE severity ratings**. Use per-package overrides for your own policy. Deadlines highlight overdue work; they do not perform unattended upgrades. Candidate availability is not a guarantee that the target can successfully install a version: dependencies, vendor hooks, phasing, and repository changes can affect the final transaction.
+Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates default to high; others default to normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades.
 
-## AI investigations
+**Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
 
-Configure an OpenAI API key and a compatible Responses API model in Settings, then enable investigations. No API call occurs until enabled with both credentials and a model. A ChatGPT subscription is separate from API billing.
+## Reboot, rollback and interrupted operations
 
-Each new executable SHA-256 / path / UID / connection-pattern combination is queued per host. PID and ephemeral client ports are excluded from the identity so ordinary restarts do not create an investigation storm. The default limit is 20 investigations per hour. Unfamiliar behavior is persisted even when AI is disabled; failed requests retry with a one-hour backoff.
+Configure each host under **Account → Operations → SSO, SMTP & target policies**. Reboot and rollback default off, and the controls load the saved policy when you select a server.
 
-Initial evidence contains executable paths, hashes, effective UIDs, and network endpoint metadata. The model may request fixed read-only checks of executable metadata, package ownership and selected systemd service properties; a second model call evaluates those results. No model-generated command is executed. Each investigation consumes at most two API calls. No command-line arguments, environment variables, process memory, or executable bytes are sent. The Responses API request uses `store: false`; this does not override your API organization's retention policies. AI results cannot execute commands, patch systems, or automatically create trusted baselines. Known-good status requires an explicit administrator decision and changes in the behavior identity create a new review item.
+- Rollback requires a validated root-owned `/etc/mrpatchy/rollback` adapter and a bootable snapshot layout. A Snapper/Btrfs adapter is included; arbitrary ext4 systems do not gain snapshot rollback automatically.
+- The target journals reboot intent **before** submitting a reboot. Completion requires a changed boot ID and healthy services.
+- Transient SSH/health failures are retried for up to ten minutes. Persistent post-reboot health failure requests one approved snapshot rollback; a rollback reboot is verified separately.
+- A verified rollback leaves the patch job failed and blocks later rollout stages. Uncertain recovery becomes `recovery_required`.
+- Orphaned `running` and `recovery_required` jobs block further queued work and configuration mutations for that host. Monitoring continues. Busy workers skip the host instead of tying up another worker slot.
+- After inspecting package/service state, snapshots and pending reboot timers through a trusted console, use **Activity → Review interrupted operation**. Reconciliation also requires idle central and target mutation locks. It releases the queue without replaying the interrupted job.
 
-## MySQL
+A host that never returns over SSH cannot be automatically repaired from the central service. Keep an out-of-band recovery path. See [recovery contracts and procedures](docs/ENTERPRISE_RECOVERY.md).
 
-Create a dedicated database/user on an existing MySQL 8+ server and set:
+## Repository management
+
+Use **Repositories** to inspect, add, edit or disable sources, upload signing keys and restore reviewed source backups. **Repository access** configures scoped HTTPS credentials, private CA bundles, proxies, default release and exact-URI mirror mappings. Secrets are encrypted in the database and staged in a private central APT auth file.
+
+HTTP(S) repositories are supported directly. Local/media sources require an administrator-provisioned HTTP(S) mirror containing the same signed metadata. Arbitrary target `apt.conf` hooks and executable authentication/transport helpers are never imported. Unsupported configurations remain visible and fail closed; “all repositories” is not an unconditional transport-compatibility claim.
+
+**Servers → Manage → Repair broken package state** explicitly performs dependency repair and dpkg configuration. It can install dependencies and run maintainer scripts; inspect failed results before retrying.
+
+## Monitoring, provenance and AI
+
+Default cadences are **60 minutes** for configurable repository checks, **30 seconds** for process/socket sampling, and **five minutes** for integrity sweeps. Slow targets or large fleets can delay them; stale telemetry and overdue sweeps are reported.
+
+The collector hashes Mr Patchy's managed files and readable running executables. Script operands and executable-mapped libraries contribute to behavior identity. Libraries are read through `/proc/PID/map_files` where permitted, or through a pathname only when its device/inode still matches. Deleted/inaccessible/replaced mappings remain explicit unverified evidence. Script hashes describe files, not the interpreter's live memory. Limits are 128 provenance files per process and 128 MiB per file.
+
+Optional bpftrace exec capture retains short-lived observations. Unverifiable identities stay marked unverified through central processing. Enabling eBPF relaxes the collector sandbox for kernel tracing; kernel support and acceptance testing are required. It is not guaranteed lossless capture or hardware attestation.
+
+Enable AI in **Settings** with an OpenAI API key and a compatible Responses API model. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
+
+The target's durable spool acknowledges batches only after central commit; overflow is visible. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
+
+## Accounts, SSO, notifications and keys
+
+**Account** manages named users, roles, authenticator MFA, password changes and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring.
+
+For OIDC, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`, register `PUBLIC_URL/auth/sso/callback`, then bind the provider's immutable subject to an existing local account. Preserve the exact issuer, including any trailing slash. SSO uses code/PKCE, nonce/state, validated ID tokens and one-time callback state. Configure MFA at your identity provider for SSO logins.
+
+SMTP requires verified TLS or STARTTLS, with optional private CA support. SMTP and HTTPS webhooks are alternative delivery channels. Alerts use a durable retrying outbox and acknowledgements; delivery is at least once. SSH rotation proves a replacement key works before removing the old target key and records a resumable journal.
+
+## Workers, databases and backups
+
+Compose separates the web app, worker and Caddy services. Keep one web process. Scale workers on the same host with:
+
+```bash
+docker compose up -d --build --scale worker=3
+```
+
+Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
+
+For an existing MySQL 8+ database, set a URL-encoded connection string in `.env` and recreate **both app and workers**:
 
 ```dotenv
 DATABASE_URL=mysql+pymysql://mrpatchy:URL_ENCODED_PASSWORD@db-host:3306/mrpatchy?charset=utf8mb4
 ```
 
-Then recreate the app container. SQLite is the default and needs no separate database service. Switching the URL does **not** migrate existing records. Back up the old DB and perform an explicit data migration if you already enrolled targets. CI runs the test suite and schema migrations against a disposable MySQL 8.4 service.
+Switching the URL does not migrate existing data. Configure verified database TLS through your connection settings for remote deployments.
 
-## Scope and operating limits
+Use [the encrypted restic workflow](docs/ENTERPRISE_RECOVERY.md#complete-encrypted-off-host-recovery) to back up the database, encryption key, complete SSH rotation directory and TLS/Caddy volumes. Stop **all app and worker replicas** first. SQLite sources must exist, pass integrity checks and contain the application tables; a missing path cannot create an empty successful backup. Restore verifies content into staging before activation into empty destinations. Protect `.env`, IdP/database secrets and restic credentials separately through your infrastructure recovery procedures.
 
-This is the first implementation, not a claim of production certification. Read [architecture and trust boundaries](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and the [validation record](docs/VALIDATION.md) before deploying broadly.
+The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.py` for full deployment recovery. Test restores before relying on them.
 
-- Central resolution uses HTTP(S), including configured authentication and private CAs. Local/media sources need an explicit reachable mirror mapping. Credential-bearing source URLs, custom executable transports and vendor authentication helpers must be converted to a supported configuration; executable target APT hooks are never imported. Private network mirrors are intentionally allowed; this application is for a trusted administrator on a management network.
-- Imported source trust/expiry overrides are rejected. Existing trust anchors are acquired through your pinned SSH connection; Mr Patchy cannot independently prove that a pre-existing target key was originally legitimate.
-- File integrity covers **Mr Patchy's managed artifacts** and hashes the executable behind each readable `/proc/PID/exe`. It does not validate every OS package file, shared library, script contents, kernel module, or process memory. Executable hashes form a reviewed behavioral baseline, not a claim of vendor provenance. A compromised root/kernel can forge telemetry; hashing is not remote attestation.
-- TCP/UDP connections are associated through `/proc` socket inodes in the collector's network namespace. Short-lived activity between samples, other network namespaces, and some inaccessible descriptors can be missed.
-- Use one web process; worker replicas coordinate through SQL and cross-process locks. Polls use bounded pools; very large fleets, slow links, huge process sets, or long-running target operations may delay collection. Stale telemetry and hash checks are surfaced. No external notification delivery is implemented.
-- Repository checks preserve APT preferences/architecture and native Debian version comparisons. Declare default release, credentials, proxy and CA settings centrally; arbitrary target apt.conf is not executed. Vendor token-refresh/entitlement agents are not replicated.
-- Named administrator/operator/viewer roles and optional TOTP MFA are available through Account. SSO, SSH-key rotation, SMTP, coordinated workers and opt-in rollback/reboot are implemented; configure and validate their platform prerequisites. Tamper-evident audit shipping and OS release upgrades are separate features. See the operational expansion status for exact scope.
+## Upgrade
 
-## Development
+1. Back up the database and all persistent volumes with app/workers stopped.
+2. Pull `main`, review `.env`, then run `docker compose up -d --build`.
+3. Use **Servers → Manage → Finish / verify installation** to upgrade each managed bridge/collector. Legacy bootstrap targets may require a fresh installer run through a trusted console first.
+4. Review queued jobs: jobs created before recovery-policy capture cannot inherit an enabled reboot/rollback policy; resubmit them after reviewing the policy.
+5. Reconcile interrupted/recovery-required jobs before resuming those hosts. Review new provenance identities rather than automatically transferring old approvals.
+
+Schema initialization is idempotent. MySQL upgrades need ALTER privileges for existing timestamp/package-state migrations.
+
+## Validation and development
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m pytest -q
+npm ci
+npx playwright install chromium
+npm run test:ui
 ```
 
-Tests include a real signed ARM64 repository fixture, altered-index/signature rejection, enrollment script syntax, auth/CSRF, holds, SSH fingerprint pinning, TLS validation, and AI trust boundaries. GitHub Actions also validates Compose and builds the Docker image.
+CI covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu and Debian, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, crash-before-reboot, health retries/rollback, missing-database refusal, deadline continuity, exact OIDC issuers and provenance uncertainty.
 
-Local preview (development only):
+Real Raspberry Pi/systemd hardware, live IdP/SMTP/custom-ACME services, kernel eBPF attachment, bootable filesystem rollback and real off-host provider connectivity require acceptance tests in your environment. The existing MySQL CI suite does not constitute a MySQL dump/import disaster-recovery drill.
 
-```bash
-DATA_DIR=/tmp/mrpatchy-dev COOKIE_SECURE=false \
-ADMIN_PASSWORD='choose-a-long-development-password' \
-DISABLE_SCHEDULER=1 uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
+Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm run test:ui`. Screenshots use illustrative fixtures and documentation-only addresses, not live infrastructure.
 
-See [the UI screenshots](docs/screenshots/) for the desktop, mobile, enrollment, and settings screens. Example screenshots use a documentation-only IP address and no live infrastructure.
+## Documentation
+
+- [Operations and troubleshooting](docs/OPERATIONS.md)
+- [Architecture and trust boundaries](docs/ARCHITECTURE.md)
+- [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)
+- [Post-review fixes](docs/REVIEW_FIXES.md)
+- [Historical reviews](docs/COMPLETION_REVIEW.md) and [expansion checkpoint](docs/OPERATIONS_EXPANSION.md)
+
+Central administrators and holders of target SSH keys can deploy root code. Protect the management network, accounts, database and secret volumes accordingly. A compromised target root/kernel can forge telemetry; hashes are not remote attestation.

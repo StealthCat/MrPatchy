@@ -83,10 +83,14 @@ def auth(request:Request):
         return {**row.value,'username':identity.username,'role':identity.role,'mfa':bool(identity.otp_secret)}
 
 @contextmanager
-def host_change(host_id):
+def host_change(host_id,allow_quarantined=False):
     lock=worker.host_lock(host_id)
     if not lock.acquire(False): raise HTTPException(409,'Server has an active operation. Retry this configuration change when it finishes.')
-    try: yield
+    try:
+        if not allow_quarantined:
+            with Session() as s:
+                if operations.host_quarantined(s,host_id):raise HTTPException(409,'Reconcile the host operation before making further changes')
+        yield
     finally: lock.release()
 
 def host_or_404(s,host_id):
@@ -157,7 +161,7 @@ def add_host(body:HostInput,user=Depends(auth)):
 class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(auth)):
-    with host_change(host_id), Session() as s:
+    with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id); h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(auth)):
@@ -196,10 +200,27 @@ def packages(host_id:str,q:str='',updates:bool=False,user=Depends(auth)):
 class PatchInput(BaseModel):
     packages:list[str]=Field(min_length=1,max_length=500)
     expected_versions:dict[str,str]|None=None
+    expected_recovery_policy:dict[str,bool]|None=None
+
+def reviewed_policy(s,host_id,expected):
+    policy=operations.recovery_policy(s,host_id)
+    if expected is None:
+        if any(policy.values()):raise HTTPException(409,'Review the current reboot and rollback policy before submitting')
+    elif expected!=policy:raise HTTPException(409,'Recovery policy changed; reopen the patch confirmation')
+    if operations.host_quarantined(s,host_id):raise HTTPException(409,'Host has a running or unreconciled operation')
+    return policy
+
+@app.get('/api/hosts/{host_id}/patch-policy')
+def patch_policy(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id)
+        return operations.recovery_policy(s,host_id)
+
 @app.post('/api/hosts/{host_id}/patch')
 def patch(host_id:str,body:PatchInput,user=Depends(auth)):
     with Session() as s:
         h=host_or_404(s,host_id)
+        policy=reviewed_policy(s,host_id,body.expected_recovery_policy)
         if h.repo_error or not h.last_repo or time.time()-h.last_repo>config(s)['repo_minutes']*120: raise HTTPException(409,'Refresh repositories before patching; candidate data is stale')
         specs=[]
         if len(set(body.packages))!=len(body.packages): raise HTTPException(400,'Duplicate package selections')
@@ -209,7 +230,7 @@ def patch(host_id:str,body:PatchInput,user=Depends(auth)):
             if not p or not p.candidate or p.held or p.dpkg_state.split()[-1]!='installed': raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
             specs.append(p.name+'='+p.candidate)
-        return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs})}
+        return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs,'_recovery_policy':policy})}
 @app.get('/api/hosts/{host_id}/repositories')
 def repositories(host_id:str,user=Depends(auth)):
     with Session() as s:
@@ -538,23 +559,26 @@ def metrics(user=Depends(auth)):
 class RolloutInput(BaseModel):
     hosts:list[str]=Field(min_length=2,max_length=50)
     packages:list[str]=Field(min_length=1,max_length=500)
+    expected_recovery_policies:dict[str,dict[str,bool]]|None=None
 @app.post('/api/operations/rollouts')
 def rollout(body:RolloutInput,user=Depends(auth)):
     if len(set(body.hosts))!=len(body.hosts):raise HTTPException(400,'Duplicate servers')
+    if body.expected_recovery_policies is not None and set(body.expected_recovery_policies)!=set(body.hosts):raise HTTPException(400,'Review recovery policies for every server')
     with Session() as s:
         prepared=[]
         for host_id in body.hosts:
             h=host_or_404(s,host_id);specs=[]
+            policy=reviewed_policy(s,host_id,(body.expected_recovery_policies or {}).get(host_id))
             if s.scalar(select(func.count()).select_from(Job).where(Job.host_id==host_id,Job.state.in_(['queued','running'])))>=50:raise HTTPException(429,'Server queue is full')
             for name in body.packages:
                 p=s.get(Package,host_id+':'+name)
                 if not p or not p.candidate:raise HTTPException(400,'Missing candidate on '+h.name+': '+name)
                 specs.append(name+'='+p.candidate)
-            worker.validate_patch(s,h,specs);prepared.append((h.id,specs))
+            worker.validate_patch(s,h,specs);prepared.append((h.id,specs,policy))
         # One transaction: no partial rollout submission. The first server is the canary.
         ids=[]
-        for host_id,specs in prepared:
-            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_depends_on':ids[-1:]})
+        for host_id,specs,policy in prepared:
+            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_depends_on':ids[-1:],'_recovery_policy':policy})
             s.add(job);ids.append(job.id)
         audit(s,'create staged rollout',user['username']+' '+','.join(ids));s.commit()
         return {'jobs':ids,'canary':ids[0]}
@@ -638,9 +662,9 @@ def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
         host_id=job.host_id
-    with host_change(host_id),Session() as s:
+    with host_change(host_id,allow_quarantined=True),Session() as s:
         job=s.get(Job,job_id);h=host_or_404(s,host_id)
-        if job.state!='running':raise HTTPException(409,'Only orphaned running jobs require reconciliation')
+        if job.state not in operations.QUARANTINE_STATES:raise HTTPException(409,'Only running or recovery-required jobs require reconciliation')
         if ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
         job.state='interrupted';job.output='Operator reviewed target after worker interruption; operation was not automatically replayed'
         audit(s,'reconcile job',user['username']+' '+job_id);s.commit()

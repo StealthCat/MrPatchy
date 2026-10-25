@@ -71,9 +71,9 @@ def test_protected_patch_rolls_back_and_never_replays(tmp_path,monkeypatch):
         calls.append(operation)
         return {'ready':True} if operation=='probe' else {'snapshot':'42'} if operation=='snapshot' else {'reboot_required':False}
     monkeypatch.setattr(bridge,'recovery_hook',hook)
-    monkeypatch.setattr(bridge,'handle',lambda request:(_ for _ in ()).throw(RuntimeError('apt failure')))
+    monkeypatch.setattr(bridge,'handle',lambda request: (_ for _ in ()).throw(RuntimeError('apt failure')) if request['action']=='patch' else {'failed_units':'','collector_active':True})
     request={'job_id':'a'*36,'packages':['test=2'],'policy':{'rollback':True}}
-    with pytest.raises(RuntimeError,match='recovery state'):bridge.protected_patch(request)
+    assert bridge.protected_patch(request)['outcome']=='rolled_back'
     assert calls==['probe','snapshot','rollback']
     with pytest.raises(RuntimeError,match='incomplete'):bridge.protected_patch(request)
 
@@ -99,7 +99,9 @@ def test_encrypted_recovery_round_trip(tmp_path,monkeypatch):
     recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
     data=tmp_path/'data';data.mkdir();(data/'ssh').mkdir();(data/'ssh/test.key').write_text('private fixture')
     (data/'secret.key').write_text('encryption fixture')
-    with sqlite3.connect(data/'mrpatchy.db') as db:db.execute('CREATE TABLE example (value TEXT)');db.execute("INSERT INTO example VALUES ('restored')")
+    with sqlite3.connect(data/'mrpatchy.db') as db:
+        db.execute('CREATE TABLE example (value TEXT)');db.execute("INSERT INTO example VALUES ('restored')")
+        for name in ('settings','hosts','packages','jobs'):db.execute('CREATE TABLE '+name+' (id TEXT)')
     dirs=[]
     for name in ['tls','caddy-data','caddy-config']:
         path=tmp_path/name;path.mkdir();(path/'fixture').write_text(name);dirs.append(path)

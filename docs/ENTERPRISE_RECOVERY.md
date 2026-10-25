@@ -22,13 +22,14 @@ The durable alert outbox retains retry state. Stable Message-ID/event IDs permit
 
 ## Automatic reboot and rollback
 
-Per-host recovery policies default off. Opt-in applies to subsequently executed, explicitly approved patch jobs, within maintenance windows.
+Per-host recovery policies default off. Patch and rollout confirmations display and capture the effective policy. A policy change before execution requires reapproval. Maintenance windows gate job start; recovery may extend past the window.
 
 - Before patching with rollback enabled, a trusted adapter must pass its probe and create a snapshot.
-- The target writes a durable transaction journal. An interrupted attempt is never silently replayed.
+- The target writes a durable transaction journal, including reboot intent before submission. An interrupted attempt is never silently replayed or considered complete merely because package installation ended.
 - A failed patch or post-patch health check invokes rollback automatically.
 - A successful patch schedules reboot only if policy permits it and /var/run/reboot-required exists.
-- Central completion waits up to ten minutes for a changed boot ID and healthy collector/systemd state. A failed check blocks staged rollout advancement.
+- Central completion retries transient SSH/service health failures for up to ten minutes and requires a changed boot ID. Persistent post-reboot health failure invokes one approved rollback when the target is reachable and has actually rebooted. A rollback reboot has its own verification window. Successful rollback still fails the patch stage and blocks rollout advancement.
+- Rollback receipts are saved centrally before waiting for a reboot because a root snapshot can also revert the target journal. Uncertain recovery becomes recovery_required and quarantines the host.
 - If rollback requires reboot while reboot policy is disabled, the job reports that a manual reboot is required.
 
 Install a validated root-owned executable at /etc/mrpatchy/rollback. It must not be group/world writable or a symlink. The fixed JSON contract is:
@@ -48,11 +49,11 @@ Workers atomically claim durable SQL jobs and use per-host cross-process locks. 
 
 All replicas must share the database, app encryption key and SSH identity storage. For workers on separate hosts, use MySQL and consistent shared/replicated secret storage; do not independently generate identities. Keep one web process unless separately validating deployment/migration coordination.
 
-Running operations are not automatically replayed after a worker crash. Review the target, then POST /api/operations/jobs/JOB/reconcile with {"verified_target_state":true}. This requires the central host lock to be free and the target mutation lock to be idle, and marks the job interrupted without resubmitting it. External side effects such as mail cannot be guaranteed exactly-once.
+Orphaned running and recovery_required jobs block subsequent queued work and configuration mutations for that host; polling continues. Workers skip busy host locks instead of occupying another worker slot. Review the target and pending reboot timers through a trusted console, then use Activity → Review interrupted operation or POST /api/operations/jobs/JOB/reconcile with {"verified_target_state":true}. This requires the central host lock to be free and the target mutation lock to be idle, and marks the job interrupted without resubmitting it. External side effects such as mail cannot be guaranteed exactly-once.
 
 ## eBPF and provenance
 
-Script and executable-mapped library hashes are collected through procfs without exporting command-line arguments or file contents. Coverage is bounded to 128 files per process and 128 MB per file. Scripts are recognized for common interpreters when the first operand is a script file; inline code and arbitrary launcher conventions are not reconstructed.
+Script and executable-mapped library hashes are collected through procfs without exporting command-line arguments or file contents. Coverage is bounded to 128 files per process and 128 MB per file. Deleted or inaccessible mapped files are retained as unverified entries. map_files reads are preferred; a pathname fallback must match the mapped device/inode. The eBPF identity_verified flag survives central normalization and AI triage. Scripts are recognized for common interpreters when the first operand is a script file; inline code and arbitrary launcher conventions are not reconstructed.
 
 Advanced controls opt into bpftrace sched_process_exec events. Install bpftrace and compatible kernel tracing/BPF facilities on the target first. Missing tools, denied attachment, diagnostics and buffer errors are surfaced. Exited processes are retained as unverified exec observations when hashing is no longer possible. This is event-assisted monitoring, not guaranteed lossless kernel telemetry or hardware attestation.
 
@@ -84,7 +85,7 @@ python scripts/recovery.py activate --app-stopped --bundle /empty/recovery-stagi
   --caddy-data /empty/caddy-data --caddy-config /empty/caddy-config
 ```
 
-Restore verifies restic content and SQLite integrity; activation refuses nonempty volume destinations and nonempty MySQL databases. When run as root it sets app/TLS ownership to UID 10001 (override with --uid). Recreate containers on the restored volumes, verify login, host-key pinning, TLS and a disposable target before resuming patching. DNS, firewall, Compose/.env secrets, restic credentials and MySQL server provisioning must be recovered through your infrastructure procedures.
+Backup opens an existing SQLite source read-only and checks integrity plus core application tables. Restore repeats those checks; activation validates bundle files/directories before destination mutation. Restore verifies restic content and SQLite integrity; activation refuses nonempty volume destinations and nonempty MySQL databases. When run as root it sets app/TLS ownership to UID 10001 (override with --uid). Recreate containers on the restored volumes, verify login, host-key pinning, TLS and a disposable target before resuming patching. DNS, firewall, Compose/.env secrets, restic credentials and MySQL server provisioning must be recovered through your infrastructure procedures.
 
 ## Validation boundaries
 

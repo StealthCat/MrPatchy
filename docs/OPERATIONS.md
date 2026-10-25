@@ -15,7 +15,7 @@ Use a management LAN/VPN, limit target SSH ingress to the app host, and protect 
 
 ```bash
 docker compose ps
-docker compose logs --tail=200 app caddy
+docker compose logs --tail=200 app worker caddy
 ```
 
 On an enrolled target:
@@ -35,7 +35,7 @@ The collector's inventory refresh is five minutes; central explicit operations r
 - **APT signing failure:** inspect Activity for the actual APT diagnostic. Obtain/verify the publisher's current public key, upload it, and repair Signed-By. Do not use `trusted=yes` or disable expiry verification.
 - **Repository no longer exists:** edit its URI/suite, comment a legacy line, set `Enabled: no`, or save an empty definition. Previous source files are backed up under `/opt/drpatch/backups`.
 - **Failed patch:** inspect the job output and target package state. No removal or forced hold changes are requested. A failed command may still have partially installed packages; inventory is refreshed on later polls. Do not assume transactional rollback.
-- **Interrupted operation after app restart:** jobs marked running become interrupted; they are not automatically replayed. Inspect target state before requeuing.
+- **Interrupted operation after app restart:** orphaned running jobs and recovery_required jobs quarantine that host’s queue. Inspect package/service state and pending reboot timers, then use Activity → Review interrupted operation. Jobs are never automatically replayed.
 - **Collector integrity mismatch:** investigate first. The repair action redeploys the collector/unit. If the bridge, sudoers or authorized_keys changed, rerun a freshly downloaded bootstrap through a trusted console before finishing installation again.
 - **API errors:** verify the model's Responses API/structured-output support, project key, limits, and billing. API errors stay visible and retry after backoff. No key/HTTP response body is copied into the investigation error.
 
@@ -49,7 +49,7 @@ The initial local CA certificate is available through `docker compose cp` as des
 
 ## Backup and restore
 
-Back up **all Compose named volumes** and your `.env` securely. For a consistent SQLite backup, stop the app before copying its volume, or use SQLite's online backup mechanism; do not copy only the `.db` while ignoring an active WAL. For MySQL, take a transactionally consistent DB backup and back up the app volume at the same time.
+Back up **all Compose named volumes** and your `.env` securely. For a consistent SQLite backup, stop all app and worker replicas before copying its volume, or use SQLite's online backup mechanism; do not copy only the `.db` while ignoring an active WAL. For MySQL, take a transactionally consistent DB backup and back up the app volume at the same time.
 
 The app volume holds the database (SQLite), SSH private keys, API-secret encryption key, and central APT state. The TLS volume holds HTTPS keys/certificates and the saved Caddyfile. Caddy's volumes contain ACME accounts, its local CA, and issuance state. Losing the app encryption key prevents recovery of encrypted API credentials; losing SSH identities requires target reenrollment.
 
@@ -60,8 +60,10 @@ Recreate the deployment with matching volumes and database, then check host fing
 There is no unauthenticated password-reset endpoint. With trusted shell access to the Docker host:
 
 ```bash
-docker compose exec -u mrpatchy app python -c 'import getpass; from app.db import Session,Setting; from app.security import password_hash; from sqlalchemy import select; p=getpass.getpass("New administrator password: "); assert len(p)>=12; s=Session(); s.merge(Setting(key="admin",value={"hash":password_hash(p)})); [s.delete(x) for x in s.scalars(select(Setting).where(Setting.key.like("session:%")))]; s.commit(); s.close()'
+docker compose exec -u mrpatchy app python -c 'import getpass; from app.db import Session,audit; from app.identity import User; from app.security import password_hash; p=getpass.getpass("New administrator password: "); assert len(p)>=12; s=Session(); u=s.get(User,"admin"); assert u is not None; u.password=password_hash(p); u.generation+=1; audit(s,"console password reset","admin"); s.commit(); s.close()'
 ```
+
+This resets the named account and invalidates its existing sessions. It retains MFA. If MFA recovery is needed, use a separate trusted-console procedure to clear that account’s OTP fields and increment its session generation; changing the legacy `Setting("admin")` hash does not reset a named user.
 
 ## Remove a target's access
 
