@@ -74,7 +74,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations'))
+        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations','/api/tls'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -289,8 +289,7 @@ def audit_log(user=Depends(auth)):
 @app.get('/api/settings')
 def settings(user=Depends(auth)):
     with Session() as s:
-        tlsrow=s.get(Setting,'tls')
-        return config(s)|{'api_key_configured':s.get(Setting,'openai_key') is not None,'tls':tlsrow.value if tlsrow else {}}
+        return config(s)|{'api_key_configured':s.get(Setting,'openai_key') is not None,'tls':tls.public_state()}
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
@@ -308,18 +307,37 @@ def settings_save(body:ConfigInput,user=Depends(auth)):
         if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
         audit(s,'update settings','Patch policy, cadence or AI configuration changed'); s.commit(); return {'ok':True}
 class TLSInput(BaseModel):
-    domain:str
-    mode:str
-    acme_url:str=''
+    domain:str=Field(default='',max_length=253)
+    aliases:list[str]=Field(default_factory=list,max_length=20)
+    enabled:bool=True
+    mode:str=Field(pattern=r'^(internal|uploaded|acme)$')
+    acme_url:str=Field(default='',max_length=2000)
+    email:str=Field(default='',max_length=320)
+    https_port:int|None=Field(default=None,ge=1,le=65535)
+    redirect_http:bool=True
+    challenge:str=Field(default='auto',pattern=r'^(auto|http|tlsalpn)$')
     certificate:str=Field(default='',max_length=100000)
     private_key:str=Field(default='',max_length=100000)
     ca:str=Field(default='',max_length=100000)
+    clear_ca:bool=False
+    eab_id:str=Field(default='',max_length=512)
+    eab_key:str=Field(default='',max_length=2000)
+    clear_eab:bool=False
+
+@app.get('/api/tls')
+def tls_settings(user=Depends(auth)):
+    return tls.public_state()
+
 @app.put('/api/tls')
 def tls_save(body:TLSInput,user=Depends(auth)):
-    try: result=tls.apply(body.model_dump())
+    return tls_profile_save('internal',body,user)
+
+@app.put('/api/tls/{profile}')
+def tls_profile_save(profile:str,body:TLSInput,user=Depends(auth)):
+    try: result=tls.apply(body.model_dump(),profile)
     except Exception as e: raise HTTPException(400,'TLS configuration rejected: '+str(e)[:1000])
     with Session() as s:
-        s.merge(Setting(key='tls',value=result)); audit(s,'update TLS',result['domain']+' '+result['mode']); s.commit()
+        s.merge(Setting(key='tls',value=result));audit(s,'update TLS',profile+' '+body.domain+' '+body.mode);s.commit()
     return result
 
 class PriorityInput(BaseModel):

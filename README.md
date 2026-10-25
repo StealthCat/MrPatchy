@@ -25,7 +25,7 @@ Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian and Ras
 
 ## Quick start
 
-Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Publish ports 80/443 for Caddy; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
+Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Configure Caddy's published interface/ports with `BIND_IP`, `HTTP_PORT` and `HTTPS_PORT`; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
 
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
@@ -43,7 +43,21 @@ The initial certificate uses Caddy's local CA. Trust its public root certificate
 docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./mrpatchy-local-ca.crt
 ```
 
-In **Settings → Configure HTTPS**, upload your certificate/key or configure public/custom ACME and an optional private root CA. ACME requires reachable HTTP/TLS-ALPN challenges. Keep `PUBLIC_URL` aligned with the browser-facing address. Do not disable certificate verification.
+In **Settings → Configure HTTPS**, configure independent **Internal** and **External / public** profiles. Each supports an uploaded certificate/key, Let's Encrypt or a custom ACME directory (with optional CA bundle, account email and EAB), or Caddy's built-in CA. Profiles use different hostnames on the same HTTPS listener. Existing generated single-site configurations migrate to the Internal profile with their certificate material preserved.
+
+For example, bind only your server's LAN address using alternate host ports:
+
+```dotenv
+BIND_IP=192.168.1.20
+HTTP_PORT=8080
+HTTPS_PORT=8443
+DOMAIN=patchy.home.example.com
+PUBLIC_URL=https://patchy.home.example.com:8443
+```
+
+Run `docker compose up -d --build` after changing bindings. Optional `HTTP_BIND_IP` and `HTTPS_BIND_IP` override the shared address; HTTPS TCP and HTTP/3 UDP use the same address/port. HTTP redirects follow `HTTPS_PORT`, including after a container recreation. A profile's browser-facing port override handles routers that expose a different external port.
+
+For dual CAs, use a private ACME server for `patchy.home.example.com` and Let's Encrypt for `patchy.example.com`. Both DNS names reach the same listener; TLS selects the appropriate certificate by hostname. **Internal is a certificate profile, not an access-control boundary**—use network controls if one name must be LAN-only. Public ACME HTTP-01/TLS-ALPN-01 validation still requires external TCP 80/443 forwarded to Caddy, even when Docker publishes 8080/8443. Wildcard issuance/DNS-01 is not included. Keep `PUBLIC_URL` aligned with the canonical enrollment/SSO address. See [Docker bindings and dual TLS](docs/DOCKER_TLS.md) for setup, migration and recovery.
 
 ## Enroll a server in three steps
 
