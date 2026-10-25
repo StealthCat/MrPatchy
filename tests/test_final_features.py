@@ -120,3 +120,33 @@ def test_remote_recovery_refuses_local_repository(monkeypatch):
     recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
     monkeypatch.setenv('RESTIC_REPOSITORY','/tmp/local')
     with pytest.raises(ValueError):recovery.remote()
+
+def test_bpf_stream_handles_batched_and_split_unicode_records():
+    from target.agent import decode_bpf_events
+    event={'type':'printf','data':'1\t0\t/opt/écho\n'}
+    encoded=(json.dumps(event,ensure_ascii=False)+'\n').encode()
+    split=encoded.index(b'\xc3')+1
+    rows,pending=decode_bpf_events(b'',encoded[:split])
+    assert rows==[]
+    rows,pending=decode_bpf_events(pending,encoded[split:]+encoded)
+    assert rows==[event,event] and pending==b''
+    with pytest.raises(ValueError,match='Oversized'):decode_bpf_events(b'',b'x'*65537)
+
+def test_sso_callback_state_is_consumed_once(client,monkeypatch):
+    import time
+    from app.security import token_hash
+    monkeypatch.setattr(sso,'issuer','https://issuer.example')
+    calls=[]
+    async def validate():return {}
+    async def authorize(request):
+        calls.append('exchange')
+        return {'userinfo':{'iss':sso.issuer,'sub':'missing-binding'}}
+    monkeypatch.setattr(sso,'validate_provider',validate)
+    monkeypatch.setattr(sso,'oauth',SimpleNamespace(provider=SimpleNamespace(authorize_access_token=authorize)))
+    state='one-time-state'
+    with Session() as session:
+        session.add(Setting(key='oidc-state:'+token_hash(state),value={'expires':time.time()+300}));session.commit()
+    assert client.get('/auth/sso/callback',params={'state':state}).status_code==400
+    result=client.get('/auth/sso/callback',params={'state':state})
+    assert result.status_code==400 and 'reused' in result.json()['detail']
+    assert calls==['exchange']

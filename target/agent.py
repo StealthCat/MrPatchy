@@ -166,6 +166,12 @@ def provenance(proc,cache):
     except OSError as e:result.append({'error':type(e).__name__})
     return result
 
+def decode_bpf_events(pending,chunk):
+    """Frame pipe reads without losing buffered events or splitting UTF-8 characters."""
+    lines=(pending+chunk).split(b'\n')
+    if any(len(line)>65536 for line in lines):raise ValueError('Oversized bpftrace event')
+    return [json.loads(line) for line in lines[:-1] if line],lines[-1]
+
 def ebpf_loop():
     """Optional kernel exec events. BPF attachment failures are visible, not silently ignored."""
     import shutil
@@ -179,31 +185,33 @@ def ebpf_loop():
         if not shutil.which('bpftrace'):
             atomic(ROOT/'ebpf-status.json',{'state':'unavailable','error':'Install bpftrace and kernel BPF support'});time.sleep(30);continue
         try:
-            process=subprocess.Popen(['bpftrace','-q','-f','json','-B','line','-e',program],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            process=subprocess.Popen(['bpftrace','-q','-f','json','-B','line','-e',program],stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0)
             def diagnostics():
                 for line in process.stderr:
-                    atomic(ROOT/'ebpf-diagnostic.json',{'state':'warning','error':line[-2000:],'at':time.time()})
+                    atomic(ROOT/'ebpf-diagnostic.json',{'state':'warning','error':line[-2000:].decode(errors='replace'),'at':time.time()})
             threading.Thread(target=diagnostics,daemon=True).start()
             atomic(ROOT/'ebpf-status.json',{'state':'starting'})
             import selectors
             selector=selectors.DefaultSelector();selector.register(process.stdout,selectors.EVENT_READ)
-            while process.poll() is None:
+            pending=b'';ended=False
+            while not ended:
                 current=json.loads(config_path.read_text()) if config_path.exists() else {}
                 if not current.get('ebpf'):process.terminate();break
                 for key,_ in selector.select(1):
-                    line=key.fileobj.readline(65536)
-                    if not line:continue
-                    event=json.loads(line)
-                    if event.get('type')!='printf':continue
-                    pid,uid,filename=event['data'].rstrip('\n').split('\t',2)
-                    proc=Path('/proc')/str(int(pid));sha=None
-                    try:
-                        if os.readlink(proc/'exe')==filename:sha=digest(proc/'exe')
-                    except OSError:pass
-                    # Exited processes remain events even when their executable is no longer readable.
-                    spool([{'pid':int(pid),'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
-                            'connections':[],'capture':'ebpf','identity_verified':sha is not None}],time.time())
-                    atomic(ROOT/'ebpf-status.json',{'state':'active','last_event':time.time()})
+                    chunk=os.read(key.fd,65536)
+                    if not chunk:ended=True;break
+                    events,pending=decode_bpf_events(pending,chunk)
+                    for event in events:
+                        if event.get('type')!='printf':continue
+                        pid,uid,filename=event['data'].rstrip('\n').split('\t',2)
+                        proc=Path('/proc')/str(int(pid));sha=None
+                        try:
+                            if os.readlink(proc/'exe')==filename:sha=digest(proc/'exe')
+                        except OSError:pass
+                        # Exited processes remain events even when their executable is no longer readable.
+                        spool([{'pid':int(pid),'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
+                                'connections':[],'capture':'ebpf','identity_verified':sha is not None}],time.time())
+                        atomic(ROOT/'ebpf-status.json',{'state':'active','last_event':time.time()})
             selector.close()
             try:process.wait(timeout=5)
             except subprocess.TimeoutExpired:process.kill();process.wait()
