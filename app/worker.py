@@ -164,6 +164,7 @@ def execute(job_id):
         with host_lock(job.host_id):
             s.refresh(job)
             if job.state!='queued': return
+            if not operations.eligible(s,job): return
             job.state='running'; s.commit()
             h=s.get(Host,job.host_id)
             try:

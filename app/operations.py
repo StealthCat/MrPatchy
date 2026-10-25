@@ -76,7 +76,7 @@ def deliver_one():
         alert.attempted=time.time();alert.attempts+=1;s.commit()
         try:
             response=httpx.post(cfg['url'],headers={'Authorization':'Bearer '+cfg['token']} if cfg.get('token') else {},
-                json={'id':alert.id,'host_id':alert.host_id,'kind':alert.kind,'message':alert.message,'created':alert.created},timeout=10,follow_redirects=False)
+                json={'id':alert.id,'event_id':hashlib.sha256((alert.id+str(alert.created)).encode()).hexdigest(),'host_id':alert.host_id,'kind':alert.kind,'message':alert.message,'created':alert.created},timeout=10,follow_redirects=False)
             response.raise_for_status();alert.notified=time.time();alert.error=''
         except Exception as e:alert.error=type(e).__name__
         s.commit()

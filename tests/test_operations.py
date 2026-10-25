@@ -125,3 +125,14 @@ def test_backup_restore_round_trip(tmp_path):
     backup.restore(tmp_path/'backup.tar.gz',tmp_path/'restored')
     with sqlite3.connect(tmp_path/'restored/mrpatchy.db') as db:assert db.execute('SELECT value FROM example').fetchone()[0]=='kept'
     assert (tmp_path/'backup.tar.gz').stat().st_mode&0o777==0o600
+
+
+def test_job_rechecks_window_at_execution(admin):
+    from app import worker
+    with Session() as s:
+        create_host(s)
+        day=time.gmtime().tm_wday
+        s.add(Setting(key='window:review-host',value={'windows':[{'days':[(day+1)%7],'start':0,'end':1440}]}))
+        s.add(Job(id='window-job',host_id='review-host',action='patch',payload={'packages':[]}));s.commit()
+    worker.execute('window-job')
+    with Session() as s:assert s.get(Job,'window-job').state=='queued'
