@@ -36,7 +36,7 @@ def main():
             snapshot=ssh.call(host,{'action':'snapshot'},timeout=5)
             if snapshot.get('telemetry') and snapshot.get('inventory'): break
             time.sleep(.5)
-        assert snapshot.get('inventory',{}).get('status')
+        assert snapshot.get('inventory',{}).get('status'), snapshot.get('collector-error', snapshot)
         assert snapshot['telemetry']['managed']['/usr/local/lib/mrpatchy/agent.py']==ssh.hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest()
         key=next(iter(snapshot['inventory']['keys'].values()))
         ssh.call(host,{'action':'key','name':'review-fixture.gpg','data':key})

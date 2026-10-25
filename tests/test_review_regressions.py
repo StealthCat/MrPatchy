@@ -79,7 +79,8 @@ def test_new_error_with_same_snapshot_is_not_ignored(admin):
         assert h.state=='attention'
 
 def test_failed_poll_rolls_back_partial_inventory(admin,monkeypatch):
-    with Session() as s: h=create_host(s);old=copy.deepcopy(h.inventory)
+    with Session() as s:
+        h=create_host(s);s.refresh(h);old=copy.deepcopy(h.inventory)
     changed=inventory();changed['collected']+=10;changed['status']=changed['status'].replace('Version: 1','Version: 9')
     monkeypatch.setattr(worker.ssh,'call',lambda *a,**k:{'inventory':changed,'telemetry':telemetry(processes=[{'invalid':'process'}])})
     worker.poll_host('review-host')

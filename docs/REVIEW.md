@@ -63,7 +63,9 @@ P1 = high-impact correctness/security failure; P2 = material reliability/hardeni
 ## Validation and evidence
 
 - The first 16 newly added regression cases all failed against the unchanged baseline, establishing reproducible failures rather than only speculative findings.
-- Local pytest, real SSH protocol checks, syntax checks, signed ARM64 repository verification and browser checks are rerun for this branch. Final counts and CI outcomes are recorded below when available.
+- **61 local pytest tests passed; one live-MySQL migration test was explicitly skipped on SQLite.** Real SSH protocol tests, syntax checks and the native signed ARM64 repository test passed. The desktop/mobile browser smoke test also passed, including a delayed-response target-switch regression and reviewed-version submission.
+- Post-update `pip-audit` reports **no known vulnerabilities** in the resolved production requirements. This is an advisory-database result, not a proof that no vulnerabilities exist.
+- Follow [PR #1 checks](https://github.com/StealthCat/MrPatchy/pull/1/checks) for the final MySQL, Compose runtime, browser and Ubuntu/Debian SSH integration outcomes.
 - A live MySQL test is explicitly skipped on local SQLite and included in the new MySQL CI job. It alters a disposable test column to legacy FLOAT, runs migration, and checks exact fractional-second storage.
 - New CI tests boot the Compose stack and validate HTTPS with its generated CA, and exercise offline enrollment, real OpenSSH/sudo, root ownership, key modes, host pinning and snapshot reads during a held mutation lock in Ubuntu/Debian containers. Service-control calls are stubbed; this is not real systemd validation.
 - Bandit findings were manually triaged: its Paramiko shell-injection warning concerns a constant `mrpatchy` command followed by JSON input to a forced command, not interpolation of user input into a shell. Subprocess uses are argv-based. The placeholder-password finding points to explicit rejection of that placeholder. Static analysis is not a proof of security.
