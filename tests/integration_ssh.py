@@ -65,6 +65,15 @@ def main():
             if run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/opt/drpatch/lock-ready').exists())")=='True': break
             time.sleep(.1)
         assert ssh.call(host,{'action':'snapshot'},timeout=3)['telemetry']
+        old_key=workspace/'old-identity.key';old_key.write_bytes(ssh.key_path(host.id).read_bytes());old_key.chmod(0o600)
+        old_public=ssh.public_key(host.id)
+        rotated=ssh.rotate(host)
+        assert rotated['authorized_keys_sha256'] and ssh.public_key(host.id)!=old_public
+        assert ssh.call(host,{'action':'snapshot'})['telemetry']
+        try:ssh.call(host,{'action':'snapshot'},key_file=old_key)
+        except ssh.paramiko.AuthenticationException:pass
+        else:raise AssertionError('Old identity still authorized after rotation')
+        assert ssh.public_key(host.id) in ssh.bootstrap(host)
         host.fingerprint='SHA256:'+'a'*43
         try: ssh.call(host,{'action':'snapshot'},timeout=3)
         except ssh.paramiko.SSHException: pass

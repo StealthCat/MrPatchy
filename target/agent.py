@@ -11,6 +11,7 @@ import stat
 import subprocess
 import time
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 import uuid
 import re
@@ -51,24 +52,28 @@ def address(value, ipv6):
     if ipv6: raw = b''.join(raw[i:i+4][::-1] for i in range(0,16,4))
     else: raw = raw[::-1]
     return socket.inet_ntop(socket.AF_INET6 if ipv6 else socket.AF_INET, raw), int(port,16)
-def sockets():
+def sockets(base=Path('/proc/net')):
     result = {}; errors = []
     for proto in ['tcp','tcp6','udp','udp6']:
         try:
-            for line in read('/proc/net/'+proto).splitlines()[1:]:
+            for line in read(base/proto).splitlines()[1:]:
                 fields = line.split()
                 local, lp = address(fields[1], proto.endswith('6'))
                 remote, rp = address(fields[2], proto.endswith('6'))
                 result[fields[9]] = {'protocol':proto, 'local':local, 'local_port':lp, 'remote':remote, 'remote_port':rp, 'state':fields[3]}
         except FileNotFoundError: pass
-        except OSError as e: errors.append({'path':'/proc/net/'+proto,'error':str(e)})
+        except OSError as e: errors.append({'path':str(base/proto),'error':str(e)})
     return result, errors
 
 def collect(hash_cache):
-    net, errors = sockets(); processes = []
+    errors=[]; processes=[]; namespaces={}
     for p in Path('/proc').iterdir():
         if not p.name.isdigit(): continue
         try:
+            namespace=(p/'ns/net').stat().st_ino
+            if namespace not in namespaces:
+                net,net_errors=sockets(p/'net');namespaces[namespace]=net;errors.extend(net_errors)
+            net=namespaces[namespace]
             exe = os.readlink(p/'exe')
             stat = (p/'exe').stat()
             identity = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size)
@@ -81,13 +86,19 @@ def collect(hash_cache):
                 except FileNotFoundError: pass
                 except OSError as e: errors.append({'pid':p.name,'error':str(e)})
             uid = next(x.split()[2] for x in read(p/'status').splitlines() if x.startswith('Uid:'))
-            processes.append({'pid':int(p.name),'executable':exe,'sha256':hash_cache[identity],'uid':uid,'connections':connections})
+            processes.append({'pid':int(p.name),'executable':exe,'sha256':hash_cache[identity],'uid':uid,'network_namespace':namespace,'connections':connections,'provenance':provenance(p,hash_cache)})
         except FileNotFoundError: pass # short-lived process / kernel thread
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
     return processes, errors
 
 def atomic(path, value):
-    tmp = path.with_suffix('.tmp'); tmp.write_text(json.dumps(value)); tmp.chmod(0o600); tmp.replace(path)
+    fd,name=tempfile.mkstemp(prefix='.'+path.name,dir=path.parent)
+    try:
+        with os.fdopen(fd,'w') as stream:
+            json.dump(value,stream);stream.flush();os.fsync(stream.fileno());os.fchmod(stream.fileno(),0o600)
+        os.replace(name,path)
+    finally:
+        if os.path.exists(name):os.unlink(name)
 
 @contextmanager
 def spool_db():
@@ -127,15 +138,93 @@ def acknowledge(ids):
     with spool_db() as db: db.executemany('DELETE FROM events WHERE id=?',[(x,) for x in ids])
     return {'acknowledged':len(ids)}
 
+def provenance(proc,cache):
+    """Hash mapped executable libraries and a script operand without exporting argv."""
+    result=[];candidates=set()
+    try:
+        for line in read(proc/'maps').splitlines():
+            fields=line.split(maxsplit=5)
+            if len(fields)==6 and 'x' in fields[1] and fields[5].startswith('/') and not fields[5].endswith(' (deleted)'):
+                candidates.add(('library',fields[5]))
+        executable=os.path.basename(os.readlink(proc/'exe'))
+        if executable.startswith(('python','bash','sh','node','ruby','perl')):
+            args=(proc/'cmdline').read_bytes().split(b'\0')
+            if len(args)>1:
+                operand=os.fsdecode(args[1])
+                if operand and not operand.startswith('-'):
+                    absolute=operand if operand.startswith('/') else os.path.normpath(os.readlink(proc/'cwd')+'/'+operand)
+                    candidates.add(('script',absolute))
+        for kind,name in sorted(candidates)[:128]:
+            path=proc/'root'/name.lstrip('/')
+            try:
+                info=path.stat()
+                if not path.is_file() or info.st_size>128*1024*1024:continue
+                identity=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_size)
+                if identity not in cache:cache[identity]=digest(path)
+                result.append({'kind':kind,'path':name,'sha256':cache[identity]})
+            except OSError as e:result.append({'kind':kind,'path':name,'error':type(e).__name__})
+    except OSError as e:result.append({'error':type(e).__name__})
+    return result
+
+def ebpf_loop():
+    """Optional kernel exec events. BPF attachment failures are visible, not silently ignored."""
+    import shutil
+    import threading
+    program='tracepoint:sched:sched_process_exec { printf("%d\\t%d\\t%s\\n", pid, uid, str(args->filename)); }'
+    while True:
+        config_path=ROOT/'observability.json'
+        config=json.loads(config_path.read_text()) if config_path.exists() else {}
+        if not config.get('ebpf'):
+            atomic(ROOT/'ebpf-status.json',{'state':'disabled'});time.sleep(5);continue
+        if not shutil.which('bpftrace'):
+            atomic(ROOT/'ebpf-status.json',{'state':'unavailable','error':'Install bpftrace and kernel BPF support'});time.sleep(30);continue
+        try:
+            process=subprocess.Popen(['bpftrace','-q','-f','json','-B','line','-e',program],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            def diagnostics():
+                for line in process.stderr:
+                    atomic(ROOT/'ebpf-diagnostic.json',{'state':'warning','error':line[-2000:],'at':time.time()})
+            threading.Thread(target=diagnostics,daemon=True).start()
+            atomic(ROOT/'ebpf-status.json',{'state':'starting'})
+            import selectors
+            selector=selectors.DefaultSelector();selector.register(process.stdout,selectors.EVENT_READ)
+            while process.poll() is None:
+                current=json.loads(config_path.read_text()) if config_path.exists() else {}
+                if not current.get('ebpf'):process.terminate();break
+                for key,_ in selector.select(1):
+                    line=key.fileobj.readline(65536)
+                    if not line:continue
+                    event=json.loads(line)
+                    if event.get('type')!='printf':continue
+                    pid,uid,filename=event['data'].rstrip('\n').split('\t',2)
+                    proc=Path('/proc')/str(int(pid));sha=None
+                    try:
+                        if os.readlink(proc/'exe')==filename:sha=digest(proc/'exe')
+                    except OSError:pass
+                    # Exited processes remain events even when their executable is no longer readable.
+                    spool([{'pid':int(pid),'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
+                            'connections':[],'capture':'ebpf','identity_verified':sha is not None}],time.time())
+                    atomic(ROOT/'ebpf-status.json',{'state':'active','last_event':time.time()})
+            selector.close()
+            try:process.wait(timeout=5)
+            except subprocess.TimeoutExpired:process.kill();process.wait()
+            if process.returncode:atomic(ROOT/'ebpf-status.json',{'state':'unavailable','error':'bpftrace exited '+str(process.returncode)})
+        except Exception as e:
+            if 'process' in locals() and process.poll() is None:process.kill();process.wait()
+            atomic(ROOT/'ebpf-status.json',{'state':'error','error':str(e)[:2000]})
+        time.sleep(5)
+
 def main():
     ROOT.mkdir(exist_ok=True)
+    import threading
+    threading.Thread(target=ebpf_loop,daemon=True).start()
     cache = {}; hashes = {}; metadata = {}; next_hash = 0; next_inventory = 0
     while True:
         started = time.monotonic()
         try:
             if started >= next_hash:
                 cache = {}; hashes = {}; metadata = {}
-                for p in MANAGED:
+                optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
+                for p in MANAGED+([optional] if Path(optional).exists() else []):
                     try:
                         hashes[p] = digest(p)
                         info=Path(p).stat()

@@ -7,19 +7,21 @@ import time
 import uuid
 import math
 import subprocess
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import apt, ssh
+from . import apt, ssh, operations
 from target.agent import MANAGED
 from target.bridge import UNIT
 from .security import unseal
 import httpx
+from .coordination import Lock
 log=logging.getLogger(__name__)
 stop=threading.Event()
 host_locks={}; locks_guard=threading.Lock()
 def host_lock(host_id):
-    with locks_guard: return host_locks.setdefault(host_id,threading.Lock())
+    with locks_guard: return host_locks.setdefault(host_id,Lock("host:"+host_id))
 def enqueue(s,host_id,action,payload=None):
+    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise ValueError('Server queue is full (50 operations)')
     job=Job(id=str(uuid.uuid4()),host_id=host_id,action=action,payload=payload or {})
     s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
 
@@ -104,7 +106,7 @@ def behavior_evidence(p):
     for c in p.get('connections',[]):
         connections.append({'protocol':c['protocol'],'remote':c['remote'],'remote_port':c['remote_port'], 'listen_port':c['local_port'] if c['state']=='0A' or c['remote_port']==0 else None, 'bind_address':c['local'] if c['state']=='0A' or c['remote_port']==0 else None})
     connections=sorted({json.dumps(c,sort_keys=True) for c in connections})
-    return {'executable':p['executable'],'sha256':p['sha256'],'uid':p['uid'],'connections':[json.loads(c) for c in connections]}
+    return {'executable':p['executable'],'sha256':p['sha256'],'uid':p['uid'],'network_namespace':p.get('network_namespace'),'provenance':p.get('provenance',[]),'capture':p.get('capture','sample'),'connections':[json.loads(c) for c in connections]}
 
 def ingest(s,h,snapshot,include_inventory=True):
     if include_inventory and 'inventory' in snapshot and snapshot['inventory'].get('collected',0)>h.inventory.get('collected',0): save_inventory(s,h,snapshot['inventory'])
@@ -124,7 +126,7 @@ def ingest(s,h,snapshot,include_inventory=True):
     for error in t.get('errors',[]): issues.append({'path':'collector','issue':str(error)[:1000]})
     for name,expected in h.baseline.items():
         if t.get('managed',{}).get(name)!=expected: issues.append({'path':name,'issue':'SHA-256 differs from enrolled version or file is missing'})
-        if name in MANAGED:
+        if name in MANAGED or name=='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf':
             expected_mode=0o440 if name=='/etc/sudoers.d/mrpatchy' else 0o644
             if t.get('managed_metadata',{}).get(name)!={'uid':0,'gid':0,'mode':expected_mode}:
                 issues.append({'path':name,'issue':'Managed file ownership/permissions changed or metadata is missing; upgrade the collector if needed'})
@@ -134,6 +136,8 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('spool',{}).get('dropped',0):
         issues.append({'path':'event spool','issue':str(snapshot['spool']['dropped'])+' observation batches lost to the target size limit'})
     t=dict(t);t['spool']=snapshot.get('spool',{})
+    if snapshot.get('ebpf-diagnostic'):issues.append({'path':'eBPF diagnostics','issue':str(snapshot['ebpf-diagnostic'])})
+    if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
     s.commit()
@@ -163,7 +167,11 @@ def execute(job_id):
         with host_lock(job.host_id):
             s.refresh(job)
             if job.state!='queued': return
-            job.state='running'; s.commit()
+            if not operations.eligible(s,job): return
+            claimed=s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
+            s.commit()
+            if claimed!=1:return
+            s.refresh(job)
             h=s.get(Host,job.host_id)
             try:
                 if not h: raise ValueError('Host no longer exists')
@@ -172,7 +180,8 @@ def execute(job_id):
                     # Known managed artifact digests; never trust target hashes as the expected baseline.
                     auth=f'restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" {ssh.public_key(h.id)} mrpatchy\n'
                     sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
-                    h.baseline={
+                    optional={k:v for k,v in h.baseline.items() if k=='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'}
+                    h.baseline={**optional,
                         '/usr/local/lib/mrpatchy/agent.py':hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest(),
                         '/usr/local/lib/mrpatchy/bridge.py':hashlib.sha256((ssh.TARGET/'bridge.py').read_bytes()).hexdigest(),
                         '/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(UNIT.encode()).hexdigest(),
@@ -185,14 +194,39 @@ def execute(job_id):
                         if verification.get('files',{}).get(path)!=expected: raise ValueError('Installation verification failed: '+path)
                     h.state='waiting'; job.output=json.dumps({'deployment':result,'verification':verification})
                     save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
+                elif job.action=='rotate-key':
+                    result=ssh.rotate(h)
+                    h.baseline={**h.baseline,'/opt/drpatch/.ssh/authorized_keys':result['authorized_keys_sha256']}
+                    job.output=json.dumps(result)
                 elif job.action=='refresh': job.output=update_repos(s,h)
                 elif job.action in ('patch','repository','key','repair'):
                     if job.action=='patch':
                         save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
                         s.commit()
                         validate_patch(s,h,job.payload['packages'])
-                    job.output=json.dumps(ssh.call(h,{'action':job.action,**job.payload},timeout=3700))
+                    policy=s.get(Setting,'recovery:'+h.id)
+                    protected=job.action=='patch' and policy and (policy.value.get('rollback') or policy.value.get('reboot'))
+                    request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
+                    if protected:request.update(action='protected-patch',job_id=job.id,policy=policy.value)
+                    result=ssh.call(h,request,timeout=7500 if protected else 3700)
+                    if result.get('reboot_scheduled'):
+                        deadline=time.monotonic()+600
+                        while time.monotonic()<deadline:
+                            time.sleep(5)
+                            try:
+                                status=ssh.call(h,{'action':'recovery-status'},timeout=15)
+                                if status['boot_id']!=result['boot_before']:
+                                    health=ssh.call(h,{'action':'health'})
+                                    if health.get('failed_units') or not health.get('collector_active'):raise ValueError('Post-reboot health check failed')
+                                    result['reboot_verified']=True;break
+                            except (OSError,ssh.paramiko.SSHException):continue
+                        if not result.get('reboot_verified'):raise RuntimeError('Reboot not verified within 10 minutes; rollout blocked')
+                    job.output=json.dumps(result)
                     save_inventory(s,h,ssh.call(h,{'action':'inventory'})); h.last_repo=0
+                    if job.action=='patch' and '_depends_on' in job.payload:
+                        health=ssh.call(h,{'action':'health'})
+                        if health.get('failed_units') or not health.get('collector_active'):raise RuntimeError('Post-patch service health failed; rollout stopped: '+json.dumps(health))
+                        job.output+='\nPost-patch health: '+json.dumps(health)
                 else: raise ValueError('Unsupported job')
                 job.output=job.output.encode()[:48000].decode(errors='ignore')
                 job.state='complete'; audit(s,'complete '+job.action,h.id)
@@ -265,10 +299,19 @@ def investigate_one():
 def loop():
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=2) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=1) as ai:
-        active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0
+        leader=Lock('scheduler');is_leader=False
+        active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0; notification_task=None
         while not stop.wait(1):
             try:
                 now=time.time()
+                if is_leader:
+                    try:valid=leader.owned()
+                    except Exception:valid=False
+                    if not valid:
+                        try:leader.release()
+                        except Exception:pass
+                        is_leader=False
+                if not is_leader:is_leader=leader.acquire(False)
                 for key,(future,_) in list(active_jobs.items()):
                     if future.done():
                         try: future.result()
@@ -276,7 +319,7 @@ def loop():
                         del active_jobs[key]
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
                 with Session() as s:
-                    if now-last_poll>=30:
+                    if is_leader and now-last_poll>=30:
                         for h in s.scalars(select(Host)):
                             if h.id not in active_polls or active_polls[h.id].done(): active_polls[h.id]=polls.submit(poll_host,h.id)
                             if h.state!='enrolling' and bool(h.inventory) and now-h.last_repo>config(s)['repo_minutes']*60:
@@ -285,26 +328,34 @@ def loop():
                                 latest=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh').order_by(Job.created.desc()))
                                 if not existing and (not latest or now-latest.created>300): enqueue(s,h.id,'refresh')
                         last_poll=now
+                        operations.collect_alerts()
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts)).order_by(Job.created)):
                         if len(active_jobs)>=2: break
-                        if j.id not in active_jobs and j.host_id not in busy_hosts:
+                        if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
                             active_jobs[j.id]=(jobs.submit(execute,j.id),j.host_id)
                             busy_hosts.add(j.host_id)
-                if now-last_cleanup>3600:
+                if is_leader and now-last_cleanup>3600:
                     with Session() as s:
                         cutoff=now-config(s)['history_days']*86400
                         s.execute(delete(Observation).where(Observation.received<cutoff))
                         s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
-                        for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%'))):
+                        for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%') | Setting.key.like('oidc-state:%'))):
                             if entry.value.get('expires',now+1)<now: s.delete(entry)
                         s.commit()
                     last_cleanup=now
-                if ai_task is None or ai_task.done(): ai_task=ai.submit(investigate_one)
+                if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
+                if is_leader and (ai_task is None or ai_task.done()): ai_task=ai.submit(investigate_one)
             except Exception: log.exception('Scheduler tick failed')
+        if is_leader:leader.release()
 def start():
     stop.clear()
-    with Session() as s:
-        for job in s.scalars(select(Job).where(Job.state=='running')):
-            job.state='interrupted'; job.output='Server restarted; verify target before retrying. Jobs are not replayed.'
-        s.commit()
     t=threading.Thread(target=loop,daemon=True); t.start(); return t
+
+if __name__=='__main__':
+    from . import identity,operations
+    from .db import init
+    import signal
+    init()
+    signal.signal(signal.SIGTERM,lambda *args:stop.set())
+    signal.signal(signal.SIGINT,lambda *args:stop.set())
+    loop()
