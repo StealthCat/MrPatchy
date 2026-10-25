@@ -1,0 +1,46 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      DOMAIN: ${DOMAIN:-localhost}
+      PUBLIC_URL: ${PUBLIC_URL:-https://localhost}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mrpatchy.db}
+      COOKIE_SECURE: "true"
+      CADDY_ADMIN: http://caddy:2019
+    volumes:
+      - app-data:/data
+      - tls-config:/tls
+    networks: [control, management]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    command: [caddy, run, --config, /tls/Caddyfile, --adapter, caddyfile]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - tls-config:/tls:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [control, edge]
+    security_opt: [no-new-privileges:true]
+volumes:
+  app-data:
+  tls-config:
+  caddy-data:
+  caddy-config:
+networks:
+  control:
+    internal: true
+  management: {}
+  edge: {}
