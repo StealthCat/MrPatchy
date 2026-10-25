@@ -69,6 +69,13 @@ module.exports=async function reviewUI(page,ids,capture){
   assert.equal(await page.locator('#content h1').innerText(),'Your Linux fleet.');
   await page.unroute('**/api/dashboard');
 
+  // A debounced search must not dereference fields removed by navigation.
+  await page.locator('[data-nav=packages]').click();await page.locator('.pkg-check').first().waitFor();
+  await page.locator('#package-search').fill('pending-search');
+  await page.locator('[data-nav=servers]').click();await page.getByRole('heading',{name:'Your Linux fleet.'}).waitFor();
+  await page.waitForTimeout(300);
+  assert.doesNotMatch(await page.locator('#toast').innerText(),/Cannot read properties/);
+
   const queued=await api('/hosts/'+ids.a+'/actions/refresh','POST');assert.equal(queued.status,200);
   await page.locator('[data-nav=activity]').click();
   const cancel=page.locator('.cancel-job[data-id="'+queued.body.job_id+'"]');
