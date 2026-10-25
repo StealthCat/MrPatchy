@@ -8,6 +8,7 @@ import pwd
 from pathlib import Path
 import re
 import subprocess
+import shutil
 from urllib.parse import urlsplit
 from .db import DATA
 
@@ -18,7 +19,9 @@ def paragraphs(text):
             if line.startswith('#'): continue
             if line[:1].isspace() and key: item[key]+='\n'+line
             elif ':' in line:
-                key,value=line.split(':',1); item[key]=value.strip()
+                key,value=line.split(':',1)
+                if key.lower() in {k.lower() for k in item}: raise ValueError('Duplicate Deb822 field: '+key)
+                item[key]=value.strip()
         if item: yield item
 
 def installed(status):
@@ -29,24 +32,61 @@ def installed(status):
             result.append({'name':p['Package']+':'+p['Architecture'],'installed':p['Version'],'held':state[0]=='hold'})
     return result
 
-def validate_source(content, deb822=False):
-    # Fail visibly for unsafe trust overrides, local-file transports and unsupported options.
-    if re.search(r'(?i)(trusted|allow-insecure|allow-weak|allow-downgrade-to-insecure|check-valid-until|check-date|valid-until-min|valid-until-max)\s*[:=]',content):
-        raise ValueError('Repository weakens signature or expiry verification')
+FALSE_VALUES = {'no', 'false', '0', 'off'}
+TRUE_VALUES = {'yes', 'true', '1', 'on'}
+
+def source_options(content, deb822=False):
+    """Parse active stanzas. Duplicate fields are rejected to avoid parser disagreement."""
     if deb822:
         for block in paragraphs(content):
-            if block.get('Enabled','yes').lower()=='no': continue
-            if not set(block.get('Types','').split()) <= {'deb','deb-src'} or not block.get('Types'): raise ValueError('Invalid repository Types')
-            if not block.get('Suites') or not block.get('URIs'): raise ValueError('Repository requires URIs and Suites')
-            for uri in block['URIs'].split(): validate_uri(uri)
+            fields = {key.lower(): value for key, value in block.items()}
+            if fields.get('enabled', 'yes').lower() in FALSE_VALUES:
+                continue
+            if not fields.get('types') or not set(fields['types'].split()) <= {'deb', 'deb-src'}:
+                raise ValueError('Invalid repository Types')
+            if not fields.get('suites') or not fields.get('uris'):
+                raise ValueError('Repository requires URIs and Suites')
+            for uri in fields['uris'].split(): validate_uri(uri)
+            yield fields
     else:
         for line in content.splitlines():
-            line=line.strip()
+            line = line.strip()
             if not line or line.startswith('#'): continue
-            m=re.match(r'^(deb|deb-src)\s+(?:\[[^\]]+\]\s+)?(\S+)\s+(\S+)',line)
-            if not m: raise ValueError('Invalid one-line APT source')
-            validate_uri(m[2])
-    # Signed-By is remapped separately; inline armored keys are supported by APT.
+            match = re.match(r'^(deb|deb-src)\s+(?:\[([^\]]+)\]\s+)?(\S+)\s+(\S+)', line)
+            if not match: raise ValueError('Invalid one-line APT source')
+            validate_uri(match[3])
+            fields = {}
+            for option in (match[2] or '').split():
+                if '=' not in option: raise ValueError('Invalid APT source option')
+                key, value = option.split('=', 1)
+                key = key.lower()
+                if key in fields: raise ValueError('Duplicate APT source option: '+key)
+                fields[key] = value
+            yield fields
+
+def signing_refs(value):
+    if '-----BEGIN PGP PUBLIC KEY BLOCK-----' in value:
+        return []
+    refs = []
+    for token in re.split(r'[\s,]+', value.strip()):
+        if token.startswith('/'):
+            if not key_path(token): raise ValueError('Unsupported signing key path: '+token)
+            refs.append(token)
+        elif token and not re.fullmatch(r'[A-Fa-f0-9]{40}!?', token):
+            raise ValueError('Signed-By must use a captured key path, fingerprint, or inline public key')
+    return refs
+
+def validate_source(content, deb822=False):
+    for fields in source_options(content, deb822):
+        for name in ('trusted', 'allow-insecure', 'allow-weak', 'allow-downgrade-to-insecure'):
+            if name in fields and fields[name].strip().lower() not in FALSE_VALUES:
+                raise ValueError('Repository weakens signature verification')
+        for name in ('check-valid-until', 'check-date'):
+            if name in fields and fields[name].strip().lower() not in TRUE_VALUES:
+                raise ValueError('Repository weakens expiry verification')
+        if any(name in fields for name in ('valid-until-min', 'valid-until-max', 'date-max-future')):
+            raise ValueError('Repository overrides signed metadata validity policy')
+        signing_refs(fields.get('signed-by', ''))
     return content
 
 def validate_uri(uri):
@@ -64,9 +104,13 @@ def prepare(host_id, inv):
     for d in ['etc/apt/sources.list.d','etc/apt/trusted.gpg.d','etc/apt/preferences.d','etc/apt/empty','var/lib/apt/lists/partial','var/cache/apt/archives/partial','var/lib/dpkg','var/log/apt']:
         (root/d).mkdir(parents=True,exist_ok=True)
     # Remove stale configuration, never stale lists silently after a failed refresh.
-    for folder in ['sources.list.d','trusted.gpg.d','preferences.d']:
-        for p in (root/'etc/apt'/folder).iterdir():
-            if p.is_file(): p.unlink()
+    for folder in ['sources.list.d','trusted.gpg.d','preferences.d','keyrings']:
+        directory=root/'etc/apt'/folder
+        if directory.exists(): shutil.rmtree(directory)
+        directory.mkdir(parents=True)
+    directory=root/'usr/share/keyrings'
+    if directory.exists(): shutil.rmtree(directory)
+    directory.mkdir(parents=True)
     for name in ['sources.list','trusted.gpg','preferences']:
         (root/'etc/apt'/name).unlink(missing_ok=True)
     for name,value in inv['keys'].items():
@@ -76,7 +120,7 @@ def prepare(host_id, inv):
         if source_path(name):
             validate_source(value,name.endswith('.sources'))
             # Every absolute key path must resolve to captured signing material.
-            refs=re.findall(r'/(?:etc/apt|usr/share/keyrings)/[^\s,\]"<>]+',value)
+            refs=[ref for fields in source_options(value,name.endswith('.sources')) for ref in signing_refs(fields.get('signed-by',''))]
             for ref in sorted(set(refs),key=len,reverse=True):
                 if not key_path(ref): raise ValueError('Unsupported signing key path: '+ref)
                 value=value.replace(ref,str(root/ref.lstrip('/')))

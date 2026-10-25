@@ -6,19 +6,21 @@ Mr Patchy is a self-hosted, Dockerized dashboard for Ubuntu and Raspberry Pi OS 
 
 ![Mr Patchy overview](docs/screenshots/overview.webp)
 
+See the [requirements and security review](docs/REVIEW.md) for the reviewed defects, proposed fixes, and remaining gaps.
+
 ## What is implemented
 
 - Responsive dashboard: fleet overview, enrollment, searchable installed packages, updates, repositories, investigations, operation results, and audit trail.
 - A dedicated SSH key per target, verified host-key fingerprints, a forced SSH command, and a fixed sudo entry point.
 - Downloadable **offline enrollment script** containing the public key and bootstrap bridge. The same script is available through an expiring curl link served by the running application.
-- Central deployment/repair of a root-owned Python collector and systemd service, with `/opt/drpatch` as the target account home and spool directory.
+- Central deployment/repair of a root-owned Python collector, bootstrap bridge, and systemd service, with `/opt/drpatch` as the target account home and spool directory.
 - Persistent SQLite inventory by default; MySQL through SQLAlchemy. Inventory includes held and multi-architecture packages. Package changes/removals are audited after initial discovery.
 - Native APT runs **inside the central container** with isolated per-host status, source files, keys, preferences, architecture, and machine ID. The collector never runs `apt update`, `apt list`, or `apt-cache` for discovery.
 - APT signature and index-hash verification. Failed repository refreshes stay visible and do not advance the last-success timestamp.
 - Inspect/edit/add/disable repository definitions in `.list` and Deb822 `.sources` format; upload scoped signing keys; back up source files before changes.
 - Operator-selected exact-version upgrades, with package-removal protection and respect for holds. Target APT runs only during an explicitly requested installation.
 - Configurable repository refresh interval (**60 minutes** default), priority deadlines, and per-package priority overrides.
-- Target process and TCP/UDP connection sampling every **30 seconds**. SHA-256 sweeps of Mr Patchy's installed artifacts and running executables every **five minutes**.
+- Target process and TCP/UDP connection sampling every **30 seconds**. SHA-256 sweeps of Mr Patchy's installed artifacts and running executables every **five minutes**, with ownership/mode checks for managed artifacts.
 - Central AI investigations with structured results, encrypted API-key storage, a configurable rate limit, retry backoff, and explicit known-good approval/revocation.
 - HTTPS via Caddy: upload a certificate/private key, use public or custom ACME, and upload a private ACME root CA.
 
@@ -43,6 +45,10 @@ docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./mrpatchy-lo
 ```
 
 Ensure `DOMAIN` resolves to the Docker host. In **Settings → Configure HTTPS**, choose uploaded certificates or your ACME directory. Public/custom ACME must be able to validate this hostname using HTTP or TLS-ALPN challenges on ports 80/443. The private Caddy admin endpoint is not published to the host. Set `PUBLIC_URL` to the final browser-facing URL so enrollment links use the correct hostname.
+
+## Upgrading an existing v0.1 installation
+
+Back up your volumes/database, then rebuild. MySQL timestamps are migrated from FLOAT to DOUBLE at startup (ALTER privileges required). Existing targets need one trusted-console rerun of the newly downloaded installer, followed by **Finish / repair installation**, to replace the legacy bridge. New behavior identities may require review after the effective-UID and listener-bind-address improvements. See [upgrade details](docs/REVIEW.md#applying-the-reviewed-fixes).
 
 ## Enroll a target
 

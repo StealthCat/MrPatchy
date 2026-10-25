@@ -16,6 +16,7 @@ from sqlalchemy import select, func
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, init, config, audit
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls
+from .http_security import RequestSizeLimit
 
 @asynccontextmanager
 async def lifespan(app):
@@ -28,13 +29,13 @@ async def lifespan(app):
     if os.getenv('DISABLE_SCHEDULER')!='1': worker.start()
     yield
     worker.stop.set()
-app=FastAPI(title='Mr Patchy',version='0.1.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+app=FastAPI(title='Mr Patchy',version='0.1.1',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+app.add_middleware(RequestSizeLimit)
 static=Path(__file__).parent/'static'
 app.mount('/static',StaticFiles(directory=static),name='static')
 
 @app.middleware('http')
 async def guard(request,call_next):
-    if int(request.headers.get('content-length','0'))>4_000_000: return JSONResponse({'detail':'Request too large'},status_code=413)
     response=await call_next(request)
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
@@ -141,16 +142,21 @@ def packages(host_id:str,q:str='',updates:bool=False,user=Depends(auth)):
         if q: stmt=stmt.where(Package.name.contains(q[:200],autoescape=True))
         if updates: stmt=stmt.where(Package.candidate!='')
         return [object_dict(p)|{'due':p.available_since+cfg['deadlines'][p.priority]*3600 if p.candidate else None} for p in s.scalars(stmt)]
-class PatchInput(BaseModel): packages:list[str]=Field(min_length=1,max_length=500)
+class PatchInput(BaseModel):
+    packages:list[str]=Field(min_length=1,max_length=500)
+    expected_versions:dict[str,str]|None=None
 @app.post('/api/hosts/{host_id}/patch')
 def patch(host_id:str,body:PatchInput,user=Depends(auth)):
     with Session() as s:
         h=host_or_404(s,host_id)
-        if not h.last_repo or time.time()-h.last_repo>config(s)['repo_minutes']*120: raise HTTPException(409,'Refresh repositories before patching; candidate data is stale')
+        if h.repo_error or not h.last_repo or time.time()-h.last_repo>config(s)['repo_minutes']*120: raise HTTPException(409,'Refresh repositories before patching; candidate data is stale')
         specs=[]
+        if len(set(body.packages))!=len(body.packages): raise HTTPException(400,'Duplicate package selections')
+        if body.expected_versions is not None and set(body.expected_versions)!=set(body.packages): raise HTTPException(400,'Expected versions must match selected packages')
         for name in body.packages:
             p=s.get(Package,host_id+':'+name)
             if not p or not p.candidate or p.held: raise HTTPException(400,'Package missing, held, or has no available update: '+name)
+            if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
             specs.append(p.name+'='+p.candidate)
         return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs})}
 @app.get('/api/hosts/{host_id}/repositories')

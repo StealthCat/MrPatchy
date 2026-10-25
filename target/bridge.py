@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+import tempfile
 
 ROOT = Path('/opt/drpatch')
 UNIT = '''[Unit]
@@ -33,13 +34,20 @@ WantedBy=multi-user.target
 def atomic(path, data, mode=0o600):
     path = Path(path)
     if path.is_symlink(): raise ValueError('Refusing symlink destination')
-    tmp = path.with_name(path.name+'.mrpatchy-new')
-    fd = os.open(tmp, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, mode)
+    fd, name = tempfile.mkstemp(prefix='.'+path.name+'.', dir=path.parent)
+    tmp = Path(name)
     try:
-        with os.fdopen(fd, 'wb') as f: f.write(data); f.flush(); os.fsync(f.fileno())
-        os.replace(tmp,path)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            # os.open's mode is filtered by the bridge's 077 umask.
+            # Public signing keys and source files must remain readable by APT.
+            os.fchmod(f.fileno(), mode)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
     finally:
-        if tmp.exists(): tmp.unlink()
+        tmp.unlink(missing_ok=True)
+
 def run(args, timeout=1800):
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
     if result.returncode: raise RuntimeError((result.stdout+result.stderr)[-20000:])
@@ -54,10 +62,21 @@ def handle(req):
         code = base64.b64decode(req['agent'],validate=True)
         if len(code)>1_000_000 or hashlib.sha256(code).hexdigest()!=req['sha256']: raise ValueError('Invalid agent digest')
         compile(code, 'agent.py', 'exec')
+        bridge = None
+        if 'bridge' in req:
+            bridge = base64.b64decode(req['bridge'],validate=True)
+            if len(bridge)>1_000_000 or hashlib.sha256(bridge).hexdigest()!=req.get('bridge_sha256'):
+                raise ValueError('Invalid bridge digest')
+            compile(bridge,'bridge.py','exec')
+        unit = req.get('unit',UNIT).encode()
+        if len(unit)>100_000 or ('unit' in req and hashlib.sha256(unit).hexdigest()!=req.get('unit_sha256')):
+            raise ValueError('Invalid systemd unit digest')
+        # Validate the complete deployment before replacing any managed file.
+        if bridge is not None: atomic('/usr/local/lib/mrpatchy/bridge.py',bridge,0o644)
         atomic('/usr/local/lib/mrpatchy/agent.py',code,0o644)
-        atomic('/etc/systemd/system/mrpatchy-agent.service',UNIT.encode(),0o644)
+        atomic('/etc/systemd/system/mrpatchy-agent.service',unit,0o644)
         run(['systemctl','daemon-reload']); run(['systemctl','enable','--now','mrpatchy-agent']); run(['systemctl','restart','mrpatchy-agent'])
-        return {'deployed':req['sha256'],'unit_sha256':hashlib.sha256(UNIT.encode()).hexdigest()}
+        return {'deployed':req['sha256'],'unit_sha256':hashlib.sha256(unit).hexdigest(),'bridge_sha256':hashlib.sha256(Path('/usr/local/lib/mrpatchy/bridge.py').read_bytes()).hexdigest()}
     if action == 'snapshot':
         result = {}
         for k in ['inventory','telemetry','collector-error']:
@@ -93,11 +112,19 @@ def handle(req):
     raise ValueError('Unsupported action')
 def main():
     os.umask(0o077)
+    raw = sys.stdin.buffer.read(4_000_001)
+    if len(raw)>4_000_000: raise ValueError('Request too large')
+    request = json.loads(raw)
+    if not isinstance(request, dict): raise ValueError('Request must be a JSON object')
+    if request.get('action') == 'snapshot':
+        # The collector writes snapshots atomically. Reading them must never
+        # wait behind a long APT installation holding the mutation lock.
+        print(json.dumps(handle(request)))
+        return
     with open(ROOT/'bridge.lock','w') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        raw = sys.stdin.buffer.read(4_000_001)
-        if len(raw)>4_000_000: raise ValueError('Request too large')
-        print(json.dumps(handle(json.loads(raw))))
+        print(json.dumps(handle(request)))
+
 if __name__ == '__main__':
     try: main()
     except Exception as e:
