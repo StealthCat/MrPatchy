@@ -1,0 +1,18 @@
+#!/usr/bin/python3
+"""Install as /etc/mrpatchy/rollback on a validated bootable Snapper/Btrfs root layout."""
+import json,subprocess,sys
+def run(*args):return subprocess.check_output(args,text=True).strip()
+operation,identifier=sys.argv[1:]
+if operation=='probe':
+    fs=run('findmnt','-n','-o','FSTYPE','/')
+    config=run('snapper','--config','root','get-config')
+    print(json.dumps({'ready':fs=='btrfs' and 'SUBVOLUME' in config,'backend':'snapper-root'}))
+elif operation=='snapshot':
+    number=run('snapper','--config','root','create','--type','single','--print-number','--description','Mr Patchy '+identifier)
+    if not number.isdigit():raise SystemExit('Invalid snapshot ID')
+    print(json.dumps({'snapshot':number}))
+elif operation=='rollback':
+    if not identifier.isdigit():raise SystemExit('Invalid snapshot ID')
+    run('snapper','--config','root','rollback',identifier)
+    print(json.dumps({'restored':identifier,'reboot_required':True}))
+else:raise SystemExit('Unsupported operation')

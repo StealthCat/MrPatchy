@@ -51,12 +51,12 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
     if result.get('error'): raise RuntimeError(result['error'])
     return result
 
-def call(host, payload, timeout=60):
+def call(host, payload, timeout=60, key_file=None):
     deadline=time.monotonic()+timeout
     client=paramiko.SSHClient()
     client.set_missing_host_key_policy(Pinned(host.fingerprint))
     try:
-        client.connect(host.address,port=host.port,username='drpatch',key_filename=str(key_path(host.id)),
+        client.connect(host.address,port=host.port,username='drpatch',key_filename=str(key_file or key_path(host.id)),
                        look_for_keys=False,allow_agent=False,timeout=min(15,timeout),auth_timeout=min(15,timeout),banner_timeout=min(15,timeout),
                        disabled_algorithms={'keys':['ssh-rsa'],'pubkeys':['ssh-rsa'],
                                             'kex':['diffie-hellman-group1-sha1','diffie-hellman-group14-sha1','diffie-hellman-group-exchange-sha1']})
@@ -141,3 +141,27 @@ printf '\nEnrollment prepared. Add this verified host fingerprint in Mr Patchy:\
 for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key" -E sha256; done
 printf '\nAllow SSH from your Mr Patchy server, then click Finish installation.\n'
 '''
+
+def rotate(host):
+    """Add new key, prove it works, atomically promote, then revoke old key."""
+    journal=DATA/'ssh'/(host.id+'.rotation.json')
+    pending=key_path(host.id+'.next')
+    if journal.exists():
+        state=json.loads(journal.read_text())
+        if state.get('complete'):journal.unlink()
+    if not journal.exists():
+        if pending.exists():pending.unlink()
+        new=create_key(host.id+'.next')
+        state={'old':public_key(host.id),'new':new}
+        temporary=journal.with_suffix('.tmp');temporary.write_text(json.dumps(state));temporary.chmod(0o600);temporary.replace(journal)
+    else:state=json.loads(journal.read_text())
+    if pending.exists():
+        call(host,{'action':'authorized-keys','keys':[state['old'],state['new']]})
+        call(host,{'action':'snapshot'},key_file=pending)
+        os.replace(pending,key_path(host.id))
+    if public_key(host.id)!=state['new']:raise RuntimeError('Rotation journal/key mismatch; recover from a trusted console')
+    result=call(host,{'action':'authorized-keys','keys':[state['new']]})
+    call(host,{'action':'snapshot'})
+    state['complete']=True
+    temporary=journal.with_suffix('.tmp');temporary.write_text(json.dumps(state));temporary.chmod(0o600);temporary.replace(journal)
+    return result

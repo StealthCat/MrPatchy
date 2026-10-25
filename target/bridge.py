@@ -122,14 +122,99 @@ def process_evidence(req):
     result['reason']='No running executable matches the recorded path and SHA-256; process may have exited or changed'
     return result
 
+def recovery_hook(operation,identifier):
+    hook=Path('/etc/mrpatchy/rollback')
+    info=hook.stat()
+    if not hook.is_file() or hook.is_symlink() or info.st_uid!=0 or info.st_mode & 0o022 or not info.st_mode & 0o100:
+        raise ValueError('Rollback adapter must be a root-owned, non-writable executable')
+    if operation not in ('snapshot','rollback','probe') or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',identifier):raise ValueError('Invalid recovery operation')
+    result=json.loads(run([str(hook),operation,identifier],timeout=1800))
+    if not isinstance(result,dict):raise ValueError('Invalid rollback adapter response')
+    return result
+
+def protected_patch(req):
+    policy=req.get('policy',{})
+    job=req.get('job_id','')
+    if not re.fullmatch(r'[a-f0-9-]{36}',job):raise ValueError('A durable job ID is required')
+    directory=ROOT/'transactions';directory.mkdir(mode=0o700,exist_ok=True)
+    journal=directory/(job+'.json')
+    if journal.exists():
+        state=json.loads(journal.read_text())
+        if state.get('state')=='complete':return state['result']
+        raise RuntimeError('Prior patch attempt is incomplete; reconcile target state before retrying')
+    state={'state':'preparing','job':job,'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
+    snapshot=None
+    if policy.get('rollback'):
+        probe=recovery_hook('probe',job)
+        if probe.get('ready') is not True:raise ValueError('Rollback adapter is not ready')
+        snapshot=recovery_hook('snapshot',job).get('snapshot')
+        if not isinstance(snapshot,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',snapshot):raise ValueError('Invalid snapshot ID')
+        state['snapshot']=snapshot
+    atomic(journal,json.dumps(state).encode())
+    try:
+        result=handle({'action':'patch','packages':req['packages']})
+        health=handle({'action':'health'})
+        if health['failed_units'] or not health['collector_active']:raise RuntimeError('Post-patch health failed: '+json.dumps(health))
+        result['health']=health
+        state.update(state='complete',result=result)
+        atomic(journal,json.dumps(state).encode())
+        if policy.get('reboot') and health['reboot_required']:
+            run(['systemd-run','--unit=mrpatchy-reboot-'+job,'--on-active=10s','/usr/bin/systemctl','reboot'],timeout=15)
+            result['reboot_scheduled']=True;result['boot_before']=state['boot_id']
+            state['result']=result;atomic(journal,json.dumps(state).encode())
+        return result
+    except Exception as error:
+        state.update(state='failed',error=str(error)[:4000])
+        atomic(journal,json.dumps(state).encode())
+        if snapshot and policy.get('rollback'):
+            recovery=recovery_hook('rollback',snapshot)
+            state['rollback']=recovery;state['state']='rolled-back';atomic(journal,json.dumps(state).encode())
+            if recovery.get('reboot_required'):
+                if not policy.get('reboot'):raise RuntimeError('Rollback prepared; reboot required but policy forbids automatic reboot')
+                run(['systemd-run','--unit=mrpatchy-rollback-'+job,'--on-active=10s','/usr/bin/systemctl','reboot'],timeout=15)
+        raise RuntimeError('Patch failed; recovery state: '+json.dumps(state))
+
 def handle(req):
     action = req.get('action')
     if action == 'evidence': return process_evidence(req)
+    if action == 'operation-status':
+        with open(ROOT/'bridge.lock','a') as lock:
+            try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:return {'busy':True}
+            return {'busy':False}
+    if action == 'observability':
+        if type(req.get('ebpf')) is not bool:raise ValueError('Boolean eBPF setting required')
+        atomic(ROOT/'observability.json',json.dumps({'ebpf':req['ebpf']}).encode())
+        # BPF needs kernel access; the optional collector runs outside restrictive service sandbox.
+        overrides=Path('/etc/systemd/system/mrpatchy-agent.service.d');overrides.mkdir(exist_ok=True)
+        dropin=overrides/'observability.conf'
+        if req['ebpf']:atomic(dropin,b'[Service]\nProtectSystem=false\nNoNewPrivileges=false\nRestrictAddressFamilies=AF_UNIX AF_NETLINK\n',0o644)
+        else:dropin.unlink(missing_ok=True)
+        run(['systemctl','daemon-reload']);run(['systemctl','restart','mrpatchy-agent'])
+        return {'configured':True,'ebpf':req['ebpf']}
+    if action == 'protected-patch':return protected_patch(req)
+    if action == 'recovery-status':
+        return {'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'rollback_adapter':Path('/etc/mrpatchy/rollback').is_file(),'systemd':Path('/run/systemd/system').exists()}
+    if action == 'authorized-keys':
+        keys=req.get('keys')
+        if not isinstance(keys,list) or not 1<=len(keys)<=2:raise ValueError('One or two Ed25519 keys required')
+        for key in keys:
+            if not isinstance(key,str) or not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+',key):raise ValueError('Invalid public key')
+            blob=base64.b64decode(key.split()[1],validate=True)
+            if len(blob)!=51 or blob[:19]!=b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20':raise ValueError('Invalid Ed25519 encoding')
+        content=''.join('restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" '+key+' mrpatchy\n' for key in keys)
+        atomic(ROOT/'.ssh/authorized_keys',content.encode(),0o644)
+        return {'authorized_keys_sha256':hashlib.sha256(content.encode()).hexdigest()}
+    if action == 'health':
+        failed=run(['systemctl','--failed','--no-legend','--plain'],timeout=15)
+        return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists(),
+                'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
     if action == 'verify':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import MANAGED,digest
         files={}
-        for path in MANAGED:
+        optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
+        for path in MANAGED+([optional] if Path(optional).exists() else []):
             info=Path(path).stat()
             files[path]={'sha256':digest(path),'uid':info.st_uid,'gid':info.st_gid,'mode':info.st_mode & 0o7777}
         return {'files':files,'active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
@@ -154,7 +239,7 @@ def handle(req):
         return {'deployed':req['sha256'],'unit_sha256':hashlib.sha256(unit).hexdigest(),'bridge_sha256':hashlib.sha256(Path('/usr/local/lib/mrpatchy/bridge.py').read_bytes()).hexdigest()}
     if action == 'snapshot':
         result = {}
-        for k in ['inventory','telemetry','collector-error']:
+        for k in ['inventory','telemetry','collector-error','ebpf-status','ebpf-diagnostic']:
             p = ROOT/(k+'.json')
             if p.exists(): result[k] = json.loads(p.read_text())
         if (ROOT/'events.db').exists():
@@ -210,7 +295,7 @@ def main():
     if len(raw)>4_000_000: raise ValueError('Request too large')
     request = json.loads(raw)
     if not isinstance(request, dict): raise ValueError('Request must be a JSON object')
-    if request.get('action') in ('snapshot','ack','evidence','backups'):
+    if request.get('action') in ('snapshot','ack','evidence','backups','operation-status'):
         # The collector writes snapshots atomically. Reading them must never
         # wait behind a long APT installation holding the mutation lock.
         print(json.dumps(handle(request)))

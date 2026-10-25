@@ -18,6 +18,9 @@ from .db import Session, Host, Package, Behavior, Job, Setting, Audit, Inventory
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls
 from .http_security import RequestSizeLimit
+from . import operations
+from .identity import User,actor,consume_otp,new_secret
+from .security import unseal
 
 @asynccontextmanager
 async def lifespan(app):
@@ -27,22 +30,35 @@ async def lifespan(app):
             password=os.getenv('ADMIN_PASSWORD','')
             if len(password)<12 or password=='replace-with-a-long-unique-password': raise RuntimeError('Set ADMIN_PASSWORD to at least 12 characters before first start')
             s.add(Setting(key='admin',value={'hash':password_hash(password)})); s.commit()
+    with Session() as s:
+        if not s.get(User,'admin'):
+            s.add(User(username='admin',password=s.get(Setting,'admin').value['hash'],role='admin'));s.commit()
     if os.getenv('DISABLE_SCHEDULER')!='1': worker.start()
     yield
     worker.stop.set()
 app=FastAPI(title='Mr Patchy',version='0.2.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
+from starlette.middleware.sessions import SessionMiddleware
+from .security import cipher
+from . import sso
+app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
+app.include_router(sso.router)
+@app.exception_handler(ValueError)
+async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
 static=Path(__file__).parent/'static'
 app.mount('/static',StaticFiles(directory=static),name='static')
 
 @app.middleware('http')
 async def guard(request,call_next):
     response=await call_next(request)
+    if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
+        with Session() as s:
+            audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='no-referrer'
     response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
-    if request.url.path.startswith(('/api','/enroll')): response.headers['Cache-Control']='no-store'
+    if request.url.path.startswith(('/api','/enroll','/auth')): response.headers['Cache-Control']='no-store'
     return response
 
 def auth(request:Request):
@@ -50,8 +66,21 @@ def auth(request:Request):
     with Session() as s:
         row=s.get(Setting,'session:'+token_hash(token))
         if not row or row.value['expires']<time.time(): raise HTTPException(401,'Sign in required')
+        username=row.value.get('username')
+        identity=s.get(User,username) if username else None
+        if not identity or not identity.enabled or row.value.get('generation')!=identity.generation:
+            raise HTTPException(401,'Session revoked; sign in again')
         if request.method not in ['GET','HEAD'] and not secrets.compare_digest(request.headers.get('x-csrf-token',''),row.value['csrf']): raise HTTPException(403,'Invalid CSRF token')
-        return row.value
+        path=request.url.path
+        self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
+        operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
+        sensitive_read=('/history' in path or path.endswith(('/installer','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations'))
+        if not self_service:
+            if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
+            if request.method not in ('GET','HEAD') and identity.role!='admin':
+                if identity.role!='operator' or not operator_action: raise HTTPException(403,'This role cannot perform that operation')
+        request.state.actor=identity.username
+        return {**row.value,'username':identity.username,'role':identity.role,'mfa':bool(identity.otp_secret)}
 
 @contextmanager
 def host_change(host_id):
@@ -70,21 +99,35 @@ def object_dict(obj,exclude=()): return {c.name:getattr(obj,c.name) for c in obj
 def index(): return FileResponse(static/'index.html')
 @app.get('/healthz')
 def health(): return {'status':'ok'}
-class Login(BaseModel): password:str=Field(max_length=1024)
+class Login(BaseModel):
+    username:str=Field(default='admin',pattern=r'^[A-Za-z0-9_.-]{1,64}$')
+    password:str=Field(max_length=1024)
+    otp:str=Field(default='',max_length=6)
 login_attempts={}; login_lock=threading.Lock()
 @app.post('/api/login')
 def login(body:Login,request:Request,response:Response):
     ip=request.client.host; now=time.time()
+    # Reserve an attempt before expensive password hashing; remove it only on success.
+    bucket=ip+':'+body.username
     with login_lock:
-        recent=[x for x in login_attempts.get(ip,[]) if now-x<300]
-        if len(recent)>=10: raise HTTPException(429,'Too many attempts. Try again in five minutes.')
-        login_attempts[ip]=recent+[now]
-    with Session() as s:
-        if not verify(body.password,s.get(Setting,'admin').value['hash']): raise HTTPException(401,'Incorrect password')
+        for key in list(login_attempts):
+            login_attempts[key]=[x for x in login_attempts[key] if now-x<300]
+            if not login_attempts[key]: del login_attempts[key]
+        recent=login_attempts.get(bucket,[])
+        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
+        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000: raise HTTPException(429,'Too many attempts. Try again in five minutes.')
+        login_attempts[bucket]=recent+[now]
+    with login_lock, Session() as s:
+        identity=s.get(User,body.username)
+        if not identity or not identity.enabled or not verify(body.password,identity.password):
+            raise HTTPException(401,'Invalid credentials')
+        if identity.otp_secret and not consume_otp(identity,body.otp): raise HTTPException(401,'Invalid credentials or MFA code')
         token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-        s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200})); audit(s,'login',ip); s.commit()
+        s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
+        audit(s,'login',identity.username+' '+ip); s.commit()
+        login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
-    return {'csrf':csrf}
+    return {'csrf':csrf,'username':identity.username,'role':identity.role}
 @app.get('/api/session')
 def session(user=Depends(auth)): return {'csrf':user['csrf']}
 @app.post('/api/logout')
@@ -137,7 +180,7 @@ def enroll(token:str):
         return PlainTextResponse(ssh.bootstrap(h))
 @app.post('/api/hosts/{host_id}/actions/{action}')
 def host_action(host_id:str,action:str,user=Depends(auth)):
-    if action not in ['deploy','refresh','repair']: raise HTTPException(404,'Unknown action')
+    if action not in ['deploy','refresh','repair','rotate-key']: raise HTTPException(404,'Unknown action')
     with Session() as s:
         h=host_or_404(s,host_id)
         if not h.fingerprint: raise HTTPException(400,'Pin the host fingerprint first')
@@ -334,3 +377,271 @@ def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(a
         record=s.get(model,record_id)
         if not record or record.host_id!=host_id: raise HTTPException(404,'History record not found')
         return object_dict(record)
+
+@app.get('/api/identity')
+def identity_info(user=Depends(auth)): return {k:user[k] for k in ('username','role','mfa')}
+
+class UserInput(BaseModel):
+    username:str=Field(pattern=r'^[A-Za-z0-9_.-]{1,64}$')
+    password:str=Field(default='',max_length=1024)
+    role:str=Field(pattern=r'^(admin|operator|viewer)$')
+    enabled:bool=True
+
+@app.get('/api/users')
+def users(user=Depends(auth)):
+    with Session() as s: return [{'username':u.username,'role':u.role,'enabled':u.enabled,'mfa':bool(u.otp_secret)} for u in s.scalars(select(User))]
+
+@app.put('/api/users')
+def save_user(body:UserInput,user=Depends(auth)):
+    if body.username=='admin' and (body.role!='admin' or not body.enabled): raise HTTPException(400,'The bootstrap administrator must remain enabled')
+    if body.username==user['username'] and (not body.enabled or body.role!='admin'): raise HTTPException(400,'Cannot revoke your own administrator access')
+    if body.password and len(body.password)<12: raise HTTPException(400,'Password must have at least 12 characters')
+    with Session() as s:
+        row=s.get(User,body.username)
+        if not row:
+            if not body.password: raise HTTPException(400,'New users require a password')
+            row=User(username=body.username,password=password_hash(body.password));s.add(row);s.flush()
+        elif body.password: row.password=password_hash(body.password)
+        row.role=body.role;row.enabled=body.enabled;row.generation+=1
+        audit(s,'manage user',user['username']+' → '+body.username);s.commit()
+    return {'ok':True}
+
+class Reauthenticate(BaseModel):
+    password:str=Field(max_length=1024)
+    otp:str=Field(default='',max_length=6)
+    new_password:str=Field(default='',max_length=1024)
+
+def check_password(row,body):
+    if not verify(body.password,row.password): raise HTTPException(401,'Invalid credentials')
+    if row.otp_secret and not consume_otp(row,body.otp): raise HTTPException(401,'Invalid MFA code')
+
+@app.post('/api/identity/mfa')
+def begin_mfa(body:Reauthenticate,user=Depends(auth)):
+    from urllib.parse import quote
+    with login_lock, Session() as s:
+        row=s.get(User,user['username']);check_password(row,body)
+        secret=new_secret();row.otp_pending=seal(secret);s.commit()
+        return {'secret':secret,'uri':'otpauth://totp/MrPatchy:'+quote(row.username)+'?secret='+secret+'&issuer=MrPatchy&algorithm=SHA1&digits=6&period=30'}
+
+class OTPInput(BaseModel): otp:str=Field(max_length=6)
+@app.post('/api/identity/mfa/confirm')
+def confirm_mfa(body:OTPInput,user=Depends(auth)):
+    with login_lock, Session() as s:
+        row=s.get(User,user['username'])
+        if not consume_otp(row,body.otp,pending=True): raise HTTPException(400,'Invalid confirmation code')
+        row.otp_secret=row.otp_pending;row.otp_pending='';row.generation+=1
+        audit(s,'enable MFA',row.username);s.commit()
+    return {'ok':True,'sign_in_again':True}
+
+@app.put('/api/identity/password')
+def change_password(body:Reauthenticate,user=Depends(auth)):
+    if len(body.new_password)<12: raise HTTPException(400,'Password must have at least 12 characters')
+    with login_lock, Session() as s:
+        row=s.get(User,user['username']);check_password(row,body)
+        row.password=password_hash(body.new_password);row.generation+=1
+        audit(s,'change password',row.username);s.commit()
+    return {'ok':True,'sign_in_again':True}
+
+@app.delete('/api/identity/sessions')
+def revoke_sessions(body:Reauthenticate,user=Depends(auth)):
+    with login_lock, Session() as s:
+        row=s.get(User,user['username']);check_password(row,body)
+        row.generation+=1;audit(s,'revoke sessions',row.username);s.commit()
+    return {'ok':True,'sign_in_again':True}
+
+class WindowInput(BaseModel): windows:list[dict]=Field(default_factory=list,max_length=20)
+@app.put('/api/operations/{host_id}/window')
+def save_window(host_id:str,body:WindowInput,user=Depends(auth)):
+    for w in body.windows:
+        if set(w)!={'days','start','end'} or not isinstance(w['days'],list) or not w['days'] or any(type(d)!=int or d not in range(7) for d in w['days']) or type(w['start'])!=int or type(w['end'])!=int or not 0<=w['start']<w['end']<=1440:
+            raise HTTPException(400,'Windows require days 0–6 (Monday first) and start/end UTC minutes within one day')
+    with host_change(host_id),Session() as s:
+        host_or_404(s,host_id);s.merge(Setting(key='window:'+host_id,value=body.model_dump()));s.commit()
+    return {'ok':True}
+@app.get('/api/operations/{host_id}/window')
+def get_window(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id);row=s.get(Setting,'window:'+host_id)
+        return row.value if row else {'windows':[]}
+
+class NotificationInput(BaseModel):
+    enabled:bool=False
+    url:str=Field(default='',max_length=2000)
+    token:str=Field(default='',max_length=2000)
+@app.put('/api/operations/notifications')
+def notifications(body:NotificationInput,user=Depends(auth)):
+    from urllib.parse import urlsplit
+    url=urlsplit(body.url)
+    if body.enabled and (url.scheme!='https' or not url.hostname or url.username or url.password or url.fragment):raise HTTPException(400,'Use an HTTPS webhook URL without embedded credentials')
+    if any(c in body.token for c in '\r\n'):raise HTTPException(400,'Invalid token')
+    with Session() as s:
+        s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(body.model_dump()))}));s.commit()
+    return {'ok':True}
+@app.get('/api/operations/alerts')
+def alerts(user=Depends(auth)):
+    with Session() as s:return [object_dict(a) for a in s.scalars(select(operations.Alert).order_by(operations.Alert.created.desc()).limit(200))]
+@app.post('/api/operations/alerts/{alert_id}/ack')
+def acknowledge_alert(alert_id:str,user=Depends(auth)):
+    with Session() as s:
+        alert=s.get(operations.Alert,alert_id)
+        if not alert:raise HTTPException(404,'Alert not found')
+        alert.state='acknowledged';audit(s,'acknowledge alert',user['username']+' '+alert_id);s.commit()
+    return {'ok':True}
+
+@app.post('/api/hosts/{host_id}/preview')
+def preview_patch(host_id:str,body:PatchInput,user=Depends(auth)):
+    with host_change(host_id),Session() as s:
+        h=host_or_404(s,host_id);specs=[]
+        for name in body.packages:
+            p=s.get(Package,host_id+':'+name)
+            if not p or not p.candidate:raise HTTPException(400,'Package has no candidate')
+            specs.append(name+'='+p.candidate)
+        worker.validate_patch(s,h,specs)
+        cfgfile=apt.DATA/'apt'/host_id/'apt.conf'
+        if not cfgfile.exists():raise HTTPException(409,'Refresh repositories first')
+        result=apt.run(cfgfile,['apt-get','--simulate','--no-remove','--only-upgrade','install','--',*specs])
+        return {'plan':result[-48000:],'packages':specs,'warning':'Central simulation; target and repositories are revalidated at execution.'}
+
+@app.post('/api/operations/jobs/{job_id}/cancel')
+def cancel_job(job_id:str,user=Depends(auth)):
+    with Session() as s:
+        job=s.get(Job,job_id)
+        if not job:raise HTTPException(404,'Job not found')
+        host_id=job.host_id
+    with host_change(host_id),Session() as s:
+        job=s.get(Job,job_id)
+        if job.state!='queued':raise HTTPException(409,'Only queued operations can be cancelled')
+        job.state='cancelled';audit(s,'cancel job',user['username']+' '+job_id);s.commit()
+    return {'ok':True}
+
+@app.get('/api/hosts/{host_id}/sbom')
+def sbom(host_id:str,user=Depends(auth)):
+    from urllib.parse import quote
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'bomFormat':'CycloneDX','specVersion':'1.5','version':1,'serialNumber':'urn:uuid:'+str(uuid.uuid4()),
+            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':'pkg:deb/'+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
+
+@app.get('/api/audit/export')
+def export_audit(after:int=0,limit:int=1000,user=Depends(auth)):
+    if after<0 or not 1<=limit<=10000:raise HTTPException(400,'Invalid export bounds')
+    with Session() as s:
+        rows=[object_dict(row) for row in s.scalars(select(Audit).where(Audit.id>after).order_by(Audit.id).limit(limit))]
+        return PlainTextResponse(''.join(json.dumps(row)+'\n' for row in rows),media_type='application/x-ndjson',headers={'Content-Disposition':'attachment; filename="mrpatchy-audit.jsonl"'})
+
+@app.get('/api/metrics')
+def metrics(user=Depends(auth)):
+    with Session() as s:
+        counts={'hosts':s.scalar(select(func.count()).select_from(Host)),'queued_jobs':s.scalar(select(func.count()).select_from(Job).where(Job.state=='queued')),'open_alerts':s.scalar(select(func.count()).select_from(operations.Alert).where(operations.Alert.state=='open'))}
+        return PlainTextResponse(''.join('mrpatchy_'+name+' '+str(value)+'\n' for name,value in counts.items()))
+
+class RolloutInput(BaseModel):
+    hosts:list[str]=Field(min_length=2,max_length=50)
+    packages:list[str]=Field(min_length=1,max_length=500)
+@app.post('/api/operations/rollouts')
+def rollout(body:RolloutInput,user=Depends(auth)):
+    if len(set(body.hosts))!=len(body.hosts):raise HTTPException(400,'Duplicate servers')
+    with Session() as s:
+        prepared=[]
+        for host_id in body.hosts:
+            h=host_or_404(s,host_id);specs=[]
+            if s.scalar(select(func.count()).select_from(Job).where(Job.host_id==host_id,Job.state.in_(['queued','running'])))>=50:raise HTTPException(429,'Server queue is full')
+            for name in body.packages:
+                p=s.get(Package,host_id+':'+name)
+                if not p or not p.candidate:raise HTTPException(400,'Missing candidate on '+h.name+': '+name)
+                specs.append(name+'='+p.candidate)
+            worker.validate_patch(s,h,specs);prepared.append((h.id,specs))
+        # One transaction: no partial rollout submission. The first server is the canary.
+        ids=[]
+        for host_id,specs in prepared:
+            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_depends_on':ids[-1:]})
+            s.add(job);ids.append(job.id)
+        audit(s,'create staged rollout',user['username']+' '+','.join(ids));s.commit()
+        return {'jobs':ids,'canary':ids[0]}
+
+class AdvisoryInput(BaseModel): packages:list[str]=Field(min_length=1,max_length=100)
+@app.post('/api/operations/{host_id}/advisories')
+def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(auth)):
+    from .advisories import scan
+    with host_change(host_id),Session() as s:
+        h=host_or_404(s,host_id)
+        result=scan(h.inventory,body.packages)
+        if len(json.dumps(result).encode())>2000000:raise HTTPException(413,'Advisory result too large')
+        s.merge(Setting(key='advisories:'+host_id,value=result));s.commit()
+        return result
+@app.get('/api/operations/{host_id}/advisories')
+def get_advisories(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
+        return row.value if row else {'results':[],'coverage':'Not checked'}
+
+class SSOBinding(BaseModel):
+    subject:str=Field(min_length=1,max_length=500)
+    username:str=Field(min_length=1,max_length=64)
+@app.put('/api/operations/sso-binding')
+def bind_sso(body:SSOBinding,user=Depends(auth)):
+    if not sso.issuer:raise HTTPException(409,'Configure OIDC deployment variables first')
+    with Session() as s:
+        if not s.get(User,body.username):raise HTTPException(404,'Create the local account/role first')
+        s.merge(Setting(key=sso.binding_key(body.subject),value={'username':body.username}))
+        audit(s,'bind SSO identity',user['username']+' → '+body.username);s.commit()
+    return {'ok':True}
+
+class SMTPInput(BaseModel):
+    enabled:bool=False
+    host:str=Field(max_length=253)
+    port:int=Field(default=587,ge=1,le=65535)
+    mode:str='starttls'
+    sender:str=Field(max_length=320)
+    recipients:list[str]=Field(min_length=1,max_length=50)
+    username:str=Field(default='',max_length=320)
+    password:str=Field(default='',max_length=2000)
+    ca:str=Field(default='',max_length=100000)
+@app.put('/api/operations/smtp')
+def smtp_save(body:SMTPInput,user=Depends(auth)):
+    from .mail import validate
+    value=validate(body.model_dump());value['channel']='smtp'
+    with Session() as s:s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
+    return {'ok':True}
+
+class RecoveryPolicy(BaseModel):
+    reboot:bool=False
+    rollback:bool=False
+@app.put('/api/operations/{host_id}/recovery')
+def recovery_policy(host_id:str,body:RecoveryPolicy,user=Depends(auth)):
+    with host_change(host_id),Session() as s:
+        h=host_or_404(s,host_id)
+        status=ssh.call(h,{'action':'recovery-status'})
+        if body.rollback and not status['rollback_adapter']:raise HTTPException(409,'Install and validate a root-owned rollback adapter on this target first')
+        if body.reboot and not status['systemd']:raise HTTPException(409,'Automatic reboot requires systemd')
+        s.merge(Setting(key='recovery:'+host_id,value=body.model_dump()));audit(s,'set recovery policy',host_id);s.commit()
+    return {'ok':True,'capabilities':status}
+
+class ObservabilityInput(BaseModel): ebpf:bool=False
+@app.put('/api/operations/{host_id}/observability')
+def observability(host_id:str,body:ObservabilityInput,user=Depends(auth)):
+    with host_change(host_id),Session() as s:
+        h=host_or_404(s,host_id);result=ssh.call(h,{'action':'observability','ebpf':body.ebpf})
+        path='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
+        baseline=dict(h.baseline)
+        if body.ebpf:baseline[path]=hashlib.sha256(b'[Service]\nProtectSystem=false\nNoNewPrivileges=false\nRestrictAddressFamilies=AF_UNIX AF_NETLINK\n').hexdigest()
+        else:baseline.pop(path,None)
+        h.baseline=baseline
+        audit(s,'configure eBPF',host_id+' '+str(body.ebpf));s.commit()
+    return result
+
+class ReconcileInput(BaseModel): verified_target_state:bool=False
+@app.post('/api/operations/jobs/{job_id}/reconcile')
+def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
+    if not body.verified_target_state:raise HTTPException(400,'Review the target state before reconciling an interrupted worker')
+    with Session() as s:
+        job=s.get(Job,job_id)
+        if not job:raise HTTPException(404,'Job not found')
+        host_id=job.host_id
+    with host_change(host_id),Session() as s:
+        job=s.get(Job,job_id);h=host_or_404(s,host_id)
+        if job.state!='running':raise HTTPException(409,'Only orphaned running jobs require reconciliation')
+        if ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
+        job.state='interrupted';job.output='Operator reviewed target after worker interruption; operation was not automatically replayed'
+        audit(s,'reconcile job',user['username']+' '+job_id);s.commit()
+    return {'ok':True}
