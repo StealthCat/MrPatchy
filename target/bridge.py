@@ -125,6 +125,10 @@ def process_evidence(req):
 def handle(req):
     action = req.get('action')
     if action == 'evidence': return process_evidence(req)
+    if action == 'health':
+        failed=run(['systemctl','--failed','--no-legend','--plain'],timeout=15)
+        return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists(),
+                'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
     if action == 'verify':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import MANAGED,digest
