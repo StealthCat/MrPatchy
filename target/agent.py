@@ -51,24 +51,28 @@ def address(value, ipv6):
     if ipv6: raw = b''.join(raw[i:i+4][::-1] for i in range(0,16,4))
     else: raw = raw[::-1]
     return socket.inet_ntop(socket.AF_INET6 if ipv6 else socket.AF_INET, raw), int(port,16)
-def sockets():
+def sockets(base=Path('/proc/net')):
     result = {}; errors = []
     for proto in ['tcp','tcp6','udp','udp6']:
         try:
-            for line in read('/proc/net/'+proto).splitlines()[1:]:
+            for line in read(base/proto).splitlines()[1:]:
                 fields = line.split()
                 local, lp = address(fields[1], proto.endswith('6'))
                 remote, rp = address(fields[2], proto.endswith('6'))
                 result[fields[9]] = {'protocol':proto, 'local':local, 'local_port':lp, 'remote':remote, 'remote_port':rp, 'state':fields[3]}
         except FileNotFoundError: pass
-        except OSError as e: errors.append({'path':'/proc/net/'+proto,'error':str(e)})
+        except OSError as e: errors.append({'path':str(base/proto),'error':str(e)})
     return result, errors
 
 def collect(hash_cache):
-    net, errors = sockets(); processes = []
+    errors=[]; processes=[]; namespaces={}
     for p in Path('/proc').iterdir():
         if not p.name.isdigit(): continue
         try:
+            namespace=(p/'ns/net').stat().st_ino
+            if namespace not in namespaces:
+                net,net_errors=sockets(p/'net');namespaces[namespace]=net;errors.extend(net_errors)
+            net=namespaces[namespace]
             exe = os.readlink(p/'exe')
             stat = (p/'exe').stat()
             identity = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size)
@@ -81,7 +85,7 @@ def collect(hash_cache):
                 except FileNotFoundError: pass
                 except OSError as e: errors.append({'pid':p.name,'error':str(e)})
             uid = next(x.split()[2] for x in read(p/'status').splitlines() if x.startswith('Uid:'))
-            processes.append({'pid':int(p.name),'executable':exe,'sha256':hash_cache[identity],'uid':uid,'connections':connections})
+            processes.append({'pid':int(p.name),'executable':exe,'sha256':hash_cache[identity],'uid':uid,'network_namespace':namespace,'connections':connections})
         except FileNotFoundError: pass # short-lived process / kernel thread
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
     return processes, errors

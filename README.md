@@ -8,6 +8,8 @@ Mr Patchy is a self-hosted, Dockerized dashboard for Ubuntu and Raspberry Pi OS 
 
 See the [v0.2 completion and security review](docs/COMPLETION_REVIEW.md) for current requirement coverage, test evidence, remaining limits, and suggested expansions. The [original review](docs/REVIEW.md) is retained as historical evidence.
 
+See [operational expansion status](docs/OPERATIONS_EXPANSION.md) for the new identity, alert, rollout, advisory and recovery controls and the explicitly unfinished expansion items.
+
 ## What is implemented
 
 - Responsive dashboard: fleet overview, enrollment, searchable installed packages, updates, repositories, investigations, operation results, and audit trail.
@@ -124,7 +126,7 @@ This is the first implementation, not a claim of production certification. Read 
 - TCP/UDP connections are associated through `/proc` socket inodes in the collector's network namespace. Short-lived activity between samples, other network namespaces, and some inaccessible descriptors can be missed.
 - Use one app replica and one Uvicorn worker. Polls use bounded pools; very large fleets, slow links, huge process sets, or long-running target operations may delay collection. Stale telemetry and hash checks are surfaced. No external notification delivery is implemented.
 - Repository checks preserve APT preferences/architecture and native Debian version comparisons. Declare default release, credentials, proxy and CA settings centrally; arbitrary target apt.conf is not executed. Vendor token-refresh/entitlement agents are not replicated.
-- There is one administrator account. This release has no RBAC, SSO, tamper-evident audit chain, scheduled unattended patching, OS release upgrades, or automatic rollback of package maintainer-script effects.
+- Named administrator/operator/viewer roles and optional TOTP MFA are available through Account. SSO, SSH-key rotation, tamper-evident audit shipping, OS release upgrades and automatic rollback remain unfinished. See the operational expansion status for exact scope.
 
 ## Development
 
