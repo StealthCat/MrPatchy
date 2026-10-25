@@ -239,3 +239,8 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
         assert plan['configs'][0]['sha256']==sha
         assert plan['services']==['nginx.service']
         assert row.digest==release.digest(release.canonical(plan))
+
+
+def test_service_recovery_ignores_transient_login_sessions():
+    output='nginx.service loaded active running Web server\nuser@1000.service loaded active running User manager\nssh@old-connection.service loaded active running SSH session\nssh.service loaded active running SSH daemon\nmrpatchy-release-job.service loaded active running Release runner\n'
+    assert release.service_inventory(output)==['nginx.service','ssh.service']

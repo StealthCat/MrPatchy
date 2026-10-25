@@ -83,6 +83,14 @@ def custom_validator():
 
 def fingerprint(inv):
     return digest(canonical({k:inv[k] for k in ('os','architecture','foreign_architectures','status','files','keys','machine_id')}))
+def service_inventory(output):
+    units=[line.split()[0] for line in output.splitlines() if line.strip()]
+    # Login-session services legitimately disappear at reboot; do not mistake
+    # a logged-out administrator or old SSH connection for a failed workload.
+    units=[unit for unit in units if not unit.startswith(('user@','ssh@','sshd@','mrpatchy-release-'))]
+    if len(units)>256 or any(not re.fullmatch(r'[A-Za-z0-9_.@:\\-]+\.service',unit) for unit in units):raise ValueError('Unsupported service inventory')
+    return sorted(set(units))
+
 def inspection():
     b=bridge();inv=b.handle({'action':'inventory'});blockers=[]
     try:destination=transition(inv)
@@ -93,8 +101,7 @@ def inspection():
     if shutil.disk_usage('/boot').free<512*1024**2:blockers.append('At least 512 MiB free on /boot is required')
     services=[]
     try:
-        services=[line.split()[0] for line in b.run(['systemctl','list-units','--type=service','--state=running','--no-legend','--plain'],timeout=30).splitlines() if line.strip()]
-        if len(services)>256 or any(not re.fullmatch(r'[A-Za-z0-9_.@:\\-]+\.service',unit) for unit in services):raise ValueError('Unsupported service inventory')
+        services=service_inventory(b.run(['systemctl','list-units','--type=service','--state=running','--no-legend','--plain'],timeout=30))
         if b.run(['dpkg','--audit'],timeout=30).strip():blockers.append('dpkg reports unfinished package configuration')
         health=b.handle({'action':'health'})
         if health['failed_units'] or not health['collector_active']:blockers.append('Resolve failed services before a release upgrade')

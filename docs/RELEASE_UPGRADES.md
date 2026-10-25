@@ -35,7 +35,7 @@ The target runner verifies inventory, repository keys, configuration hashes/owne
 - Distribution source rewrites; third-party sources/backports are disabled rather than blindly redirected. Pinning, aliases such as `stable`, mixed vendor stanzas and unsupported mirrors require preparation.
 - Package-owned conffiles for changed installed packages, current SHA-256/metadata, authenticated new package defaults and available packaged `NEWS` material.
 - AI-proposed complete configuration content, reasons, blockers and unified diffs. The AI cannot choose commands, target paths or validators.
-- The set of previously running services required to recover after reboot.
+- The set of previously running services required to recover after reboot; transient login/SSH session units are excluded.
 - Explicit authorization for reboot and one snapshot rollback, independent of routine patch settings.
 
 Protected/executable configuration such as PAM, sudoers, systemd and cron is never rewritten by the AI. Unmodified vendor-owned protected files remain under distribution package management. Locally modified protected files block the plan. Deleted/moved vendor conffiles, unreadable/symlinked files, unsupported validators and uncertain AI migrations also block GO.
