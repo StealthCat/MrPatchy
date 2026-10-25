@@ -209,7 +209,9 @@ def _prepare(profiles, validate=True):
             if assigned.intersection(hosts):
                 raise ValueError('Internal and external domains/aliases must be different')
             assigned.update(hosts)
-            lines += [', '.join('https://' + address(h) for h in hosts) + ' {', '  encode zstd gzip', '  reverse_proxy app:8000']
+            port = str(item['https_port']) if item.get('https_port') else '{$HTTPS_PORT:443}'
+            lines += [', '.join('https://' + address(h) for h in hosts) + ' {', '  encode zstd gzip',
+                      '  header Alt-Svc ' + json.dumps('h3=":' + port + '"; ma=86400'), '  reverse_proxy app:8000']
             if item['mode'] == 'uploaded':
                 cert_path, key_path = folder / (name + '-cert.pem'), folder / (name + '-key.pem')
                 _write(cert_path, item['certificate']); _write(key_path, item['private_key'])
@@ -244,7 +246,6 @@ def _prepare(profiles, validate=True):
             for host in hosts:
                 lines.append('http://' + address(host) + ' {')
                 if item.get('redirect_http', True):
-                    port = str(item['https_port']) if item.get('https_port') else '{$HTTPS_PORT:443}'
                     lines.append('  redir https://' + address(host) + ':' + port + '{uri} 308')
                 else:
                     lines.append('  respond "Use HTTPS" 404')

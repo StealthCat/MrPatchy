@@ -161,6 +161,7 @@ def test_native_caddy_adapts_both_issuers_and_redirect_ports(configured):
     assert 'external_account' not in by_host['patchy.external.test']
     assert 'trusted_roots_pem_files' not in by_host['patchy.external.test']
     assert 'https://patchy.external.test:8443{http.request.uri}' in result.stdout
+    assert 'h3=\\\":8443\\\"; ma=86400' in result.stdout
 
 
 def test_uploaded_certificate_cannot_override_automatic_profile(configured):

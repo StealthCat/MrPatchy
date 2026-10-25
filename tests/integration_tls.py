@@ -70,6 +70,7 @@ try:
                 time.sleep(.5)
         redirect = client.get('http://localhost:18080/a/path?test=yes',follow_redirects=False)
         assert redirect.status_code == 308 and redirect.headers['location'] == 'https://localhost:18443/a/path?test=yes'
+        assert client.get('https://localhost:18443/healthz').headers['alt-svc'] == 'h3=":18443"; ma=86400'
         login = client.post('https://localhost:18443/api/login',json={'password':PASSWORD}); login.raise_for_status()
         client.headers['X-CSRF-Token'] = login.json()['csrf']
         external = cert_for(['external.example.test'])
