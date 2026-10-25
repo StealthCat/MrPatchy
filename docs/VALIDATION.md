@@ -2,6 +2,8 @@
 
 Initial implementation, October 24, 2026.
 
+This is a historical record. See [the latest review and validation](FULL_REVIEW_2026-10-25.md) and [subsequent remediation](REVIEW_FIXES.md) for current coverage, including Docker/Caddy startup, MySQL, real SSH fixtures and restic recovery CI.
+
 ## Executed successfully
 
 - **29 pytest tests** covering authentication/CSRF, personalized offline installer shell/Python syntax, enrollment-link expiry, unsafe repository rejection, inventory and package holds, exact-version patch jobs, SSH host fingerprint pinning, TLS domain/key checks, AI request minimization and explicit trust approval, backoff, target JSON-command validation, atomic-write symlink rejection, and process identity normalization.

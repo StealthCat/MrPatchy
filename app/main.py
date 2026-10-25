@@ -432,9 +432,18 @@ class Reauthenticate(BaseModel):
     otp:str=Field(default='',max_length=6)
     new_password:str=Field(default='',max_length=1024)
 
+def reserve_account_attempt(username):
+    # Account-wide across password, MFA setup/confirmation and session revocation.
+    # Called under login_lock; these endpoints must not bypass login throttling.
+    key='account:'+username;now=time.time()
+    attempts=[t for t in login_attempts.get(key,[]) if now-t<300]
+    if len(attempts)>=10:raise HTTPException(429,'Too many account verification attempts. Try again in five minutes.')
+    login_attempts[key]=attempts+[now]
+
 def check_password(row,body):
-    if not verify(body.password,row.password): raise HTTPException(401,'Invalid credentials')
-    if row.otp_secret and not consume_otp(row,body.otp): raise HTTPException(401,'Invalid MFA code')
+    reserve_account_attempt(row.username)
+    if not verify(body.password,row.password): raise HTTPException(403,'Invalid credentials')
+    if row.otp_secret and not consume_otp(row,body.otp): raise HTTPException(403,'Invalid MFA code')
 
 @app.post('/api/identity/mfa')
 def begin_mfa(body:Reauthenticate,user=Depends(auth)):
@@ -449,6 +458,7 @@ class OTPInput(BaseModel): otp:str=Field(max_length=6)
 def confirm_mfa(body:OTPInput,user=Depends(auth)):
     with login_lock, Session() as s:
         row=s.get(User,user['username'])
+        reserve_account_attempt(row.username)
         if not consume_otp(row,body.otp,pending=True): raise HTTPException(400,'Invalid confirmation code')
         row.otp_secret=row.otp_pending;row.otp_pending='';row.generation+=1
         audit(s,'enable MFA',row.username);s.commit()
@@ -489,6 +499,28 @@ class NotificationInput(BaseModel):
     enabled:bool=False
     url:str=Field(default='',max_length=2000)
     token:str=Field(default='',max_length=2000)
+    clear_token:bool=False
+
+def notification_config(s):
+    row=s.get(Setting,'notifications')
+    return json.loads(unseal(row.value['encrypted'])) if row else {}
+
+def retain_notification_secret(previous,value,secret,clear,identity):
+    if clear:value[secret]=''
+    elif not value.get(secret) and previous.get(secret):
+        if any(previous.get(key,'')!=value.get(key,'') for key in identity):
+            raise HTTPException(400,'Enter or explicitly clear the '+secret+' when changing the notification destination/account')
+        value[secret]=previous[secret]
+    return value
+
+@app.get('/api/operations/notifications')
+def notification_settings(user=Depends(auth)):
+    with Session() as s:
+        value=notification_config(s)
+        return {k:v for k,v in value.items() if k not in ('password','token')}|{
+            'channel':value.get('channel','webhook'),'password_configured':bool(value.get('password')),
+            'token_configured':bool(value.get('token'))}
+
 @app.put('/api/operations/notifications')
 def notifications(body:NotificationInput,user=Depends(auth)):
     from urllib.parse import urlsplit
@@ -496,7 +528,10 @@ def notifications(body:NotificationInput,user=Depends(auth)):
     if body.enabled and (url.scheme!='https' or not url.hostname or url.username or url.password or url.fragment):raise HTTPException(400,'Use an HTTPS webhook URL without embedded credentials')
     if any(c in body.token for c in '\r\n'):raise HTTPException(400,'Invalid token')
     with Session() as s:
-        s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(body.model_dump()))}));s.commit()
+        previous=notification_config(s)
+        value=body.model_dump(exclude={'clear_token'});value['channel']='webhook'
+        retain_notification_secret(previous if previous.get('channel','webhook')=='webhook' else {},value,'token',body.clear_token,('url',))
+        s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
 @app.get('/api/operations/alerts')
 def alerts(user=Depends(auth)):
@@ -626,11 +661,15 @@ class SMTPInput(BaseModel):
     username:str=Field(default='',max_length=320)
     password:str=Field(default='',max_length=2000)
     ca:str=Field(default='',max_length=100000)
+    clear_password:bool=False
 @app.put('/api/operations/smtp')
 def smtp_save(body:SMTPInput,user=Depends(auth)):
     from .mail import validate
-    value=validate(body.model_dump());value['channel']='smtp'
-    with Session() as s:s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
+    value=validate(body.model_dump(exclude={'clear_password'}));value['channel']='smtp'
+    with Session() as s:
+        previous=notification_config(s)
+        retain_notification_secret(previous if previous.get('channel')=='smtp' else {},value,'password',body.clear_password,('host','port','mode','username'))
+        s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
 
 class RecoveryPolicy(BaseModel):

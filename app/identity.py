@@ -35,7 +35,9 @@ def consume_otp(user,value,now=None,pending=False):
     if not secret: return False
     counter=int((time.time() if now is None else now)//30)
     for candidate in (counter-1,counter,counter+1):
-        if candidate>user.otp_counter and hmac.compare_digest(code(unseal(secret),candidate),value):
+        # A newly generated secret has its own replay domain. Replacing MFA
+        # must work in the same time step as verification of the old secret.
+        if candidate>(-1 if pending else user.otp_counter) and hmac.compare_digest(code(unseal(secret),candidate),value):
             user.otp_counter=candidate
             return True
     return False
