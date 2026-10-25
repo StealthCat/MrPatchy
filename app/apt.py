@@ -11,6 +11,7 @@ import subprocess
 import shutil
 from urllib.parse import urlsplit
 from .db import DATA
+from .repository_access import validate as validate_access, rewrite
 
 def paragraphs(text):
     for block in re.split(r'\n\s*\n',text.strip()):
@@ -28,8 +29,8 @@ def installed(status):
     result=[]
     for p in paragraphs(status):
         state=p.get('Status','').split()
-        if len(state)==3 and state[2]=='installed':
-            result.append({'name':p['Package']+':'+p['Architecture'],'installed':p['Version'],'held':state[0]=='hold'})
+        if len(state)==3 and state[2] not in ('not-installed','config-files'):
+            result.append({'name':p['Package']+':'+p['Architecture'],'installed':p.get('Version',''),'held':state[0]=='hold','dpkg_state':p.get('Status','unknown')})
     return result
 
 FALSE_VALUES = {'no', 'false', '0', 'off'}
@@ -70,7 +71,7 @@ def signing_refs(value):
     refs = []
     for token in re.split(r'[\s,]+', value.strip()):
         if token.startswith('/'):
-            if not key_path(token): raise ValueError('Unsupported signing key path: '+token)
+            if not public_key_path(token): raise ValueError('Unsupported signing key path: '+token)
             refs.append(token)
         elif token and not re.fullmatch(r'[A-Fa-f0-9]{40}!?', token):
             raise ValueError('Signed-By must use a captured key path, fingerprint, or inline public key')
@@ -99,7 +100,14 @@ def source_path(name):
     return name=='/etc/apt/sources.list' or bool(re.fullmatch(r'/etc/apt/sources\.list\.d/[A-Za-z0-9_.-]+\.(list|sources)',name))
 def key_path(name):
     return name=='/etc/apt/trusted.gpg' or bool(re.fullmatch(r'/(etc/apt/(keyrings|trusted\.gpg\.d)|usr/share/keyrings)/[A-Za-z0-9_.+-]+\.(asc|gpg)',name))
-def prepare(host_id, inv):
+def key_destination(root,name):
+    return root/name.lstrip('/') if key_path(name) else root/'etc/apt/keyrings'/('captured-'+hashlib.sha256(name.encode()).hexdigest()+Path(name).suffix)
+
+def public_key_path(name):
+    return name.startswith('/') and '..' not in Path(name).parts and bool(re.fullmatch(r'/[A-Za-z0-9_./+\-]+\.(asc|gpg)',name))
+
+def prepare(host_id, inv, access=None):
+    access=validate_access(access or {})
     root=DATA/'apt'/host_id; root.mkdir(parents=True,exist_ok=True)
     for d in ['etc/apt/sources.list.d','etc/apt/trusted.gpg.d','etc/apt/preferences.d','etc/apt/empty','var/lib/apt/lists/partial','var/cache/apt/archives/partial','var/lib/dpkg','var/log/apt']:
         (root/d).mkdir(parents=True,exist_ok=True)
@@ -114,16 +122,19 @@ def prepare(host_id, inv):
     for name in ['sources.list','trusted.gpg','preferences']:
         (root/'etc/apt'/name).unlink(missing_ok=True)
     for name,value in inv['keys'].items():
-        if not key_path(name): continue
-        p=root/name.lstrip('/'); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(base64.b64decode(value,validate=True)); p.chmod(0o644)
+        if not (key_path(name) or public_key_path(name)): continue
+        p=key_destination(root,name); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(base64.b64decode(value,validate=True)); p.chmod(0o644)
+        if name=='/etc/apt/trusted.gpg' or name.startswith('/etc/apt/trusted.gpg.d/'):
+            legacy=root/name.lstrip('/');legacy.write_bytes(p.read_bytes());legacy.chmod(0o644)
     for name,value in inv['files'].items():
         if source_path(name):
+            value=rewrite(value,access)
             validate_source(value,name.endswith('.sources'))
             # Every absolute key path must resolve to captured signing material.
             refs=[ref for fields in source_options(value,name.endswith('.sources')) for ref in signing_refs(fields.get('signed-by',''))]
             for ref in sorted(set(refs),key=len,reverse=True):
-                if not key_path(ref): raise ValueError('Unsupported signing key path: '+ref)
-                value=value.replace(ref,str(root/ref.lstrip('/')))
+                if ref not in inv['keys']: raise ValueError('Signing key was not captured from target: '+ref)
+                value=value.replace(ref,str(key_destination(root,ref)))
         elif name!='/etc/apt/preferences' and not re.fullmatch(r'/etc/apt/preferences.d/[A-Za-z0-9_.-]+',name): continue
         p=root/name.lstrip('/'); p.write_text(value)
     (root/'var/lib/dpkg/status').write_text(inv['status'])
@@ -148,12 +159,25 @@ APT::Get::AllowUnauthenticated "false";
 APT::Update::Error-Mode "any";
 APT::Sandbox::User "{pwd.getpwuid(os.geteuid()).pw_name}";
 ''')
+    auth=root/'etc/apt/auth.conf'
+    auth.write_text(''.join('machine '+x['machine']+' login '+x['login']+' password '+x['password']+'\n' for x in access.get('credentials',[])))
+    auth.chmod(0o600)
+    ca=root/'repository-ca.pem';ca.unlink(missing_ok=True)
+    with cfg.open('a') as stream:
+        stream.write('Dir::Etc::netrc "'+str(auth)+'";\n')
+        if access.get('proxy'):
+            for protocol in ('http','https'): stream.write('Acquire::'+protocol+'::Proxy "'+access['proxy']+'";\n')
+        if access.get('ca'):
+            ca.write_text(access['ca']);ca.chmod(0o600)
+            stream.write('Acquire::https::CaInfo "'+str(ca)+'";\n')
+        if access.get('default_release'): stream.write('APT::Default-Release "'+access['default_release']+'";\n')
     return root,cfg
 
 def run(cfg,args):
-    p=subprocess.run(args,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','APT_CONFIG':str(cfg)},capture_output=True,text=True,timeout=900)
-    if p.returncode: raise RuntimeError((p.stdout+p.stderr)[-16000:])
-    return p.stdout
+    from .process import bounded
+    out,_=bounded(args,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','APT_CONFIG':str(cfg)})
+    return out
+
 
 def parse_policy(text):
     result={}; current=None; version=None
@@ -169,8 +193,8 @@ def parse_policy(text):
                 result[current]['origin']+=line+'\n'
     return result
 
-def refresh(host_id,inv):
-    root,cfg=prepare(host_id,inv)
+def refresh(host_id,inv,access=None):
+    root,cfg=prepare(host_id,inv,access)
     log=run(cfg,['apt-get','update'])
     pkgs=installed(inv['status']); policies={}
     for offset in range(0,len(pkgs),150):

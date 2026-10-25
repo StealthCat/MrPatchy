@@ -30,6 +30,8 @@ def main():
         run('docker','exec',name,'bash','/tmp/enroll.sh')
         host.fingerprint=run('docker','exec',name,'ssh-keygen','-lf','/etc/ssh/ssh_host_ed25519_key.pub','-E','sha256').split()[1]
         ssh.deploy(host)
+        verification=ssh.call(host,{'action':'verify'})
+        assert verification['active'] and verification['files']['/usr/local/lib/mrpatchy/agent.py']['uid']==0
         run('docker','exec','-d',name,'/usr/bin/python3','-I','/usr/local/lib/mrpatchy/agent.py')
         snapshot={}
         for _ in range(30):
@@ -38,9 +40,18 @@ def main():
             time.sleep(.5)
         assert snapshot.get('inventory',{}).get('status'), snapshot.get('collector-error', snapshot)
         assert snapshot['telemetry']['managed']['/usr/local/lib/mrpatchy/agent.py']==ssh.hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest()
+        assert snapshot['events'] and snapshot['spool']['pending']>0
+        ids=[event['id'] for event in snapshot['events']]
+        ssh.call(host,{'action':'ack','ids':ids})
+        assert not set(ids)&{event['id'] for event in ssh.call(host,{'action':'snapshot'})['events']}
         key=next(iter(snapshot['inventory']['keys'].values()))
         ssh.call(host,{'action':'key','name':'review-fixture.gpg','data':key})
         ssh.call(host,{'action':'repository','path':'/etc/apt/sources.list.d/review.sources','content':'Types: deb\nURIs: https://example.invalid\nSuites: stable\nComponents: main\nEnabled: no\n'})
+        ssh.call(host,{'action':'repository','path':'/etc/apt/sources.list.d/review.sources','content':''})
+        backups=ssh.call(host,{'action':'backups'})['backups']
+        assert backups and backups[0]['path']=='/etc/apt/sources.list.d/review.sources'
+        assert 'Enabled: no' in backups[0]['content']
+        ssh.call(host,{'action':'repository','path':backups[0]['path'],'content':backups[0]['content']})
         for path in ['/etc/apt/keyrings/review-fixture.gpg','/etc/apt/sources.list.d/review.sources','/usr/local/lib/mrpatchy/agent.py']:
             assert run('docker','exec',name,'stat','-c','%a:%u',path)=='644:0'
         # Re-enrollment must replace old user-owned files with root-owned files.

@@ -27,7 +27,8 @@ def test_removed_scoped_signing_keys_are_not_retained(tmp_path,monkeypatch):
     monkeypatch.setattr(apt,'DATA',tmp_path)
     inv=inventory();root,_=apt.prepare('host',inv)
     assert (root/'etc/apt/keyrings/vendor.gpg').exists()
-    inv['keys']={};apt.prepare('host',inv)
+    inv['keys']={}
+    with pytest.raises(ValueError,match='not captured'): apt.prepare('host',inv)
     assert not (root/'etc/apt/keyrings/vendor.gpg').exists()
 
 @pytest.mark.parametrize('source,deb822',[

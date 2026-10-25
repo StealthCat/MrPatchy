@@ -83,3 +83,14 @@ Keep `/opt/drpatch/backups` until you no longer need repository history. Remove 
 - APT source format and Signed-By: https://manpages.debian.org/bookworm/apt/sources.list.5.en.html
 - Caddy TLS/ACME: https://caddyserver.com/docs/caddyfile/directives/tls
 - OpenAI structured outputs: https://developers.openai.com/api/docs/guides/structured-outputs
+
+
+## v0.2 enrollment and recovery
+
+Use Add server → Endpoint → Prepare → Connect and verify. The third delivery option is offline preparation. Servers → Manage always provides a fresh download of that host's personalized Bash installer. Existing identities are preserved.
+
+Repository credentials, CA/proxy/default-release and mirror mappings are configured under Repositories → Repository access. Source backup restoration is reviewed in the UI. Package recovery is separate from ordinary upgrades and can run maintainer scripts; inspect Activity after errors/timeouts before retrying.
+
+Target events.db is a bounded SQLite spool. Do not delete it as routine cleanup: unacknowledged observations may be lost. Central history retention is configurable. Overflow counts remain visible as cumulative evidence of lost batches.
+
+See [completion review and upgrade notes](COMPLETION_REVIEW.md) for migration, validation and platform limits.

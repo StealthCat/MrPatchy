@@ -9,13 +9,16 @@ from pathlib import Path
 import shutil
 import subprocess
 import threading
+import ssl
+import ipaddress
 from datetime import datetime,timezone,timedelta
 from email.utils import format_datetime
 import pytest
 from app import apt
 
 @pytest.mark.skipif(not shutil.which('gpg'),reason='GnuPG required')
-def test_central_apt_verifies_signatures_and_package_hashes(tmp_path,monkeypatch):
+@pytest.mark.parametrize('private',['public','https-auth-mirror'])
+def test_central_apt_verifies_signatures_and_package_hashes(tmp_path,monkeypatch,private):
     from pgpy import PGPKey, PGPUID, PGPMessage
     from pgpy.constants import PubKeyAlgorithm, KeyFlags, HashAlgorithm, SymmetricKeyAlgorithm, CompressionAlgorithm
     signing=PGPKey.new(PubKeyAlgorithm.RSAEncryptOrSign,2048)
@@ -33,20 +36,46 @@ def test_central_apt_verifies_signatures_and_package_hashes(tmp_path,monkeypatch
     (dist/'InRelease').write_text(str(message))
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self,*args): pass
+        def do_GET(self):
+            if private=='https-auth-mirror' and self.headers.get('Authorization')!='Basic '+base64.b64encode(b'test:secret').decode():
+                self.send_response(401);self.end_headers();return
+            super().do_GET()
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Quiet,directory=str(repo)))
+    access={}
+    if private=='https-auth-mirror':
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes,serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        tlskey=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+        subject=x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME,'Local test CA')])
+        cert=(x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(tlskey.public_key())
+              .serial_number(x509.random_serial_number()).not_valid_before(datetime.now(timezone.utc)-timedelta(days=1))
+              .not_valid_after(datetime.now(timezone.utc)+timedelta(days=1))
+              .add_extension(x509.BasicConstraints(ca=True,path_length=None),critical=True)
+              .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]),critical=False)
+              .sign(tlskey,hashes.SHA256()))
+        ca=cert.public_bytes(serialization.Encoding.PEM).decode()
+        (tmp_path/'cert.pem').write_text(ca)
+        (tmp_path/'key.pem').write_bytes(tlskey.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(tmp_path/'cert.pem',tmp_path/'key.pem')
+        server.socket=context.wrap_socket(server.socket,server_side=True)
+        uri='https://127.0.0.1:'+str(server.server_port)
+        access={'ca':ca,'mirrors':{'file:/fixture':uri},'credentials':[{'machine':uri,'login':'test','password':'secret'}]}
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     monkeypatch.setattr(apt,'DATA',tmp_path/'central')
     inv={'architecture':'arm64','foreign_architectures':[],'machine_id':'a'*32,'status':'Package: patchy-test\nStatus: install ok installed\nArchitecture: arm64\nVersion: 1.0-1\nMaintainer: Test <test@example.invalid>\nDescription: Integration fixture\n\n','keys':{'/etc/apt/keyrings/test.gpg':base64.b64encode(key).decode()},'files':{'/etc/apt/sources.list':f'deb [signed-by=/etc/apt/keyrings/test.gpg] http://127.0.0.1:{server.server_port} stable main\n'}}
+    if private=='https-auth-mirror':
+        inv['files']['/etc/apt/sources.list']=inv['files']['/etc/apt/sources.list'].replace(f'http://127.0.0.1:{server.server_port}','file:/fixture')
     try:
-        rows,log=apt.refresh('signed-test',inv)
+        rows,log=apt.refresh('signed-test',inv,access)
         assert rows[0]['candidate']=='2.0-1',rows
         # Tamper with a signed index. APT must reject, not silently use the old candidate.
         (binary/'Packages.gz').write_bytes(gzip.compress(packages.replace(b'2.0-1',b'9.0-1')))
         shutil.rmtree(tmp_path/'central/apt/signed-test/var/lib/apt/lists')
         with pytest.raises(RuntimeError,match='Hash Sum mismatch|unexpected size'):
-            apt.refresh('signed-test',inv)
+            apt.refresh('signed-test',inv,access)
         # Tamper with signature itself: no successful refresh permitted.
         (dist/'InRelease').write_text((dist/'InRelease').read_text().replace('Origin: Patchy Test','Origin: Forged Test'))
         shutil.rmtree(tmp_path/'central/apt/signed-test/var/lib/apt/lists')
-        with pytest.raises(RuntimeError): apt.refresh('signed-test',inv)
+        with pytest.raises(RuntimeError): apt.refresh('signed-test',inv,access)
     finally: server.shutdown();server.server_close()

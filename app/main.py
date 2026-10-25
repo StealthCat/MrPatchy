@@ -1,5 +1,6 @@
 import base64
-from contextlib import asynccontextmanager
+import json
+from contextlib import asynccontextmanager, contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
-from .db import Session, Host, Package, Behavior, Job, Setting, Audit, init, config, audit
+from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls
 from .http_security import RequestSizeLimit
@@ -29,7 +30,7 @@ async def lifespan(app):
     if os.getenv('DISABLE_SCHEDULER')!='1': worker.start()
     yield
     worker.stop.set()
-app=FastAPI(title='Mr Patchy',version='0.1.1',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+app=FastAPI(title='Mr Patchy',version='0.2.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 static=Path(__file__).parent/'static'
 app.mount('/static',StaticFiles(directory=static),name='static')
@@ -51,6 +52,13 @@ def auth(request:Request):
         if not row or row.value['expires']<time.time(): raise HTTPException(401,'Sign in required')
         if request.method not in ['GET','HEAD'] and not secrets.compare_digest(request.headers.get('x-csrf-token',''),row.value['csrf']): raise HTTPException(403,'Invalid CSRF token')
         return row.value
+
+@contextmanager
+def host_change(host_id):
+    lock=worker.host_lock(host_id)
+    if not lock.acquire(False): raise HTTPException(409,'Server has an active operation. Retry this configuration change when it finishes.')
+    try: yield
+    finally: lock.release()
 
 def host_or_404(s,host_id):
     h=s.get(Host,host_id)
@@ -106,7 +114,7 @@ def add_host(body:HostInput,user=Depends(auth)):
 class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(auth)):
-    with Session() as s:
+    with host_change(host_id), Session() as s:
         h=host_or_404(s,host_id); h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(auth)):
@@ -129,7 +137,7 @@ def enroll(token:str):
         return PlainTextResponse(ssh.bootstrap(h))
 @app.post('/api/hosts/{host_id}/actions/{action}')
 def host_action(host_id:str,action:str,user=Depends(auth)):
-    if action not in ['deploy','refresh']: raise HTTPException(404,'Unknown action')
+    if action not in ['deploy','refresh','repair']: raise HTTPException(404,'Unknown action')
     with Session() as s:
         h=host_or_404(s,host_id)
         if not h.fingerprint: raise HTTPException(400,'Pin the host fingerprint first')
@@ -155,7 +163,7 @@ def patch(host_id:str,body:PatchInput,user=Depends(auth)):
         if body.expected_versions is not None and set(body.expected_versions)!=set(body.packages): raise HTTPException(400,'Expected versions must match selected packages')
         for name in body.packages:
             p=s.get(Package,host_id+':'+name)
-            if not p or not p.candidate or p.held: raise HTTPException(400,'Package missing, held, or has no available update: '+name)
+            if not p or not p.candidate or p.held or p.dpkg_state.split()[-1]!='installed': raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
             specs.append(p.name+'='+p.candidate)
         return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs})}
@@ -163,14 +171,27 @@ def patch(host_id:str,body:PatchInput,user=Depends(auth)):
 def repositories(host_id:str,user=Depends(auth)):
     with Session() as s:
         h=host_or_404(s,host_id)
-        return {'files':h.inventory.get('files',{}),'keys':list(h.inventory.get('keys',{})),'last_checked':h.last_repo,'error':h.repo_error}
+        access=worker.repository_access(s,host_id);health=[]
+        for path,content in h.inventory.get('files',{}).items():
+            if not apt.source_path(path): continue
+            try:
+                rewritten=apt.rewrite(content,access)
+                apt.validate_source(rewritten,path.endswith('.sources'))
+                active=list(apt.source_options(rewritten,path.endswith('.sources')))
+                state='disabled' if not active else ('check_failed' if h.repo_error else ('checked' if h.last_repo else 'unverified'))
+                detail='Central APT check includes this source' if active else 'No active repositories'
+            except ValueError as e: state='blocked';detail=str(e)
+            health.append({'path':path,'state':state,'detail':detail})
+        return {'files':h.inventory.get('files',{}),'keys':list(h.inventory.get('keys',{})),'last_checked':h.last_repo,'error':h.repo_error,'health':health}
 class RepoInput(BaseModel):
     path:str=Field(max_length=300)
     content:str=Field(max_length=1_000_000)
 @app.put('/api/hosts/{host_id}/repositories')
 def repository(host_id:str,body:RepoInput,user=Depends(auth)):
     if not apt.source_path(body.path): raise HTTPException(400,'Unsupported repository path')
-    try: apt.validate_source(body.content,body.path.endswith('.sources'))
+    try:
+        with Session() as access_session: access=worker.repository_access(access_session,host_id)
+        apt.validate_source(apt.rewrite(body.content,access),body.path.endswith('.sources'))
     except ValueError as e: raise HTTPException(400,str(e))
     with Session() as s:
         host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'repository',body.model_dump())}
@@ -212,6 +233,7 @@ class ConfigInput(BaseModel):
     ai_enabled:bool=False
     ai_model:str=Field(default='',max_length=100)
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
+    history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
 @app.put('/api/settings')
 def settings_save(body:ConfigInput,user=Depends(auth)):
@@ -242,9 +264,73 @@ class PriorityInput(BaseModel):
 @app.put('/api/hosts/{host_id}/priority')
 def set_priority(host_id:str,body:PriorityInput,user=Depends(auth)):
     if body.priority not in ['critical','high','normal','low','auto']: raise HTTPException(400,'Invalid priority')
-    with Session() as s:
+    with host_change(host_id), Session() as s:
         p=s.get(Package,host_id+':'+body.name)
         if not p: raise HTTPException(404,'Package not found')
         p.priority_manual=body.priority!='auto'
         p.priority=body.priority if p.priority_manual else ('high' if '-security' in p.origin or '/security' in p.origin else 'normal')
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
+
+@app.get('/api/jobs/{job_id}')
+def job_detail(job_id:str,user=Depends(auth)):
+    with Session() as s:
+        job=s.get(Job,job_id)
+        if not job: raise HTTPException(404,'Operation not found')
+        return object_dict(job,('payload',))
+
+@app.get('/api/hosts/{host_id}/history')
+def history(host_id:str,kind:str='inventory',offset:int=0,limit:int=50,user=Depends(auth)):
+    if kind not in ('inventory','observations') or offset<0 or not 1<=limit<=100: raise HTTPException(400,'Invalid history query')
+    model=InventoryRevision if kind=='inventory' else Observation
+    timestamp=model.created if kind=='inventory' else model.observed
+    with Session() as s:
+        host_or_404(s,host_id)
+        return [object_dict(row,('inventory','evidence')) for row in s.scalars(select(model).where(model.host_id==host_id).order_by(timestamp.desc()).offset(offset).limit(limit))]
+
+@app.get('/api/hosts/{host_id}/backups')
+def repository_backups(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        h=host_or_404(s,host_id)
+        try: return ssh.call(h,{'action':'backups'})
+        except Exception as e: raise HTTPException(502,str(e)[:1000])
+
+class RepositoryAccess(BaseModel):
+    credentials:list[dict[str,str]]=Field(default_factory=list,max_length=50)
+    proxy:str=Field(default='',max_length=2000)
+    ca:str=Field(default='',max_length=100000)
+    default_release:str=Field(default='',max_length=120)
+    mirrors:dict[str,str]=Field(default_factory=dict)
+    replace_credentials:bool=False
+
+@app.get('/api/hosts/{host_id}/repository-access')
+def get_repository_access(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id);access=worker.repository_access(s,host_id)
+        return {k:v for k,v in access.items() if k!='credentials'}|{'credential_scopes':[c['machine'] for c in access.get('credentials',[])]}
+
+@app.put('/api/hosts/{host_id}/repository-access')
+def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(auth)):
+    from .repository_access import validate
+    with host_change(host_id), Session() as s:
+        h=host_or_404(s,host_id);value=body.model_dump(exclude={'replace_credentials'})
+        if not body.replace_credentials: value['credentials']=worker.repository_access(s,host_id).get('credentials',[])
+        try: validate(value)
+        except Exception as e: raise HTTPException(400,str(e)[:1000])
+        s.merge(Setting(key='repository-access:'+host_id,value={'encrypted':seal(json.dumps(value))}))
+        h.last_repo=0;audit(s,'update repository access',host_id);s.commit();return {'ok':True}
+
+@app.get('/api/investigation-status')
+def investigation_status(user=Depends(auth)):
+    with Session() as s:
+        pending=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.verdict.in_(['pending','error'])))
+        oldest=s.scalar(select(func.min(Behavior.first_seen)).where(Behavior.approved==False,Behavior.verdict.in_(['pending','error'])))
+        return {'pending':pending,'oldest':oldest,'hourly_limit':config(s)['ai_hourly_limit'],'enabled':config(s)['ai_enabled']}
+
+@app.get('/api/hosts/{host_id}/history/{record_id}')
+def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(auth)):
+    if kind not in ('inventory','observations'): raise HTTPException(400,'Invalid history kind')
+    model=InventoryRevision if kind=='inventory' else Observation
+    with Session() as s:
+        record=s.get(model,record_id)
+        if not record or record.host_id!=host_id: raise HTTPException(404,'History record not found')
+        return object_dict(record)

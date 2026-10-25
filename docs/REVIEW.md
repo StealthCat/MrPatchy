@@ -1,5 +1,7 @@
 # Requirements, correctness, and security review
 
+> Historical v0.1 review. See [v0.2 completion review](COMPLETION_REVIEW.md) for current coverage and remaining limits.
+
 Reviewed baseline: [`2cca1875d0c5da4a699c80dc6fdcfb80f59f2cd4`](https://github.com/StealthCat/MrPatchy/commit/2cca1875d0c5da4a699c80dc6fdcfb80f59f2cd4).
 
 The implementation has the main architecture requested, but the original claim of comprehensive repository management is not met. Several monitoring, trust, and patch-selection defects also need correction before relying on it. This review includes regression-tested fixes on `review/requirements-security`; those fixes are not on `main` until the pull request is merged.

@@ -10,6 +10,10 @@ import socket
 import stat
 import subprocess
 import time
+import sqlite3
+from contextlib import contextmanager
+import uuid
+import re
 
 ROOT = Path('/opt/drpatch')
 MANAGED = ['/usr/local/lib/mrpatchy/agent.py', '/usr/local/lib/mrpatchy/bridge.py', '/etc/systemd/system/mrpatchy-agent.service', '/etc/sudoers.d/mrpatchy', '/opt/drpatch/.ssh/authorized_keys']
@@ -32,6 +36,12 @@ def inventory():
             p = Path(name)
             if p.is_file() and p.stat().st_size < 2_000_000:
                 keys[name] = base64.b64encode(p.read_bytes()).decode()
+    # Capture explicitly referenced public-key files outside the conventional directories.
+    for content in files.values():
+        for name in re.findall(r'/[A-Za-z0-9_./+\-]+\.(?:asc|gpg)',content):
+            p=Path(name)
+            if '..' not in p.parts and p.is_file() and p.stat().st_size<2_000_000:
+                keys[name]=base64.b64encode(p.read_bytes()).decode()
     arch = subprocess.check_output(['dpkg', '--print-architecture'], text=True).strip()
     foreign = subprocess.check_output(['dpkg', '--print-foreign-architectures'], text=True).split()
     return {'os': read('/etc/os-release'), 'architecture': arch, 'foreign_architectures': foreign, 'status': read('/var/lib/dpkg/status'), 'files': files, 'keys': keys, 'machine_id': read('/etc/machine-id').strip(), 'collected': time.time()}
@@ -78,6 +88,45 @@ def collect(hash_cache):
 
 def atomic(path, value):
     tmp = path.with_suffix('.tmp'); tmp.write_text(json.dumps(value)); tmp.chmod(0o600); tmp.replace(path)
+
+@contextmanager
+def spool_db():
+    db=sqlite3.connect(ROOT/'events.db',timeout=5)
+    db.execute('PRAGMA journal_mode=WAL')
+    db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, observed REAL, payload TEXT)')
+    db.execute('CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER)')
+    try:
+        with db: yield db
+    finally: db.close()
+
+def spool(processes, observed):
+    # Bounded durable batches. Overflow is explicit and persists across restarts.
+    with spool_db() as db:
+        payload=json.dumps({'processes':processes})
+        if len(payload.encode())>2_000_000:
+            db.execute("INSERT INTO counters VALUES ('dropped',1) ON CONFLICT(name) DO UPDATE SET value=value+1")
+            return
+        db.execute('INSERT INTO events VALUES (?,?,?)',(str(uuid.uuid4()),observed,payload))
+        size=db.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events').fetchone()[0]
+        while size>48_000_000:
+            row=db.execute('SELECT id,length(CAST(payload AS BLOB)) FROM events ORDER BY rowid LIMIT 1').fetchone()
+            db.execute('DELETE FROM events WHERE id=?',(row[0],));size-=row[1]
+            db.execute("INSERT INTO counters VALUES ('dropped',1) ON CONFLICT(name) DO UPDATE SET value=value+1")
+
+def pending_events():
+    with spool_db() as db:
+        rows=db.execute('SELECT id,observed,payload FROM events ORDER BY rowid LIMIT 8').fetchall()
+        dropped=db.execute("SELECT value FROM counters WHERE name='dropped'").fetchone()
+        count=db.execute('SELECT count(*) FROM events').fetchone()[0]
+    return {'events':[{'id':r[0],'observed':r[1],**json.loads(r[2])} for r in rows],
+            'spool':{'pending':count,'dropped':dropped[0] if dropped else 0}}
+
+def acknowledge(ids):
+    if not isinstance(ids,list) or len(ids)>8 or any(not isinstance(x,str) or len(x)!=36 for x in ids):
+        raise ValueError('Invalid event acknowledgement')
+    with spool_db() as db: db.executemany('DELETE FROM events WHERE id=?',[(x,) for x in ids])
+    return {'acknowledged':len(ids)}
+
 def main():
     ROOT.mkdir(exist_ok=True)
     cache = {}; hashes = {}; metadata = {}; next_hash = 0; next_inventory = 0
@@ -94,6 +143,7 @@ def main():
                     except OSError as e: hashes[p] = 'ERROR: '+str(e)
                 hashed_at = time.time(); next_hash = started+300
             procs, errors = collect(cache)
+            spool(procs,time.time())
             atomic(ROOT/'telemetry.json', {'collected':time.time(),'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,'processes':procs,'errors':errors})
             if started >= next_inventory:
                 atomic(ROOT/'inventory.json', inventory()); next_inventory = started+300
