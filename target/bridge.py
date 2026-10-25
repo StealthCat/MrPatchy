@@ -48,16 +48,91 @@ def atomic(path, data, mode=0o600):
     finally:
         tmp.unlink(missing_ok=True)
 
+import os
+import selectors
+import signal
+import subprocess
+import time
+
+def bounded(args,timeout=900,env=None,limit=16_000_000):
+    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,start_new_session=True)
+    output=bytearray();errors=bytearray();selector=selectors.DefaultSelector()
+    selector.register(process.stdout,selectors.EVENT_READ,output)
+    selector.register(process.stderr,selectors.EVENT_READ,errors)
+    deadline=time.monotonic()+timeout
+    try:
+        while selector.get_map():
+            if time.monotonic()>deadline: raise TimeoutError('Operation timed out; verify target state before retrying')
+            for key,_ in selector.select(min(.2,max(0,deadline-time.monotonic()))):
+                chunk=os.read(key.fileobj.fileno(),65536)
+                if not chunk: selector.unregister(key.fileobj);continue
+                key.data.extend(chunk)
+                if len(output)+len(errors)>limit: raise RuntimeError('Operation output exceeded 16 MB limit')
+        process.wait(timeout=max(.1,deadline-time.monotonic()))
+        if process.returncode: raise RuntimeError((output+errors)[-16000:].decode(errors='replace'))
+        return output.decode(errors='replace'),errors.decode(errors='replace')
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid,signal.SIGKILL);process.wait()
+        selector.close();process.stdout.close();process.stderr.close()
+
 def run(args, timeout=1800):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
-    if result.returncode: raise RuntimeError((result.stdout+result.stderr)[-20000:])
-    return (result.stdout+result.stderr)[-20000:]
+    out,err=bounded(args,timeout=timeout,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
+    return (out+err)[-20000:]
 def repo_path(name):
     if name == '/etc/apt/sources.list': return Path(name)
     if not re.fullmatch(r'/etc/apt/sources\.list\.d/[A-Za-z0-9_.-]+\.(list|sources)',name): raise ValueError('Invalid source path')
     return Path(name)
+
+def process_evidence(req):
+    path=req.get('executable','');expected=req.get('sha256','')
+    checks=req.get('checks',[])
+    if not isinstance(path,str) or not path.startswith('/') or len(path)>4096 or not re.fullmatch('[a-f0-9]{64}',expected):
+        raise ValueError('Invalid executable identity')
+    if not isinstance(checks,list) or not set(checks)<={'package','service','executable'}: raise ValueError('Invalid evidence checks')
+    result={'identity_verified':False,'checks':checks}
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit(): continue
+        try:
+            if os.readlink(proc/'exe')!=path: continue
+            # Open the process executable, not an arbitrary caller-provided file.
+            with open(proc/'exe','rb') as stream:
+                checksum=hashlib.sha256()
+                for chunk in iter(lambda:stream.read(1024*1024),b''): checksum.update(chunk)
+                digest=checksum.hexdigest()
+                info=os.fstat(stream.fileno())
+            if digest!=expected: continue
+            result['identity_verified']=True
+            if 'executable' in checks:
+                result['executable']={'sha256':digest,'uid':info.st_uid,'gid':info.st_gid,'mode':info.st_mode & 0o7777,'size':info.st_size,
+                    'status':[line for line in (proc/'status').read_text().splitlines() if line.split(':')[0] in ('Uid','Gid','CapEff','NoNewPrivs','Seccomp')]}
+            if 'package' in checks:
+                try: result['package']=run(['dpkg-query','-S','--',path],timeout=15)[:8000]
+                except RuntimeError: result['package']='No installed package ownership found'
+            if 'service' in checks:
+                groups=(proc/'cgroup').read_text()
+                units=re.findall(r'(?:^|/)([A-Za-z0-9_.@:-]+\.service)(?:/|$)',groups,re.M)
+                result['service']=[]
+                for unit in sorted(set(units))[:3]:
+                    result['service'].append(run(['systemctl','show',unit,'--property=Id,LoadState,ActiveState,SubState,FragmentPath,User,Group,NoNewPrivileges,ProtectSystem'],timeout=15)[:8000])
+            return result
+        except (FileNotFoundError,ProcessLookupError): continue
+        except PermissionError:
+            result['inaccessible_processes']=result.get('inaccessible_processes',0)+1
+    result['reason']='No running executable matches the recorded path and SHA-256; process may have exited or changed'
+    return result
+
 def handle(req):
     action = req.get('action')
+    if action == 'evidence': return process_evidence(req)
+    if action == 'verify':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import MANAGED,digest
+        files={}
+        for path in MANAGED:
+            info=Path(path).stat()
+            files[path]={'sha256':digest(path),'uid':info.st_uid,'gid':info.st_gid,'mode':info.st_mode & 0o7777}
+        return {'files':files,'active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
     if action == 'deploy':
         code = base64.b64decode(req['agent'],validate=True)
         if len(code)>1_000_000 or hashlib.sha256(code).hexdigest()!=req['sha256']: raise ValueError('Invalid agent digest')
@@ -82,18 +157,37 @@ def handle(req):
         for k in ['inventory','telemetry','collector-error']:
             p = ROOT/(k+'.json')
             if p.exists(): result[k] = json.loads(p.read_text())
+        if (ROOT/'events.db').exists():
+            sys.path.insert(0,'/usr/local/lib/mrpatchy')
+            from agent import pending_events
+            result.update(pending_events())
         return result
+    if action == 'ack':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import acknowledge
+        return acknowledge(req.get('ids'))
     if action == 'inventory':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import inventory
         return inventory()
     if action == 'repository':
         p = repo_path(req['path']); content = req['content'].encode()
+        if p.is_symlink(): raise ValueError('Refusing symlink source file')
         if len(content)>1_000_000: raise ValueError('Source too large')
         backups = ROOT/'backups'; backups.mkdir(mode=0o700,exist_ok=True)
-        if p.exists(): atomic(backups/(str(time.time_ns())+'-'+p.name),p.read_bytes())
+        if p.exists(): atomic(backups/(str(time.time_ns())+'.json'),json.dumps({'path':str(p),'content':p.read_text()}).encode())
         atomic(p,content,0o644)
         return {'saved':str(p),'backup_directory':str(backups)}
+    if action == 'backups':
+        backups=ROOT/'backups'
+        rows=[]
+        for p in sorted(backups.glob('*.json'),reverse=True)[:100]:
+            item=json.loads(p.read_text())
+            rows.append({'id':p.stem,'path':item['path'],'content':item['content']})
+        return {'backups':rows}
+    if action == 'repair':
+        # Explicit operator action; potentially runs maintainer scripts.
+        return {'output':run(['apt-get','-y','--no-remove','--fix-broken','-o','Dpkg::Options::=--force-confold','install'])+run(['dpkg','--configure','-a'])}
     if action == 'key':
         name = req['name']
         if not re.fullmatch(r'[A-Za-z0-9_-]+\.(gpg|asc)',name): raise ValueError('Invalid key filename')
@@ -116,7 +210,7 @@ def main():
     if len(raw)>4_000_000: raise ValueError('Request too large')
     request = json.loads(raw)
     if not isinstance(request, dict): raise ValueError('Request must be a JSON object')
-    if request.get('action') == 'snapshot':
+    if request.get('action') in ('snapshot','ack','evidence','backups'):
         # The collector writes snapshots atomically. Reading them must never
         # wait behind a long APT installation holding the mutation lock.
         print(json.dumps(handle(request)))

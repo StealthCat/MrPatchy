@@ -12,7 +12,7 @@
 | Collector | Inventory, process/connection snapshots, SHA-256 sweeps | Root-owned systemd service, no outbound networking |
 | Database | Hosts, packages, candidates, known-good behaviors, investigations, policies, audit, jobs | SQLite or MySQL |
 
-The target collector writes atomic snapshots under `/opt/drpatch`. The server pulls them over SSH; targets do not post to an Internet-facing ingestion endpoint. SSH protects transport authenticity and confidentiality, with a per-target client key and administrator-pinned host fingerprint.
+The target collector writes atomic snapshots plus a bounded transactional observation spool under `/opt/drpatch`. The server pulls them over SSH; targets do not post to an Internet-facing ingestion endpoint. SSH protects transport authenticity and confidentiality, with a per-target client key and administrator-pinned host fingerprint.
 
 ## Enrollment lifecycle
 
@@ -33,7 +33,7 @@ The app builds an isolated APT directory per host and maps Signed-By paths to ca
 
 Initial trust in captured signing keys comes from enrollment. Unsupported source schemes and verification-weakening directives fail closed. Internal repositories are allowed deliberately; administrator-authored repositories can cause outbound HTTP(S) from the management container. Use network policy to restrict that egress if needed.
 
-Only an operator-requested patch job invokes target `apt-get update` followed by exact-version installation. Discovery never depends on refreshing the target's APT cache. This separation also means a central candidate is availability evidence rather than a guaranteed install plan.
+Only an operator-requested patch or repair job invokes target `apt-get update` followed by exact-version installation. Discovery never depends on refreshing the target's APT cache. This separation also means a central candidate is availability evidence rather than a guaranteed install plan.
 
 ## Integrity and behavioral identity
 
@@ -45,7 +45,7 @@ This is periodic observation, not EDR or hardware-backed attestation. It can mis
 
 ## AI boundary
 
-All OpenAI requests originate centrally. API keys are encrypted at rest with a Fernet key stored in the app volume. This protects a database-only disclosure; an attacker controlling both database and app volume can decrypt them. The system instruction treats telemetry as untrusted evidence. Strict JSON-schema results, output limits, no tools, no shell execution, no automatic approval, a per-hour dispatch cap, and retry backoff constrain the workflow.
+All OpenAI requests originate centrally. API keys are encrypted at rest with a Fernet key stored in the app volume. This protects a database-only disclosure; an attacker controlling both database and app volume can decrypt them. The system instruction treats telemetry as untrusted evidence. Strict JSON-schema results, output limits, a two-stage workflow with only fixed package/service/executable evidence checks, no model-generated shell execution, no automatic approval, a per-hour dispatch cap, and retry backoff constrain the workflow.
 
 An AI classification is a triage aid, not proof that a binary is benign. Approval is a separate audited administrator action. Records do not silently become known good on a model's recommendation.
 
@@ -56,3 +56,16 @@ Password hashes use scrypt. Sessions are random opaque tokens stored only as tok
 Caddy and the app share only a TLS configuration volume; Caddy does not mount the app's database/SSH secrets. Its administration port exists only on Docker networks and is not host-published. The app runs as an unprivileged UID after entrypoint volume preparation. The Docker socket is never mounted. A single worker is required because scheduler ownership/locks are in-process.
 
 Local audit records support review but are not immutable against a database administrator. Session and enrollment tokens are stored hashed. Installer links expire after an hour and may be reused during that hour; they contain no client private key.
+
+
+## v0.2 data delivery and access
+
+Observation batches use UUIDs on the target and host-scoped SHA-256 IDs centrally. A transaction persists the batch and behavior records before ACK; interrupted delivery retries safely. A 48 MB target payload budget and 2 MB batch ceiling bound storage, with explicit persistent overflow counters. Central received-time retention controls history cleanup. Inventory revisions are written on changes, including A → B → A transitions.
+
+Central repository access is declarative and encrypted in Setting records. Native APT receives a private auth.conf, optional CA/proxy/default-release, and rewritten mirror URIs. Unsupported source configurations fail closed; all captured source files remain editable. Local/media mirrors are administrator-provisioned. Custom target hooks and arbitrary filesystem access are not delegated to APT.
+
+Process investigations re-identify a currently running executable by path and SHA-256 before collecting fixed metadata. A process that has exited/changed produces an explicit unavailable identity result. Package ownership is evidence, not a verified publisher signature. The AI cannot request arbitrary files, commands, package mutations, or trust approvals.
+
+Subprocess pipes are drained concurrently with a 16 MB output ceiling and total deadline. Failed/oversize commands are terminated and reported; successful operation logs are bounded below MySQL TEXT's byte limit. A timeout during APT can leave a target requiring explicit recovery.
+
+Installation completion checks actual file bytes and metadata plus service active state. This establishes installed artifacts and service startup, not future uptime; subsequent telemetry freshness remains independently monitored.

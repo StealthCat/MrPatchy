@@ -46,6 +46,7 @@ class Package(Base):
     priority_manual: Mapped[bool] = mapped_column(Boolean, default=False)
     available_since: Mapped[float] = mapped_column(Double, default=0)
     held: Mapped[bool] = mapped_column(Boolean, default=False)
+    dpkg_state: Mapped[str] = mapped_column(String(80), default='install ok installed')
     origin: Mapped[str] = mapped_column(Text, default='')
 class Behavior(Base):
     __tablename__ = 'behaviors'
@@ -73,13 +74,30 @@ class Audit(Base):
     created: Mapped[float] = mapped_column(Double, default=time.time)
     action: Mapped[str] = mapped_column(String(120))
     detail: Mapped[str] = mapped_column(Text)
-DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20}
+class InventoryRevision(Base):
+    __tablename__ = 'inventory_revisions'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(36), index=True)
+    created: Mapped[float] = mapped_column(Double, default=time.time)
+    inventory: Mapped[dict] = mapped_column(JSON)
+class Observation(Base):
+    __tablename__ = 'observations'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(36), index=True)
+    observed: Mapped[float] = mapped_column(Double)
+    received: Mapped[float] = mapped_column(Double, default=time.time)
+    evidence: Mapped[dict] = mapped_column(JSON)
+DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20, 'history_days': 30}
 def config(s):
     item = s.get(Setting, 'config')
     return {**DEFAULTS, **(item.value if item else {})}
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
 def init():
     Base.metadata.create_all(engine)
+    columns={c['name'] for c in inspect(engine).get_columns('packages')}
+    if 'dpkg_state' not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE packages ADD COLUMN dpkg_state VARCHAR(80) NOT NULL DEFAULT 'install ok installed'"))
     # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
     # SQLite already stores these values as 64-bit REAL. This migration is
     # idempotent and runs before workers start, with only one app replica.

@@ -1,5 +1,8 @@
 name: Validate Mr Patchy
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 concurrency:
   group: mrpatchy-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
