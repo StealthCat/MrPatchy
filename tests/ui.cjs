@@ -18,6 +18,8 @@ const assert=require('assert/strict');
     const capture=async name=>{if(shots)await page.screenshot({path:path.join(shots,name+'.png'),fullPage:true});};
     const errors=[];page.on('pageerror',e=>errors.push(String(e)));
     await page.goto('http://127.0.0.1:8097');
+    await page.getByRole('button',{name:'Open your workspace'}).waitFor();
+    await capture('login');
     await page.locator('[name=password]').fill('ui-test-password-long');
     await page.getByRole('button',{name:'Open your workspace'}).click();
     await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
@@ -90,7 +92,8 @@ const assert=require('assert/strict');
     await page.getByRole('button',{name:'Install selected updates',exact:true}).click();
     await page.getByText('enabled — services may be interrupted',{exact:true}).waitFor();
     await capture('patch-review');
-    await page.getByRole('button',{name:'Install 1 selected updates',exact:true}).click();
+    // Rapid repeated clicks must queue only one approved transaction.
+    await page.locator('#confirm-patch').evaluate(button=>{button.click();button.click();});
     await page.getByRole('status').filter({hasText:'Installation queued'}).waitFor();
     assert.equal(submitted.length,1);assert.ok(submitted[0].url.includes(ids.b));
     assert.deepEqual(submitted[0].body.expected_versions,{'package-from-b:amd64':'3'});
@@ -146,6 +149,7 @@ const assert=require('assert/strict');
     await page.evaluate(({host,id})=>{reviewRelease(host,id);},{host:ids.a,id:slowId});
     await planStart;await page.locator('#close-modal').click();resolvePlan();await page.waitForTimeout(100);
     assert.equal(await page.locator('#modal').evaluate(node=>node.open),false);
+    await require('./ui_review.cjs')(page,ids,capture);
     {
       // Illustrative fixture responses also exercise populated mobile tables in CI.
       const demoHosts=await (await page.request.get('http://127.0.0.1:8097/api/hosts')).json();

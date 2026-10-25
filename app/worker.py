@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 import math
+import re
 import subprocess
 from sqlalchemy import select, delete, update
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
@@ -396,7 +397,11 @@ def investigate_one():
             checks=result.get('requested_checks',[])
             if checks:
                 host=s.get(Host,row.host_id)
-                evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':row.evidence['sha256'],'checks':list(set(checks))},timeout=90)
+                checksum=row.evidence.get('sha256','')
+                if not host or not isinstance(checksum,str) or not re.fullmatch(r'[a-f0-9]{64}',checksum) or row.evidence.get('identity_verified') is False:
+                    evidence={'identity_verified':False,'checks':list(set(checks)),'reason':'The observed executable has no verified identity or its host is unavailable; no remote evidence request was sent'}
+                else:
+                    evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'checks':list(set(checks))},timeout=90)
                 row.evidence={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
                 s.commit()
                 result=assess(row.evidence)
