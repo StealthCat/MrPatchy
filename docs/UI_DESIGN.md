@@ -1,0 +1,38 @@
+# Mr Patchy's glass workbench
+
+The interface pairs a smoky blue/teal glass surface with Mr Patchy: a scruffy, slightly wild-eyed cartoon raccoon in patched denim overalls. Mint marks actions and healthy states, amber marks attention, and coral marks errors or critical priorities. Status labels remain visible alongside color.
+
+## Structure
+
+- `app/static/ui.js`: shared presentation-only icons, mascot treatments, page introductions, empty/loading states and enrollment progress. It makes no API calls and owns no authorization or fleet state.
+- `app/static/style.css`: design tokens, base controls, shell, component styles, calendar, responsive layouts and accessibility overrides. Adjust tokens in `:root` before adding one-off colors or dimensions.
+- `app/static/index.html`: accessible page landmarks, local assets, the sign-in layout, navigation, dialogs and notices.
+- `app/static/app.js` and `schedules.js`: existing API-backed interactions and page composition. Text originating from servers or API errors must continue to pass through `esc()` or `textContent`.
+- `app/static/mascot/`: the two shared transparent PNG illustrations. Browser caching reuses them across sign-in, navigation, introductions, onboarding, empty states, notices and the footer. No external fonts, image services or UI scripts are required at runtime.
+
+Shared components accept trusted markup for actions and headings. Callers must escape variable text before composing markup. Mascot variants are selected from fixed local filenames. Decorative artwork has empty alt text; the sign-in illustration introduces the character with descriptive alt text.
+
+## Layout and interaction
+
+Desktop navigation sits in a floating glass sidebar, grouped into fleet and operational tasks. Narrow layouts use a horizontally scrollable navigation strip, keeping every authorized view reachable. Dense package/repository tables and calendars scroll within their own containers. Main workflows have consistent introductions, toolbars, cards and explicit action buttons.
+
+The overview adds shortcuts to packages, investigations and patch schedules. Enrollment shows the three steps without changing the preparation or approval flow. View failures show an escaped diagnostic and a retry action. Route changes reset the page scroll position; background refreshes do not. The keyboard skip link focuses the current heading without changing the route, or the username input on sign-in.
+
+Glass effects use a legible dark fallback, and only enhance surfaces when backdrop filtering is supported. Focus indicators, text status labels, reduced-motion and reduced-transparency preferences, and forced-color borders are included. Critical operational confirmations, role checks, MFA, API diagnostics and patch approvals retain their existing behavior.
+
+## Validation and screenshots
+
+Run `npm run test:ui` against the disposable test database. The suite exercises real local login, role restrictions, enrollment, package approval, schedules, settings, TLS, operations and release-plan review. Additional design checks traverse every main page at 320, 768 and 1440 pixels, check horizontal overflow, local image loading, keyboard skip behavior, reduced motion, escaped loading errors and retry recovery.
+
+To refresh documentation images:
+
+```bash
+SCREENSHOT_DIR=/tmp/mrpatchy-shots npm run test:ui
+cp /tmp/mrpatchy-shots/*.jpg docs/screenshots/
+```
+
+Screenshots are captured directly by the browser as JPEGs after local images decode. Fixture addresses and counts are illustrative; no production host or AI account is contacted. Inspect desktop, mobile and dialog screenshots before publishing. Browser assertions do not constitute a complete WCAG audit.
+
+## Mascot provenance
+
+The illustrations were created for this project with the built-in image-generation tool. The working pose used the welcome pose as its visual identity reference. Original transparent outputs are committed as project assets; there is no runtime image-generation dependency. The exact prompts are retained in `app/static/mascot/PROMPTS.md`.

@@ -123,7 +123,7 @@ module.exports=async function reviewUI(page,ids,capture){
     assert.equal(await page.locator('#logout').isVisible(),true);
     for(const nav of ['packages','repositories','settings']){
       await page.locator('[data-nav='+nav+']').click();
-      await page.waitForFunction(nav=>document.querySelector('#breadcrumb').textContent.toLowerCase().endsWith(nav),nav);
+      await page.waitForFunction(nav=>document.querySelector('[data-nav='+nav+']').getAttribute('aria-current')==='page',nav);
       await page.locator('#content h1').waitFor();
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,nav+' overflows '+width+'px');
     }

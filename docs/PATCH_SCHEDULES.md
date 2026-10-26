@@ -42,6 +42,6 @@ Administrator authorization is required for all `/api/schedules` endpoints; writ
 
 Tests cover timezones and DST, monthly/weekly recurrence, all/selected scope, deduplication across workers, expired windows, disabled/revised policies, held/broken packages, offline/stale/integrity/quarantined targets, recovery-policy mismatches, urgency delays and overrides, refresh failures, exact-version execution and post-patch health. Browser tests exercise creation, approval, persistence, pause/delete and desktop/mobile month/hour views. Live production patch outcomes still depend on the target packages, repository reachability and recovery adapters.
 
-![Hourly patch windows](screenshots/patch-hourly.webp)
+![Hourly patch windows](screenshots/patch-hourly.jpg)
 
-![Schedule and out-of-cycle policy editor](screenshots/patch-schedule-editor.webp)
+![Schedule and out-of-cycle policy editor](screenshots/patch-schedule-editor.jpg)

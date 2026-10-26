@@ -24,7 +24,7 @@ Ubuntu's native upgrader can make additional package decisions through vendor mi
 4. Review the destination, package additions/removals, repository changes, configuration explanations/diffs and blockers. Plans are saved and may be reopened. **GO** is available only for a completed, unblocked plan.
 5. Choose **GO · Execute approved plan** or **No-go · Keep current release**. There are no additional routine approval prompts during execution. Unexpected state stops the job or invokes the already-approved rollback rather than expanding the plan.
 
-![Release upgrade review with illustrative fixture data](screenshots/release-upgrade.webp)
+![Release upgrade review with illustrative fixture data](screenshots/release-upgrade.jpg)
 
 The target runner verifies inventory, repository keys, configuration hashes/ownership/modes and its own code against the approved plan. The bridge and root-owned recovery/validation hooks are bound by SHA-256, owner and mode too; replacing them requires a new plan. Update helpers and regenerate old, unexecuted plans before using this release. Do not redeploy helpers while an upgrade is running. Approval is bound to a SHA-256 digest and expires after 24 hours. A changed target or expired plan requires regeneration and another GO. Maintenance windows gate job start; they do not terminate an upgrade already in progress.
 
