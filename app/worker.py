@@ -312,6 +312,10 @@ def execute_locked(job_id):
                 from . import incidents
                 incident=s.get(incidents.Incident,job.payload['incident_id'])
                 if not incident or incident.host_id!=h.id:raise ValueError('Incident not found')
+                if job.payload.get('automatic'):
+                    policy=s.get(Setting,'security-policy:'+h.id)
+                    if not policy or not policy.value.get('auto_ai_plan'):raise ValueError('Automatic AI planning is disabled; no AI call sent')
+                    if incident.state!='open' or incident.scan_id!=job.payload.get('scan_id'):raise ValueError('Automatic incident evidence changed; no AI call sent')
                 plan=incidents.generate(s,incident)
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='security-scan':
@@ -465,7 +469,7 @@ def loop():
                         del active_jobs[key]
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
                 if is_leader and now-last_schedule>=30:
-                    scheduling.tick(now); incidents.schedule_tick(now); last_schedule=now
+                    scheduling.tick(now); incidents.schedule_tick(now); incidents.auto_plan_tick(now); last_schedule=now
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:

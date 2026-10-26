@@ -2,7 +2,7 @@
 import hashlib
 import json
 import time
-from sqlalchemy import String, Text, Integer, Double, select, func
+from sqlalchemy import String, Text, Integer, Double, select, func, tuple_
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs
@@ -108,3 +108,27 @@ def run_one():
                     row=s.get(UpdateScore,identifier);row.state='error';row.explanation=ai_runs.safe_error(error)
                 s.commit()
     finally:lock.release()
+
+
+def historical(s,host_id,name,after,before=None,observed=None,cache=None):
+    """Return only an assessment of the exact version transition, never a newer candidate."""
+    if cache is not None:
+        rows=[r for version in after for r in cache.get((host_id,name,version),[])
+              if (before is None or (r.installed in before and r.candidate not in before)) and (observed is None or r.completed<=observed)]
+        row=max(rows,key=lambda r:(r.completed,r.id),default=None)
+        return public(row)|{'historical':True,'from_version':row.installed,'to_version':row.candidate} if row else None
+    query=select(UpdateScore).where(UpdateScore.host_id==host_id,UpdateScore.name==name,
+        UpdateScore.state=='complete',UpdateScore.candidate.in_(after),UpdateScore.score.is_not(None))
+    if before is not None:query=query.where(UpdateScore.installed.in_(before),UpdateScore.candidate.not_in(before))
+    if observed is not None:query=query.where(UpdateScore.completed<=observed)
+    row=s.scalar(query.order_by(UpdateScore.completed.desc(),UpdateScore.id).limit(1))
+    return public(row)|{'historical':True,'from_version':row.installed,'to_version':row.candidate} if row else None
+
+
+def historical_cache(s,keys):
+    keys=list(set(keys));cache={}
+    for start in range(0,len(keys),200):
+        query=select(UpdateScore).where(UpdateScore.state=='complete',UpdateScore.score.is_not(None),
+            tuple_(UpdateScore.host_id,UpdateScore.name,UpdateScore.candidate).in_(keys[start:start+200]))
+        for row in s.scalars(query):cache.setdefault((row.host_id,row.name,row.candidate),[]).append(row)
+    return cache

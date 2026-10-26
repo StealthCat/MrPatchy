@@ -270,13 +270,15 @@ def packages(host_id:str,q:str='',updates:bool=False,user=Depends(auth)):
         if updates: stmt=stmt.where(Package.candidate!='')
         planner=install_times.Planner(s,h)
         rows=list(s.scalars(stmt))
+        historical_scores=update_scores.historical_cache(s,[(host_id,p.name,v) for p in rows for v in versions.get(p.name,[p.installed])])
         identities={p.id:update_scores.identity(h,p) for p in rows if p.candidate}
         keys=list(identities.values());scores={}
         # Saved assessments outlive candidates; fetch only this view's current identities.
         for start in range(0,len(keys),400):
             scores.update({r.id:r for r in s.scalars(select(update_scores.UpdateScore).where(update_scores.UpdateScore.id.in_(keys[start:start+400])))})
         return [object_dict(p)|{'installed_versions':versions.get(p.name,[p.installed]),'due':p.available_since+cfg['deadlines'][p.priority]*3600 if p.candidate else None,
-            'installation':planner.for_package(p),'assessment':update_scores.public(scores.get(identities[p.id]),cfg['ai_enabled'] and cfg['ai_updates_enabled']) if p.candidate else None} for p in rows]
+            'installed_assessment':update_scores.historical(s,host_id,p.name,versions.get(p.name,[p.installed]),observed=h.inventory.get('collected'),cache=historical_scores) if p.candidate else None,
+            'installation':planner.for_package(p),'assessment':update_scores.public(scores.get(identities[p.id]),cfg['ai_enabled'] and cfg['ai_updates_enabled']) if p.candidate else update_scores.historical(s,host_id,p.name,versions.get(p.name,[p.installed]),observed=h.inventory.get('collected'),cache=historical_scores)} for p in rows]
 class PatchInput(BaseModel):
     packages:list[str]=Field(min_length=1,max_length=500)
     expected_versions:dict[str,str]|None=None
@@ -1079,7 +1081,8 @@ def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user
         if host_id:host_or_404(s,host_id);query=query.where(package_history.PackageEvent.host_id==host_id)
         if q:query=query.where(package_history.PackageEvent.name.contains(q[:200],autoescape=True))
         rows=list(s.scalars(query.order_by(package_history.PackageEvent.recorded.desc(),package_history.PackageEvent.id.desc()).offset(offset).limit(limit+1)))
-        return {'items':[object_dict(r) for r in rows[:limit]],'more':len(rows)>limit}
+        saved=update_scores.historical_cache(s,[(r.host_id,r.name,v) for r in rows[:limit] if r.action=='version_changed' for v in r.after])
+        return {'items':[object_dict(r)|{'assessment':update_scores.historical(s,r.host_id,r.name,r.after,r.before,r.observed,cache=saved) if r.action=='version_changed' else None} for r in rows[:limit]],'more':len(rows)>limit}
 
 
 class SecurityScanInput(BaseModel):
@@ -1154,6 +1157,7 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
 
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
+    auto_ai_plan:bool=False
     interval_hours:int=Field(default=24,ge=1,le=720)
 
 @app.get('/api/hosts/{host_id}/security/policy')

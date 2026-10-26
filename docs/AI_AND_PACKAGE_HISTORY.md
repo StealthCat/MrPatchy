@@ -90,3 +90,8 @@ AI run/event logs and raw inventory/observation snapshots follow configurable `h
 Back up the database/volumes, then rebuild **both app and worker** from the same revision. Startup creates the new tables in SQLite or MySQL. No target bootstrap or SSH-key change is needed for these central/UI features; history starts/backfills on subsequent successful inventory collection.
 
 Regression coverage includes safe provider-error logging, worker failures, retry quotas, role restrictions, personal password changes, strict score validation and candidate races, RPM multi-version history, retained-snapshot backfill, post-install health failure, and schedule/window forecasts. Browser checks cover the new pages at desktop/mobile widths, update selection, diagnostic stages, package history, user creation and sign-in after a personal password change. Live OpenAI billing/model access and production target behavior require validation after deployment.
+
+
+### Historical update importance
+
+Installed packages retain access to saved AI assessments whose candidate version matches the installed version. When another update is pending, its current assessment and the installed version's historical assessment are shown separately. Historical labels include the assessed source/target versions and original rationale. Package-history version changes match both sides of the transition and exclude assessments completed after the observation. Missing assessments are not reconstructed or rescored automatically. These are past update-importance estimates, not current malware or vulnerability verdicts.

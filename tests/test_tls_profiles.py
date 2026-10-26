@@ -183,3 +183,23 @@ def test_native_caddy_pins_overlapping_manual_certificates_to_each_profile(confi
     server = next(s for s in config['apps']['http']['servers'].values() if ':443' in s['listen'])
     policies = {p['match']['sni'][0]:p['certificate_selection']['any_tag'] for p in server['tls_connection_policies'] if 'match' in p}
     assert policies['patchy.internal.test'] != policies['external.test']
+
+
+def test_external_port_forwarding_uses_matching_public_url(configured,monkeypatch):
+    root,calls=configured
+    monkeypatch.setenv('PUBLIC_URL','https://patchy.external.test:10443')
+    state=tls.apply({'domain':'patchy.external.test','mode':'internal','enabled':True},'external')
+    assert state['profiles']['external']['effective_https_port']==10443
+    assert state['profiles']['internal']['effective_https_port']==8443
+    assert 'redir https://patchy.external.test:10443{uri}' in calls[-1]
+    assert 'h3=\\":10443\\"' in calls[-1]
+    assert 'https://patchy.external.test {' in calls[-1] # Container listener stays 443.
+    state=tls.apply({'domain':'patchy.external.test','mode':'internal','enabled':True,'https_port':9443},'external')
+    assert state['profiles']['external']['effective_https_port']==9443
+    assert 'redir https://patchy.external.test:9443{uri}' in calls[-1]
+
+
+def test_public_url_default_https_port_is_not_docker_port(configured,monkeypatch):
+    monkeypatch.setenv('PUBLIC_URL','https://patchy.external.test')
+    assert tls.profile_port({'domain':'patchy.external.test'})==443
+    assert tls.profile_port({'domain':'other.test'})==8443

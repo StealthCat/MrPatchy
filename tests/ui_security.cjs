@@ -8,7 +8,7 @@ module.exports=async(page)=>{
   const request=route.request(),url=new URL(request.url());
   if(url.pathname.startsWith('/api/security/indicators/'))return route.fulfill({json:{items:[{host_id:host.id,path:'/tmp/security-fixture',state:incidentState,updated:Date.now()/1000}],more:false}});
   if(!url.pathname.startsWith(prefix))return route.fallback();
-  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
+  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
   if(url.pathname.endsWith('/policy'))return route.fulfill({json:{enabled:false,interval_hours:24,paths:['/tmp']}});
   if(url.pathname===prefix)return route.fulfill({json:report});
   if(url.pathname.endsWith('/timeline'))return route.fulfill({json:{items:[{kind:'review',actor:'admin',created:Date.now()/1000,details:{reason:'Fixture reviewed'}}],more:false}});
@@ -22,6 +22,7 @@ module.exports=async(page)=>{
   await page.getByText('Review fixture detection',{exact:true}).waitFor();
   assert.equal(writes.length,0);
   await page.locator('#security-policy-form [name=enabled]').check();
+  await page.locator('#security-policy-form [name=auto_ai_plan]').check();
   await page.getByRole('button',{name:'Save scan policy',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Scan policy saved'));
   assert.equal(writes.pop(),prefix+'/policy');

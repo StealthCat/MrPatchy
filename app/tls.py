@@ -93,13 +93,26 @@ def public_state():
         return _public(read_profiles())
 
 
+def public_url_port(item):
+    public=urlsplit(os.getenv('PUBLIC_URL',''))
+    names=[item.get('domain',''),*item.get('aliases',[])]
+    if public.scheme=='https' and public.hostname and public.hostname.lower() in [h.lower() for h in names]:
+        return public.port or 443
+    return None
+
+
+def profile_port(item):
+    """Advertised browser port; never change the container's 443 listener for NAT."""
+    return item.get('https_port') or public_url_port(item) or int(os.getenv('HTTPS_PORT','443'))
+
+
 def _public(profiles):
     result = {}
     for name, item in profiles.items():
         result[name] = {k: v for k, v in item.items() if k not in SECRETS}
         result[name].update(certificate_configured=bool(item.get('certificate') and item.get('private_key')),
                             ca_configured=bool(item.get('ca')), eab_configured=bool(item.get('eab_key')),
-                            effective_https_port=item.get('https_port') or int(os.getenv('HTTPS_PORT', '443')))
+                            effective_https_port=profile_port(item))
     # Preserve the original API's summary fields for existing clients.
     primary = result['internal'] if result['internal']['enabled'] else result['external']
     return {'profiles': result, 'domain': primary['domain'], 'mode': primary['mode']}
@@ -209,7 +222,7 @@ def _prepare(profiles, validate=True):
             if assigned.intersection(hosts):
                 raise ValueError('Internal and external domains/aliases must be different')
             assigned.update(hosts)
-            port = str(item['https_port']) if item.get('https_port') else '{$HTTPS_PORT:443}'
+            port = str(profile_port(item)) if item.get('https_port') or public_url_port(item) is not None else '{$HTTPS_PORT:443}'
             lines += [', '.join('https://' + address(h) for h in hosts) + ' {', '  encode zstd gzip',
                       '  header Alt-Svc ' + json.dumps('h3=":' + port + '"; ma=86400'), '  reverse_proxy app:8000']
             if item['mode'] == 'uploaded':
