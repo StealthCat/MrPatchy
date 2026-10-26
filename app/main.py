@@ -19,7 +19,7 @@ from .db import Session, Host, Package, Behavior, Job, Setting, Audit, Inventory
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations
+from . import operations, incidents
 from .identity import User,actor,consume_otp,new_secret
 from .security import unseal
 
@@ -80,7 +80,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories','/snapshot'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
+        sensitive_read=('/security' in path or '/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories','/snapshot','/security'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -1034,7 +1034,7 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(aut
 
 @app.get('/api/ai/runs')
 def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(auth)):
-    if purpose not in ('','triage','update_scoring','connection_test','release_configuration','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
+    if purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
     with Session() as s:
         query=select(ai_runs.AIRun)
         if purpose:query=query.where(ai_runs.AIRun.purpose==purpose)
@@ -1080,3 +1080,93 @@ def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user
         if q:query=query.where(package_history.PackageEvent.name.contains(q[:200],autoescape=True))
         rows=list(s.scalars(query.order_by(package_history.PackageEvent.recorded.desc(),package_history.PackageEvent.id.desc()).offset(offset).limit(limit+1)))
         return {'items':[object_dict(r) for r in rows[:limit]],'more':len(rows)>limit}
+
+
+class SecurityScanInput(BaseModel):
+    paths:list[str]=Field(min_length=1,max_length=16)
+
+@app.get('/api/hosts/{host_id}/security')
+def security_status(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.scalar(select(incidents.Scan).where(incidents.Scan.host_id==host_id).order_by(incidents.Scan.created.desc()).limit(1))
+        if row:return {'scan_id':row.id,**row.report}
+        legacy=s.get(Setting,'security-scan:'+host_id)
+        return legacy.value if legacy else {'state':'not_scanned','findings':[],'gaps':['No security scan has completed']}
+
+@app.post('/api/hosts/{host_id}/security')
+def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(auth)):
+    for path in body.paths:
+        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    with worker.Lock('security-scan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id)
+            pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-scan',Job.state.in_(['queued','running'])))
+            if pending:raise HTTPException(409,'A security scan is already queued or running')
+            return {'job_id':worker.enqueue(s,host_id,'security-scan',body.model_dump())}
+
+@app.get('/api/hosts/{host_id}/security/history')
+def security_history(host_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(incidents.Scan).where(incidents.Scan.host_id==host_id).order_by(incidents.Scan.created.desc(),incidents.Scan.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r) for r in rows[:20]],'more':len(rows)>20}
+
+@app.get('/api/hosts/{host_id}/security/incidents')
+def security_incidents(host_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(incidents.Incident).where(incidents.Incident.host_id==host_id).order_by(incidents.Incident.updated.desc(),incidents.Incident.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r)|{'plans':[object_dict(p) for p in s.scalars(select(incidents.Plan).where(incidents.Plan.incident_id==r.id).order_by(incidents.Plan.created.desc()).limit(10))]} for r in rows[:20]],'more':len(rows)>20}
+
+@app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/plan')
+def security_plan_queue(host_id:str,incident_id:str,user=Depends(auth)):
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id);row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            pending=s.scalar(select(Job).where(Job.action=='security-plan',Job.host_id==host_id,Job.state.in_(['queued','running'])))
+            if pending:raise HTTPException(409,'An incident plan is already queued or running for this server')
+            # Bound paid work independently of process triage.
+            recent=s.scalar(select(func.count()).select_from(Job).where(Job.action=='security-plan',Job.created>time.time()-3600))
+            if recent>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
+            return {'job_id':worker.enqueue(s,host_id,'security-plan',{'incident_id':row.id})}
+
+class SecurityPlanApproval(BaseModel):
+    evidence_digest:str
+
+@app.post('/api/hosts/{host_id}/security/plans/{plan_id}/approve')
+def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            plan=s.get(incidents.Plan,plan_id)
+            row=s.get(incidents.Incident,plan.incident_id) if plan else None
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Plan not found')
+            current=incidents.digest({'incident_id':row.id,'scan_id':row.scan_id,'finding':row.evidence})
+            if plan.state!='draft' or current!=plan.evidence_digest or body.evidence_digest!=current or time.time()-plan.created>86400:
+                raise HTTPException(409,'Plan is stale or already reviewed; generate a new plan')
+            plan.state='approved';plan.approved_by=user['username'];plan.expires=time.time()+3600
+            audit(s,'security plan approved for manual response',plan.id+' '+user['username']);s.commit()
+            return {'ok':True,'expires':plan.expires,'execution':'manual_only'}
+
+class SecurityScanPolicy(SecurityScanInput):
+    enabled:bool=False
+    interval_hours:int=Field(default=24,ge=1,le=720)
+
+@app.get('/api/hosts/{host_id}/security/policy')
+def security_policy(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
+        return row.value if row else {'enabled':False,'interval_hours':24,'paths':['/usr/local/bin','/tmp']}
+
+@app.put('/api/hosts/{host_id}/security/policy')
+def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(auth)):
+    for path in body.paths:
+        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096 or '\x00' in path:raise ValueError('Invalid scan directory')
+    with worker.Lock('security-scan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
+            audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
+    return body.model_dump()
