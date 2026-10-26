@@ -34,6 +34,17 @@ module.exports=async(page,capture)=>{
  // User creation and their own password change use real APIs on the disposable DB.
  await page.locator('[data-nav=users]').click();await page.locator('#new-user').click();
  await page.locator('#user-form [name=username]').fill('new-teammate');await page.locator('#user-form [name=password]').fill('temporary-password-long');await page.locator('#user-form [name=confirm_password]').fill('temporary-password-long');await page.getByRole('button',{name:'Save user',exact:true}).click();await page.getByText('new-teammate',{exact:true}).waitFor();await capture('users');
+ // A delayed save from a dismissed user form must not close a newer dialog.
+ let releaseSave,saveStarted;
+ const saveGate=new Promise(resolve=>releaseSave=resolve),started=new Promise(resolve=>saveStarted=resolve);
+ const delayedSave=async route=>{if(route.request().method()!=='PUT')return route.continue();saveStarted();await saveGate;await route.fulfill({json:{ok:true}});};
+ await page.route('**/api/users',delayedSave);
+ try{
+  await page.locator('[data-edit-user="new-teammate"]').click();await page.getByRole('button',{name:'Save user',exact:true}).click();await started;
+  await page.keyboard.press('Escape');await page.getByRole('button',{name:'Account',exact:true}).click();await page.locator('#account-form').waitFor();
+  const title=await page.locator('#modal-title').innerText();const response=page.waitForResponse(r=>r.url().endsWith('/api/users')&&r.request().method()==='PUT');releaseSave();await response;
+  await page.waitForTimeout(150);assert.equal(await page.locator('#modal').evaluate(e=>e.open),true);assert.equal(await page.locator('#modal-title').innerText(),title);await page.keyboard.press('Escape');
+ }finally{releaseSave();await page.unroute('**/api/users',delayedSave);}
  await page.locator('#logout').click();await page.locator('#login-form [name=username]').fill('new-teammate');await page.locator('#login-form [name=password]').fill('temporary-password-long');await page.getByRole('button',{name:'Open your workspace'}).click();await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
  assert.equal(await page.locator('[data-nav=users]').isVisible(),false);assert.equal(await page.locator('[data-nav=ai-logs]').isVisible(),false);
  await page.getByRole('button',{name:'Account',exact:true}).click();await page.locator('#account-form [name=password]').fill('temporary-password-long');await page.locator('#account-form [name=new_password]').fill('my-own-password-long');await page.locator('#account-form [name=confirm_password]').fill('wrong-password-long');await page.locator('#change-password').click();await page.getByText('New passwords do not match',{exact:true}).waitFor();
