@@ -1,5 +1,6 @@
 const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
+ await page.locator('[href="#settings/database"]').first().click();
  await page.locator('#database-form').waitFor();
  await page.locator('#database-form [name=host]').fill('mysql.example.test');
  await page.locator('#database-form [name=username]').fill('patchy');
@@ -10,6 +11,7 @@ module.exports=async(page,capture)=>{
  await page.locator('[data-nav=overview]').click();
  await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
  await page.locator('[data-nav=settings]').click();
+ await page.locator('[href="#settings/database"]').first().click();
  await page.locator('#database-form [name=host]').waitFor();
  assert.equal(await page.locator('#database-form [name=host]').inputValue(),'mysql.example.test');
  assert.equal(await page.locator('#database-form [name=password]').inputValue(),'');
