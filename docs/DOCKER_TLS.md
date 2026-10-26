@@ -12,7 +12,7 @@ Only Caddy publishes ports. The application port 8000 and Caddy administration p
 | `HTTP_PORT` | `80` | Host TCP port mapped to Caddy port 80 |
 | `HTTPS_PORT` | `443` | Host TCP and UDP ports mapped to Caddy port 443; default browser redirect port |
 | `DOMAIN` | `localhost` | First-start Internal profile hostname or IP; saved settings take precedence afterward |
-| `PUBLIC_URL` | `https://localhost` | Canonical enrollment-link and OIDC callback origin, including any browser-facing nonstandard port |
+| `PUBLIC_URL` | `https://localhost` | Default enrollment-link and OIDC callback origin, including any browser-facing nonstandard port |
 
 Compose's long port syntax also accepts IPv6 bind addresses without bracket/colon ambiguity. Bind only addresses assigned to the Docker host. `BIND_IP=::` follows the host's IPv6/dual-stack behavior; use an explicit assigned address if you need a precise interface boundary. Host networking is not required.
 
@@ -58,7 +58,11 @@ Public HTTP-01 validation arrives on external TCP 80, and TLS-ALPN-01 on externa
 
 Certificate acquisition and renewal run asynchronously in Caddy. A successful apply means the configuration was accepted; it does not claim the CA has already issued a certificate. Inspect `docker compose logs caddy` for issuance status. Avoid repeatedly requesting production certificates while debugging reachability.
 
-`PUBLIC_URL` remains deployment-wide. Set it to the canonical origin reachable by targets/users consuming generated enrollment links and register its `/auth/sso/callback` URL at the identity provider. Enabling the second profile does not rewrite that origin or share login cookies between hostnames.
+`PUBLIC_URL` remains the default enrollment-link origin and the deployment-wide OIDC origin. Register its `/auth/sso/callback` URL at the identity provider. Enabling the second profile does not rewrite that origin or share login cookies between hostnames.
+
+In enrollment step 2, choose **Fetch from Mr Patchy with curl**, then select **Fetch from HTTPS endpoint**. The selector offers the default `PUBLIC_URL` and each enabled Internal/External profile. Profile links use the configured hostname and browser-facing HTTPS port (the profile override, otherwise `HTTPS_PORT`); port 443 is omitted. Selecting an endpoint generates a fresh one-hour link. Disabling a profile removes it from the choices and prevents new links for that profile. Existing tokens retain their original expiry and can be served by either application hostname; endpoint selection is a delivery preference, not a token access boundary.
+
+Choose the endpoint the target can resolve and reach. The ACME directory URL identifies the certificate issuer, not an installer download server. Targets must trust the issuer of the chosen site's certificate: install that CA through your trusted process or add `--cacert /path/to/ca.pem` to curl. The CA bundle uploaded for contacting an ACME directory is not necessarily the CA that signs site certificates. TLS verification remains enabled. Direct API callers can send `{"endpoint":"internal"}` or `{"endpoint":"external"}` to `POST /api/hosts/{id}/enrollment-link`; omitting the body preserves the default URL behavior.
 
 ## Migration, persistence and recovery
 
