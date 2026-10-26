@@ -161,7 +161,7 @@ def test_old_bridge_is_upgraded_before_release_runner_deployment(monkeypatch):
     def call(host,payload,**kwargs):
         calls.append(payload)
         result={key:payload[key] for key in ('bridge_sha256','unit_sha256')};result['deployed']=payload['sha256']
-        if len(calls)>1:result['release_sha256']=payload['release_sha256']
+        if len(calls)>1:result.update(release_sha256=payload['release_sha256'],rpm_sha256=payload['rpm_sha256'])
         return result
     monkeypatch.setattr(ssh,'call',call)
     assert ssh.deploy(None)['release_sha256'] and len(calls)==2

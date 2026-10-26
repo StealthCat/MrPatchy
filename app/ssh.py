@@ -105,12 +105,13 @@ def deploy(host):
     code=(TARGET/'agent.py').read_bytes()
     bridge=(TARGET/'bridge.py').read_bytes()
     release=(TARGET/'release.py').read_bytes()
-    expected={'release_sha256':hashlib.sha256(release).hexdigest(),'deployed':hashlib.sha256(code).hexdigest(),'bridge_sha256':hashlib.sha256(bridge).hexdigest(),'unit_sha256':hashlib.sha256(UNIT.encode()).hexdigest()}
-    payload={'action':'deploy','agent':base64.b64encode(code).decode(),'sha256':expected['deployed'],
+    rpm_code=(TARGET/'rpm_support.py').read_bytes()
+    expected={'rpm_sha256':hashlib.sha256(rpm_code).hexdigest(),'release_sha256':hashlib.sha256(release).hexdigest(),'deployed':hashlib.sha256(code).hexdigest(),'bridge_sha256':hashlib.sha256(bridge).hexdigest(),'unit_sha256':hashlib.sha256(UNIT.encode()).hexdigest()}
+    payload={'action':'deploy','rpm_support':base64.b64encode(rpm_code).decode(),'rpm_sha256':expected['rpm_sha256'],'agent':base64.b64encode(code).decode(),'sha256':expected['deployed'],
                       'bridge':base64.b64encode(bridge).decode(),'bridge_sha256':expected['bridge_sha256'],
                       'unit':UNIT,'unit_sha256':expected['unit_sha256'],'release':base64.b64encode(release).decode(),'release_sha256':expected['release_sha256']}
     result=call(host,payload)
-    if result.get('bridge_sha256')==expected['bridge_sha256'] and 'release_sha256' not in result:
+    if result.get('bridge_sha256')==expected['bridge_sha256'] and ('release_sha256' not in result or 'rpm_sha256' not in result):
         # Older bridges accept their own replacement before understanding runner deployment.
         result=call(host,payload)
     if result.get('bridge_sha256') is None:
@@ -128,7 +129,10 @@ set -euo pipefail
 for command in python3 sshd ssh-keygen sudo visudo useradd sha256sum openssl; do
   command -v "$command" >/dev/null || {{ echo "Missing prerequisite: $command. Install python3 openssh-server sudo first."; exit 1; }}
 done
-# Offline enrollment: no downloads, apt calls, or callbacks.
+if [ ! -f /var/lib/dpkg/status ]; then
+  /usr/bin/python3 -c 'import dnf,rpm' || {{ echo 'RPM targets require Python 3 with python3-dnf and python3-rpm installed first (DNF4 bindings, including on DNF5 systems).'; exit 1; }}
+fi
+# Offline enrollment: no downloads, package metadata queries, or callbacks.
 if id drpatch >/dev/null 2>&1 && [ ! -f /opt/drpatch/.mrpatchy-enrolled ]; then
   echo "Existing drpatch account is not managed by Mr Patchy; choose a clean target account before enrolling."; exit 1
 fi
@@ -173,6 +177,12 @@ trap - EXIT
 touch /opt/drpatch/.mrpatchy-enrolled
 chmod 600 /opt/drpatch/.mrpatchy-enrolled
 visudo -cf /etc/sudoers.d/mrpatchy
+if command -v selinuxenabled >/dev/null && selinuxenabled; then
+  command -v semanage >/dev/null || {{ echo 'Install policycoreutils-python-utils before enrollment on SELinux systems.'; exit 1; }}
+  semanage fcontext -a -t user_home_dir_t '/opt/drpatch' 2>/dev/null || semanage fcontext -m -t user_home_dir_t '/opt/drpatch'
+  semanage fcontext -a -t ssh_home_t '/opt/drpatch/[.]ssh(/.*)?' 2>/dev/null || semanage fcontext -m -t ssh_home_t '/opt/drpatch/[.]ssh(/.*)?'
+  restorecon -RF /opt/drpatch /usr/local/lib/mrpatchy /etc/sudoers.d/mrpatchy
+fi
 sshd -t
 {HOST_FINGERPRINT_SCRIPT}
 printf '\nAllow SSH from your Mr Patchy server, then click Finish installation.\n'

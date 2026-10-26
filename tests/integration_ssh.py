@@ -21,7 +21,7 @@ def run(*args):
 def main():
     image=os.getenv('TARGET_IMAGE','mrpatchy-ssh-test:latest')
     name='patchy-target-'+uuid.uuid4().hex[:10]
-    run('docker','run','-d','--name',name,'-p','127.0.0.1::22',image)
+    run('docker','run','-d','--name',name,'-p','127.0.0.1::22','-p','127.0.0.1::8443',image)
     try:
         host=SimpleNamespace(id='integration-host',name='Disposable target',address='127.0.0.1',port=int(run('docker','port',name,'22/tcp').rsplit(':',1)[1]),fingerprint='')
         ssh.create_key(host.id)
@@ -59,16 +59,40 @@ def main():
         else:raise AssertionError('Changed configuration was accepted as restored')
         run('docker','exec',name,'rm','/etc/mrpatchy-recovery-fixture')
         assert ssh.call(host,{'action':'patch-restored','original':original},timeout=120)['original_state_verified']
+        rpm=snapshot['inventory'].get('package_manager')=='rpm'
         key=next(iter(snapshot['inventory']['keys'].values()))
         ssh.call(host,{'action':'key','name':'review-fixture.gpg','data':key})
-        ssh.call(host,{'action':'repository','path':'/etc/apt/sources.list.d/review.sources','content':'Types: deb\nURIs: https://example.invalid\nSuites: stable\nComponents: main\nEnabled: no\n'})
-        ssh.call(host,{'action':'repository','path':'/etc/apt/sources.list.d/review.sources','content':''})
+        source_path='/etc/yum.repos.d/review.repo' if rpm else '/etc/apt/sources.list.d/review.sources'
+        content='[review]\nname=Review\nbaseurl=https://example.invalid\nenabled=0\n' if rpm else 'Types: deb\nURIs: https://example.invalid\nSuites: stable\nComponents: main\nEnabled: no\n'
+        ssh.call(host,{'action':'repository','path':source_path,'content':content})
+        ssh.call(host,{'action':'repository','path':source_path,'content':''})
         backups=ssh.call(host,{'action':'backups'})['backups']
-        assert backups and backups[0]['path']=='/etc/apt/sources.list.d/review.sources'
-        assert 'Enabled: no' in backups[0]['content']
-        ssh.call(host,{'action':'repository','path':backups[0]['path'],'content':backups[0]['content']})
-        for path in ['/etc/apt/keyrings/review-fixture.gpg','/etc/apt/sources.list.d/review.sources','/usr/local/lib/mrpatchy/agent.py']:
+        assert backups and backups[0]['path']==source_path
+        assert backups[0]['content']==content
+        ssh.call(host,{'action':'repository','path':source_path,'content':content})
+        key_path='/etc/pki/rpm-gpg/review-fixture.gpg' if rpm else '/etc/apt/keyrings/review-fixture.gpg'
+        for path in [key_path,source_path,'/usr/local/lib/mrpatchy/agent.py','/usr/local/lib/mrpatchy/rpm_support.py']:
             assert run('docker','exec',name,'stat','-c','%a:%u',path)=='644:0'
+        if rpm:
+            from app import packages
+            run('docker','exec','-d',name,'python3','/tmp/serve-fixture.py')
+            ca=run('docker','exec',name,'cat','/etc/pki/fixture-ca.pem')
+            repo_port=run('docker','port',name,'8443/tcp').rsplit(':',1)[1]
+            inv=ssh.call(host,{'action':'inventory'})
+            assert inv['package_manager']=='rpm'
+            rows,_=packages.refresh(host.id,inv,{'ca':ca,'mirrors':{'https://127.0.0.1:8443':'https://127.0.0.1:'+repo_port}})
+            fixture=next(p for p in rows if p['name']=='patchy-fixture:noarch')
+            assert fixture['candidate']=='1:2.0-1',fixture
+            result=ssh.call(host,{'action':'patch','packages':['patchy-fixture:noarch=1:2.0-1']},timeout=120)
+            assert 'DNF completed' in result['output'],result
+            assert run('docker','exec',name,'rpm','-q','--qf','%{VERSION}','patchy-fixture')=='2.0'
+            # Unsigned newer RPM must never be installed, even with valid HTTPS metadata.
+            run('docker','exec',name,'cp','/tmp/fixture-build/RPMS/noarch/patchy-fixture-3.0-1.noarch.rpm','/tmp/fixture-repo/')
+            run('docker','exec',name,'createrepo_c','--update','/tmp/fixture-repo')
+            try:ssh.call(host,{'action':'patch','packages':['patchy-fixture:noarch=1:3.0-1']},timeout=120)
+            except RuntimeError as error:assert 'signature' in str(error).lower(),error
+            else:raise AssertionError('Unsigned RPM accepted')
+            assert run('docker','exec',name,'rpm','-q','--qf','%{VERSION}','patchy-fixture')=='2.0'
         # Re-enrollment must replace old user-owned files with root-owned files.
         run('docker','exec',name,'chown','drpatch:drpatch','/usr/local/lib/mrpatchy/bridge.py')
         run('docker','exec',name,'bash','/tmp/enroll.sh')

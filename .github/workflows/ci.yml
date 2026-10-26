@@ -19,7 +19,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
       - run: python -m compileall -q app target
-      - run: bash -n deploy/entrypoint.sh
+      - run: bash -n deploy/entrypoint.sh reset-admin-password.sh tests/fixtures/rpm-repository.sh
       - run: node --check app/static/app.js
       - run: docker compose --env-file .env.example config --quiet
       - run: docker build -t mrpatchy:test .
@@ -112,3 +112,18 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y restic
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest tests/test_final_features.py -q
+
+  rpm:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ['fedora:44', 'almalinux:9']
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv
+      - run: /usr/bin/python3 -m venv --system-site-packages /tmp/patchy-rpm-test
+      - run: /tmp/patchy-rpm-test/bin/pip install -r requirements-dev.txt
+      - run: /tmp/patchy-rpm-test/bin/python -m pytest tests/test_rpm.py tests/test_rpm_native.py -q
+      - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.rpm -t mrpatchy-ssh-test .
+      - run: /tmp/patchy-rpm-test/bin/python tests/integration_ssh.py

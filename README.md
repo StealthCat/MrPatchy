@@ -2,7 +2,7 @@
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
-Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian and Raspberry Pi OS. Manage packages and repositories over SSH, plan AI-assisted release upgrades with one go/no-go approval, monitor system integrity and process behavior, and coordinate patching, alerts and recovery across your fleet.
+Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian, Raspberry Pi OS, Fedora and modern DNF/Yum-based RPM systems. Manage packages and repositories over SSH, plan AI-assisted release upgrades with one go/no-go approval, monitor system integrity and process behavior, and coordinate patching, alerts and recovery across your fleet.
 
 ![Fleet overview with illustrative documentation data](docs/screenshots/overview.webp)
 
@@ -11,13 +11,13 @@ Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian and Ras
 | Area | Capabilities |
 |---|---|
 | Enrollment | Three-step endpoint → offline preparation → SSH completion; downloadable per-server Bash installer; expiring curl links; independent installation verification |
-| Package management | Installed/held/broken package inventory, inventory history, exact-version updates, dependency simulation, repair, configurable deadlines and priority overrides |
-| Repositories | Central native APT signature/index verification; `.list` and Deb822 `.sources`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
+| Package management | Installed/held/broken package inventory, inventory history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair, configurable deadlines and priority overrides |
+| Repositories | Central native APT/DNF verification; `.list`, Deb822 `.sources` and RPM `.repo`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
 | Distribution upgrades | Adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, fixed read-only evidence checks, explicit known-good approvals, durable observation spool and retained history |
-| Identity | Named administrator/operator/viewer accounts, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
+| Identity | Local administrator password-reset script, named administrator/operator/viewer accounts, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
 | Notifications | Persistent monitoring and recovery-required alerts with acknowledgements and retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
@@ -59,9 +59,26 @@ Run `docker compose up -d --build` after changing bindings. Optional `HTTP_BIND_
 
 For dual CAs, use a private ACME server for `patchy.home.example.com` and Let's Encrypt for `patchy.example.com`. Both DNS names reach the same listener; TLS selects the appropriate certificate by hostname. **Internal is a certificate profile, not an access-control boundary**—use network controls if one name must be LAN-only. Public ACME HTTP-01/TLS-ALPN-01 validation still requires external TCP 80/443 forwarded to Caddy, even when Docker publishes 8080/8443. Wildcard issuance/DNS-01 is not included. Keep `PUBLIC_URL` aligned with the default enrollment/SSO address; curl enrollment can also use either enabled HTTPS profile. See [Docker bindings and dual TLS](docs/DOCKER_TLS.md) for setup, migration and recovery.
 
+
+## Reset an administrator password locally
+
+From your deployment directory, with the updated app container running:
+
+```bash
+./reset-admin-password.sh
+# Another existing administrator:
+./reset-admin-password.sh --username alice
+# Explicit account recovery when required:
+./reset-admin-password.sh --username alice --reset-mfa --enable
+```
+
+The script prompts twice without echoing the password (12–1024 characters), updates the existing administrator and revokes their sessions. MFA and disabled status are preserved unless their flags are selected. It never creates/promotes an account or changes SSO bindings. Access to Docker/the database is required; there is no public password-reset endpoint.
+
+For a script stored elsewhere, set `MRPATCHY_PROJECT_DIR` to the deployment directory. `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` can select your deployment. Automation can pipe a secret from its secret manager into `./reset-admin-password.sh --password-stdin`; do not put passwords in command arguments, shell history or environment variables. A direct installation can run `python -m app.admin_reset` with its existing `DATA_DIR`/`DATABASE_URL`. If login was rate-limited, wait five minutes or restart the app after resetting.
+
 ## Enroll a server in three steps
 
-Targets need systemd, Python 3, OpenSSH server, sudo, OpenSSL and dpkg installed already. Offline preparation does not download missing prerequisites.
+Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed already. Debian-family targets need dpkg; RPM targets need `python3-dnf` and `python3-rpm` (including Fedora with DNF5). SELinux-enabled targets need `policycoreutils-python-utils`. See [RPM setup and support boundaries](docs/RPM_SUPPORT.md). Offline preparation does not download missing prerequisites.
 
 1. **Endpoint:** select **Add server** and enter a name, IP/hostname and SSH port.
 2. **Prepare:** download the personalized Bash script, transfer it to the target and run `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, its public SSH key, the root-owned bridge and restricted sudo permissions. The script performs no downloads, APT queries or callbacks. Click **I ran the script · Proceed to step 3**. Curl and ordinary-download delivery use the same bootstrap; curl links expire after one hour. In curl mode, select **Fetch from HTTPS endpoint**: the default `PUBLIC_URL`, **Internal HTTPS**, or **External HTTPS**. Enabled profiles use their configured hostname and browser-facing port. Choose an address reachable from the target; for a private CA, use curl’s `--cacert /path/to/ca.pem` with a trusted bundle for the site certificate.
@@ -75,11 +92,11 @@ Targets need systemd, Python 3, OpenSSH server, sudo, OpenSSL and dpkg installed
 
 ## Review and install updates
 
-Package discovery runs native APT **centrally**, using isolated target inventories, architectures, source definitions, keys and preferences. The collector does not run target APT queries for discovery. An offline target can still have repository metadata checked against its last saved inventory.
+Package discovery runs native APT or DNF **centrally**, using isolated target inventories, architectures, source definitions, keys and preferences. The collector reads local package databases without target repository queries for discovery. An offline target can still have repository metadata checked against its last saved inventory.
 
 In **Packages**, select a server, review candidates and choose updates. Confirmation displays the effective reboot and snapshot-rollback policy. That policy is recorded with the job; if it changes before execution, the job fails for reapproval rather than silently adopting different behavior. Staged rollouts require the same policy review for every server.
 
-Explicit installation refreshes target metadata and requests the recorded exact versions. Package removal and forced changes to holds are prohibited; existing configuration files are retained with `--force-confold`. Maintainer scripts may restart services. **Automatic reboot is available only under an explicitly reviewed, enabled policy.**
+Explicit installation refreshes target metadata and requests the recorded exact versions. Package removal and forced changes to holds are prohibited; APT retains existing configuration files with `--force-confold`; RPM follows native config-file flags and may create `.rpmnew`/`.rpmsave` files. RPM preview shows candidates; dependency resolution runs on the target before installation. Maintainer scripts may restart services. **Automatic reboot is available only under an explicitly reviewed, enabled policy.**
 
 ![Patch approval showing reboot and rollback policy](docs/screenshots/patch-review.webp)
 
@@ -211,7 +228,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-CI covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu and Debian, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
+CI covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
 
 Browser regressions also exercise all three roles, 320px/390px layouts, account access, persisted maintenance and SMTP settings, queued cancellation, inline dialog errors, duplicate patch clicks, and delayed responses after navigation, dialog dismissal or sign-out.
 
@@ -221,6 +238,7 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 
 ## Documentation
 
+- [Fedora, RPM and DNF/Yum support](docs/RPM_SUPPORT.md)
 - [Operations and troubleshooting](docs/OPERATIONS.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)

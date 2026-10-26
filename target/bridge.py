@@ -83,7 +83,19 @@ def bounded(args,timeout=900,env=None,limit=16_000_000):
 def run(args, timeout=1800):
     out,err=bounded(args,timeout=timeout,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
     return (out+err)[-20000:]
+def rpm_backend():
+    return not Path('/var/lib/dpkg/status').exists()
+
+def rpm_module():
+    sys.path.insert(0,'/usr/local/lib/mrpatchy')
+    try:import rpm_support
+    except ImportError:from target import rpm_support
+    return rpm_support
+
 def repo_path(name):
+    if rpm_backend():
+        if not rpm_module().source_path(name):raise ValueError('Invalid RPM source path')
+        return Path(name)
     if name == '/etc/apt/sources.list': return Path(name)
     if not re.fullmatch(r'/etc/apt/sources\.list\.d/[A-Za-z0-9_.-]+\.(list|sources)',name): raise ValueError('Invalid source path')
     return Path(name)
@@ -110,7 +122,7 @@ def process_evidence(req):
                 result['executable']={'sha256':digest,**metadata,
                     'status':[line for line in (proc/'status').read_text().splitlines() if line.split(':')[0] in ('Uid','Gid','CapEff','NoNewPrivs','Seccomp')]}
             if 'package' in checks:
-                try: result['package']=run(['dpkg-query','-S','--',path],timeout=15)[:8000]
+                try: result['package']=run((['rpm','-qf','--',path] if rpm_backend() else ['dpkg-query','-S','--',path]),timeout=15)[:8000]
                 except RuntimeError: result['package']='No installed package ownership found'
             if 'service' in checks:
                 groups=(proc/'cgroup').read_text()
@@ -172,11 +184,12 @@ def patch_evidence():
         from target.agent import hash_artifact,MANAGED
         from target.release import fingerprint,conffiles,service_inventory
     inv=handle({'action':'inventory'})
-    if run(['dpkg','--audit'],timeout=60).strip():raise ValueError('Package state must be clean before recovery verification')
+    if rpm_backend():run(['rpm','--verifydb'],timeout=60)
+    elif run(['dpkg','--audit'],timeout=60).strip():raise ValueError('Package state must be clean before recovery verification')
     services=service_inventory(run(['systemctl','list-units','--type=service','--state=running','--no-legend','--plain'],timeout=30))
     health=handle({'action':'health'})
     if health.get('failed_units') or not health.get('collector_active'):raise ValueError('Service health must be clean before recovery verification')
-    names=set(conffiles(inv['status'])) | set(MANAGED)
+    names=(set() if rpm_backend() else set(conffiles(inv['status']))) | set(MANAGED)
     deadline=time.monotonic()+30
     def walk_error(error):raise error
     for directory,dirs,files in os.walk(PATCH_CONFIG_ROOT,followlinks=False,onerror=walk_error):
@@ -336,7 +349,7 @@ def handle(req):
         return {'authorized_keys_sha256':hashlib.sha256(content.encode()).hexdigest()}
     if action == 'health':
         failed=run(['systemctl','--failed','--no-legend','--plain'],timeout=15)
-        return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists(),
+        return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists() or (rpm_backend() and (ROOT/'rpm-reboot-required').is_file() and (ROOT/'rpm-reboot-required').read_text().strip()==boot_id()),
                 'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
     if action == 'verify':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
@@ -362,16 +375,22 @@ def handle(req):
             release_code=base64.b64decode(req['release'],validate=True)
             if len(release_code)>1_000_000 or hashlib.sha256(release_code).hexdigest()!=req.get('release_sha256'):raise ValueError('Invalid release runner digest')
             compile(release_code,'release.py','exec')
+        rpm_code=None
+        if 'rpm_support' in req:
+            rpm_code=base64.b64decode(req['rpm_support'],validate=True)
+            if len(rpm_code)>1_000_000 or hashlib.sha256(rpm_code).hexdigest()!=req.get('rpm_sha256'):raise ValueError('Invalid RPM helper digest')
+            compile(rpm_code,'rpm_support.py','exec')
         unit = req.get('unit',UNIT).encode()
         if len(unit)>100_000 or ('unit' in req and hashlib.sha256(unit).hexdigest()!=req.get('unit_sha256')):
             raise ValueError('Invalid systemd unit digest')
         # Validate the complete deployment before replacing any managed file.
+        if rpm_code is not None:atomic('/usr/local/lib/mrpatchy/rpm_support.py',rpm_code,0o644)
         if release_code is not None:atomic('/usr/local/lib/mrpatchy/release.py',release_code,0o644)
         if bridge is not None: atomic('/usr/local/lib/mrpatchy/bridge.py',bridge,0o644)
         atomic('/usr/local/lib/mrpatchy/agent.py',code,0o644)
         atomic('/etc/systemd/system/mrpatchy-agent.service',unit,0o644)
         run(['systemctl','daemon-reload']); run(['systemctl','enable','--now','mrpatchy-agent']); run(['systemctl','restart','mrpatchy-agent'])
-        return {**({'release_sha256':req['release_sha256']} if release_code is not None else {}),'deployed':req['sha256'],'unit_sha256':hashlib.sha256(unit).hexdigest(),'bridge_sha256':hashlib.sha256(Path('/usr/local/lib/mrpatchy/bridge.py').read_bytes()).hexdigest()}
+        return {**({'rpm_sha256':req['rpm_sha256']} if rpm_code is not None else {}),**({'release_sha256':req['release_sha256']} if release_code is not None else {}),'deployed':req['sha256'],'unit_sha256':hashlib.sha256(unit).hexdigest(),'bridge_sha256':hashlib.sha256(Path('/usr/local/lib/mrpatchy/bridge.py').read_bytes()).hexdigest()}
     if action == 'snapshot':
         result = {}
         for k in ['inventory','telemetry','collector-error','ebpf-status','ebpf-diagnostic']:
@@ -400,7 +419,9 @@ def handle(req):
         if len(content)>1_000_000: raise ValueError('Source too large')
         backups = ROOT/'backups'; backups.mkdir(mode=0o700,exist_ok=True)
         if p.exists(): atomic(backups/(str(time.time_ns())+'.json'),json.dumps({'path':str(p),'content':p.read_text()}).encode())
+        if rpm_backend():rpm_module().repositories({str(p):req['content']},rpm_module().local_inventory()['rpm_vars'])
         atomic(p,content,0o644)
+        if rpm_backend() and Path('/usr/sbin/restorecon').exists():run(['/usr/sbin/restorecon',str(p)])
         return {'saved':str(p),'backup_directory':str(backups)}
     if action == 'backups':
         backups=ROOT/'backups'
@@ -410,6 +431,8 @@ def handle(req):
             rows.append({'id':p.stem,'path':item['path'],'content':item['content']})
         return {'backups':rows}
     if action == 'repair':
+        if rpm_backend():
+            return {'output':run(['rpm','--rebuilddb'])+run(['rpm','--verifydb'])+'RPM database rebuilt and verified; dependency repair requires a reviewed patch transaction.'}
         # Explicit operator action; potentially runs maintainer scripts.
         return {'output':run(['apt-get','-y','--no-remove','--fix-broken','-o','Dpkg::Options::=--force-confold','install'])+run(['dpkg','--force-confold','--configure','-a'])}
     if action == 'key':
@@ -417,10 +440,17 @@ def handle(req):
         if not re.fullmatch(r'[A-Za-z0-9_-]+\.(gpg|asc)',name): raise ValueError('Invalid key filename')
         data = base64.b64decode(req['data'],validate=True)
         if len(data)>2_000_000: raise ValueError('Key too large')
+        if rpm_backend():
+            Path('/etc/pki/rpm-gpg').mkdir(exist_ok=True,mode=0o755)
+            destination='/etc/pki/rpm-gpg/'+name
+            atomic(destination,data,0o644)
+            run(['rpm','--import',destination])
+            return {'saved':destination}
         Path('/etc/apt/keyrings').mkdir(exist_ok=True,mode=0o755)
         atomic('/etc/apt/keyrings/'+name,data,0o644)
         return {'saved':'/etc/apt/keyrings/'+name}
     if action == 'patch':
+        if rpm_backend():return rpm_module().patch(req.get('packages',[]))
         packages = req.get('packages',[])
         if not packages or len(packages)>500 or any(not re.fullmatch(r'[a-z0-9][a-z0-9+.-]+(?::[a-z0-9-]+)?=[A-Za-z0-9.+:~\-]+',x) for x in packages): raise ValueError('Explicit package=version list required')
         # Only operator-requested installation uses APT on the target.

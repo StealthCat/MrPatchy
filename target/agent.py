@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Root-owned, outbound-network-free collector. No third-party dependencies."""
+"""Root-owned, outbound-network-free collector. RPM inventory uses the system RPM bindings."""
 import base64
 import glob
 import hashlib
@@ -17,12 +17,18 @@ import uuid
 import re
 
 ROOT = Path('/opt/drpatch')
-MANAGED = ['/usr/local/lib/mrpatchy/release.py', '/usr/local/lib/mrpatchy/agent.py', '/usr/local/lib/mrpatchy/bridge.py', '/etc/systemd/system/mrpatchy-agent.service', '/etc/sudoers.d/mrpatchy', '/opt/drpatch/.ssh/authorized_keys']
+MANAGED = ['/usr/local/lib/mrpatchy/rpm_support.py', '/usr/local/lib/mrpatchy/release.py', '/usr/local/lib/mrpatchy/agent.py', '/usr/local/lib/mrpatchy/bridge.py', '/etc/systemd/system/mrpatchy-agent.service', '/etc/sudoers.d/mrpatchy', '/opt/drpatch/.ssh/authorized_keys']
 def digest(path):
     return hash_artifact(path,{})
 def read(path):
     return Path(path).read_text(errors='replace')
 def inventory():
+    if not Path('/var/lib/dpkg/status').exists():
+        import sys
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        try:from rpm_support import local_inventory
+        except ImportError:from target.rpm_support import local_inventory
+        return local_inventory()
     files = {}
     for pattern in ['/etc/apt/sources.list', '/etc/apt/sources.list.d/*', '/etc/apt/preferences', '/etc/apt/preferences.d/*']:
         for name in glob.glob(pattern):

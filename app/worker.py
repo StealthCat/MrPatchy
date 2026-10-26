@@ -10,7 +10,7 @@ import re
 import subprocess
 from sqlalchemy import select, delete, update
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import apt, ssh, operations, releases, scheduling
+from . import apt, ssh, operations, releases, scheduling, packages as package_backend
 from target.agent import MANAGED
 from target.bridge import UNIT
 from .security import unseal
@@ -27,8 +27,8 @@ def enqueue(s,host_id,action,payload=None):
     s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
 
 def save_inventory(s,h,inv):
-    items=apt.installed(inv['status'])
-    if h.inventory and any(h.inventory.get(key)!=inv.get(key) for key in ('status','files','keys','architecture','foreign_architectures','machine_id')):
+    items=package_backend.installed(inv)
+    if h.inventory and any(h.inventory.get(key)!=inv.get(key) for key in ('status','files','keys','architecture','foreign_architectures','machine_id','package_manager','rpm_vars','module_platform_id')):
         h.last_repo=0
     previous={k:v for k,v in h.inventory.items() if k!='collected'}
     current={k:v for k,v in inv.items() if k!='collected'}
@@ -36,6 +36,9 @@ def save_inventory(s,h,inv):
         s.add(InventoryRevision(id=uuid.uuid4().hex,host_id=h.id,inventory=inv))
     h.inventory=inv
     old={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
+    changed=[(item,old[item['name']]) for item in items if item['name'] in old and old[item['name']].candidate]
+    newer=package_backend.newer_flags(inv,[(p.candidate,item['installed']) for item,p in changed])
+    still_newer={item['name']:flag for (item,_),flag in zip(changed,newer)}
     names=set()
     for item in items:
         names.add(item['name']); p=old.get(item['name'])
@@ -45,7 +48,7 @@ def save_inventory(s,h,inv):
         else:
             if p.installed!=item['installed']: audit(s,'package version changed',h.name+' '+p.name+' '+p.installed+' → '+item['installed'])
             p.installed=item['installed']; p.held=item['held']; p.dpkg_state=item['dpkg_state']
-            if p.candidate and subprocess.run(['/usr/bin/dpkg','--compare-versions',p.candidate,'gt',p.installed]).returncode!=0:
+            if p.candidate and not still_newer.get(item['name'],False):
                 p.candidate=''; p.available_since=0
     for name,p in old.items():
         if name not in names:
@@ -63,7 +66,7 @@ def update_repos(s,h):
             audit(s,'repository check uses cached inventory',h.id+' '+type(e).__name__)
         else:
             save_inventory(s,h,inv);s.commit()
-    packages,output=apt.refresh(h.id,inv,repository_access(s,h.id))
+    packages,output=package_backend.refresh(h.id,inv,repository_access(s,h.id))
     for item in packages:
         p=s.get(Package,h.id+':'+item['name'])
         if not p: continue
@@ -284,6 +287,7 @@ def execute_locked(job_id):
                 sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
                 optional={k:v for k,v in h.baseline.items() if k=='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'}
                 h.baseline={**optional,
+                    '/usr/local/lib/mrpatchy/rpm_support.py':hashlib.sha256((ssh.TARGET/'rpm_support.py').read_bytes()).hexdigest(),
                     '/usr/local/lib/mrpatchy/release.py':hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest(),
                     '/usr/local/lib/mrpatchy/agent.py':hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest(),
                     '/usr/local/lib/mrpatchy/bridge.py':hashlib.sha256((ssh.TARGET/'bridge.py').read_bytes()).hexdigest(),
