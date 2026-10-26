@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
-from . import ssh, apt, worker, tls, scheduling, ai, packages as package_backend
+from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations
 from .identity import User,actor,consume_otp,new_secret
@@ -75,7 +75,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
+        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -225,7 +225,15 @@ def packages(host_id:str,q:str='',updates:bool=False,user=Depends(auth)):
         stmt=select(Package).where(Package.host_id==host_id).order_by(Package.name)
         if q: stmt=stmt.where(Package.name.contains(q[:200],autoescape=True))
         if updates: stmt=stmt.where(Package.candidate!='')
-        return [object_dict(p)|{'installed_versions':versions.get(p.name,[p.installed]),'due':p.available_since+cfg['deadlines'][p.priority]*3600 if p.candidate else None} for p in s.scalars(stmt)]
+        planner=install_times.Planner(s,h)
+        rows=list(s.scalars(stmt))
+        identities={p.id:update_scores.identity(h,p) for p in rows if p.candidate}
+        keys=list(identities.values());scores={}
+        # Saved assessments outlive candidates; fetch only this view's current identities.
+        for start in range(0,len(keys),400):
+            scores.update({r.id:r for r in s.scalars(select(update_scores.UpdateScore).where(update_scores.UpdateScore.id.in_(keys[start:start+400])))})
+        return [object_dict(p)|{'installed_versions':versions.get(p.name,[p.installed]),'due':p.available_since+cfg['deadlines'][p.priority]*3600 if p.candidate else None,
+            'installation':planner.for_package(p),'assessment':update_scores.public(scores.get(identities[p.id]),cfg['ai_enabled'] and cfg['ai_updates_enabled']) if p.candidate else None} for p in rows]
 class PatchInput(BaseModel):
     packages:list[str]=Field(min_length=1,max_length=500)
     expected_versions:dict[str,str]|None=None
@@ -259,7 +267,7 @@ def patch(host_id:str,body:PatchInput,user=Depends(auth)):
             if not p or not p.candidate or p.held or p.dpkg_state.split()[-1]!='installed': raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
             specs.append(p.name+'='+p.candidate)
-        return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs,'_recovery_policy':policy})}
+        return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs,'_recovery_policy':policy,'_actor':user['username']})}
 @app.get('/api/hosts/{host_id}/repositories')
 def repositories(host_id:str,user=Depends(auth)):
     with Session() as s:
@@ -321,6 +329,8 @@ class ConfigInput(BaseModel):
     ai_enabled:bool=False
     ai_model:str=Field(default='',max_length=100)
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
+    ai_updates_enabled:bool=True
+    ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
 @app.put('/api/settings')
@@ -344,12 +354,14 @@ def ai_test(user=Depends(auth)):
             cfg=config(s);secret=s.get(Setting,'openai_key');last=s.get(Setting,'ai-test:last')
             if not cfg['ai_model'] or not secret:raise HTTPException(400,'Save a model ID and API key before testing')
             if last and time.time()-last.value['attempted']<60:raise HTTPException(429,'Wait one minute between AI connection tests')
-            key=unseal(secret.value['encrypted'])
+            encrypted=secret.value['encrypted']
             s.merge(Setting(key='ai-test:last',value={'attempted':time.time()}));s.commit()
         try:
-            ai.investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
-        except ai.AIError as error:
-            return JSONResponse({'detail':str(error)},status_code=502)
+            with ai_runs.track('connection_test',cfg['ai_model'],subject=user['username']):
+                key=unseal(encrypted)
+                ai.investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
+        except Exception as error:
+            return JSONResponse({'detail':ai_runs.safe_error(error)},status_code=502)
         return {'ok':True,'detail':'OpenAI connection and structured-output test passed using the saved settings. No server evidence was sent.'}
     finally:lock.release()
 
@@ -451,9 +463,7 @@ def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(auth))
 @app.get('/api/investigation-status')
 def investigation_status(user=Depends(auth)):
     with Session() as s:
-        pending=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.verdict.in_(['pending','error'])))
-        oldest=s.scalar(select(func.min(Behavior.first_seen)).where(Behavior.approved==False,Behavior.verdict.in_(['pending','error'])))
-        return {'pending':pending,'oldest':oldest,'hourly_limit':config(s)['ai_hourly_limit'],'enabled':config(s)['ai_enabled']}
+        return ai_runs.status(s)
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(auth)):
@@ -685,7 +695,7 @@ def rollout(body:RolloutInput,user=Depends(auth)):
         # One transaction: no partial rollout submission. The first server is the canary.
         ids=[]
         for host_id,specs,policy in prepared:
-            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_depends_on':ids[-1:],'_recovery_policy':policy})
+            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']})
             s.add(job);ids.append(job.id)
         audit(s,'create staged rollout',user['username']+' '+','.join(ids));s.commit()
         return {'jobs':ids,'canary':ids[0]}
@@ -839,7 +849,7 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(aut
         if row.state!='ready' or plan.get('blockers'):raise HTTPException(409,'Resolve every blocker and regenerate the plan before GO')
         if plan['expires']<time.time():raise HTTPException(409,'Plan expired; regenerate it')
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Wait for existing host operations before GO')
-        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-upgrade',payload={'plan_id':row.id,'digest':row.digest})
+        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-upgrade',payload={'plan_id':row.id,'digest':row.digest,'_actor':user['username']})
         row.job_id=job.id;row.state='approved';s.add(job);audit(s,'approve distribution upgrade',user['username']+' '+row.id+' '+row.digest);s.commit()
         return {'state':row.state,'job_id':job.id}
 
@@ -876,3 +886,42 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(aut
         scheduling.cancel_pending(s,schedule_id,'Schedule deleted')
         s.delete(row);audit(s,'delete patch schedule',user['username']+' '+schedule_id);s.commit()
     return {'ok':True}
+
+@app.get('/api/ai/runs')
+def ai_run_list(purpose:str='',offset:int=0,limit:int=50,user=Depends(auth)):
+    if purpose not in ('','triage','update_scoring','connection_test','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
+    with Session() as s:
+        query=select(ai_runs.AIRun)
+        if purpose:query=query.where(ai_runs.AIRun.purpose==purpose)
+        rows=list(s.scalars(query.order_by(ai_runs.AIRun.started.desc(),ai_runs.AIRun.id).offset(offset).limit(limit+1)))
+        return {'items':[object_dict(r) for r in rows[:limit]],'more':len(rows)>limit}
+
+@app.get('/api/ai/runs/{run_id}')
+def ai_run_detail(run_id:str,user=Depends(auth)):
+    with Session() as s:
+        row=s.get(ai_runs.AIRun,run_id)
+        if not row:raise HTTPException(404,'AI run not found')
+        return object_dict(row)|{'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
+
+@app.post('/api/investigations/{behavior_id}/retry')
+def retry_investigation(behavior_id:str,user=Depends(auth)):
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Retry when it finishes.')
+    try:
+        with Session() as s:
+            row=s.get(Behavior,behavior_id)
+            if not row or row.approved or row.verdict not in ('error','pending'):raise HTTPException(409,'Only unapproved failed/pending investigations can be retried')
+            row.attempted=0;row.verdict='pending';row.analysis='Retry requested by an administrator; hourly limits still apply.'
+            audit(s,'retry AI investigation',user['username']+' '+row.id);s.commit()
+        return {'ok':True,'detail':'Investigation queued. AI must be enabled and a worker available; hourly limits still apply.'}
+    finally:lock.release()
+
+@app.get('/api/package-history')
+def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user=Depends(auth)):
+    if offset<0 or not 1<=limit<=200:raise HTTPException(400,'Invalid history pagination')
+    with Session() as s:
+        query=select(package_history.PackageEvent)
+        if host_id:host_or_404(s,host_id);query=query.where(package_history.PackageEvent.host_id==host_id)
+        if q:query=query.where(package_history.PackageEvent.name.contains(q[:200],autoescape=True))
+        rows=list(s.scalars(query.order_by(package_history.PackageEvent.recorded.desc(),package_history.PackageEvent.id.desc()).offset(offset).limit(limit+1)))
+        return {'items':[object_dict(r) for r in rows[:limit]],'more':len(rows)>limit}

@@ -230,3 +230,16 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
  .host-table td { padding: 0; border: 0; min-width: 0; }.host-table td:first-child { grid-column: 1/-1; font-size: 14px; }.host-table td:nth-child(3) { grid-column: 1; font-size: 11px; }.host-table td:last-child { grid-column: 2; grid-row: 2/4; align-self: center; }
  .host-table td[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 9px; margin-bottom: 3px; }
 }
+
+/* AI observability, update assessments and the package ledger. */
+.selection-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:0 0 12px; }
+.selection-bar [role=status] { color:var(--muted); font-size:12px; }
+.package-table { min-width:1120px; }.package-table td { vertical-align:top; }
+.package-assessment { min-width:145px; max-width:250px; }.package-assessment summary { display:flex; align-items:center; gap:7px; font-size:11px; }.package-assessment p { font-size:12px; margin-top:12px; overflow-wrap:anywhere; }
+.score { display:inline-flex; gap:2px; align-items:baseline; font-size:22px; color:var(--mint); font-weight:700; font-variant-numeric:tabular-nums; }.score small { display:inline; font-size:10px; }.score.important { color:var(--amber); }.score.urgent { color:var(--red); }
+.installation-cell { min-width:180px; max-width:260px; }.installation-cell strong { font-size:12px; }.installation-cell summary { font-size:11px; margin-top:10px; }.installation-cell p { margin-top:10px; }
+.status-facts { display:flex; flex-wrap:wrap; gap:22px; margin-bottom:16px; color:var(--muted); font-size:12px; }.status-facts strong { font-size:19px; color:var(--mint); margin-right:4px; }
+.log-message { max-width:450px; overflow-wrap:anywhere; }.role-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:24px; }
+#ai-log-table td { vertical-align:top; }#package-history-table td { vertical-align:top; overflow-wrap:anywhere; }
+@media(max-width:760px) { .role-grid { grid-template-columns:1fr; gap:10px; }.selection-bar { align-items:flex-start; }.selection-bar .actions { width:100%; }.status-facts { gap:12px; } }
+@media(max-height:1000px) and (min-width:761px) { .patchy-note { display:none; }.aside-bottom { padding-top:16px; }.nav-label { padding-top:10px; }.workspace { padding-top:16px; }nav a { padding-top:9px; padding-bottom:9px; } }

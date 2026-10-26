@@ -64,7 +64,7 @@ def test_plan_go_is_digest_bound_expiring_idempotent_and_admin_only(admin):
     assert admin.post(url,json={'decision':'go','digest':sha}).json()==result.json()
     with Session() as s:
         row=s.get(releases.ReleasePlan,rid);assert row.state=='approved'
-        assert s.get(Job,row.job_id).payload=={'plan_id':rid,'digest':sha}
+        assert s.get(Job,row.job_id).payload=={'plan_id':rid,'digest':sha,'_actor':'admin'}
         assert 'target' not in row.encrypted and json.loads(unseal(row.encrypted))['target']['version']=='13'
     # Role restrictions apply to both read-only plan contents and GO.
     from tests.test_operations import login_as
