@@ -501,7 +501,9 @@ if __name__=='__main__':
     from .db import init
     import signal
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
-    init()
-    signal.signal(signal.SIGTERM,lambda *args:stop.set())
-    signal.signal(signal.SIGINT,lambda *args:stop.set())
-    loop()
+    from .database_config import runtime_guard
+    with runtime_guard():
+        init()
+        signal.signal(signal.SIGTERM,lambda *args:stop.set())
+        signal.signal(signal.SIGINT,lambda *args:stop.set())
+        loop()

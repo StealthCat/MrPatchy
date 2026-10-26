@@ -25,18 +25,23 @@ from .security import unseal
 
 @asynccontextmanager
 async def lifespan(app):
-    init()
-    with Session() as s:
-        if not s.get(Setting,'admin'):
-            password=os.getenv('ADMIN_PASSWORD','')
-            if len(password)<12 or password=='replace-with-a-long-unique-password': raise RuntimeError('Set ADMIN_PASSWORD to at least 12 characters before first start')
-            s.add(Setting(key='admin',value={'hash':password_hash(password)})); s.commit()
-    with Session() as s:
-        if not s.get(User,'admin'):
-            s.add(User(username='admin',password=s.get(Setting,'admin').value['hash'],role='admin'));s.commit()
-    if os.getenv('DISABLE_SCHEDULER')!='1': worker.start()
-    yield
-    worker.stop.set()
+    from .database_config import runtime_guard
+    with runtime_guard():
+        init()
+        with Session() as s:
+            if not s.get(Setting,'admin'):
+                password=os.getenv('ADMIN_PASSWORD','')
+                if len(password)<12 or password=='replace-with-a-long-unique-password': raise RuntimeError('Set ADMIN_PASSWORD to at least 12 characters before first start')
+                s.add(Setting(key='admin',value={'hash':password_hash(password)})); s.commit()
+        with Session() as s:
+            if not s.get(User,'admin'):
+                s.add(User(username='admin',password=s.get(Setting,'admin').value['hash'],role='admin'));s.commit()
+        background=worker.start() if os.getenv('DISABLE_SCHEDULER')!='1' else None
+        try:
+            yield
+        finally:
+            worker.stop.set()
+            if background: background.join()
 app=FastAPI(title='Mr Patchy',version='0.2.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -364,6 +369,31 @@ def ai_test(user=Depends(auth)):
             return JSONResponse({'detail':ai_runs.safe_error(error)},status_code=502)
         return {'ok':True,'detail':'OpenAI connection and structured-output test passed using the saved settings. No server evidence was sent.'}
     finally:lock.release()
+
+@app.get('/api/settings/ai-models')
+def ai_models(user=Depends(auth)):
+    with Session() as s:
+        secret=s.get(Setting,'openai_key')
+        if not secret:raise HTTPException(400,'Save your API key in monitoring settings, then refresh models.')
+        encrypted=secret.value['encrypted']
+        selected=config(s)['ai_model']
+    try:models=ai.list_models(unseal(encrypted))
+    except Exception as error:return JSONResponse({'detail':ai_runs.safe_error(error)},status_code=502)
+    return {'models':models,'selected':selected,'selected_available':selected in models}
+
+from . import database_config
+
+@app.get('/api/settings/database')
+def database_settings(user=Depends(auth)):
+    return database_config.public_state()
+
+@app.put('/api/settings/database')
+def database_settings_save(body:database_config.DatabaseInput,user=Depends(auth)):
+    result=database_config.stage(body)
+    with Session() as s:
+        audit(s,'stage database migration',user['username']+' staged '+body.backend+' destination; active database unchanged')
+        s.commit()
+    return {'ok':True,'target':result}
 
 class TLSInput(BaseModel):
     domain:str=Field(default='',max_length=253)
