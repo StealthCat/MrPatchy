@@ -48,6 +48,6 @@ Real distribution upgrades, Raspberry Pi/systemd hardware, live IdP/SMTP/custom 
 3. Split the frontend into tested modules; add accessibility auditing and automated visual comparison to the existing browser workflows.
 4. Add shared authentication throttling/MFA transactions before supporting multiple web replicas; benchmark large-fleet inventory and investigation workloads before setting capacity guarantees.
 
-![Login with named accounts](screenshots/login.webp)
+![Login with named accounts](screenshots/login.jpg)
 
-![Saved operations policy](screenshots/operations.webp)
+![Saved operations policy](screenshots/operations.jpg)

@@ -4,12 +4,17 @@
 
 Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian, Raspberry Pi OS, Fedora and modern DNF/Yum-based RPM systems. Manage packages and repositories over SSH, plan AI-assisted release upgrades with one go/no-go approval, monitor system integrity and process behavior, and coordinate patching, alerts and recovery across your fleet.
 
-![Fleet overview with illustrative documentation data](docs/screenshots/overview.webp)
+![Fleet overview with illustrative documentation data](docs/screenshots/overview.jpg)
+
+Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you company throughout the workspace. The glass interface brings consistent controls, readable status cards, responsive navigation, and guided enrollment to every part of fleet care. [UI design and component guide](docs/UI_DESIGN.md).
+
+[Sign-in preview](docs/screenshots/login.jpg) · [Mobile workspace](docs/screenshots/mobile.jpg) · [Settings](docs/screenshots/settings.jpg)
 
 ## Features
 
 | Area | Capabilities |
 |---|---|
+| Workspace | Glass panels, mascot-guided onboarding, modular UI components, responsive desktop/mobile layouts, keyboard focus and reduced-motion support |
 | Enrollment | Three-step endpoint → offline preparation → SSH completion; downloadable per-server Bash installer; expiring curl links; independent installation verification |
 | Package management | Installed/held/broken package inventory, inventory history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair, configurable deadlines and priority overrides |
 | Repositories | Central native APT/DNF verification; `.list`, Deb822 `.sources` and RPM `.repo`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
@@ -86,9 +91,9 @@ Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed alrea
 
 **Servers → Manage → Download Bash installer** remains available for every configured server. A fresh download contains the server's current SSH identity; download again after key rotation. Re-running an old saved script can reinstall its old public key.
 
-![Offline enrollment wizard](docs/screenshots/enrollment.webp)
+![Offline enrollment wizard](docs/screenshots/enrollment.jpg)
 
-![Curl enrollment with selectable HTTPS endpoint](docs/screenshots/enrollment-curl.webp)
+![Curl enrollment with selectable HTTPS endpoint](docs/screenshots/enrollment-curl.jpg)
 
 ## Review and install updates
 
@@ -98,7 +103,7 @@ In **Packages**, select a server, review candidates and choose updates. Confirma
 
 Explicit installation refreshes target metadata and requests the recorded exact versions. Package removal and forced changes to holds are prohibited; APT retains existing configuration files with `--force-confold`; RPM follows native config-file flags and may create `.rpmnew`/`.rpmsave` files. RPM preview shows candidates; dependency resolution runs on the target before installation. Maintainer scripts may restart services. **Automatic reboot is available only under an explicitly reviewed, enabled policy.**
 
-![Patch approval showing reboot and rollback policy](docs/screenshots/patch-review.webp)
+![Patch approval showing reboot and rollback policy](docs/screenshots/patch-review.jpg)
 
 | Priority | Default deadline |
 |---|---:|
@@ -119,7 +124,7 @@ Each schedule can independently enable **high** and **critical** out-of-cycle up
 
 Review and explicitly approve unattended installation before enabling a schedule. Jobs refresh signed repository metadata, select exact candidate versions and preserve package holds, host-key verification, recovery quarantine and per-host serialization. Unhealthy/offline targets wait within the allowed start window. Missed windows are skipped; pausing, editing or deleting cancels queued work while already running patches may finish. The selected reboot/rollback behavior must match each target’s saved recovery policy.
 
-![Monthly patch calendar](docs/screenshots/patch-calendar.webp)
+![Monthly patch calendar](docs/screenshots/patch-calendar.jpg)
 
 See [scheduling behavior, daylight saving, safety checks and failure handling](docs/PATCH_SCHEDULES.md). Distribution release upgrades still use their separate reviewed GO workflow.
 
@@ -147,7 +152,7 @@ One GO authorizes the named release transition, displayed configuration edits, s
 
 Supported paths are Ubuntu **22.04 → 24.04 → 26.04 LTS** (only when offered by Ubuntu) and Debian **11 → 12 → 13**, one hop at a time on amd64/arm64 systemd hosts. Ubuntu uses its official release upgrader; its package list is labeled an estimate. Raspberry Pi OS major versions are flagged as requiring a new-image migration.
 
-![Release upgrade review and configuration diff](docs/screenshots/release-upgrade.webp)
+![Release upgrade review and configuration diff](docs/screenshots/release-upgrade.jpg)
 
 A tested release-capable snapshot adapter is mandatory. Generic root-only Snapper snapshots do not automatically qualify. AI review sends configuration text to your API provider and covers package-owned conffiles; custom applications, data migrations and external volumes require site-specific validation/recovery. Blockers disable GO. See [release upgrades, privacy, adapter contracts and limits](docs/RELEASE_UPGRADES.md) before enabling this workflow.
 

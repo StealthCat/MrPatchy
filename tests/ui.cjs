@@ -15,7 +15,7 @@ const assert=require('assert/strict');
     const page=await browser.newPage({viewport:{width:1440,height:1000}});
     const shots=process.env.SCREENSHOT_DIR;
     if(shots)fs.mkdirSync(shots,{recursive:true});
-    const capture=async(name,fullPage=true)=>{if(shots)await page.screenshot({path:path.join(shots,name+'.png'),fullPage});};
+    const capture=async(name,fullPage=true)=>{if(shots){await page.evaluate(async()=>{window.scrollTo(0,0);await Promise.all([...document.images].map(img=>img.decode().catch(()=>{})));});await page.screenshot({path:path.join(shots,name+'.jpg'),type:'jpeg',quality:88,fullPage});}};
     const errors=[];page.on('pageerror',e=>errors.push(String(e)));
     await page.goto('http://127.0.0.1:8097');
     await page.getByRole('button',{name:'Open your workspace'}).waitFor();
@@ -174,6 +174,7 @@ const assert=require('assert/strict');
     await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await capture('mobile');
+    await require('./ui_design.cjs')(page,capture);
     assert.deepEqual(errors,[]);
     console.log('Desktop/mobile UI smoke checks passed');
   }finally{if(browser)await browser.close();server.kill();fs.rmSync(data,{recursive:true,force:true});}

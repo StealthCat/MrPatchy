@@ -74,4 +74,4 @@ Existing saved profiles survive app/Caddy restarts. Changing `DOMAIN` later does
 
 Validation includes native Caddy adaptation of independent ACME policies and EAB/trust configuration, migration and rollback regressions, browser profile switching/redaction, and CI using real Docker IP/port publication, verified TLS for both names, redirects on 18443, and Caddy restart persistence. Live public/private CA issuance still depends on your DNS, trust, CA policy and network routing.
 
-![HTTPS profile editor](screenshots/https-profiles.webp)
+![HTTPS profile editor](screenshots/https-profiles.jpg)
