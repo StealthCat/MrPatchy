@@ -118,6 +118,12 @@ def installed(inv):
     return result
 
 
+def redact_config(text):
+    # Preserve layout while preventing common DNF credentials entering inventory/history.
+    text=re.sub(r'(?im)^(\s*(?:password|proxy_password)\s*=).*$',r'\1[redacted]',text)
+    return re.sub(r'(?i)(https?://)[^\s/@]+@',r'\1[redacted]@',text)
+
+
 def local_inventory():
     import rpm
     files={};keys={};variables={}
@@ -129,7 +135,7 @@ def local_inventory():
             p=Path(name)
             if p.is_file():
                 if p.stat().st_size>2_000_000:raise ValueError('RPM configuration too large: '+name)
-                files[name]=p.read_text()
+                files[name]=redact_config(p.read_text()) if source_path(name) or name in MAIN_FILES else p.read_text()
                 if '/vars/' in name:variables[p.name]=files[name].strip()
     for name in glob.glob(KEY_ROOT+'*'):
         p=Path(name)
@@ -172,8 +178,9 @@ def local_inventory():
 def validate_main(inv):
     main=next((parse(inv['files'][p]) for p in MAIN_FILES if p in inv['files']),None)
     if main and main.has_section('main'):
+        if any(main.get('main',k,fallback='').strip() for k in ('password','username','proxy_password','proxy_username','sslclientcert','sslclientkey')):raise ValueError('Target DNF credentials/client certificates require a supported repository access adapter')
         if main.get('main','reposdir',fallback=REPO_ROOT).rstrip('/')!=REPO_ROOT.rstrip('/'):raise ValueError('Custom RPM reposdir is not supported; use /etc/yum.repos.d')
-        if main.get('main','tsflags',fallback='').strip():raise ValueError('Nonempty RPM tsflags require manual review')
+        if set(main.get('main','tsflags',fallback='').replace(',',' ').split())-{'nodocs'}:raise ValueError('Unsafe RPM tsflags require manual review (only nodocs is supported)')
     return main
 
 
@@ -274,7 +281,9 @@ def discover(inv, root, access):
             row['candidate']=str(candidate.epoch)+':'+candidate.version+'-'+candidate.release
             row['origin']=candidate.reponame
             # Advisory severity is metadata, not an AI classification.
-            for advisory in candidate.get_advisories(hawkey.EQ):
+            for advisory in candidate.get_advisories(hawkey.EQ | hawkey.LT | hawkey.GT):
+                if not any(p.name==candidate.name and p.arch==candidate.arch and
+                           compare(p.evr,row['installed'])>0 and compare(p.evr,candidate.evr)<=0 for p in advisory.packages):continue
                 severity=str(advisory.severity or '').lower()
                 if severity=='critical':row['priority']='critical'
                 elif row['priority']!='critical' and (severity in ('important','high') or advisory.type==hawkey.ADVISORY_SECURITY):row['priority']='high'
@@ -285,12 +294,13 @@ def patch(specs):
     import dnf
     inv=local_inventory()
     # Fail closed for unsupported trust/settings instead of silently ignoring them.
-    definitions={r['id']:r for r in repositories(inv['files'],inv['rpm_vars'])};validate_main(inv)
+    definitions={r['id']:r for r in repositories(inv['files'],inv['rpm_vars'])};main_config=validate_main(inv)
     current={p['name']:p for p in installed(inv)}
     if not isinstance(specs,list) or not 1<=len(specs)<=500 or len(set(specs))!=len(specs):raise ValueError('Explicit RPM package:arch=epoch:version-release list required')
     with dnf.Base() as base:
         base.conf.read();base.conf.plugins=False;base.conf.gpgcheck=True;base.conf.localpkg_gpgcheck=True
-        base.conf.tsflags=[];base.conf.assumeyes=False;base.conf.installonly_limit=0
+        base.conf.tsflags=main_config.get('main','tsflags',fallback='').replace(',',' ').split() if main_config else []
+        base.conf.assumeyes=False;base.conf.installonly_limit=0
         base.read_all_repos()
         for repo in base.repos.iter_enabled():
             if repo.id not in definitions:raise ValueError('Uncaptured active RPM repository: '+repo.id)

@@ -107,6 +107,16 @@ def test_rpm_inherits_trust_and_rejects_global_transaction_overrides():
     files={'/etc/yum.repos.d/vendor.repo':source().replace('https://','http://'),
            '/etc/dnf/dnf.conf':'[main]\nrepo_gpgcheck=1\n'}
     assert rpm.repositories(files,inventory()['rpm_vars'])[0]['repo_gpgcheck']
+    files['/etc/dnf/dnf.conf']='[main]\nrepo_gpgcheck=1\ntsflags=nodocs\n'
+    assert rpm.repositories(files,inventory()['rpm_vars'])
     for option in ('reposdir=/tmp/repos','tsflags=nosignature'):
         files['/etc/dnf/dnf.conf']='[main]\n'+option+'\n'
         with pytest.raises(ValueError):rpm.repositories(files,inventory()['rpm_vars'])
+
+
+def test_rpm_inventory_redacts_repository_credentials():
+    text='[vendor]\npassword=secret-value\nproxy_password = proxy-secret\nbaseurl=https://user:secret@example.test/rpm\ngpgcheck=1\n'
+    cleaned=rpm.redact_config(text)
+    assert 'secret' not in cleaned and 'gpgcheck=1' in cleaned and cleaned.count('[redacted]')==3
+    with pytest.raises(ValueError):rpm.repositories({'/etc/yum.repos.d/vendor.repo':cleaned},{})
+    with pytest.raises(ValueError):rpm.validate_main({'files':{'/etc/dnf/dnf.conf':'[main]\nproxy_password=[redacted]'}})
