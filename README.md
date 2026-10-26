@@ -14,7 +14,7 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 
 | Area | Capabilities |
 |---|---|
-| Workspace | Glass panels, mascot-guided onboarding, modular UI components, responsive desktop/mobile layouts, keyboard focus and reduced-motion support |
+| Workspace | Dedicated server pages with tabbed overview, packages, patching timeline, investigations, AI activity, history, repositories and maintenance; glass panels, mascot-guided onboarding, modular UI components, responsive desktop/mobile layouts, keyboard focus and reduced-motion support |
 | Enrollment | Three-step endpoint → offline preparation → SSH completion; downloadable per-server Bash installer; expiring curl links; independent installation verification |
 | Package management | Installed/held/broken inventory, select-all reviewed batches, explained AI importance scores, expected start times, per-package change history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair and priority policies |
 | Repositories | Central native APT/DNF verification; `.list`, Deb822 `.sources` and RPM `.repo`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
@@ -27,6 +27,14 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
 [Quick start](#quick-start) · [Enrollment](#enroll-a-server-in-three-steps) · [Release upgrades](#distribution-release-upgrades) · [Recovery](#workers-databases-and-backups) · [Documentation](#documentation)
+
+## Server workspaces
+
+Open **Servers → a server name** (or **Open server**) to see everything recorded for that server in one place. Separate tabs cover its overview, packages, patching timeline, investigations, AI activity with estimated costs, history, repositories and maintenance. Switch servers while keeping the same tab, or bookmark a server tab directly. Sensitive tabs and actions retain the existing role permissions.
+
+![Individual server overview with illustrative data](docs/screenshots/server-overview.jpg)
+
+[Server tabs and permissions](docs/SERVER_WORKSPACES.md) · [Patching timeline preview](docs/screenshots/server-patching.jpg)
 
 ## Quick start
 
@@ -267,6 +275,7 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 
 ## Documentation
 
+- [Server workspaces, tabs and permissions](docs/SERVER_WORKSPACES.md)
 - [Fedora, RPM and DNF/Yum support](docs/RPM_SUPPORT.md)
 - [Operations and troubleshooting](docs/OPERATIONS.md)
 - [AI diagnostics, update scores, expected installation and package history](docs/AI_AND_PACKAGE_HISTORY.md)

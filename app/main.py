@@ -80,7 +80,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
+        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories','/snapshot'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -154,6 +154,44 @@ def dashboard(user=Depends(auth)):
 @app.get('/api/hosts')
 def hosts(user=Depends(auth)):
     with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).order_by(Host.name))]
+
+@app.get('/api/hosts/{host_id}/summary')
+def host_summary(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        h=host_or_404(s,host_id); cfg=config(s); now=time.time()
+        packages=list(s.scalars(select(Package).where(Package.host_id==host_id)))
+        updates=[p for p in packages if p.candidate]
+        behaviors=list(s.execute(select(Behavior.verdict,Behavior.approved).where(Behavior.host_id==host_id)))
+        jobs=dict(s.execute(select(Job.state,func.count()).where(Job.host_id==host_id).group_by(Job.state)).all())
+        last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='patch').order_by(Job.created.desc(),Job.id).limit(1))
+        return {'host':object_dict(h,('inventory','telemetry','baseline')),
+                'system':{k:h.inventory.get(k) for k in ('os','architecture','foreign_architectures','package_manager','machine_id','collected')},
+                'collector':{'collected':h.telemetry.get('collected'), 'hashed_at':h.telemetry.get('hashed_at'),
+                             'processes':len(h.telemetry.get('processes',[])), 'managed_files':len(h.telemetry.get('managed',{}))},
+                'counts':{'packages':len(packages),'updates':len(updates),'held':sum(p.held for p in packages),
+                          'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),
+                          'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
+                          'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
+                'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+
+@app.get('/api/hosts/{host_id}/snapshot')
+def host_snapshot(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        h=host_or_404(s,host_id)
+        return {'inventory':h.inventory,'telemetry':h.telemetry,'baseline':h.baseline}
+
+@app.get('/api/hosts/{host_id}/patching')
+def host_patching(host_id:str,start:float,end:float,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id)
+        events=scheduling.calendar(s,start,end,host_id)
+        policies=[scheduling.serialize(r) for r in s.scalars(select(scheduling.PatchSchedule))
+                  if r.policy['all_hosts'] or host_id in r.policy['host_ids']]
+        # Display this host's policy without exposing other schedule members.
+        policies=[{k:v for k,v in p.items() if k not in ('host_ids','all_hosts')} for p in policies]
+        window=s.get(Setting,'window:'+host_id)
+        return {'events':events,'schedules':policies,'windows':window.value['windows'] if window else [],
+                'recovery':operations.recovery_policy(s,host_id)}
 class HostInput(BaseModel):
     name:str=Field(min_length=1,max_length=120)
     address:str=Field(min_length=1,max_length=253,pattern=r'^[A-Za-z0-9:.\-]+$')
@@ -306,10 +344,11 @@ def key_upload(host_id:str,body:KeyInput,user=Depends(auth)):
     with Session() as s:
         host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'key',body.model_dump())}
 @app.get('/api/investigations')
-def investigations(host_id:str='',user=Depends(auth)):
+def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(auth)):
+    if offset<0 or not 1<=limit<=500:raise HTTPException(400,'Invalid investigation pagination')
     with Session() as s:
-        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc()).limit(500)
-        if host_id: stmt=stmt.where(Behavior.host_id==host_id)
+        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
+        if host_id: host_or_404(s,host_id);stmt=stmt.where(Behavior.host_id==host_id)
         return [object_dict(x) for x in s.scalars(stmt)]
 class ApproveInput(BaseModel): approved:bool
 @app.put('/api/investigations/{behavior_id}')
@@ -319,8 +358,12 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(auth)):
         if not row: raise HTTPException(404,'Behavior not found')
         row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 @app.get('/api/jobs')
-def jobs(user=Depends(auth)):
-    with Session() as s: return [object_dict(x,('payload',)) for x in s.scalars(select(Job).order_by(Job.created.desc()).limit(100))]
+def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):
+    if offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid operation pagination')
+    with Session() as s:
+        query=select(Job)
+        if host_id:host_or_404(s,host_id);query=query.where(Job.host_id==host_id)
+        return [object_dict(x,('payload',)) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
 def audit_log(user=Depends(auth)):
     with Session() as s: return [object_dict(x) for x in s.scalars(select(Audit).order_by(Audit.created.desc()).limit(200))]
@@ -990,14 +1033,21 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(aut
     return {'ok':True}
 
 @app.get('/api/ai/runs')
-def ai_run_list(purpose:str='',offset:int=0,limit:int=50,user=Depends(auth)):
+def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(auth)):
     if purpose not in ('','triage','update_scoring','connection_test','release_configuration','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
     with Session() as s:
         query=select(ai_runs.AIRun)
         if purpose:query=query.where(ai_runs.AIRun.purpose==purpose)
+        if host_id:
+            host_or_404(s,host_id)
+            query=query.where((ai_runs.AIRun.host_id==host_id)|ai_runs.AIRun.id.in_(
+                select(ai_runs.AIRunHost.run_id).where(ai_runs.AIRunHost.host_id==host_id))|ai_runs.AIRun.id.in_(
+                select(update_scores.UpdateScore.run_id).where(update_scores.UpdateScore.host_id==host_id)))
         rows=list(s.scalars(query.order_by(ai_runs.AIRun.started.desc(),ai_runs.AIRun.id).offset(offset).limit(limit+1)))
         receipts=ai_runs.call_receipts(s,[r.id for r in rows[:limit]])
-        return {'items':[object_dict(r)|{'cost':ai_runs.cost_summary(r,receipts[r.id])} for r in rows[:limit]],'more':len(rows)>limit}
+        members=ai_runs.run_hosts(s,[r.id for r in rows[:limit]])
+        return {'items':[object_dict(r)|{'cost':ai_runs.cost_summary(r,receipts[r.id]),
+            'shared_batch':len(members[r.id])>1} for r in rows[:limit]],'more':len(rows)>limit}
 
 @app.get('/api/ai/runs/{run_id}')
 def ai_run_detail(run_id:str,user=Depends(auth)):

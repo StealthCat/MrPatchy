@@ -240,7 +240,7 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
         monkeypatch.setattr(releases.apt,'DATA',tmp_path)
         monkeypatch.setattr(releases,'simulate',lambda *a:(tmp_path,tmp_path/'apt.conf',{'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main\n'},[],[{'action':'install','package':'nginx','version':'2'}]))
         monkeypatch.setattr(releases,'vendor_files',lambda *a:{'/etc/nginx/nginx.conf':'vendor\n'})
-        monkeypatch.setattr(releases,'ai_review',lambda *a:{'content':'merged\n','reason':'Preserve local intent with new syntax','blockers':[]})
+        monkeypatch.setattr(releases,'ai_review',lambda *a,**kw:{'content':'merged\n','reason':'Preserve local intent with new syntax','blockers':[]})
         def call(host,req,**kw):
             if req['action']=='release-inspect':return inspect
             assert req['action']=='release-configs'

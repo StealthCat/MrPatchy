@@ -78,8 +78,10 @@ def run_one():
             if not batch:return
             s.commit();encrypted=secret.value['encrypted']
         ids=[item['id'] for item in batch]
+        with Session() as s:
+            host_ids=list(s.scalars(select(UpdateScore.host_id).where(UpdateScore.id.in_(ids)).distinct()))
         try:
-            with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates') as run_id:
+            with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
                 key=unseal(encrypted)
                 with Session() as s:
                     for identifier in ids:s.get(UpdateScore,identifier).run_id=run_id
