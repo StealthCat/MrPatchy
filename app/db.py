@@ -6,7 +6,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 DATA = Path(os.getenv('DATA_DIR', '/data'))
 DATA.mkdir(parents=True, exist_ok=True)
-URL = os.getenv('DATABASE_URL', f'sqlite:///{DATA}/mrpatchy.db')
+from .database_config import runtime_url
+URL = runtime_url()
 engine = create_engine(URL, pool_pre_ping=True, **({'connect_args': {'check_same_thread': False, 'timeout': 30}} if URL.startswith('sqlite') else {}))
 if URL.startswith('sqlite'):
     @event.listens_for(engine, 'connect')

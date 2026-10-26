@@ -29,6 +29,7 @@ def verify(archive):
 
 def backup(source,destination):
     source=Path(source);destination=Path(destination)
+    if (source/'database-active.json').exists():raise ValueError('An offline migration profile is active; use scripts/recovery.py to back up the active database')
     if not (source/'mrpatchy.db').is_file():raise ValueError('SQLite database missing; MySQL requires a native dump')
     with tempfile.TemporaryDirectory() as temporary:
         snapshot=Path(temporary)/'mrpatchy.db'

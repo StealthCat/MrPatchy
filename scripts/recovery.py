@@ -44,11 +44,22 @@ def mysql_options(url,directory):
         if not ca:raise ValueError('Remote MySQL backup/restore requires MYSQL_SSL_CA (MariaDB client)')
         with path.open('a') as stream:stream.write('ssl-ca='+escape(ca)+'\nssl-verify-server-cert=1\n')
     path.chmod(0o600);return path
+def active_database_url(data):
+    data=Path(data)
+    profile=data/'database-active.json'
+    if profile.exists():
+        from cryptography.fernet import Fernet
+        try:
+            value=json.loads(Fernet((data/'secret.key').read_bytes()).decrypt(json.loads(profile.read_text())['encrypted'].encode()))
+            return make_url(value['url'])
+        except Exception:raise ValueError('Cannot read active database profile; restore the matching secret.key') from None
+    return make_url(os.getenv('DATABASE_URL') or 'sqlite:///'+str(data/'mrpatchy.db'))
+
 def backup(data,tls,caddy_data,caddy_config):
     remote()
     with tempfile.TemporaryDirectory(prefix='mrpatchy-recovery-') as temporary:
         root=Path(temporary);bundle=root/'bundle';bundle.mkdir(mode=0o700)
-        data=Path(data);url=make_url(os.getenv('DATABASE_URL','sqlite:///'+str(data/'mrpatchy.db')))
+        data=Path(data);url=active_database_url(data)
         if url.get_backend_name()=='sqlite':
             from contextlib import closing
             with closing(open_sqlite(url.database)) as source,sqlite3.connect(bundle/'database.sqlite') as destination:source.backup(destination)
@@ -60,6 +71,10 @@ def backup(data,tls,caddy_data,caddy_config):
             backend='mysql'
         else:raise ValueError('Unsupported database')
         shutil.copy2(data/'secret.key',bundle/'secret.key')
+        # Retain encrypted profiles for reference, not automatic restore activation.
+        # A restore explicitly selects a new destination and may use new paths.
+        for name in ('database-active.json','database-target.json'):
+            if (data/name).is_file():shutil.copy2(data/name,bundle/name)
         copy_tree(data/'ssh',bundle/'ssh');copy_tree(tls,bundle/'tls')
         copy_tree(caddy_data,bundle/'caddy-data');copy_tree(caddy_config,bundle/'caddy-config')
         (bundle/'manifest.json').write_text(json.dumps({'format':1,'database':backend}))
