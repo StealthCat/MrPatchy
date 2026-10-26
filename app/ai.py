@@ -96,15 +96,17 @@ def request(payload,key,timeout=60):
     payload={**payload,'model':payload['model'].strip()}
     if not payload['model']:raise AIError('Save an API model ID in Settings before testing.')
     try:
-        ai_runs.event('api_request','Sending bounded structured-output request to OpenAI.',call=True)
+        call_id=ai_runs.request_started(payload['model'])
         response=httpx.post(URL,headers={'Authorization':'Bearer '+key},json=payload,timeout=timeout)
         ai_runs.response_received(response)
+        try:data=response.json()
+        except (ValueError,UnicodeDecodeError):data=None
+        if isinstance(data,dict):ai_runs.record_usage(call_id,data,payload)
         response.raise_for_status()
     except httpx.HTTPStatusError as error:raise http_error(error.response) from None
     except httpx.TimeoutException:raise AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.') from None
     except httpx.RequestError:raise AIError('Could not reach the OpenAI API. Check central-server DNS, outbound HTTPS, proxy settings and trusted CA certificates.') from None
-    try:data=response.json()
-    except (ValueError,UnicodeDecodeError):raise AIError('OpenAI returned invalid JSON. Check any HTTPS proxy or gateway between Mr Patchy and the API.') from None
+    if data is None:raise AIError('OpenAI returned invalid JSON. Check any HTTPS proxy or gateway between Mr Patchy and the API.')
     if not isinstance(data,dict):raise AIError('OpenAI returned an unexpected response format.')
     if data.get('status')!='completed':
         reason=data.get('incomplete_details') or {}

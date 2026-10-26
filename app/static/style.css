@@ -260,3 +260,12 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 @media(max-width:600px) { .settings-hub { grid-template-columns:1fr; }.settings-nav a { padding:9px 11px; }.ai-save-actions { align-items:stretch; flex-direction:column; } }
 
 .settings-saved { padding:12px 16px; border:1px solid #9de5d540; border-radius:12px; background:#548e7c20; color:var(--text); overflow-wrap:anywhere; }
+/* AI costs remain readable below one cent, with per-call usage on small screens. */
+.ai-cost-cell{min-width:140px;font-variant-numeric:tabular-nums}
+.ai-cost-detail{margin:22px 0}
+.ai-cost-total strong{font-size:1.6rem;font-variant-numeric:tabular-nums}
+.ai-cost-total small{display:block;margin-top:4px}
+.ai-call{border-top:1px solid var(--border,#34434d);padding:16px 0}
+.ai-call h3,.ai-call p{overflow-wrap:anywhere}
+.ai-token-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:12px;margin:12px 0;font-size:.85rem}
+.ai-token-grid strong{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;margin-top:4px}

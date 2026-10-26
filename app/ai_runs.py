@@ -3,11 +3,13 @@ import logging
 import re
 import time
 import uuid
+from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, select, func
+from sqlalchemy import String, Text, Double, Integer, JSON, select, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, config
+from . import ai_pricing
 
 log = logging.getLogger('uvicorn.error')
 active = ContextVar('ai_run', default=None)
@@ -33,6 +35,67 @@ class AIEvent(Base):
     created: Mapped[float] = mapped_column(Double, default=time.time)
     stage: Mapped[str] = mapped_column(String(80))
     message: Mapped[str] = mapped_column(Text)
+
+
+class AICall(Base):
+    """One durable usage receipt per attempted provider call, with no prompt/body."""
+    __tablename__ = 'ai_calls'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    created: Mapped[float] = mapped_column(Double, default=time.time)
+    requested_model: Mapped[str] = mapped_column(String(100))
+    response_model: Mapped[str] = mapped_column(String(100), default='')
+    service_tier: Mapped[str] = mapped_column(String(30), default='')
+    usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    pricing: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(30), default='unavailable')
+    reason: Mapped[str] = mapped_column(Text, default='No usage receipt was received. The call may still have incurred a charge.')
+
+
+def request_started(model):
+    run_id = active.get()
+    if not run_id: return None
+    message = 'Sending bounded structured-output request to OpenAI.'
+    with Session() as s:
+        row = s.get(AIRun, run_id)
+        if not row: return None
+        row.calls += 1; row.stage = 'api_request'; row.message = message
+        receipt = AICall(id=str(uuid.uuid4()), run_id=run_id, number=row.calls, requested_model=ai_pricing.identifier(model))
+        s.add(receipt)
+        s.add(AIEvent(run_id=run_id, stage='api_request', message=message)); s.commit()
+        return receipt.id
+
+
+def record_usage(call_id, data, payload):
+    if not call_id: return
+    values = ai_pricing.estimate(data, payload)
+    with Session() as s:
+        row = s.get(AICall, call_id)
+        if not row: return
+        for key, value in values.items(): setattr(row, key, value)
+        s.commit()
+
+
+def call_receipts(s, run_ids):
+    grouped = {identifier: [] for identifier in run_ids}
+    if not grouped: return grouped
+    for row in s.scalars(select(AICall).where(AICall.run_id.in_(grouped)).order_by(AICall.number)):
+        grouped[row.run_id].append(row)
+    return grouped
+
+
+def cost_summary(run, receipts):
+    priced = [r for r in receipts if r.status == 'estimated']
+    amount = sum((Decimal(r.pricing['estimated_usd']) for r in priced), Decimal(0))
+    calls = max(run.calls, len(receipts))
+    status = ('no_calls' if not calls else 'estimated' if len(priced) == calls
+              else 'partial' if priced else 'unavailable')
+    usages = [r.usage for r in receipts if r.usage]
+    tokens = {key: sum(u[key] for u in usages if u.get(key) is not None) for key in ai_pricing.TOKEN_FIELDS}
+    return {'status': status, 'estimated_usd': format(amount, 'f') if priced or not calls else None,
+            'currency': 'USD', 'priced_calls': len(priced), 'total_calls': calls,
+            'usage_calls': len(usages), 'tokens': tokens, 'in_progress': run.state == 'running'}
 
 
 def safe_error(error):
