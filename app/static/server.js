@@ -1,5 +1,5 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true]];
+const SERVER_TABS=[['overview','Overview'],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true]];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
 
 function serverPagination(root,offset,more,load,size=50){
@@ -27,7 +27,7 @@ async function serverWorkspace(revision){
  const body=$('#server-tab-body'),context={root:body,hostId:id};
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance};
+  const views={overview:serverOverview,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity};
   await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
@@ -91,4 +91,10 @@ async function serverMaintenance(revision,{root,hostId}){
   const form=$(selector);form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button'),status=form.querySelector('[role=status]');button.disabled=true;try{const value=body(new FormData(form));await api(path,'PUT',value);if(root.isConnected){status.textContent='Saved for '+h.name+'.';if(value.windows)root.querySelector('#server-window-summary').innerHTML=serverWindowText(value.windows);}}catch(error){if(root.isConnected)status.textContent=error.message;}finally{if(root.isConnected)button.disabled=false;}};
  }
  $('#server-snapshot-load').onclick=async event=>{const button=event.target;button.disabled=true;try{const data=await api('/hosts/'+hostId+'/snapshot');if(!root.isConnected)return;$('#server-snapshot').innerHTML=Object.entries(data).map(([name,value])=>`<details class="source"><summary>${esc(name)}</summary><pre>${esc(JSON.stringify(value,null,2))}</pre></details>`).join('');}catch(error){if(root.isConnected)toast(error.message);}finally{if(root.isConnected)button.disabled=false;}};
+}
+
+async function serverSecurity(revision,{root,hostId}){
+ const data=await api('/hosts/'+hostId+'/security');if(!root.isConnected||!currentView(revision,'servers'))return;
+ root.innerHTML='<p class="notice">Read-only, bounded ClamAV scanning. This is not full endpoint protection. No detection does not prove the server is clean. Upgrade the installed target helper before scanning.</p><form id="security-scan-form"><label>Absolute directories, one per line<textarea name="paths">/usr/local/bin\n/var/www\n/tmp</textarea></label><button>Queue security scan</button></form><section class="card"><h3>Latest scan coverage</h3><pre>'+esc(JSON.stringify(data,null,2))+'</pre></section>';
+ root.querySelector('form').onsubmit=async e=>{e.preventDefault();try{await api('/hosts/'+hostId+'/security','POST',{paths:new FormData(e.target).get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});toast('Security scan queued. Review operation status in Patching timeline; refresh this tab for the report.');}catch(error){toast(error.message);}};
 }

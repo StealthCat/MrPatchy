@@ -331,4 +331,72 @@ def main():
         except Exception as e:
             atomic(ROOT/'collector-error.json', {'error':str(e),'at':time.time()})
         time.sleep(max(0.1, 30-(time.monotonic()-started)))
+
+def security_scan(paths):
+    """Bounded, read-only file scan. Missing engines and skipped files are coverage gaps."""
+    import shutil
+    if not isinstance(paths,list) or not 1<=len(paths)<=16:
+        raise ValueError('Select 1–16 absolute directories')
+    roots=[]
+    for value in paths:
+        if not isinstance(value,str) or not value.startswith('/') or '..' in Path(value).parts:
+            raise ValueError('Invalid scan directory')
+        path=Path(value)
+        if path.is_symlink() or not path.is_dir():raise ValueError('Scan roots must be real directories')
+        roots.append(path)
+    engine=shutil.which('clamscan')
+    report={'version':1,'started':time.time(),'roots':paths,'engine':'ClamAV','available':bool(engine),
+            'scanned':0,'examined':0,'skipped':0,'findings':[],'gaps':[], 'state':'incomplete'}
+    if not engine:
+        report['gaps']=['ClamAV is not installed; no malware scanning performed'];return report
+    report['engine_version']=subprocess.run([engine,'--version'],capture_output=True,text=True,timeout=15).stdout[:500]
+    deadline=time.monotonic()+240
+    def gap(path,reason):
+        report['skipped']+=1
+        if len(report['gaps'])<100:report['gaps'].append(str(path)+': '+reason)
+    for root in roots:
+        for directory,dirs,files in os.walk(root,followlinks=False,onerror=lambda e:gap(e.filename,'Directory inaccessible')):
+            allowed=[]
+            for d in dirs:
+                child=Path(directory,d)
+                if child.is_symlink() or str(child) in ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine'):
+                    gap(child,'Directory excluded from scan')
+                else:allowed.append(d)
+            dirs[:]=allowed
+            for name in files:
+                path=Path(directory,name);report['examined']+=1
+                if report['examined']>2000 or time.monotonic()>deadline:
+                    gap(path,'Scan budget exhausted; remaining files not examined');report['finished']=time.time();return report
+                fd=None
+                try:
+                    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+                    before=os.fstat(fd)
+                    if not stat.S_ISREG(before.st_mode) or before.st_size>32*1024*1024:
+                        gap(path,'Not a regular file within the 32 MiB limit');continue
+                    digest=hashlib.sha256()
+                    while True:
+                        chunk=os.read(fd,1024*1024)
+                        if not chunk:break
+                        digest.update(chunk)
+                        if time.monotonic()>deadline:raise TimeoutError()
+                    os.lseek(fd,0,0)
+                    result=subprocess.run([engine,'--stdout','--no-summary','--alert-exceeds-max=yes',f'/proc/self/fd/{fd}'],pass_fds=(fd,),capture_output=True,text=True,timeout=min(30,max(1,deadline-time.monotonic())))
+                    after=os.fstat(fd)
+                    if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+                        gap(path,'File changed during scanning');continue
+                    if result.returncode not in (0,1):gap(path,'Scanner failed');continue
+                    if 'Heuristics.Limits.Exceeded' in result.stdout:gap(path,'Scanner inspection limit exceeded')
+                    report['scanned']+=1
+                    if result.returncode==1:
+                        report['findings'].append({'path':str(path),'sha256':digest.hexdigest(),'device':before.st_dev,'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:]})
+                        if len(report['findings'])>=100:
+                            gap(path,'Finding limit reached; scan stopped');report['finished']=time.time();return report
+                except (OSError,ValueError,TimeoutError,subprocess.TimeoutExpired) as error:gap(path,type(error).__name__)
+                finally:
+                    if fd is not None:os.close(fd)
+    report['finished']=time.time()
+    report['state']='completed_with_findings' if report['findings'] else 'no_detections'
+    if report['skipped']:report['state']='incomplete'
+    return report
+
 if __name__ == '__main__': main()

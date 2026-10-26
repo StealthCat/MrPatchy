@@ -314,6 +314,10 @@ def handle(req):
         if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
+    if action == 'security-scan':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import security_scan
+        return security_scan(req.get('paths'))
     if action == 'evidence': return process_evidence(req)
     if action == 'operation-status':
         with open(ROOT/'bridge.lock','a') as lock:

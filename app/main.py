@@ -80,7 +80,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories','/snapshot'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
+        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories','/snapshot','/security'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -1080,3 +1080,24 @@ def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user
         if q:query=query.where(package_history.PackageEvent.name.contains(q[:200],autoescape=True))
         rows=list(s.scalars(query.order_by(package_history.PackageEvent.recorded.desc(),package_history.PackageEvent.id.desc()).offset(offset).limit(limit+1)))
         return {'items':[object_dict(r) for r in rows[:limit]],'more':len(rows)>limit}
+
+
+class SecurityScanInput(BaseModel):
+    paths:list[str]=Field(min_length=1,max_length=16)
+
+@app.get('/api/hosts/{host_id}/security')
+def security_status(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.get(Setting,'security-scan:'+host_id)
+        return row.value if row else {'state':'not_scanned','findings':[],'gaps':['No security scan has completed']}
+
+@app.post('/api/hosts/{host_id}/security')
+def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(auth)):
+    for path in body.paths:
+        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    with Session() as s:
+        host_or_404(s,host_id)
+        pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-scan',Job.state.in_(['queued','running'])))
+        if pending:raise HTTPException(409,'A security scan is already queued or running')
+        return {'job_id':worker.enqueue(s,host_id,'security-scan',body.model_dump())}

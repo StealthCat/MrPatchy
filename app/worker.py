@@ -308,6 +308,10 @@ def execute_locked(job_id):
                 result=ssh.rotate(h)
                 h.baseline={**h.baseline,'/opt/drpatch/.ssh/authorized_keys':result['authorized_keys_sha256']}
                 job.output=json.dumps(result)
+            elif job.action=='security-scan':
+                result=ssh.call(h,{'action':'security-scan','paths':job.payload['paths']},timeout=300)
+                s.merge(Setting(key='security-scan:'+h.id,value={'job_id':job.id,**result}))
+                job.output=json.dumps({'state':result.get('state'),'findings':len(result.get('findings',[]))})
             elif job.action=='refresh': job.output=update_repos(s,h)
             elif job.action in ('patch','repository','key','repair'):
                 if job.action=='patch':
