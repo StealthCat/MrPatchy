@@ -62,13 +62,15 @@ def repositories(files, variables):
     allowed={'name','enabled','baseurl','metalink','mirrorlist','gpgkey','gpgcheck','repo_gpgcheck','sslverify',
              'exclude','excludepkgs','includepkgs','priority','cost','module_hotfixes','metadata_expire',
              'sslcacert','skip_if_unavailable','countme','enabled_metadata','timeout','retries','minrate','bandwidth','throttle','ip_resolve','type'}
+    main=validate_main({'files':files})
+    inherited={k:main.get('main',k) for k in ('gpgcheck','repo_gpgcheck','sslverify','sslcacert') if main and main.has_option('main',k)}
     result=[];ids=set()
     for path,text in files.items():
         if not source_path(path):continue
         cfg=parse(text)
         for name in cfg.sections():
             if not re.fullmatch(NAME,name) or name in ids:raise ValueError('Duplicate or invalid RPM repository ID: '+name)
-            ids.add(name);item=dict(cfg[name])
+            ids.add(name);item={**inherited,**dict(cfg[name])}
             if not truth(item.get('enabled','1')):continue
             unknown=set(item)-allowed
             if unknown:raise ValueError('Unsupported active RPM repository options: '+', '.join(sorted(unknown)))
@@ -134,8 +136,10 @@ def local_inventory():
         if key_path(name) and p.is_file() and p.stat().st_size<2_000_000:keys[name]=base64.b64encode(p.read_bytes()).decode()
     info={k:v.strip().strip('"') for k,v in (line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)}
     arch=rpm.expandMacro('%{_arch}')
-    variables.update(basearch=arch,arch=arch,releasever=info.get('VERSION_ID','').split('.')[0],
-                     releasever_major=info.get('VERSION_ID','').split('.')[0],releasever_minor=info.get('VERSION_ID','').partition('.')[2])
+    import dnf.rpm
+    releasever=variables.get('releasever') or dnf.rpm.detect_releasever('/') or info.get('VERSION_ID','').split('.')[0]
+    variables.update(basearch=dnf.rpm.basearch(arch),arch=arch,releasever=releasever,
+                     releasever_major=releasever.split('.')[0],releasever_minor=releasever.partition('.')[2])
     held=[]
     for name in ('/etc/dnf/plugins/versionlock.conf','/etc/yum/pluginconf.d/versionlock.conf'):
         if name in files:
@@ -193,6 +197,12 @@ def secure_mirrors(uri, ca=None, proxy=None):
 def central_base(inv, root, access):
     import dnf
     root=Path(root);root.mkdir(parents=True,exist_ok=True);root.chmod(0o700)
+    key_digest=hashlib.sha256(json.dumps(inv['keys'],sort_keys=True).encode()).hexdigest()
+    stamp=root/'key-digest'
+    if not stamp.exists() or stamp.read_text()!=key_digest:
+        # libdnf's cached keyring must not retain a key removed from inventory.
+        for directory in ('cache','persist'):shutil.rmtree(root/directory,ignore_errors=True)
+        stamp.write_text(key_digest)
     for name in ('cache','persist','log'):(root/name).mkdir(parents=True,exist_ok=True)
     base=dnf.Base()
     base.conf.installroot=str(root)

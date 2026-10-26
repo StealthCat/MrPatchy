@@ -64,6 +64,15 @@ def test_native_rpm_metadata_and_policy(tmp_path):
         assert rows[0]['candidate']=='2:1.0-1',rows
         assert rows[0]['priority']=='critical',rows
         assert len(rows[0]['installed_versions'])==2
+        mirror_uri=f'https://127.0.0.1:{server.server_port}/mirrors'
+        (repo/'mirrors').write_text('# Fixture mirror list\nhttp://insecure.invalid\n'+mirror_uri.rsplit('/',1)[0]+'\n')
+        assert rpm_support.secure_mirrors(mirror_uri,tmp_path/'ca.pem')==[mirror_uri.rsplit('/',1)[0]]
+        (repo/'mirrors').write_text('http://insecure.invalid\n')
+        with pytest.raises(ValueError,match='no verified HTTPS'):rpm_support.secure_mirrors(mirror_uri,tmp_path/'ca.pem')
+        (tmp_path/'central/cache/stale-keyring').touch()
+        inv['keys']['/etc/pki/rpm-gpg/removed.asc']=''
+        rpm_support.discover(inv,tmp_path/'central',{'ca':ca})
+        assert not (tmp_path/'central/cache/stale-keyring').exists()
         inv['files']['/etc/yum.repos.d/test.repo']=source+'exclude=Patchy_test\n'
         assert not rpm_support.discover(inv,tmp_path/'excluded',{'ca':ca})[0]['candidate']
         inv['files']['/etc/yum.repos.d/test.repo']=source

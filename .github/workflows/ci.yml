@@ -125,5 +125,5 @@ jobs:
       - run: /usr/bin/python3 -m venv --system-site-packages /tmp/patchy-rpm-test
       - run: /tmp/patchy-rpm-test/bin/pip install -r requirements-dev.txt
       - run: /tmp/patchy-rpm-test/bin/python -m pytest tests/test_rpm.py tests/test_rpm_native.py -q
-      - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.rpm -t mrpatchy-ssh-test .
+      - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.rpm -t mrpatchy-ssh-test tests/fixtures
       - run: /tmp/patchy-rpm-test/bin/python tests/integration_ssh.py

@@ -101,3 +101,12 @@ def test_rpm_transaction_rejects_unsafe_changes_and_untrusted_signatures(monkeyp
         with pytest.raises(ValueError):rpm.patch(['Example_pkg:x86_64=2.0-2'])
         assert not Base.completed
     with pytest.raises(ValueError):rpm.patch(['Example_pkg:x86_64=2.0-2;id'])
+
+
+def test_rpm_inherits_trust_and_rejects_global_transaction_overrides():
+    files={'/etc/yum.repos.d/vendor.repo':source().replace('https://','http://'),
+           '/etc/dnf/dnf.conf':'[main]\nrepo_gpgcheck=1\n'}
+    assert rpm.repositories(files,inventory()['rpm_vars'])[0]['repo_gpgcheck']
+    for option in ('reposdir=/tmp/repos','tsflags=nosignature'):
+        files['/etc/dnf/dnf.conf']='[main]\n'+option+'\n'
+        with pytest.raises(ValueError):rpm.repositories(files,inventory()['rpm_vars'])
