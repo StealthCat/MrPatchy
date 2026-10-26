@@ -1148,6 +1148,7 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
             if plan.state!='draft' or current!=plan.evidence_digest or body.evidence_digest!=current or time.time()-plan.created>86400:
                 raise HTTPException(409,'Plan is stale or already reviewed; generate a new plan')
             plan.state='approved';plan.approved_by=user['username'];plan.expires=time.time()+3600
+            incidents.event(s,row.id,user['username'],'plan_approved',{'plan_id':plan.id,'expires':plan.expires,'execution':'manual_only'})
             audit(s,'security plan approved for manual response',plan.id+' '+user['username']);s.commit()
             return {'ok':True,'expires':plan.expires,'execution':'manual_only'}
 
@@ -1170,3 +1171,35 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(auth))
             host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
     return body.model_dump()
+
+
+class IncidentReview(BaseModel):
+    state:str=Field(pattern=r'^(open|acknowledged|false_positive|resolved)$')
+    reason:str=Field(min_length=10,max_length=4000)
+    expected_updated:float=Field(ge=0,allow_inf_nan=False)
+
+@app.put('/api/hosts/{host_id}/security/incidents/{incident_id}')
+def security_incident_review(host_id:str,incident_id:str,body:IncidentReview,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            if row.updated!=body.expected_updated:raise HTTPException(409,'Incident changed; refresh before reviewing')
+            incidents.review(s,row,body.state,body.reason,user['username'],body.expected_updated)
+            s.commit();return object_dict(row)
+
+@app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/timeline')
+def security_incident_timeline(host_id:str,incident_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=s.get(incidents.Incident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+        events=list(s.scalars(select(incidents.IncidentEvent).where(incidents.IncidentEvent.incident_id==row.id).order_by(incidents.IncidentEvent.created.desc(),incidents.IncidentEvent.id).offset(offset).limit(51)))
+        return {'items':[object_dict(e) for e in events[:50]],'more':len(events)>50,'note':'Timeline recording begins with this version; older receipts and plans remain available.'}
+
+@app.get('/api/security/indicators/{sha256}')
+def security_indicator_matches(sha256:str,offset:int=0,user=Depends(auth)):
+    if not re.fullmatch('[a-f0-9]{64}',sha256) or offset<0:raise ValueError('Invalid hash or offset')
+    with Session() as s:
+        rows=list(s.scalars(select(incidents.Incident).where(incidents.Incident.evidence['sha256'].as_string()==sha256).order_by(incidents.Incident.updated.desc(),incidents.Incident.id).offset(offset).limit(51)))
+        return {'items':[{'id':r.id,'host_id':r.host_id,'state':r.state,'path':r.evidence['path'],'updated':r.updated,'scan_id':r.scan_id} for r in rows[:50]],'more':len(rows)>50,'scope':'Recorded detections only; this does not perform a fleet scan.'}

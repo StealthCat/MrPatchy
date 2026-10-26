@@ -54,10 +54,12 @@ def record(s,host_id,job_id,report):
     for finding in findings:
         identifier=digest({'host':host_id,'path':finding['path'],'sha256':finding['sha256']})
         row=s.get(Incident,identifier)
+        previous=row.state if row else None
         if row:
             row.updated=time.time();row.scan_id=job_id;row.evidence=finding;row.state='open'
             for plan in s.scalars(select(Plan).where(Plan.incident_id==identifier,Plan.state=='approved')):plan.state='superseded'
         else:s.add(Incident(id=identifier,host_id=host_id,scan_id=job_id,evidence=finding))
+        event(s,identifier,'scanner','detection',{'scan_id':job_id,'previous_state':previous,'state':'open'})
     audit(s,'security scan receipt',host_id+' '+job_id)
 
 ACTIONS=('preserve_evidence','isolate_host','quarantine_file','restore_trusted_package','remove_persistence','rotate_credentials','rebuild_host','rescan','verify_services')
@@ -87,7 +89,7 @@ def generate(s,incident):
         if digest({'incident_id':current.id,'scan_id':current.scan_id,'finding':current.evidence})!=captured:
             raise ValueError('Incident evidence changed while generating the plan; request a new plan')
         plan=Plan(id=str(uuid.uuid4()),incident_id=current.id,run_id=run_id,evidence_digest=captured,content=content)
-        s.add(plan);audit(s,'security plan generated',current.id+' '+plan.id);s.commit()
+        s.add(plan);event(s,current.id,'AI','plan_generated',{'plan_id':plan.id,'run_id':run_id});audit(s,'security plan generated',current.id+' '+plan.id);s.commit()
         return plan
 
 
@@ -120,3 +122,28 @@ def schedule_tick(now=None):
                 if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state=='recovery_required').limit(1)):continue
                 try:enqueue(s,host_id,'security-scan',{'paths':policy['paths'],'scheduled':True})
                 except ValueError:continue # Full queues are retried on the next scheduler tick.
+
+class IncidentEvent(Base):
+    __tablename__='security_incident_events'
+    id:Mapped[str]=mapped_column(String(36),primary_key=True)
+    incident_id:Mapped[str]=mapped_column(String(64),index=True)
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+    actor:Mapped[str]=mapped_column(String(120))
+    kind:Mapped[str]=mapped_column(String(40))
+    details:Mapped[dict]=mapped_column(JSON)
+
+
+def event(s,incident_id,actor,kind,details):
+    s.add(IncidentEvent(id=str(uuid.uuid4()),incident_id=incident_id,actor=actor,kind=kind,details=details))
+
+
+def review(s,row,state,reason,actor,expected_updated):
+    if row.updated!=expected_updated:raise ValueError('Incident changed; refresh before reviewing')
+    if state not in ('open','acknowledged','false_positive','resolved'):raise ValueError('Invalid incident state')
+    if state==row.state:raise ValueError('Incident already has this state')
+    reason=reason.strip()
+    if not 10<=len(reason)<=4000:raise ValueError('Provide a review reason of 10–4000 characters')
+    previous=row.state;row.state=state;row.updated=max(time.time(),row.updated+0.000001)
+    for plan in s.scalars(select(Plan).where(Plan.incident_id==row.id,Plan.state.in_(['draft','approved']))):plan.state='superseded'
+    event(s,row.id,actor,'review',{'from':previous,'to':state,'reason':reason,'scan_id':row.scan_id,'verification':'manual_review'})
+    audit(s,'security incident reviewed',row.id+' '+actor+' '+state)
