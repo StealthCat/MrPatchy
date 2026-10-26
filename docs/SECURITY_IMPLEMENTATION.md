@@ -16,7 +16,7 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 
 Still required before the requested system is complete:
 
-- Configurable retention and external immutable evidence storage; incident lifecycle and fleet correlation workflows.
+- Configurable retention and external immutable evidence storage; broader behavioral and threat-intelligence correlation.
 - Event-triggered scans, YARA integration, authenticated rule distribution, trusted vendor package verification and approved custom baselines.
 - Runtime detection integration, persistence inventory, fleet correlation and agent tamper monitoring.
 - Follow-up AI evidence collection tools; approved typed execution of response plans. Current AI plans use scanner evidence only.
@@ -26,3 +26,12 @@ Still required before the requested system is complete:
 - Browser coverage and real scanner/OS integration tests, performance tests and failure-injection response drills.
 
 No destructive security response is enabled in this checkpoint.
+
+
+## Incident review and fleet hash correlation
+
+Server Security cards now provide **Review incident**, **Incident timeline**, and **Find hash across fleet**. Administrators can acknowledge, reopen, mark a false positive, or record manual resolution with a reason of 10–4,000 characters. Resolution records the administrator's assessment; it does not certify a clean host or execute remediation. A new detection reopens the incident, including a previously resolved or false-positive record. False-positive review is not an allowlist.
+
+Reviews use the displayed update timestamp to reject stale decisions and share the host operation lock with scan workers. Any status change supersedes draft and approved plans. Scans and their evidence remain unchanged. Timelines record new detections, previous state, plan generation, plan approval, and manual reviews with actors and timestamps. Timeline capture starts with this version; earlier events are not fabricated.
+
+Hash correlation searches exact SHA-256 values among stored incident detections across the fleet, with pagination and administrator-only access. It does not initiate a fleet scan, establish that matching files are malware, or prove absence on hosts with no stored detection. Scan and timeline models are included automatically in database migration metadata.
