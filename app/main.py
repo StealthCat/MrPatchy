@@ -991,19 +991,22 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(aut
 
 @app.get('/api/ai/runs')
 def ai_run_list(purpose:str='',offset:int=0,limit:int=50,user=Depends(auth)):
-    if purpose not in ('','triage','update_scoring','connection_test','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
+    if purpose not in ('','triage','update_scoring','connection_test','release_configuration','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
     with Session() as s:
         query=select(ai_runs.AIRun)
         if purpose:query=query.where(ai_runs.AIRun.purpose==purpose)
         rows=list(s.scalars(query.order_by(ai_runs.AIRun.started.desc(),ai_runs.AIRun.id).offset(offset).limit(limit+1)))
-        return {'items':[object_dict(r) for r in rows[:limit]],'more':len(rows)>limit}
+        receipts=ai_runs.call_receipts(s,[r.id for r in rows[:limit]])
+        return {'items':[object_dict(r)|{'cost':ai_runs.cost_summary(r,receipts[r.id])} for r in rows[:limit]],'more':len(rows)>limit}
 
 @app.get('/api/ai/runs/{run_id}')
 def ai_run_detail(run_id:str,user=Depends(auth)):
     with Session() as s:
         row=s.get(ai_runs.AIRun,run_id)
         if not row:raise HTTPException(404,'AI run not found')
-        return object_dict(row)|{'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
+        receipts=ai_runs.call_receipts(s,[row.id])[row.id]
+        return object_dict(row)|{'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
+            'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
 
 @app.post('/api/investigations/{behavior_id}/retry')
 def retry_investigation(behavior_id:str,user=Depends(auth)):

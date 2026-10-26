@@ -192,6 +192,8 @@ Open **Settings → AI & models** and use **Save API key** first; no valid model
 
 Open **AI run logs** to inspect request stages, safe provider errors, model, request IDs and attempt times. The worker-status panel explains disabled/missing settings, missing heartbeat, active work, hourly limits and retry backoff. **Investigations → Retry** makes a failed/pending behavior eligible again without bypassing the hourly quota. Unhandled background failures are recorded instead of silently disappearing. See [the troubleshooting workflow](docs/AI_AND_PACKAGE_HISTORY.md#diagnose-stalled-triage).
 
+Each action now shows **estimated API cost in USD**, including follow-up calls. Inspect it for token usage, cached input, reasoning and the saved rates per call. Failed responses can still incur charges; missing usage/pricing and historical entries show **Unavailable**, while incomplete totals show **Partial**. See [cost coverage and limitations](docs/AI_AND_PACKAGE_HISTORY.md#cost-per-ai-action).
+
 ![AI diagnostics and worker status](docs/screenshots/ai-run-logs.jpg)
 
 The target's durable spool acknowledges batches only after central commit; overflow is visible. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
