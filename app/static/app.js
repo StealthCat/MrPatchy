@@ -28,12 +28,12 @@ function modal(title,html){modalRevision++;$('#modal-message').classList.add('hi
 async function render(){
  const revision=++renderRevision;
  let requested=location.hash.slice(1)||'overview';
- if(!['overview','servers','packages','repositories','investigations','activity','settings'].includes(requested))requested='overview';
+ if(!['overview','servers','packages','repositories','investigations','activity','schedules','settings'].includes(requested))requested='overview';
  try{
   const [me,list]=await Promise.all([api('/identity'),api('/hosts')]);
   if(revision!==renderRevision)return;
   currentUser=me;document.body.dataset.role=me.role;hosts=list;
-  if(!isAdmin()&&['settings','repositories'].includes(requested)){
+  if(!isAdmin()&&['settings','repositories','schedules'].includes(requested)){
    requested='overview';history.replaceState(null,'','#overview');
   }
   page=requested;
@@ -41,7 +41,7 @@ async function render(){
   $('#breadcrumb').textContent='Workspace / '+page[0].toUpperCase()+page.slice(1);
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   $('#content').innerHTML='<p class="help" role="status">Loading…</p>';
-  await ({overview,servers,packages,repositories,investigations,activity,settings}[page])(revision);
+  await ({overview,servers,packages,repositories,investigations,activity,schedules,settings}[page])(revision);
  }catch(error){if(revision===renderRevision)toast(error.message);}
 }
 async function overview(revision=renderRevision){const d=await api('/dashboard');if(!currentView(revision,'overview'))return;$('#content').innerHTML=heading('A healthier fleet starts here.','Your servers, packages, and security signals. One calm workspace.','<button class="primary" data-admin data-action="add">+ Add server</button>')+`<div class="stats"><div class="stat accent"><label>Connected servers</label><strong>${d.online}<small> / ${d.servers}</small></strong><small>Fresh telemetry, no integrity alerts</small></div><div class="stat"><label>Updates available</label><strong>${d.updates}</strong><small>Across ${d.packages.toLocaleString()} installed packages</small></div><div class="stat"><label>Past patch deadline</label><strong>${d.overdue}</strong><small>Based on your priority policy</small></div><div class="stat"><label>Integrity alerts</label><strong>${d.integrity_alerts}</strong><small>Managed files checked every 5 minutes</small></div></div><div class="grid"><section><div class="card"><div class="card-head"><h2>Your servers</h2><a href="#servers" class="mint">View all ↗</a></div>${hosts.length?hostTable(hosts.slice(0,5)):empty('Make room for your first server','Enroll an Ubuntu or Raspberry Pi OS machine to start watching packages and processes.','<button data-admin data-action="add">Enroll a server →</button>')}</div><div class="hero"><div class="eyebrow">QUIETLY KEEPING WATCH</div><h2>Small checks.<br>A clearer picture.</h2><p>Repositories checked centrally every ${d.repo_minutes} minutes. Process activity sampled every 30 seconds. You decide what gets trusted and patched.</p><span class="cross">✚</span></div></section><section><div class="card"><h2>Your monitoring rhythm</h2><div class="timeline"><div><span class="step">01</span><section><h3>Collect &amp; compare</h3><p>Package inventory and signed repository metadata, resolved centrally.</p></section></div><div><span class="step">02</span><section><h3>Investigate the unfamiliar</h3><p>${d.investigations} behaviors awaiting your trust decision. AI triage is optional.</p></section></div><div><span class="step">03</span><section><h3>Patch with intention</h3><p>Review available versions and deadlines before installing selected updates.</p></section></div></div></div><div class="card"><h3>Trust is explicit.</h3><p class="help">Host keys are pinned. Repository signatures stay enforced. An AI opinion never automatically approves a process.</p><a data-admin href="#settings" class="mint">Review your policy →</a></div></section></div>`;}
