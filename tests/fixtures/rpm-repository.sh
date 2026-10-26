@@ -47,7 +47,13 @@ sslcacert=/etc/pki/fixture-ca.pem
 REPO
 cat > /tmp/serve-fixture.py <<'PY'
 import functools,http.server,ssl
-server=http.server.ThreadingHTTPServer(('0.0.0.0',8443),functools.partial(http.server.SimpleHTTPRequestHandler,directory='/tmp/fixture-repo'))
+class Fresh(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        # Fixture updates can share a one-second Last-Modified timestamp.
+        # Always serve current metadata so unsigned-package tests reach verification.
+        if 'If-Modified-Since' in self.headers:del self.headers['If-Modified-Since']
+        super().do_GET()
+server=http.server.ThreadingHTTPServer(('0.0.0.0',8443),functools.partial(Fresh,directory='/tmp/fixture-repo'))
 context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain('/etc/pki/fixture-ca.pem','/tmp/fixture.key')
 server.socket=context.wrap_socket(server.socket,server_side=True);server.serve_forever()
 PY
