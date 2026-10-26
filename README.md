@@ -8,7 +8,7 @@ Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian, Raspbe
 
 Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you company throughout the workspace. The glass interface brings consistent controls, readable status cards, responsive navigation, and guided enrollment to every part of fleet care. [UI design and component guide](docs/UI_DESIGN.md).
 
-[Sign-in preview](docs/screenshots/login.jpg) · [Mobile workspace](docs/screenshots/mobile.jpg) · [Settings](docs/screenshots/settings.jpg)
+[Sign-in preview](docs/screenshots/login.jpg) · [Mobile workspace](docs/screenshots/mobile.jpg) · [Settings](docs/screenshots/settings.jpg) · [AI settings](docs/screenshots/ai-settings.jpg)
 
 ## Features
 
@@ -48,7 +48,7 @@ The initial certificate uses Caddy's local CA. Trust its public root certificate
 docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./mrpatchy-local-ca.crt
 ```
 
-In **Settings → Configure HTTPS**, configure independent **Internal** and **External / public** profiles. Each supports an uploaded certificate/key, Let's Encrypt or a custom ACME directory (with optional CA bundle, account email and EAB), or Caddy's built-in CA. Profiles use different hostnames on the same HTTPS listener. Existing generated single-site configurations migrate to the Internal profile with their certificate material preserved.
+In **Settings → HTTPS & certificates → Configure HTTPS**, configure independent **Internal** and **External / public** profiles. Each supports an uploaded certificate/key, Let's Encrypt or a custom ACME directory (with optional CA bundle, account email and EAB), or Caddy's built-in CA. Profiles use different hostnames on the same HTTPS listener. Existing generated single-site configurations migrate to the Internal profile with their certificate material preserved.
 
 For example, bind only your server's LAN address using alternate host ports:
 
@@ -94,6 +94,10 @@ Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed alrea
 ![Offline enrollment wizard](docs/screenshots/enrollment.jpg)
 
 ![Curl enrollment with selectable HTTPS endpoint](docs/screenshots/enrollment-curl.jpg)
+
+## Workspace settings
+
+Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
 
 ## Review and install updates
 
@@ -184,7 +188,7 @@ The collector hashes Mr Patchy's managed files and readable running executables.
 
 Optional bpftrace exec capture retains short-lived observations. Unverifiable identities stay marked unverified through central processing. Enabling eBPF relaxes the collector sandbox for kernel tracing; kernel support and acceptance testing are required. It is not guaranteed lossless capture or hardware attestation.
 
-Enable AI in **Settings** with an OpenAI API key and a compatible Responses API model. Save the key, click **Refresh available models**, select a model from the live dropdown, save, and run **Test saved AI settings**. The list comes from your key’s accessible models; it does not certify Responses API/structured-output compatibility. A saved model missing from the list is marked unavailable without silently selecting a replacement. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Process-investigation evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent by that workflow. Release configuration planning separately sends eligible configuration text, as disclosed before planning. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
+Open **Settings → AI & models** and use **Save API key** first; no valid model is required to save a key. Click **Refresh available models** and choose a model, or select **Enter a model ID manually** if discovery is unavailable. **Save AI settings** only persists your choice; **Save and test selected model** saves it first and then tests that exact model. A provider error never rolls back the save. Results identify the tested model and retain the request ID when supplied. The list comes from your key’s accessible models; it does not certify Responses API/structured-output compatibility. A saved model missing from the list is marked unavailable without silently selecting a replacement. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Process-investigation evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent by that workflow. Release configuration planning separately sends eligible configuration text, as disclosed before planning. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
 
 Open **AI run logs** to inspect request stages, safe provider errors, model, request IDs and attempt times. The worker-status panel explains disabled/missing settings, missing heartbeat, active work, hourly limits and retry backoff. **Investigations → Retry** makes a failed/pending behavior eligible again without bypassing the hourly quota. Unhandled background failures are recorded instead of silently disappearing. See [the troubleshooting workflow](docs/AI_AND_PACKAGE_HISTORY.md#diagnose-stalled-triage).
 
@@ -214,7 +218,7 @@ docker compose up -d --build --scale worker=3
 
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
 
-Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database & offline migration**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
+Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
 
 For a new deployment without existing data, you can still configure MySQL 8+ through `.env` and recreate **both app and workers**:
 

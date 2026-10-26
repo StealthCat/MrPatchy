@@ -8,6 +8,7 @@ module.exports=async(page,hosts,capture)=>{
   await page.route('**/api/hosts/'+id+'/repositories',repoHandler);
   try{
     await page.locator('[data-nav=servers]').click();
+    await page.getByText('Fedora build server',{exact:true}).waitFor();
     await page.getByRole('button',{name:'Manage ↗'}).first().click();
     assert.equal(await page.locator('#release-upgrade').isDisabled(),true);
     await page.locator('#repair-packages').click();

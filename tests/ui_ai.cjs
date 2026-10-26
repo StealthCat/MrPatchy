@@ -24,6 +24,8 @@ module.exports=async(page)=>{
     assert.equal(calls,3);
     await page.locator('[data-nav=settings]').click();
     await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
+    await page.locator('[href="#settings/ai"]').first().click();
+    await page.locator('#ai-settings-form').waitFor();
     assert.equal(await page.locator('#ai-test-result').textContent(),'');
   }finally{release();await page.unroute('**/api/settings/ai-test',routeHandler);}
 };

@@ -3,7 +3,7 @@
 ## Diagnose stalled triage
 
 1. Open **Investigations** or **AI run logs** as an administrator. The status card distinguishes disabled AI, missing configuration, a missing scheduler heartbeat, an active investigation, an exhausted hourly allowance, retry backoff and an empty queue. A heartbeat older than 90 seconds is considered stale; it is a scheduler heartbeat, not proof that OpenAI is reachable.
-2. In **Settings**, save the API key and a compatible model ID, then use **Test saved AI settings**. This makes a billable structured-output request without target evidence. A successful test verifies that request, not the outcome of subsequent investigations.
+2. Open **Settings → AI & models**. **Save API key** works without a valid model. Refresh the model dropdown, or choose **Enter a model ID manually** if discovery fails. Use **Save AI settings** to persist without calling OpenAI, or **Save and test selected model** to save first and test the selected model. This makes a billable structured-output request without target evidence. A successful test verifies that request, not the outcome of subsequent investigations.
 3. In **AI run logs**, inspect a failed run. Logs retain purpose, model, target ID for triage, timestamps, API-call count and stages such as request, HTTP response, SSH evidence collection and failure. Recognized provider errors explain credentials, model/schema access, billing/quota, throttling or network/TLS issues. A validated provider request ID is retained when available.
 4. Correct the reported issue. **Investigations → Retry** makes an unapproved failed/pending observation eligible again. It does not enable AI, approve the behavior or bypass the hourly allowance. Automatic retries otherwise wait one hour. Concurrent triage and manual retry coordinate through the same distributed lock.
 5. If the worker is missing or diagnostics cannot be written, inspect the container logs:
@@ -16,6 +16,12 @@
 The Compose app disables its embedded scheduler and runs a separate worker. Check that the worker is running with the same database and secret volume. A scheduler/container failure cannot reliably report to an unavailable database; console logs remain the fallback. Worker tasks now consume background-future failures and record a safe diagnostic instead of dropping them silently. Interrupted triage/scoring runs are reconciled when a worker reacquires their execution lock.
 
 AI logs contain controlled diagnostics, not API keys, raw prompts, raw provider bodies, process evidence or arbitrary exception text. Unexpected failures retain the exception class and a generic health-check instruction. Full process evidence remains in its existing authenticated investigation view. These logs cover process triage, update scoring, saved-settings connection tests and background AI failures; distribution-release planning retains its existing Activity/plan diagnostics.
+
+## Recover from a model error
+
+A `model_not_found` error is a provider test/inference failure, not a database-save failure. The AI page displays **Saved model**, a separate save result, and a separate test result. A failed test keeps the new model saved so you can select another without being blocked by the previous model. Save and test sends the exact saved model and an opaque key revision; if another administrator changes either before the test starts, it refuses the stale test without making a provider request. Provider failures include the tested model, log run ID in the API response, and a sanitized request ID when available. The one-minute connection-test limit remains in effect; saving a replacement does not bypass it.
+
+The model list reports IDs accessible to the saved API key; it does not certify Responses API or JSON-schema compatibility. If a chosen model continues to fail, inspect the **fresh** test result for its exact ID and request ID, check the API project's access, and select a compatible model. An error from discovery leaves manual entry available. The app cannot grant API model access or make an unsupported model compatible. Do not send API keys in troubleshooting messages.
 
 ## Explained update scores
 

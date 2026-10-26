@@ -327,7 +327,7 @@ def audit_log(user=Depends(auth)):
 @app.get('/api/settings')
 def settings(user=Depends(auth)):
     with Session() as s:
-        return config(s)|{'api_key_configured':s.get(Setting,'openai_key') is not None,'tls':tls.public_state()}
+        return config(s)|{'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state()}
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
@@ -350,35 +350,107 @@ def settings_save(body:ConfigInput,user=Depends(auth)):
         if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
         audit(s,'update settings','Patch policy, cadence or AI configuration changed'); s.commit(); return {'ok':True}
 
+def ai_key_revision(secret):
+    # An opaque version of randomized ciphertext, not a fingerprint of the key.
+    return hashlib.sha256(secret.value['encrypted'].encode()).hexdigest()[:32] if secret else ''
+
+class AISettingsInput(BaseModel):
+    model_config={'extra':'forbid'}
+    ai_enabled:bool=False
+    ai_model:str=Field(default='',max_length=100)
+    ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
+    ai_updates_enabled:bool=True
+    ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
+
+class AIKeyInput(BaseModel):
+    model_config={'extra':'forbid'}
+    api_key:str=Field(min_length=1,max_length=1000)
+
+class PatchSettingsInput(BaseModel):
+    model_config={'extra':'forbid'}
+    repo_minutes:int=Field(ge=5,le=10080)
+    deadlines:dict[str,int]
+
+class HistorySettingsInput(BaseModel):
+    model_config={'extra':'forbid'}
+    history_days:int=Field(ge=1,le=3650)
+
+def save_settings_section(values,section):
+    with worker.Lock('settings-config'):
+        with Session() as s:
+            if section=='ai' and values['ai_enabled'] and (not values['ai_model'] or not s.get(Setting,'openai_key')):
+                raise HTTPException(400,'Save an API key and select a model before enabling AI. You can save a key independently above.')
+            s.merge(Setting(key='config',value=config(s)|values))
+            audit(s,'update '+section+' settings','Saved '+section+' configuration; no provider test was performed')
+            s.commit()
+            return {'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
+
+@app.put('/api/settings/ai-key')
+def ai_key_save(body:AIKeyInput,user=Depends(auth)):
+    key=body.api_key.strip()
+    if not re.fullmatch(r'[!-~]{1,1000}',key):raise HTTPException(400,'Enter an API key without whitespace or unsupported characters')
+    with worker.Lock('settings-config'):
+        with Session() as s:
+            secret=Setting(key='openai_key',value={'encrypted':seal(key)})
+            s.merge(secret)
+            audit(s,'update AI API key',user['username']+' saved an API key; model unchanged; no provider test was performed')
+            s.commit()
+            return {'ok':True,'api_key_configured':True,'api_key_revision':ai_key_revision(secret)}
+
+@app.put('/api/settings/ai')
+def ai_settings_save(body:AISettingsInput,user=Depends(auth)):
+    body.ai_model=body.ai_model.strip()
+    if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):
+        raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
+    return save_settings_section(body.model_dump(),'ai')
+
+@app.put('/api/settings/patching')
+def patch_settings_save(body:PatchSettingsInput,user=Depends(auth)):
+    if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()):
+        raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
+    return save_settings_section(body.model_dump(),'patching')
+
+@app.put('/api/settings/history')
+def history_settings_save(body:HistorySettingsInput,user=Depends(auth)):
+    return save_settings_section(body.model_dump(),'history')
+
+class AITestInput(BaseModel):
+    model_config={'extra':'forbid'}
+    expected_model:str|None=Field(default=None,max_length=100)
+    expected_key_revision:str|None=Field(default=None,max_length=64)
+
 @app.post('/api/settings/ai-test')
-def ai_test(user=Depends(auth)):
+def ai_test(body:AITestInput|None=None,user=Depends(auth)):
     lock=worker.Lock('ai-connection-test')
     if not lock.acquire(False):raise HTTPException(409,'An AI connection test is already running')
     try:
         with Session() as s:
             cfg=config(s);secret=s.get(Setting,'openai_key');last=s.get(Setting,'ai-test:last')
+            if body and ((body.expected_model is not None and body.expected_model!=cfg['ai_model']) or (body.expected_key_revision is not None and body.expected_key_revision!=ai_key_revision(secret))):
+                raise HTTPException(409,'Saved AI configuration changed. Reload the AI section before testing; no provider request was sent.')
             if not cfg['ai_model'] or not secret:raise HTTPException(400,'Save a model ID and API key before testing')
             if last and time.time()-last.value['attempted']<60:raise HTTPException(429,'Wait one minute between AI connection tests')
             encrypted=secret.value['encrypted']
             s.merge(Setting(key='ai-test:last',value={'attempted':time.time()}));s.commit()
+        run_id=None
         try:
-            with ai_runs.track('connection_test',cfg['ai_model'],subject=user['username']):
+            with ai_runs.track('connection_test',cfg['ai_model'],subject=user['username']) as run_id:
                 key=unseal(encrypted)
                 ai.investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
         except Exception as error:
-            return JSONResponse({'detail':ai_runs.safe_error(error)},status_code=502)
-        return {'ok':True,'detail':'OpenAI connection and structured-output test passed using the saved settings. No server evidence was sent.'}
+            return JSONResponse({'detail':'Test failed for model '+cfg['ai_model']+'. '+ai_runs.safe_error(error)+' Your saved model was not changed.', 'model':cfg['ai_model'],'run_id':run_id},status_code=502)
+        return {'ok':True,'model':cfg['ai_model'],'run_id':run_id,'detail':'OpenAI connection and structured-output test passed for model '+cfg['ai_model']+'. No server evidence was sent.'}
     finally:lock.release()
 
 @app.get('/api/settings/ai-models')
 def ai_models(user=Depends(auth)):
     with Session() as s:
         secret=s.get(Setting,'openai_key')
-        if not secret:raise HTTPException(400,'Save your API key in monitoring settings, then refresh models.')
+        if not secret:raise HTTPException(400,'Save your API key in Settings → AI & models, then refresh models.')
         encrypted=secret.value['encrypted']
         selected=config(s)['ai_model']
     try:models=ai.list_models(unseal(encrypted))
-    except Exception as error:return JSONResponse({'detail':ai_runs.safe_error(error)},status_code=502)
+    except Exception as error:return JSONResponse({'detail':'Model discovery failed. '+ai_runs.safe_error(error)+' You can still enter and save an exact model ID manually; saving does not call OpenAI.'},status_code=502)
     return {'models':models,'selected':selected,'selected_available':selected in models}
 
 from . import database_config
