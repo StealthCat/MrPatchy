@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
-from . import ssh, apt, worker, tls, scheduling
+from . import ssh, apt, worker, tls, scheduling, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations
 from .identity import User,actor,consume_otp,new_secret
@@ -148,7 +148,7 @@ def dashboard(user=Depends(auth)):
         return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False)),'repo_minutes':cfg['repo_minutes']}
 @app.get('/api/hosts')
 def hosts(user=Depends(auth)):
-    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os','')} for h in s.scalars(select(Host).order_by(Host.name))]
+    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).order_by(Host.name))]
 class HostInput(BaseModel):
     name:str=Field(min_length=1,max_length=120)
     address:str=Field(min_length=1,max_length=253,pattern=r'^[A-Za-z0-9:.\-]+$')
@@ -219,11 +219,13 @@ def host_action(host_id:str,action:str,user=Depends(auth)):
 @app.get('/api/hosts/{host_id}/packages')
 def packages(host_id:str,q:str='',updates:bool=False,user=Depends(auth)):
     with Session() as s:
-        host_or_404(s,host_id); cfg=config(s)
+        h=host_or_404(s,host_id); cfg=config(s)
+        versions={}
+        for item in h.inventory.get("rpm_packages",[]):versions.setdefault(item["name"]+":"+item["arch"],[]).append(item["evr"])
         stmt=select(Package).where(Package.host_id==host_id).order_by(Package.name)
         if q: stmt=stmt.where(Package.name.contains(q[:200],autoescape=True))
         if updates: stmt=stmt.where(Package.candidate!='')
-        return [object_dict(p)|{'due':p.available_since+cfg['deadlines'][p.priority]*3600 if p.candidate else None} for p in s.scalars(stmt)]
+        return [object_dict(p)|{'installed_versions':versions.get(p.name,[p.installed]),'due':p.available_since+cfg['deadlines'][p.priority]*3600 if p.candidate else None} for p in s.scalars(stmt)]
 class PatchInput(BaseModel):
     packages:list[str]=Field(min_length=1,max_length=500)
     expected_versions:dict[str,str]|None=None
@@ -264,28 +266,24 @@ def repositories(host_id:str,user=Depends(auth)):
         h=host_or_404(s,host_id)
         access=worker.repository_access(s,host_id);health=[]
         for path,content in h.inventory.get('files',{}).items():
-            if not apt.source_path(path): continue
+            if not package_backend.source_path(path,h.inventory): continue
             try:
-                rewritten=apt.rewrite(content,access)
-                apt.validate_source(rewritten,path.endswith('.sources'))
-                active=list(apt.source_options(rewritten,path.endswith('.sources')))
+                active=package_backend.sources(content,path,h.inventory,access)
                 state='disabled' if not active else ('check_failed' if h.repo_error else ('checked' if h.last_repo else 'unverified'))
-                detail='Central APT check includes this source' if active else 'No active repositories'
+                detail='Central package metadata check includes this source' if active else 'No active repositories'
             except ValueError as e: state='blocked';detail=str(e)
             health.append({'path':path,'state':state,'detail':detail})
-        return {'files':h.inventory.get('files',{}),'keys':list(h.inventory.get('keys',{})),'last_checked':h.last_repo,'error':h.repo_error,'health':health}
+        return {'package_manager':h.inventory.get('package_manager','apt'),'editable_paths':[path for path in h.inventory.get('files',{}) if package_backend.source_path(path,h.inventory)],'files':h.inventory.get('files',{}),'keys':list(h.inventory.get('keys',{})),'last_checked':h.last_repo,'error':h.repo_error,'health':health}
 class RepoInput(BaseModel):
     path:str=Field(max_length=300)
     content:str=Field(max_length=1_000_000)
 @app.put('/api/hosts/{host_id}/repositories')
 def repository(host_id:str,body:RepoInput,user=Depends(auth)):
-    if not apt.source_path(body.path): raise HTTPException(400,'Unsupported repository path')
-    try:
-        with Session() as access_session: access=worker.repository_access(access_session,host_id)
-        apt.validate_source(apt.rewrite(body.content,access),body.path.endswith('.sources'))
-    except ValueError as e: raise HTTPException(400,str(e))
     with Session() as s:
-        host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'repository',body.model_dump())}
+        h=host_or_404(s,host_id)
+        if not package_backend.source_path(body.path,h.inventory): raise HTTPException(400,'Unsupported repository path for this target')
+        package_backend.sources(body.content,body.path,h.inventory,worker.repository_access(s,host_id))
+        return {'job_id':worker.enqueue(s,host_id,'repository',body.model_dump())}
 class KeyInput(BaseModel): name:str; data:str=Field(max_length=3_000_000)
 @app.put('/api/hosts/{host_id}/keys')
 def key_upload(host_id:str,body:KeyInput,user=Depends(auth)):
@@ -598,6 +596,8 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(auth)):
             if not p or not p.candidate:raise HTTPException(400,'Package has no candidate')
             specs.append(name+'='+p.candidate)
         worker.validate_patch(s,h,specs)
+        if package_backend.is_rpm(h.inventory):
+            return {'plan':'Reviewed RPM candidates:\n'+'\n'.join(specs),'packages':specs,'warning':'Candidate review only. Native DNF resolves dependencies and verifies signatures on the target before installation; removals and downgrades are prohibited.'}
         cfgfile=apt.DATA/'apt'/host_id/'apt.conf'
         if not cfgfile.exists():raise HTTPException(409,'Refresh repositories first')
         result=apt.run(cfgfile,['apt-get','--simulate','--no-remove','--only-upgrade','install','--',*specs])
@@ -626,7 +626,7 @@ def sbom(host_id:str,user=Depends(auth)):
     with Session() as s:
         host_or_404(s,host_id)
         return {'bomFormat':'CycloneDX','specVersion':'1.5','version':1,'serialNumber':'urn:uuid:'+str(uuid.uuid4()),
-            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':'pkg:deb/'+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
+            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':('pkg:rpm/' if package_backend.is_rpm(h.inventory) else 'pkg:deb/')+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
 
 @app.get('/api/audit/export')
 def export_audit(after:int=0,limit:int=1000,user=Depends(auth)):
@@ -777,6 +777,7 @@ def release_plans(host_id:str,user=Depends(auth)):
 def plan_release(host_id:str,user=Depends(auth)):
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
+        if package_backend.is_rpm(h.inventory):raise HTTPException(409,'RPM major release upgrades require a distribution-specific migration plan; regular RPM patching is supported')
         required='/usr/local/lib/mrpatchy/release.py'
         if h.baseline.get(required)!=hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest():
             raise HTTPException(409,'Finish / verify installation to install the current release runner first')

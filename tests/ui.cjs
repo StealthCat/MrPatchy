@@ -166,6 +166,7 @@ const assert=require('assert/strict');
       await page.getByText('Ubuntu services',{exact:true}).waitFor();
       await page.locator('#toast').waitFor({state:'hidden'});
       await capture('overview');
+      await require('./ui_rpm.cjs')(page,demoHosts,capture);
     }
     await page.setViewportSize({width:390,height:844});
     await page.locator('[data-nav=overview]').click();

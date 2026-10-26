@@ -22,6 +22,7 @@ def ecosystem(os_release,inventory=None):
     raise ValueError('No verified advisory ecosystem mapping for this OS; derivative distributions are not silently treated as Debian')
 
 def scan(inventory,names):
+    if inventory.get('package_manager')=='rpm':raise ValueError('RPM priority comes from repository updateinfo; Debian/Ubuntu OSV matching is not applicable')
     eco=ecosystem(inventory.get('os',''),inventory);queries=[];mapped=[]
     packages={p['Package']+':'+p['Architecture']:p for p in paragraphs(inventory['status']) if 'Package' in p and 'Architecture' in p}
     for name in names:

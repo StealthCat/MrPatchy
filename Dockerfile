@@ -1,6 +1,6 @@
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DATA_DIR=/data TLS_DIR=/tls
-RUN apt-get update && apt-get install -y --no-install-recommends apt gnupg ca-certificates gosu tzdata && rm -rf /var/lib/apt/lists/* && useradd --system --uid 10001 --create-home mrpatchy
+RUN apt-get update && apt-get install -y --no-install-recommends apt gnupg ca-certificates gosu tzdata python3 python3-dnf python3-rpm rpm && rm -rf /var/lib/apt/lists/* && useradd --system --uid 10001 --create-home mrpatchy
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
