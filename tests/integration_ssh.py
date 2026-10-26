@@ -89,6 +89,8 @@ def main():
             # Unsigned newer RPM must never be installed, even with valid HTTPS metadata.
             run('docker','exec',name,'cp','/tmp/fixture-build/RPMS/noarch/patchy-fixture-3.0-1.noarch.rpm','/tmp/fixture-repo/')
             run('docker','exec',name,'createrepo_c','--update','/tmp/fixture-repo')
+            rows,_=packages.refresh(host.id,ssh.call(host,{'action':'inventory'}),{'ca':ca,'mirrors':{'https://127.0.0.1:8443':'https://127.0.0.1:'+repo_port}})
+            assert next(p for p in rows if p['name']=='patchy-fixture:noarch')['candidate']=='1:3.0-1'
             try:ssh.call(host,{'action':'patch','packages':['patchy-fixture:noarch=1:3.0-1']},timeout=120)
             except RuntimeError as error:assert 'signature' in str(error).lower(),error
             else:raise AssertionError('Unsigned RPM accepted')

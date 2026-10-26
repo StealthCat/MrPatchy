@@ -40,13 +40,18 @@ def test_native_rpm_metadata_and_policy(tmp_path):
 <time file="1700000000" build="1700000000"/><size package="123" installed="4" archive="4"/><location href="Patchy_test.rpm"/>
 <format><rpm:license>MIT</rpm:license><rpm:vendor>Test</rpm:vendor><rpm:group>System</rpm:group><rpm:buildhost>test</rpm:buildhost><rpm:sourcerpm>Patchy_test-1.0-1.src.rpm</rpm:sourcerpm><rpm:header-range start="0" end="100"/><rpm:provides><rpm:entry name="Patchy_test" flags="EQ" epoch="2" ver="1.0" rel="1"/></rpm:provides></format></package></metadata>'''
     updateinfo='''<?xml version="1.0"?><updates><update from="test" status="stable" type="security" version="1"><id>PATCHY-1</id><title>Critical fixture</title><severity>Critical</severity><issued date="2026-01-01 00:00:00"/><description>Test</description><pkglist><collection short="fixture"><name>Fixture</name><package name="Patchy_test" epoch="2" version="0.9" release="1" arch="noarch" src=""><filename>Patchy_test.rpm</filename></package></collection></pkglist></update></updates>'''
-    entries=[]
-    for kind,content in [('primary',primary),('updateinfo',updateinfo)]:
-        raw=content.encode();data=gzip.compress(raw);(metadata/(kind+'.xml.gz')).write_bytes(data)
-        entries.append(f'<data type="{kind}"><checksum type="sha256">{hashlib.sha256(data).hexdigest()}</checksum><open-checksum type="sha256">{hashlib.sha256(raw).hexdigest()}</open-checksum><location href="repodata/{kind}.xml.gz"/><timestamp>1700000000</timestamp><size>{len(data)}</size><open-size>{len(raw)}</open-size></data>')
-    (metadata/'repomd.xml').write_text('<?xml version="1.0"?><repomd xmlns="http://linux.duke.edu/metadata/repo"><revision>1</revision>'+''.join(entries)+'</repomd>')
+    def publish(primary):
+        entries=[]
+        for kind,content in [('primary',primary),('updateinfo',updateinfo)]:
+            raw=content.encode();data=gzip.compress(raw);(metadata/(kind+'.xml.gz')).write_bytes(data)
+            entries.append(f'<data type="{kind}"><checksum type="sha256">{hashlib.sha256(data).hexdigest()}</checksum><open-checksum type="sha256">{hashlib.sha256(raw).hexdigest()}</open-checksum><location href="repodata/{kind}.xml.gz"/><timestamp>1700000000</timestamp><size>{len(data)}</size><open-size>{len(raw)}</open-size></data>')
+        (metadata/'repomd.xml').write_text('<?xml version="1.0"?><repomd xmlns="http://linux.duke.edu/metadata/repo"><revision>1</revision>'+''.join(entries)+'</repomd>')
+    publish(primary)
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self,*args):pass
+        def do_GET(self):
+            if 'If-Modified-Since' in self.headers:del self.headers['If-Modified-Since']
+            super().do_GET()
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Quiet,directory=str(repo)))
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(tmp_path/'ca.pem',tmp_path/'key.pem')
     server.socket=context.wrap_socket(server.socket,server_side=True)
@@ -81,8 +86,12 @@ def test_native_rpm_metadata_and_policy(tmp_path):
         inv['files']['/etc/yum.repos.d/test.repo']=source
         inv['rpm_packages'][0]['held']=True
         assert not rpm_support.discover(inv,tmp_path/'held',{'ca':ca})[0]['candidate']
+        inv['rpm_packages'][0]['held']=False
+        primary=primary.replace('ver="1.0"','ver="2.0"')
+        publish(primary)
+        assert rpm_support.discover(inv,tmp_path/'central',{'ca':ca})[0]['candidate']=='2:2.0-1'
         with pytest.raises(Exception):rpm_support.discover(inv,tmp_path/'untrusted-tls',{})
-        (metadata/'primary.xml.gz').write_bytes(gzip.compress(primary.replace('1.0','9.0').encode()))
+        (metadata/'primary.xml.gz').write_bytes(gzip.compress(primary.replace('2.0','9.0').encode()))
         with pytest.raises(Exception,match='checksum|Downloading|download|repodata'):
             rpm_support.discover(inv,tmp_path/'tampered',{'ca':ca})
     finally:server.shutdown();server.server_close()

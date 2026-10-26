@@ -260,6 +260,8 @@ def central_base(inv, root, access):
                 repo.username=credentials['login'];repo.password=credentials['password']
         if item['mirrorlist'] and not item['repo_gpgcheck']:
             repo.baseurl=secure_mirrors(repo.mirrorlist,ca if access.get('ca') else None,access.get('proxy'));repo.mirrorlist=''
+        # Match DNF --refresh; metadata_expire=0 alone can reuse a same-second cache.
+        repo._repo.expire()
         base.repos.add(repo);repo.enable()
     base.fill_sack(load_system_repo=False,load_available_repos=True)
     return base
@@ -305,6 +307,7 @@ def patch(specs):
         for repo in base.repos.iter_enabled():
             if repo.id not in definitions:raise ValueError('Uncaptured active RPM repository: '+repo.id)
             repo.gpgcheck=True;repo.sslverify=True;repo.skip_if_unavailable=False;repo.metadata_expire=0
+            repo._repo.expire()
             item=definitions[repo.id]
             if item['mirrorlist'] and not item['repo_gpgcheck']:
                 repo.baseurl=secure_mirrors(item['mirrorlist'][0],item.get('sslcacert'),repo.proxy or None);repo.mirrorlist=''
