@@ -48,6 +48,7 @@ module.exports=async function reviewUI(page,ids,capture){
   await page.getByRole('button',{name:'Account',exact:true}).click();
   await page.locator('#account-form [name=password]').fill('incorrect');
   await page.locator('#account-form [name=new_password]').fill('replacement-password-long');
+  await page.locator('#account-form [name=confirm_password]').fill('replacement-password-long');
   await page.getByRole('button',{name:'Change password',exact:true}).click();
   await page.locator('#modal-message').filter({hasText:'Invalid credentials'}).waitFor();
   assert.equal((await api('/identity')).status,200);

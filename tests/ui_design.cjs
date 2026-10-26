@@ -3,7 +3,7 @@ module.exports=async(page,capture)=>{
   // Every top-level workflow stays usable at phone, tablet and desktop widths.
   for(const width of [320,768,1440]){
     await page.setViewportSize({width,height:1000});
-    for(const view of ['overview','servers','packages','repositories','investigations','schedules','activity','settings']){
+    for(const view of ['overview','servers','packages','repositories','investigations','schedules','activity','history','ai-logs','users','settings']){
       await page.locator('[data-nav='+view+']').click();
       await page.waitForFunction(view=>document.querySelector('[data-nav='+view+']')?.getAttribute('aria-current')==='page',view);
       await page.locator('#page-title').waitFor();

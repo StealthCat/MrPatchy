@@ -8,9 +8,9 @@ import uuid
 import math
 import re
 import subprocess
-from sqlalchemy import select, delete, update
+from sqlalchemy import select, delete, update, func
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import apt, ssh, operations, releases, scheduling, ai, packages as package_backend
+from . import apt, ssh, operations, releases, scheduling, ai, ai_runs, package_history, update_scores, packages as package_backend
 from target.agent import MANAGED
 from target.bridge import UNIT
 from .security import unseal
@@ -32,10 +32,11 @@ def save_inventory(s,h,inv):
         h.last_repo=0
     previous={k:v for k,v in h.inventory.items() if k!='collected'}
     current={k:v for k,v in inv.items() if k!='collected'}
+    old={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
+    package_history.record(s,h,inv,old,items)
     if previous!=current or not s.scalar(select(InventoryRevision.id).where(InventoryRevision.host_id==h.id).limit(1)):
         s.add(InventoryRevision(id=uuid.uuid4().hex,host_id=h.id,inventory=inv))
     h.inventory=inv
-    old={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     changed=[(item,old[item['name']]) for item in items if item['name'] in old and old[item['name']].candidate]
     newer=package_backend.newer_flags(inv,[(p.candidate,item['installed']) for item,p in changed])
     still_newer={item['name']:flag for (item,_),flag in zip(changed,newer)}
@@ -279,7 +280,9 @@ def execute_locked(job_id):
             elif job.action=='release-upgrade':
                 result=releases.execute(s,h,job)
                 job.output=json.dumps(result)
-                save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0
+                token=package_history.operation.set({'job_id':job.id,'actor':job.payload.get('_actor','system')})
+                try:save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0;s.commit()
+                finally:package_history.operation.reset(token)
             elif job.action=='deploy':
                 result=ssh.deploy(h)
                 # Known managed artifact digests; never trust target hashes as the expected baseline.
@@ -331,7 +334,9 @@ def execute_locked(job_id):
                 result=ssh.call(h,request,timeout=7500 if protected else 3700)
                 if protected:result=finish_recovery(s,h,job,result,policy)
                 job.output=json.dumps(result)
-                save_inventory(s,h,ssh.call(h,{'action':'inventory'})); h.last_repo=0
+                token=package_history.operation.set({'job_id':job.id,'actor':job.payload.get('_actor','system')})
+                try:save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0;s.commit()
+                finally:package_history.operation.reset(token)
                 if job.action=='patch' and '_depends_on' in job.payload:
                     health=ssh.call(h,{'action':'health'})
                     if health.get('failed_units') or not health.get('collector_active'):raise RuntimeError('Post-patch service health failed; rollout stopped: '+json.dumps(health))
@@ -368,41 +373,64 @@ def validate_patch(s,h,specs):
 
 
 def investigate_one():
+    lock=Lock('ai-triage')
+    if not lock.acquire(False):return
+    try:
+        ai_runs.reconcile('triage')
+        return _investigate_one()
+    finally:lock.release()
+
+def _investigate_one():
     with Session() as s:
         cfg=config(s); secret=s.get(Setting,'openai_key')
         if not cfg['ai_enabled'] or not cfg['ai_model'] or not secret: return
         now=time.time()
         recent=list(s.scalars(select(Behavior).where(Behavior.attempted>now-3600)))
-        if len(recent)>=cfg['ai_hourly_limit']: return
+        count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
+        if max(len(recent),count)>=cfg['ai_hourly_limit']: return
         row=s.scalar(select(Behavior).where(Behavior.approved==False,Behavior.verdict.in_(['pending','error']),Behavior.attempted<now-3600).order_by(Behavior.first_seen).limit(1))
         if not row: return
         row.attempted=now; s.commit()
         try:
-            def assess(evidence):return ai.investigate(evidence,cfg['ai_model'],unseal(secret.value['encrypted']))
-            result=assess(row.evidence)
-            checks=result.get('requested_checks',[])
-            if checks:
-                host=s.get(Host,row.host_id)
-                checksum=row.evidence.get('sha256','')
-                if not host or not isinstance(checksum,str) or not re.fullmatch(r'[a-f0-9]{64}',checksum) or row.evidence.get('identity_verified') is False:
-                    evidence={'identity_verified':False,'checks':list(set(checks)),'reason':'The observed executable has no verified identity or its host is unavailable; no remote evidence request was sent'}
-                else:
-                    evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'checks':list(set(checks))},timeout=90)
-                row.evidence={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
-                s.commit()
-                result=assess(row.evidence)
-            row.verdict=result['risk']; row.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
+            with ai_runs.track('triage',cfg['ai_model'],row.host_id,row.id):
+                _assess_behavior(s,row,cfg,secret)
         except Exception as e:
+            s.rollback();row=s.get(Behavior,row.id)
             row.verdict='error'
-            detail=str(e) if isinstance(e,ai.AIError) else ('SSH evidence collection failed. Check the target connection and installation.' if isinstance(e,(ssh.paramiko.SSHException,ssh.RemoteProtocolError)) else type(e).__name__)
-            row.analysis='Investigation failed; automatic retry after the one-hour backoff. '+detail
+            row.analysis='Investigation failed; automatic retry after the one-hour backoff. '+ai_runs.safe_error(e)
         s.commit()
+
+def _assess_behavior(s,row,cfg,secret):
+    def assess(evidence):return ai.investigate(evidence,cfg['ai_model'],unseal(secret.value['encrypted']))
+    result=assess(row.evidence)
+    checks=result.get('requested_checks',[])
+    if checks:
+        ai_runs.event('ssh_evidence','Collecting the requested allowlisted evidence from the target.')
+        host=s.get(Host,row.host_id)
+        checksum=row.evidence.get('sha256','')
+        if not host or not isinstance(checksum,str) or not re.fullmatch(r'[a-f0-9]{64}',checksum) or row.evidence.get('identity_verified') is False:
+            evidence={'identity_verified':False,'checks':list(set(checks)),'reason':'The observed executable has no verified identity or its host is unavailable; no remote evidence request was sent'}
+        else:
+            try:evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'checks':list(set(checks))},timeout=90)
+            except Exception as error:raise ai.AIError('SSH evidence collection failed ('+type(error).__name__+'). Verify target connectivity, host pinning and helper installation.') from None
+        row.evidence={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
+        s.commit()
+        result=assess(row.evidence)
+    row.verdict=result['risk']; row.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
+    s.commit()
+
+def ai_cycle():
+    # Separate quotas keep score batches from starving process investigations.
+    for fn in (investigate_one,update_scores.run_one):
+        try:fn()
+        except Exception as error:ai_runs.task_failure(error)
+
 
 def loop():
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=2) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=1) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0
+        active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0
         while not stop.wait(1):
             try:
                 now=time.time()
@@ -414,6 +442,11 @@ def loop():
                         except Exception:pass
                         is_leader=False
                 if not is_leader:is_leader=leader.acquire(False)
+                if is_leader:ai_runs.heartbeat()
+                if ai_task is not None and ai_task.done():
+                    try:ai_task.result()
+                    except Exception as error:ai_runs.task_failure(error)
+                    ai_task=None
                 for key,(future,_) in list(active_jobs.items()):
                     if future.done():
                         try: future.result()
@@ -448,12 +481,15 @@ def loop():
                         cutoff=now-config(s)['history_days']*86400
                         s.execute(delete(Observation).where(Observation.received<cutoff))
                         s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
+                        expired=select(ai_runs.AIRun.id).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running')
+                        s.execute(delete(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id.in_(expired)))
+                        s.execute(delete(ai_runs.AIRun).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running'))
                         for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%') | Setting.key.like('oidc-state:%'))):
                             if entry.value.get('expires',now+1)<now: s.delete(entry)
                         s.commit()
                     last_cleanup=now
                 if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
-                if is_leader and (ai_task is None or ai_task.done()): ai_task=ai.submit(investigate_one)
+                if is_leader and ai_task is None and now-last_ai>=5: ai_task=ai.submit(ai_cycle);last_ai=now
             except Exception: log.exception('Scheduler tick failed')
         if is_leader:leader.release()
 def start():
@@ -464,6 +500,7 @@ if __name__=='__main__':
     from . import identity,operations
     from .db import init
     import signal
+    logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
     init()
     signal.signal(signal.SIGTERM,lambda *args:stop.set())
     signal.signal(signal.SIGINT,lambda *args:stop.set())

@@ -20,7 +20,7 @@ jobs:
       - run: python -m pytest -q
       - run: python -m compileall -q app target
       - run: bash -n deploy/entrypoint.sh reset-admin-password.sh tests/fixtures/rpm-repository.sh
-      - run: node --check app/static/app.js && node --check app/static/ui.js && node --check app/static/schedules.js
+      - run: node --check app/static/app.js && node --check app/static/ui.js && node --check app/static/fleet.js && node --check app/static/schedules.js
       - run: docker compose --env-file .env.example config --quiet
       - run: docker build -t mrpatchy:test .
       - name: Native Caddy dual-issuer adapter checks

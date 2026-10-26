@@ -87,7 +87,7 @@ class Observation(Base):
     observed: Mapped[float] = mapped_column(Double)
     received: Mapped[float] = mapped_column(Double, default=time.time)
     evidence: Mapped[dict] = mapped_column(JSON)
-DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20, 'history_days': 30}
+DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20, 'ai_updates_enabled': True, 'ai_update_hourly_limit': 20, 'history_days': 30}
 def config(s):
     item = s.get(Setting, 'config')
     return {**DEFAULTS, **(item.value if item else {})}

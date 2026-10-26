@@ -7,6 +7,7 @@ The interface pairs a smoky blue/teal glass surface with Mr Patchy: a scruffy, s
 - `app/static/ui.js`: shared presentation-only icons, mascot treatments, page introductions, empty/loading states and enrollment progress. It makes no API calls and owns no authorization or fleet state.
 - `app/static/style.css`: design tokens, base controls, shell, component styles, calendar, responsive layouts and accessibility overrides. Adjust tokens in `:root` before adding one-off colors or dimensions.
 - `app/static/index.html`: accessible page landmarks, local assets, the sign-in layout, navigation, dialogs and notices.
+- `app/static/fleet.js`: AI run logs, package history and Users views, plus shared importance-score, expected-installation and worker-status components. All untrusted explanations and diagnostics are escaped.
 - `app/static/app.js` and `schedules.js`: existing API-backed interactions and page composition. Text originating from servers or API errors must continue to pass through `esc()` or `textContent`.
 - `app/static/mascot/`: the two shared transparent PNG illustrations. Browser caching reuses them across sign-in, navigation, introductions, onboarding, empty states, notices and the footer. No external fonts, image services or UI scripts are required at runtime.
 
@@ -22,7 +23,7 @@ Glass effects use a legible dark fallback, and only enhance surfaces when backdr
 
 ## Validation and screenshots
 
-Run `npm run test:ui` against the disposable test database. The suite exercises real local login, role restrictions, enrollment, package approval, schedules, settings, TLS, operations and release-plan review. Additional design checks traverse every main page at 320, 768 and 1440 pixels, check horizontal overflow, local image loading, keyboard skip behavior, reduced motion, escaped loading errors and retry recovery.
+Run `npm run test:ui` against the disposable test database. The suite exercises real local login, role restrictions, enrollment, package approval, schedules, settings, TLS, operations and release-plan review. Fleet checks cover select-all/clear with held/broken/queued exclusions, score explanations, expected start states, run-log stages, history, real user creation and personal password changes. Additional design checks traverse every main page at 320, 768 and 1440 pixels, check horizontal overflow, local image loading, keyboard skip behavior, reduced motion, escaped loading errors and retry recovery.
 
 To refresh documentation images:
 

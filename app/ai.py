@@ -2,6 +2,7 @@
 import json
 import re
 import httpx
+from . import ai_runs
 
 URL='https://api.openai.com/v1/responses'
 SCHEMA={'type':'object','properties':{'risk':{'type':'string','enum':['low','medium','high','unknown']},'explanation':{'type':'string'},'recommended_checks':{'type':'string'},'requested_checks':{'type':'array','items':{'type':'string','enum':['package','service','executable']}}},'required':['risk','explanation','recommended_checks','requested_checks'],'additionalProperties':False}
@@ -69,7 +70,9 @@ def request(payload,key,timeout=60):
     payload={**payload,'model':payload['model'].strip()}
     if not payload['model']:raise AIError('Save an API model ID in Settings before testing.')
     try:
+        ai_runs.event('api_request','Sending bounded structured-output request to OpenAI.',call=True)
         response=httpx.post(URL,headers={'Authorization':'Bearer '+key},json=payload,timeout=timeout)
+        ai_runs.response_received(response)
         response.raise_for_status()
     except httpx.HTTPStatusError as error:raise http_error(error.response) from None
     except httpx.TimeoutException:raise AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.') from None

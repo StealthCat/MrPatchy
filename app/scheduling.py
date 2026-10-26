@@ -231,7 +231,7 @@ def advance(s, run, now):
     except ValueError as error:
         run.state = 'failed'; run.detail = str(error)[:1000]; return
     job = Job(id=str(uuid.uuid4()), host_id=host.id, action='patch', payload={
-        'packages':specs, '_recovery_policy':policy['recovery'], '_schedule':{'run_id':run.id}, '_schedule_policy':policy, '_depends_on':[]})
+        'packages':specs, '_actor':'schedule:'+schedule.id, '_recovery_policy':policy['recovery'], '_schedule':{'run_id':run.id}, '_schedule_policy':policy, '_depends_on':[]})
     s.add(job); run.job_id = job.id; run.state = 'queued'; run.detail = f'{len(specs)} exact-version updates queued'
     audit(s, 'queue scheduled patch', run.id+' '+host.id+' '+run.trigger)
 

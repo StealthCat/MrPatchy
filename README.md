@@ -16,13 +16,13 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 |---|---|
 | Workspace | Glass panels, mascot-guided onboarding, modular UI components, responsive desktop/mobile layouts, keyboard focus and reduced-motion support |
 | Enrollment | Three-step endpoint → offline preparation → SSH completion; downloadable per-server Bash installer; expiring curl links; independent installation verification |
-| Package management | Installed/held/broken package inventory, inventory history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair, configurable deadlines and priority overrides |
+| Package management | Installed/held/broken inventory, select-all reviewed batches, explained AI importance scores, expected start times, per-package change history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair and priority policies |
 | Repositories | Central native APT/DNF verification; `.list`, Deb822 `.sources` and RPM `.repo`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
 | Distribution upgrades | Adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
-| Investigations | Optional two-stage OpenAI triage, fixed read-only evidence checks, explicit known-good approvals, safe API diagnostics, a saved-settings connection test, durable observation spool and retained history |
-| Identity | Local administrator password-reset script, named administrator/operator/viewer accounts, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
+| Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
+| Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
 | Notifications | Persistent monitoring and recovery-required alerts with acknowledgements and retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
@@ -99,7 +99,7 @@ Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed alrea
 
 Package discovery runs native APT or DNF **centrally**, using isolated target inventories, architectures, source definitions, keys and preferences. The collector reads local package databases without target repository queries for discovery. An offline target can still have repository metadata checked against its last saved inventory.
 
-In **Packages**, select a server, review candidates and choose updates. Confirmation displays the effective reboot and snapshot-rollback policy. That policy is recorded with the job; if it changes before execution, the job fails for reapproval rather than silently adopting different behavior. Staged rollouts require the same policy review for every server.
+In **Packages**, select a server, review candidates and choose updates. **Select all eligible updates** selects the current filtered view, up to 500 packages per reviewed batch; held, broken and already queued packages are excluded. Clear selection is available beside it. Confirmation displays the effective reboot and snapshot-rollback policy. That policy is recorded with the job; if it changes before execution, the job fails for reapproval rather than silently adopting different behavior. Staged rollouts require the same policy review for every server.
 
 Explicit installation refreshes target metadata and requests the recorded exact versions. Package removal and forced changes to holds are prohibited; APT retains existing configuration files with `--force-confold`; RPM follows native config-file flags and may create `.rpmnew`/`.rpmsave` files. RPM preview shows candidates; dependency resolution runs on the target before installation. Maintainer scripts may restart services. **Automatic reboot is available only under an explicitly reviewed, enabled policy.**
 
@@ -115,6 +115,18 @@ Explicit installation refreshes target metadata and requests the recorded exact 
 Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates default to high; others default to normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
+
+## Update importance, expected installation and package history
+
+Enable **AI update importance scores** in Settings alongside AI investigations. Pending updates receive an advisory **0–100** score with an expandable explanation, limitations, model and assessment time. Assessments bind to the exact installed/candidate versions and policy evidence; a changed candidate needs a new assessment. The default separate allowance is 20 batches/hour, with up to five updates per call. Scores use package metadata and repository classification, carry **low confidence**, and do not claim verified CVE/changelog evidence or change your patch schedule/priority.
+
+**Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**; holds, recovery, offline targets and unknown dependency completion explain why a date cannot be given. All times displayed in the table use your browser's timezone.
+
+![Explained AI importance and expected installation](docs/screenshots/update-importance.jpg)
+
+**Package history** records observed installations, version changes, removals and package-state changes, with before/after versions, observation/recording times and a job/actor link when known. It preserves RPM install-only version sets and dependency changes. Existing retained inventory snapshots are backfilled on the next inventory collection; the initial snapshot is a baseline, not proof of an installation time. Outside changes can only be dated to when Mr Patchy observes them. See [AI diagnostics, update scoring and package history](docs/AI_AND_PACKAGE_HISTORY.md) for limits and retention.
+
+![Package change ledger](docs/screenshots/package-history.jpg)
 
 ## Scheduled and out-of-cycle patching
 
@@ -174,11 +186,15 @@ Optional bpftrace exec capture retains short-lived observations. Unverifiable id
 
 Enable AI in **Settings** with an OpenAI API key and a compatible Responses API model. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Process-investigation evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent by that workflow. Release configuration planning separately sends eligible configuration text, as disclosed before planning. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
 
+Open **AI run logs** to inspect request stages, safe provider errors, model, request IDs and attempt times. The worker-status panel explains disabled/missing settings, missing heartbeat, active work, hourly limits and retry backoff. **Investigations → Retry** makes a failed/pending behavior eligible again without bypassing the hourly quota. Unhandled background failures are recorded instead of silently disappearing. See [the troubleshooting workflow](docs/AI_AND_PACKAGE_HISTORY.md#diagnose-stalled-triage).
+
+![AI diagnostics and worker status](docs/screenshots/ai-run-logs.jpg)
+
 The target's durable spool acknowledges batches only after central commit; overflow is visible. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
 
 ## Accounts, SSO, notifications and keys
 
-**Account** manages named users, roles, authenticator MFA, password changes and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring.
+**Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring.
 
 Account and Sign out remain available in the header on mobile. Navigation and action controls reflect the signed-in role; the API independently enforces permissions. Password verification and MFA setup/confirmation share a limit of ten attempts per account in five minutes. A failed verification leaves the current session intact; successful password/MFA changes and session revocation require signing in again.
 
@@ -245,6 +261,7 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 
 - [Fedora, RPM and DNF/Yum support](docs/RPM_SUPPORT.md)
 - [Operations and troubleshooting](docs/OPERATIONS.md)
+- [AI diagnostics, update scores, expected installation and package history](docs/AI_AND_PACKAGE_HISTORY.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)
 - [Distribution release upgrades](docs/RELEASE_UPGRADES.md)
