@@ -55,6 +55,7 @@ const assert=require('assert/strict');
     await capture('settings');
     await page.getByRole('button',{name:'Save monitoring settings'}).click();
     await page.getByRole('status').filter({hasText:'Monitoring settings saved'}).waitFor();
+    await require('./ui_ai.cjs')(page);
     await require('./ui_tls.cjs')(page,capture);
     await page.locator('[data-nav=repositories]').click();
     await page.getByRole('button',{name:'Repository access',exact:true}).click();

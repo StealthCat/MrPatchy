@@ -7,7 +7,8 @@ import paramiko
 import pytest
 from app import ssh
 
-def test_real_ssh_drains_large_stderr_without_deadlock(monkeypatch,tmp_path):
+@pytest.mark.parametrize('early_status',[False,True])
+def test_real_ssh_drains_large_stderr_without_deadlock(monkeypatch,tmp_path,early_status):
     monkeypatch.setattr(ssh,'DATA',tmp_path)
     host=SimpleNamespace(id='ssh-test',address='127.0.0.1',port=0,fingerprint='')
     ssh.create_key(host.id)
@@ -17,6 +18,7 @@ def test_real_ssh_drains_large_stderr_without_deadlock(monkeypatch,tmp_path):
     listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1)
     host.port=listener.getsockname()[1]
     failures=[];seen=[]
+    expected={'os':'x'*490,'status':'package inventory '*200000,'keys':{'fixture':'a'*50000}} if early_status else {'ok':True}
     class Server(paramiko.ServerInterface):
         def check_auth_publickey(self,username,key):
             return paramiko.AUTH_SUCCESSFUL if username=='drpatch' and key==allowed else paramiko.AUTH_FAILED
@@ -35,9 +37,17 @@ def test_real_ssh_drains_large_stderr_without_deadlock(monkeypatch,tmp_path):
                 if not chunk: break
                 data.extend(chunk)
             seen.append(json.loads(data))
-            channel.sendall_stderr(b'x'*(3*1024*1024))
-            channel.sendall(b'{"ok":true}')
-            channel.send_exit_status(0);channel.shutdown_write()
+            channel.sendall_stderr(b'fixture' if early_status else b'x'*(3*1024*1024))
+            payload=json.dumps(expected).encode()
+            if early_status:
+                channel.sendall(payload[:1024])
+                # SSH exit-status is not an end-of-stream marker.
+                channel.send_exit_status(0)
+                time.sleep(.1)
+                channel.sendall(payload[1024:])
+            else:
+                channel.sendall(payload);channel.send_exit_status(0)
+            channel.shutdown_write()
             time.sleep(.1)
         except Exception as e: failures.append(e)
         finally:
@@ -46,7 +56,7 @@ def test_real_ssh_drains_large_stderr_without_deadlock(monkeypatch,tmp_path):
     thread=threading.Thread(target=serve,daemon=True);thread.start()
     result=ssh.call(host,{'action':'snapshot'},timeout=10)
     thread.join(2)
-    assert result=={'ok':True} and seen==[{'action':'snapshot'}] and not failures
+    assert result==expected and seen==[{'action':'snapshot'}] and not failures
 
 class EndlessChannel:
     def recv_ready(self): return True
@@ -62,3 +72,21 @@ def test_snapshot_byte_limit_is_enforced():
 
 def test_paramiko_has_no_sha1_rsa_signatures():
     assert 'ssh-rsa' not in paramiko.RSAKey.HASHES
+
+class FinishedChannel:
+    eof_received=True
+    closed=True
+    def __init__(self,data,status=0):self.data=data;self.status=status
+    def recv_ready(self):return bool(self.data)
+    def recv(self,n):result=self.data[:n];self.data=self.data[n:];return result
+    def recv_stderr_ready(self):return False
+    def exit_status_ready(self):return True
+    def recv_exit_status(self):return self.status
+
+
+def test_truncated_reply_has_safe_diagnostic_and_missing_status_is_not_success():
+    with pytest.raises(ssh.RemoteProtocolError) as error:
+        ssh.read_channel(FinishedChannel(b'{"inventory":"private-sensitive-value'),time.monotonic()+1)
+    assert 'bytes received' in str(error.value) and 'private-sensitive-value' not in str(error.value)
+    with pytest.raises(ssh.RemoteProtocolError,match='without an exit status'):
+        ssh.read_channel(FinishedChannel(b'{"ok":true}',-1),time.monotonic()+1)

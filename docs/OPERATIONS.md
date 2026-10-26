@@ -5,7 +5,7 @@
 - Browser → Caddy: TCP 443; TCP 80 for redirects/ACME; UDP 443 for HTTP/3.
 - Central app → targets: configured SSH port (normally TCP 22).
 - Central app → repositories: HTTP(S), using the source configuration captured from the target.
-- Central app → OpenAI: HTTPS only when investigations are enabled and configured.
+- Central app → OpenAI: HTTPS for configured investigations/release planning and administrator-initiated AI connection tests.
 - Caddy → ACME directory: HTTPS, with an uploaded CA when required.
 - No inbound target-agent port. The target collector needs no outbound network connection. Explicit target package installations still need access to configured package repositories.
 
@@ -38,7 +38,9 @@ The collector's inventory refresh is five minutes; central explicit operations r
 - **Failed patch:** inspect the job output and target package state. No removal or forced hold changes are requested. A failed command may still have partially installed packages; inventory is refreshed on later polls. Do not assume transactional rollback.
 - **Interrupted operation after app restart:** running release upgrades resume receipt observation without replaying installation. Other orphaned running jobs and recovery_required jobs quarantine that host’s queue. Recovery-required jobs create persistent alerts. Inspect package/service state, release journals, pending reboot timers and the temporary service-start guard, then use Activity → Review interrupted operation. See [release recovery](RELEASE_UPGRADES.md#execution-and-recovery-states).
 - **Collector integrity mismatch:** investigate first. The repair action redeploys the collector/unit. If the bridge, sudoers or authorized_keys changed, rerun a freshly downloaded bootstrap through a trusted console before finishing installation again.
-- **API errors:** verify the model's Responses API/structured-output support, project key, limits, and billing. API errors stay visible and retry after backoff. No key/HTTP response body is copied into the investigation error.
+- **Enrollment reports `Unterminated string` / incomplete JSON:** update/rebuild the central app, then use **Servers → Manage → Finish / verify installation** again. The SSH reader now waits for stream EOF as well as exit status; an early status signal could previously truncate a large package inventory. Genuine malformed or disconnected replies include the action and received-byte count without exposing the inventory. A failed mutation is never automatically replayed; inspect Activity/target state first, especially for patch/recovery jobs. This transport fix does not require deleting the server, rotating keys, or weakening SSH pinning. If enrollment still fails, retain the new action-specific error and check the target SSH/service logs.
+- **AI triage reports `HTTPStatusError`:** update the app to see a safe diagnostic including HTTP status, recognized provider code/parameter, request ID when available, and a suggested action. The old exception name alone cannot distinguish authentication, model access, billing, throttling or upstream errors. Correct the saved model/key in **Settings → AI investigations**, save, then click **Test saved AI settings**. The test uses the same Responses API JSON schema and token budget as investigations, sends no target evidence, and is limited to one test per minute per deployment. It is a billable API request. Existing failed observations become eligible again after their one-hour backoff; a successful connection test does not approve behaviors or rerun those observations immediately.
+- **API diagnostic guide:** HTTP 401 indicates authentication/access settings to check; 403/404 can indicate project/model access or an invalid model ID; 429 with quota/credit/spend codes requires correcting API billing/limits, while rate-limit codes call for lower request rates. HTTP 400 parameter/schema errors require a compatible Responses API model with structured-output support. Network/TLS failures identify central-server DNS, outbound HTTPS, proxy or CA checks. Incomplete/refused/malformed model output is never treated as a safety assessment. Raw provider bodies, API keys and evidence echoed by an error are not included in these diagnostics.
 
 ## HTTPS changes and recovery
 
@@ -85,6 +87,8 @@ Keep `/opt/drpatch/backups` until you no longer need repository history. Remove 
 - APT configuration: https://manpages.debian.org/bookworm/apt/apt.conf.5.en.html
 - APT source format and Signed-By: https://manpages.debian.org/bookworm/apt/sources.list.5.en.html
 - Caddy TLS/ACME: https://caddyserver.com/docs/caddyfile/directives/tls
+- OpenAI error codes: https://developers.openai.com/api/docs/guides/error-codes
+- OpenAI request diagnostics: https://developers.openai.com/api/reference/overview
 - OpenAI structured outputs: https://developers.openai.com/api/docs/guides/structured-outputs
 
 

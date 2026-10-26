@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
-from . import ssh, apt, worker, tls, scheduling, packages as package_backend
+from . import ssh, apt, worker, tls, scheduling, ai, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations
 from .identity import User,actor,consume_otp,new_secret
@@ -326,11 +326,33 @@ class ConfigInput(BaseModel):
 @app.put('/api/settings')
 def settings_save(body:ConfigInput,user=Depends(auth)):
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()): raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
+    body.ai_model=body.ai_model.strip();body.api_key=body.api_key.strip()
+    if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
+    if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     with Session() as s:
         if body.ai_enabled and (not body.ai_model or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
         s.merge(Setting(key='config',value=body.model_dump(exclude={'api_key'})))
         if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
         audit(s,'update settings','Patch policy, cadence or AI configuration changed'); s.commit(); return {'ok':True}
+
+@app.post('/api/settings/ai-test')
+def ai_test(user=Depends(auth)):
+    lock=worker.Lock('ai-connection-test')
+    if not lock.acquire(False):raise HTTPException(409,'An AI connection test is already running')
+    try:
+        with Session() as s:
+            cfg=config(s);secret=s.get(Setting,'openai_key');last=s.get(Setting,'ai-test:last')
+            if not cfg['ai_model'] or not secret:raise HTTPException(400,'Save a model ID and API key before testing')
+            if last and time.time()-last.value['attempted']<60:raise HTTPException(429,'Wait one minute between AI connection tests')
+            key=unseal(secret.value['encrypted'])
+            s.merge(Setting(key='ai-test:last',value={'attempted':time.time()}));s.commit()
+        try:
+            ai.investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
+        except ai.AIError as error:
+            return JSONResponse({'detail':str(error)},status_code=502)
+        return {'ok':True,'detail':'OpenAI connection and structured-output test passed using the saved settings. No server evidence was sent.'}
+    finally:lock.release()
+
 class TLSInput(BaseModel):
     domain:str=Field(default='',max_length=253)
     aliases:list[str]=Field(default_factory=list,max_length=20)
