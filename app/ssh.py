@@ -57,6 +57,9 @@ class Pinned(paramiko.MissingHostKeyPolicy):
     def __init__(self, expected): self.expected = expected
     def missing_host_key(self, client, hostname, key):
         if fingerprint(key)!=self.expected: raise paramiko.SSHException('SSH host fingerprint mismatch; verify on target console')
+class RemoteProtocolError(RuntimeError):
+    """A reply cannot be trusted as a complete remote operation receipt."""
+
 def read_channel(channel, deadline, max_bytes=64*1024*1024):
     """Drain both streams; an idle timeout alone does not bound a trickling peer."""
     output=bytearray(); diagnostics=bytearray()
@@ -70,15 +73,25 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
         if channel.recv_stderr_ready():
             chunk=channel.recv_stderr(32768)
             diagnostics.extend(chunk[:max(0,16000-len(diagnostics))])
-        if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+        # Servers may send exit-status before the last stdout packets. Only EOF
+        # (or channel close) tells us that no more response bytes can arrive.
+        ended=getattr(channel,'eof_received',False) or getattr(channel,'closed',False)
+        if ended and channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
             status=channel.recv_exit_status()
             break
         time.sleep(0.005)
+    if status == -1:
+        raise RemoteProtocolError('SSH stream closed without an exit status; verify target state before retrying')
     if status:
         try: detail=json.loads(output).get('error')
         except (ValueError,AttributeError): detail=None
         raise RuntimeError(detail or diagnostics.decode(errors='replace') or 'Remote bridge failed')
-    result=json.loads(output)
+    try: result=json.loads(output)
+    except (ValueError,UnicodeDecodeError) as error:
+        # Never echo inventory/key material from a damaged response into logs/UI.
+        position=getattr(error,'pos',None)
+        location=(' at character '+str(position)) if position is not None else ''
+        raise RemoteProtocolError('SSH returned incomplete or invalid JSON'+location+' ('+str(len(output))+' bytes received). Verify target state before retrying.') from None
     if not isinstance(result,dict): raise ValueError('Remote bridge returned a non-object response')
     if result.get('error'): raise RuntimeError(result['error'])
     return result
@@ -96,7 +109,10 @@ def call(host, payload, timeout=60, key_file=None):
         if remaining<=0: raise TimeoutError('SSH connection exceeded its total deadline')
         stdin,stdout,stderr=client.exec_command('mrpatchy',timeout=remaining)
         stdin.write(json.dumps(payload));stdin.flush();stdin.channel.shutdown_write()
-        return read_channel(stdout.channel,deadline)
+        try: return read_channel(stdout.channel,deadline)
+        except RuntimeError as error:
+            action=payload.get('action','request')
+            raise type(error)('SSH '+str(action)+' failed: '+str(error)) from error
     finally:
         client.close()
 

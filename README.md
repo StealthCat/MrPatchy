@@ -16,7 +16,7 @@ Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian, Raspbe
 | Distribution upgrades | Adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
-| Investigations | Optional two-stage OpenAI triage, fixed read-only evidence checks, explicit known-good approvals, durable observation spool and retained history |
+| Investigations | Optional two-stage OpenAI triage, fixed read-only evidence checks, explicit known-good approvals, safe API diagnostics, a saved-settings connection test, durable observation spool and retained history |
 | Identity | Local administrator password-reset script, named administrator/operator/viewer accounts, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
 | Notifications | Persistent monitoring and recovery-required alerts with acknowledgements and retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
