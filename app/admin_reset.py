@@ -44,7 +44,9 @@ def main():
             if not sys.stdin.isatty(): raise ValueError('Use an interactive terminal, or explicitly select --password-stdin')
             password = getpass.getpass('New administrator password: ')
             if password != getpass.getpass('Confirm new password: '): raise ValueError('Passwords do not match')
-        reset(args.username,password,args.reset_mfa,args.enable)
+        from .database_config import runtime_guard
+        with runtime_guard():
+            reset(args.username,password,args.reset_mfa,args.enable)
     except (ValueError,EOFError,KeyboardInterrupt) as error:
         print(str(error) or 'Password reset cancelled',file=sys.stderr); return 1
     print('Administrator password reset. Existing sessions revoked. '+('MFA removed.' if args.reset_mfa else 'MFA preserved.'))

@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 
 from sqlalchemy import create_engine, inspect, select, func, text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.pool import NullPool
 
 from . import database_config as settings
@@ -38,7 +38,7 @@ def connect_url(value, source=False):
         if source:
             if not path.is_file(): raise MigrationError('Source SQLite database does not exist; nothing was created')
             # mode=ro prevents accidental source initialization and writes.
-            url = make_url('sqlite:///file:' + path.resolve().as_posix() + '?mode=ro&uri=true')
+            url = URL.create('sqlite', database=path.resolve().as_uri(), query={'mode':'ro','uri':'true'})
         elif not path.parent.is_dir():
             raise MigrationError('Destination SQLite directory does not exist')
     elif not url.database:

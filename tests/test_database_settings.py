@@ -195,3 +195,12 @@ def test_recovery_follows_active_profile_and_legacy_backup_refuses(isolated_prof
     (isolated_profiles/'database-active.json').write_text('invalid')
     with pytest.raises(ValueError,match='active database profile'):
         recovery.active_database_url(isolated_profiles)
+
+
+def test_sqlite_source_uri_escapes_special_filename_characters(tmp_path):
+    from sqlalchemy.engine import URL
+    source=create_engine(URL.create('sqlite',database=str(tmp_path/'source#%.db')))
+    seed_all(source)
+    source.dispose()
+    result=migration.migrate(str(source.url),'sqlite:///'+str(tmp_path/'copy.db'))
+    assert all(item['rows']==2 for item in result.values())
