@@ -27,8 +27,12 @@ def main():
         ssh.create_key(host.id)
         installer=workspace/'enroll.sh';installer.write_text(ssh.bootstrap(host))
         run('docker','cp',str(installer),name+':/tmp/enroll.sh')
-        run('docker','exec',name,'bash','/tmp/enroll.sh')
+        # Obsolete/malformed public key files must not abort successful enrollment.
+        run('docker','exec',name,'sh','-c','printf "not a public key\\n" > /etc/ssh/ssh_host_dsa_key.pub')
+        enrolled=run('docker','exec',name,'bash','/tmp/enroll.sh')
         host.fingerprint=run('docker','exec',name,'ssh-keygen','-lf','/etc/ssh/ssh_host_ed25519_key.pub','-E','sha256').split()[1]
+        assert host.fingerprint in enrolled and enrolled.count('SHA256:')==1
+        assert 'then click Finish installation' in enrolled
         ssh.deploy(host)
         verification=ssh.call(host,{'action':'verify'})
         assert verification['files']['/usr/local/lib/mrpatchy/release.py']=={'uid':0,'gid':0,'mode':0o644,'sha256':ssh.hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest()}

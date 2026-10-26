@@ -9,6 +9,38 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .db import DATA
 TARGET = Path(__file__).resolve().parent.parent/'target'
+# The UI pins ED25519. Inspect sshd's configured identities instead of globbing
+# unrelated/stale .pub files (including obsolete DSA keys) under /etc/ssh.
+HOST_FINGERPRINT_SCRIPT = r'''
+sshd_config=$(sshd -T)
+ed25519_enabled=0
+while read -r directive value; do
+  if [ "$directive" = hostkeyalgorithms ]; then
+    case ",$value," in *,ssh-ed25519,*) ed25519_enabled=1 ;; esac
+  fi
+done <<< "$sshd_config"
+host_fingerprint=''
+if [ "$ed25519_enabled" = 1 ]; then
+  while read -r directive value; do
+    [ "$directive" = hostkey ] || continue
+    # Derive the public identity without modifying keys or trusting a stale .pub.
+    if host_public=$(ssh-keygen -y -P '' -f "$value" 2>/dev/null); then
+      case "$host_public" in
+        'ssh-ed25519 '*)
+          if host_fingerprint=$(printf '%s\n' "$host_public" | ssh-keygen -lf - -E sha256 2>/dev/null); then
+            break
+          fi
+          ;;
+      esac
+    fi
+  done <<< "$sshd_config"
+fi
+if [ -z "$host_fingerprint" ]; then
+  printf '%s\n' 'Enrollment files are prepared, but no usable enabled ED25519 host key was found in sshd -T.' 'Check the SSH server HostKey and HostKeyAlgorithms settings on this target before finishing enrollment.' >&2
+  exit 1
+fi
+printf '\nEnrollment prepared. Add this verified ED25519 host fingerprint in Mr Patchy:\n%s\n' "$host_fingerprint"
+'''
 def key_path(host_id): return DATA/'ssh'/(host_id+'.key')
 def create_key(host_id):
     path = key_path(host_id); path.parent.mkdir(mode=0o700, exist_ok=True)
@@ -93,7 +125,7 @@ def bootstrap(host):
     return f'''#!/bin/bash
 set -euo pipefail
 [ "$(id -u)" = 0 ] || {{ echo 'Run as root (sudo bash installer.sh)'; exit 1; }}
-for command in python3 sshd sudo visudo useradd sha256sum openssl; do
+for command in python3 sshd ssh-keygen sudo visudo useradd sha256sum openssl; do
   command -v "$command" >/dev/null || {{ echo "Missing prerequisite: $command. Install python3 openssh-server sudo first."; exit 1; }}
 done
 # Offline enrollment: no downloads, apt calls, or callbacks.
@@ -142,8 +174,7 @@ touch /opt/drpatch/.mrpatchy-enrolled
 chmod 600 /opt/drpatch/.mrpatchy-enrolled
 visudo -cf /etc/sudoers.d/mrpatchy
 sshd -t
-printf '\nEnrollment prepared. Add this verified host fingerprint in Mr Patchy:\n'
-for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key" -E sha256; done
+{HOST_FINGERPRINT_SCRIPT}
 printf '\nAllow SSH from your Mr Patchy server, then click Finish installation.\n'
 '''
 
