@@ -269,3 +269,27 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .ai-call h3,.ai-call p{overflow-wrap:anywhere}
 .ai-token-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:12px;margin:12px 0;font-size:.85rem}
 .ai-token-grid strong{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums;margin-top:4px}
+.server-name{color:var(--text);text-decoration:underline;text-underline-offset:4px}
+.host-table td:last-child .button{margin:0 8px 6px 0;white-space:nowrap}
+.server-back{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0}
+.server-back a{color:var(--mint,#9de5d5)}
+.server-back label{display:flex;align-items:center;gap:12px;max-width:70%}
+.server-back select{max-width:280px;min-width:0}
+.server-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 28px;border-bottom:1px solid var(--border,#34434d);padding-bottom:14px}
+.server-tabs a{display:block;border:1px solid transparent;border-radius:10px;padding:10px 14px;color:var(--muted);text-decoration:none;font-weight:650}
+.server-tabs a:hover,.server-tabs a:focus-visible{border-color:var(--mint,#9de5d5);color:var(--text)}
+.server-tabs a.active{color:var(--text);background:#9de5d520;border-color:#9de5d560}
+.server-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.server-grid>.card{min-width:0}
+.server-stats a{text-decoration:none;color:var(--text)}
+.server-facts{display:grid;gap:14px;margin:18px 0}
+.server-facts dt{font-size:.8rem;color:var(--muted)}
+.server-facts dd{margin:4px 0 0;overflow-wrap:anywhere}
+.server-timeline article{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;border-top:1px solid var(--border,#34434d);padding:18px 0}
+.server-timeline time{font-size:.85rem;color:var(--muted)}
+.server-timeline h4,.server-policy h4{margin:0 0 8px}
+.server-timeline p{margin:6px 0}
+.server-policy{padding:14px 0;border-bottom:1px solid var(--border,#34434d)}
+.server-pagination{margin:16px 0}
+#server-tab-content,#server-tab-body,#server-snapshot{min-width:0;overflow-wrap:anywhere}
+@media(max-width:760px){.server-grid{grid-template-columns:1fr}.server-back{align-items:flex-start;flex-direction:column}.server-back label{max-width:100%;width:100%}.server-back select{max-width:100%;flex:1}.server-tabs{gap:4px}.server-tabs a{font-size:.85rem;padding:9px 10px}.server-timeline article{grid-template-columns:1fr;gap:8px}}

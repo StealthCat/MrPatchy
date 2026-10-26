@@ -262,7 +262,7 @@ def tick(now=None):
     finally: lock.release()
 
 
-def calendar(s, start, end):
+def calendar(s, start, end, host_id=''):
     if not math.isfinite(start) or not math.isfinite(end) or not 0 <= start < end <= 4102444800 or end-start > 62*86400:
         raise ValueError('Calendar range must be within 1970–2100 and at most 62 days')
     schedules = list(s.scalars(select(PatchSchedule)))
@@ -270,13 +270,16 @@ def calendar(s, start, end):
     events = {}
     for row in schedules:
         if not row.policy['enabled']: continue
-        target_count = len(hosts_for(s,row.policy))
+        if host_id and not (row.policy['all_hosts'] or host_id in row.policy['host_ids']): continue
+        target_count = 1 if host_id else len(hosts_for(s,row.policy))
         for due in occurrences(row.policy, max(start-86400, row.updated), end):
             key = row.id+':'+str(int(due))
             events[key] = {'id':key,'schedule_id':row.id,'title':row.policy['name'],'start':due,
                            'end':due+row.policy['window_minutes']*60,'trigger':'regular','states':{},
                            'servers':target_count, 'timezone':row.policy['timezone']}
-    for run in s.scalars(select(PatchRun).where(PatchRun.due >= start-86400, PatchRun.due < end).order_by(PatchRun.due).limit(10000)):
+    runs = select(PatchRun).where(PatchRun.due >= start-86400, PatchRun.due < end)
+    if host_id: runs = runs.where(PatchRun.host_id == host_id)
+    for run in s.scalars(runs.order_by(PatchRun.due).limit(10000)):
         key = run.schedule_id+':'+str(int(run.due)) if run.trigger == 'regular' else run.id
         event = events.setdefault(key, {'id':key,'schedule_id':run.schedule_id,'title':names.get(run.schedule_id,'Deleted schedule'),
                   'start':run.due,'end':run.expires,'trigger':run.trigger,'states':{},'servers':0,'timezone':''})

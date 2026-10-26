@@ -53,6 +53,24 @@ class AICall(Base):
     reason: Mapped[str] = mapped_column(Text, default='No usage receipt was received. The call may still have incurred a charge.')
 
 
+class AIRunHost(Base):
+    """Durable membership survives a package score being superseded or retried."""
+    __tablename__ = 'ai_run_hosts'
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(36), primary_key=True, index=True)
+
+
+def run_hosts(s, run_ids):
+    grouped = {identifier: set() for identifier in run_ids}
+    if not grouped: return grouped
+    from .update_scores import UpdateScore
+    # Score links recover some historical batches created before durable membership.
+    for model in (AIRunHost, UpdateScore):
+        for run_id, host_id in s.execute(select(model.run_id, model.host_id).where(model.run_id.in_(grouped))):
+            grouped[run_id].add(host_id)
+    return grouped
+
+
 def request_started(model):
     run_id = active.get()
     if not run_id: return None
@@ -121,10 +139,13 @@ def event(stage, message, *, state=None, call=False):
 
 
 @contextmanager
-def track(purpose, model, host_id='', subject=''):
+def track(purpose, model, host_id='', subject='', host_ids=None):
     with Session() as s:
         row = AIRun(id=str(uuid.uuid4()), purpose=purpose, model=model, host_id=host_id, subject=subject)
-        s.add(row); s.commit(); identifier = row.id
+        s.add(row)
+        for member in set(host_ids or []) | ({host_id} if host_id else set()):
+            s.add(AIRunHost(run_id=row.id,host_id=member))
+        s.commit(); identifier = row.id
     token = active.set(identifier)
     try:
         event('starting', 'Run accepted by the worker.')
