@@ -19,3 +19,16 @@ button:disabled{cursor:not-allowed}
  #toast{left:16px;right:16px;bottom:16px;max-width:none}
  .login-card{padding:26px}.table-wrap td button{white-space:nowrap}
 }
+
+/* Patch schedules: monthly overview and elapsed-hour agenda. */
+.schedule-stats{display:grid;grid-template-columns:1fr 1fr 2fr;gap:16px}
+.schedule-stats strong{display:block;font-size:32px;color:var(--mint);margin:8px 0}
+.schedule-list{display:grid;gap:14px}.schedule-item{display:flex;justify-content:space-between;align-items:start;gap:16px;border-top:1px solid var(--line);padding-top:16px}.schedule-item h3{margin-bottom:8px}.schedule-item p{margin:6px 0}
+#patch-calendar{overflow:auto;max-height:760px;border:1px solid var(--line);border-radius:10px}
+.calendar-month{display:grid;grid-template-columns:repeat(7,minmax(92px,1fr));min-width:680px}
+.calendar-weekday{padding:12px;color:var(--muted);text-align:center;background:#111b20}
+.calendar-cell{min-height:120px;padding:8px;border-top:1px solid var(--line);border-right:1px solid var(--line)}.calendar-cell.outside{background:#11191e}.calendar-cell.today{box-shadow:inset 0 0 0 1px var(--mint)}.calendar-day{padding:4px 8px;background:transparent;border:0;font-size:12px}
+.calendar-event{border-left:3px solid var(--mint);background:#22362e;border-radius:4px;padding:7px;margin-top:6px;font-size:10px;overflow-wrap:anywhere}.calendar-event strong,.calendar-event small{display:block}.calendar-event small{margin-top:4px;color:#cad8d0}.calendar-event.high{border-color:var(--amber);background:#3a3327}.calendar-event.critical{border-color:var(--red);background:#3e2a2f}
+.calendar-hour{display:grid;grid-template-columns:110px 1fr;border-bottom:1px solid var(--line);min-height:60px}.calendar-hour time{font-size:11px;color:var(--muted);padding:15px;border-right:1px solid var(--line)}.calendar-hour>div{padding:5px 12px}.calendar-hour .calendar-event{font-size:12px}
+#schedule-form fieldset{border:1px solid var(--line);border-radius:8px;margin:0 0 18px;padding:14px}#schedule-form legend{font-size:12px;color:var(--mint);padding:0 6px}#schedule-hosts{max-height:220px;overflow:auto}#schedule-form [hidden]{display:none}
+@media(max-width:650px){.schedule-stats{grid-template-columns:1fr 1fr}.schedule-stats>.card:last-child{grid-column:1/-1}.schedule-item{flex-direction:column}.calendar-hour{grid-template-columns:85px 1fr}.calendar-hour time{padding:12px 5px}#patch-calendar{max-height:560px}}

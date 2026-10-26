@@ -10,7 +10,7 @@ import re
 import subprocess
 from sqlalchemy import select, delete, update
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import apt, ssh, operations, releases
+from . import apt, ssh, operations, releases, scheduling
 from target.agent import MANAGED
 from target.bridge import UNIT
 from .security import unseal
@@ -307,6 +307,7 @@ def execute_locked(job_id):
                     save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
                     s.commit()
                     validate_patch(s,h,job.payload['packages'])
+                    if job.payload.get('_schedule'): scheduling.validate_selection(s,h,job)
                 policy=operations.recovery_policy(s,h.id)
                 if job.action=='patch':
                     approved=job.payload.get('_recovery_policy',{'reboot':False,'rollback':False})
@@ -414,7 +415,7 @@ def loop():
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=2) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=1) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0; notification_task=None
+        active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0
         while not stop.wait(1):
             try:
                 now=time.time()
@@ -432,6 +433,8 @@ def loop():
                         except Exception: log.exception('Job worker failed outside its operation handler')
                         del active_jobs[key]
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
+                if is_leader and now-last_schedule>=30:
+                    scheduling.tick(now); last_schedule=now
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:

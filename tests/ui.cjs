@@ -49,6 +49,7 @@ const assert=require('assert/strict');
     await page.getByRole('button',{name:'Manage ↗'}).click();
     assert.equal(await page.locator('#modal-body a[download]').count(),1);
     await page.locator('#close-modal').click();
+    await require('./ui_schedules.cjs')(page,capture);
     await page.locator('[data-nav=settings]').click();
     await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
     await capture('settings');

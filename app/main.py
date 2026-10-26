@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
-from . import ssh, apt, worker, tls
+from . import ssh, apt, worker, tls, scheduling
 from .http_security import RequestSizeLimit
 from . import operations
 from .identity import User,actor,consume_otp,new_secret
@@ -75,7 +75,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations','/api/tls'))
+        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -819,3 +819,37 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(aut
         job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-upgrade',payload={'plan_id':row.id,'digest':row.digest})
         row.job_id=job.id;row.state='approved';s.add(job);audit(s,'approve distribution upgrade',user['username']+' '+row.id+' '+row.digest);s.commit()
         return {'state':row.state,'job_id':job.id}
+
+
+@app.get('/api/schedules')
+def patch_schedules(user=Depends(auth)):
+    with Session() as s:
+        return {'host_policies':{h.id:operations.recovery_policy(s,h.id) for h in s.scalars(select(Host))},
+                'schedules':[scheduling.serialize(row) for row in s.scalars(select(scheduling.PatchSchedule).order_by(scheduling.PatchSchedule.updated.desc()))],
+                'runs':[object_dict(row) for row in s.scalars(select(scheduling.PatchRun).order_by(scheduling.PatchRun.due.desc()).limit(100))]}
+
+@app.get('/api/schedules/calendar')
+def patch_calendar(start:float,end:float,user=Depends(auth)):
+    with Session() as s: return {'events':scheduling.calendar(s,start,end)}
+
+@app.post('/api/schedules')
+def create_patch_schedule(body:scheduling.ScheduleInput,user=Depends(auth)):
+    with scheduling.Lock('patch-schedules'),Session() as s:
+        return scheduling.save(s,body,None,user['username'])
+
+@app.put('/api/schedules/{schedule_id}')
+def update_patch_schedule(schedule_id:str,body:scheduling.ScheduleInput,user=Depends(auth)):
+    with scheduling.Lock('patch-schedules'),Session() as s:
+        return scheduling.save(s,body,schedule_id,user['username'])
+
+class ScheduleRevision(BaseModel): revision:int=Field(ge=1)
+
+@app.delete('/api/schedules/{schedule_id}')
+def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(auth)):
+    with scheduling.Lock('patch-schedules'),Session() as s:
+        row=s.get(scheduling.PatchSchedule,schedule_id)
+        if not row: raise HTTPException(404,'Schedule not found')
+        if row.revision!=body.revision: raise HTTPException(409,'Schedule changed; reload before deleting')
+        scheduling.cancel_pending(s,schedule_id,'Schedule deleted')
+        s.delete(row);audit(s,'delete patch schedule',user['username']+' '+schedule_id);s.commit()
+    return {'ok':True}

@@ -90,9 +90,21 @@ Explicit installation refreshes target metadata and requests the recorded exact 
 | Normal | 168 hours |
 | Low | 720 hours |
 
-Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates default to high; others default to normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades.
+Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates default to high; others default to normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
+
+## Scheduled and out-of-cycle patching
+
+Open **Patch schedules** in the main menu to configure daily, weekly or monthly patching for all configured servers (including future enrollments) or a selected group. Set an IANA timezone, start time, allowed start-window length and regular priorities. The month calendar and hourly day view show upcoming windows and recorded urgent runs; times in the calendar use your browser’s timezone.
+
+Each schedule can independently enable **high** and **critical** out-of-cycle updates after a configurable delay from first discovery. These rules respect server maintenance windows unless you explicitly authorize a bypass for that priority. Detection follows the central repository check interval. Priority labels are Mr Patchy policy labels, not automatic CVSS classifications.
+
+Review and explicitly approve unattended installation before enabling a schedule. Jobs refresh signed repository metadata, select exact candidate versions and preserve package holds, host-key verification, recovery quarantine and per-host serialization. Unhealthy/offline targets wait within the allowed start window. Missed windows are skipped; pausing, editing or deleting cancels queued work while already running patches may finish. The selected reboot/rollback behavior must match each target’s saved recovery policy.
+
+![Monthly patch calendar](docs/screenshots/patch-calendar.webp)
+
+See [scheduling behavior, daylight saving, safety checks and failure handling](docs/PATCH_SCHEDULES.md). Distribution release upgrades still use their separate reviewed GO workflow.
 
 ## Reboot, rollback and interrupted operations
 

@@ -41,6 +41,9 @@ def recovery_policy(s,host_id):
     return {name:bool(row and row.value.get(name)) for name in ('reboot','rollback')}
 
 def eligible(s,job):
+    if job.payload.get('_schedule'):
+        from .scheduling import job_guard
+        return job_guard(s,job)
     if job.action not in ('patch','repair','release-upgrade'): return True
     dependencies=job.payload.get('_depends_on',[])
     for dep in dependencies:
@@ -63,7 +66,10 @@ def collect_alerts():
             else:
                 alert.message=message
                 if alert.state=='resolved':alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
+        from .scheduling import PatchRun
         for host in s.scalars(select(Host)):
+            failed_runs=s.scalar(select(func.count()).select_from(PatchRun).where(PatchRun.host_id==host.id,PatchRun.state.in_(('failed','blocked','skipped')),PatchRun.due>now-86400))
+            if failed_runs:record(host,'scheduled patching',str(failed_runs)+' scheduled run(s) failed, were blocked, or missed their start window in the last 24 hours. Review Patch schedules and Activity.')
             recovery=list(s.scalars(select(Job.id).where(Job.host_id==host.id,Job.state=='recovery_required')))
             if recovery:record(host,'recovery',str(len(recovery))+' operation(s) require console recovery/reconciliation. See Activity: '+', '.join(recovery[:10]))
             if host.state=='enrolling':continue
