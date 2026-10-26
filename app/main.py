@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import threading
 import time
 import uuid
@@ -74,7 +75,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations','/api/tls'))
+        sensitive_read=('/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories'))) or path.startswith(('/api/users','/api/settings','/api/audit','/api/operations','/api/tls'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -168,13 +169,39 @@ def installer(host_id:str,user=Depends(auth)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return PlainTextResponse(ssh.bootstrap(h),headers={'Content-Disposition':'attachment; filename="mrpatchy-enroll.sh"'})
-@app.post('/api/hosts/{host_id}/enrollment-link')
-def enrollment_link(host_id:str,request:Request,user=Depends(auth)):
+def enrollment_endpoints(request:Request):
+    endpoints=[{'id':'default','label':'Default (PUBLIC_URL)',
+                'url':os.getenv('PUBLIC_URL',str(request.base_url)).rstrip('/')}]
+    for name, item in tls.public_state()['profiles'].items():
+        if not item['enabled']:
+            continue
+        port=item['effective_https_port']
+        origin='https://'+tls.address(tls.hostname(item['domain']))+(f':{port}' if port!=443 else '')
+        endpoints.append({'id':name,'label':name.capitalize()+' HTTPS','url':origin})
+    return endpoints
+
+@app.get('/api/hosts/{host_id}/enrollment-endpoints')
+def get_enrollment_endpoints(host_id:str,request:Request,user=Depends(auth)):
     with Session() as s:
-        host_or_404(s,host_id); token=secrets.token_urlsafe(32)
+        host_or_404(s,host_id)
+    return {'endpoints':enrollment_endpoints(request)}
+
+class EnrollmentLinkInput(BaseModel):
+    endpoint:str=Field(default='default',max_length=32)
+
+@app.post('/api/hosts/{host_id}/enrollment-link')
+def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=None,user=Depends(auth)):
+    with Session() as s:
+        host_or_404(s,host_id)
+        endpoint=body.endpoint if body else 'default'
+        selected=next((item for item in enrollment_endpoints(request) if item['id']==endpoint),None)
+        if selected is None:
+            raise HTTPException(400,'HTTPS endpoint is unavailable. Select an enabled profile in Settings → HTTPS.')
+        token=secrets.token_urlsafe(32)
         s.add(Setting(key='enroll:'+token_hash(token),value={'host_id':host_id,'expires':time.time()+3600})); s.commit()
-        base=os.getenv('PUBLIC_URL',str(request.base_url).rstrip('/'))
-        return {'url':base+'/enroll/'+token,'expires_in':3600}
+        url=selected['url']+'/enroll/'+token
+        return {'url':url,'endpoint':endpoint,'expires_in':3600,
+                'command':f'curl -fsSL {shlex.quote(url)} -o /tmp/mrpatchy-enroll.sh && sudo bash /tmp/mrpatchy-enroll.sh'}
 @app.get('/enroll/{token}')
 def enroll(token:str):
     with Session() as s:
