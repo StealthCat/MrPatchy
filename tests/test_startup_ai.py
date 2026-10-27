@@ -1,4 +1,5 @@
 import json
+import math
 import pytest
 from app import startup_ai,incidents,worker,ai
 from app.db import Session,Setting,Job,config
@@ -36,9 +37,13 @@ def test_startup_plan_worker_usage_binding_and_manual_approval(admin,monkeypatch
     row=admin.get(BASE+'/persistence-incidents').json()['items'][0]
     queued=admin.post(path+'/plan',json={'expected_updated':row['updated']});assert queued.status_code==200
     assert admin.post(path+'/plan',json={'expected_updated':row['updated']}).status_code==409
+    with Session() as s:
+        revision=s.get(Job,queued.json()['job_id']).payload['expected_updated']
+        assert isinstance(revision,str) and float(revision)==row['updated']
     worker.execute(queued.json()['job_id'])
     with Session() as s:
-        assert s.get(Job,queued.json()['job_id']).state=='complete'
+        job=s.get(Job,queued.json()['job_id'])
+        assert job.state=='complete',job.output
         plan=s.query(incidents.Plan).one();plan_id=plan.id;digest=plan.evidence_digest
         from app.ai_runs import AIRun
         assert s.get(AIRun,plan.run_id).purpose=='security_plan'
@@ -75,7 +80,7 @@ def test_shared_budget_roles_and_changed_job_prevent_provider_call(admin,monkeyp
     monkeypatch.setattr(ai,'request',lambda *a:pytest.fail('No provider call'))
     with Session() as s:
         row=s.get(incidents.PersistenceIncident,identifier)
-        with pytest.raises(ValueError,match='changed'):startup_ai.generate(s,row,updated-1)
+        with pytest.raises(ValueError,match='changed'):startup_ai.generate(s,row,math.nextafter(updated,math.inf))
         for role in ('viewer','operator'):
             s.get(User,'admin').role=role;s.commit()
             assert admin.post(path,json={'expected_updated':updated}).status_code==403

@@ -968,4 +968,29 @@ def evidence_preserve(identifier,snapshot=None,status_only=False):
         if status_only:return {'id':identifier,'state':'not_found'}
         raise
 
+def evidence_export(identifier,snapshot):
+    """Export only an already preserved operation, never an arbitrary path."""
+    import fcntl
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid evidence operation ID')
+    with evidence_directory(EVIDENCE_ROOT/identifier) as directory:
+        fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        receipt=evidence_status_open(directory,identifier)
+        if receipt.get('state')!='preserved' or receipt.get('snapshot')!=snapshot or receipt.get('original_unchanged') is not True:raise ValueError('Only the approved preserved snapshot may be acquired')
+        fd=os.open('content',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+        try:
+            before=os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or stat.S_IMODE(before.st_mode)!=0o600 or before.st_nlink!=1 or before.st_size>32*1024*1024:raise ValueError('Unsafe vault content')
+            chunks=[];total=0;digest=hashlib.sha256();deadline=time.monotonic()+30
+            while True:
+                chunk=os.read(fd,65536)
+                if not chunk:break
+                total+=len(chunk)
+                if total>32*1024*1024 or time.monotonic()>deadline:raise ValueError('Evidence export exceeded its budget')
+                chunks.append(chunk);digest.update(chunk)
+            if evidence_identity(before)!=evidence_identity(os.fstat(fd)) or evidence_identity(before)!=evidence_identity(os.stat('content',dir_fd=directory,follow_symlinks=False)) or digest.hexdigest()!=snapshot['sha256'] or total!=snapshot['identity']['size']:raise ValueError('Preserved evidence changed during export')
+            if evidence_status_open(directory,identifier)!=receipt:raise ValueError('Evidence receipt changed during export')
+            return {'id':identifier,'snapshot':snapshot,'content_base64':base64.b64encode(b''.join(chunks)).decode('ascii')}
+        finally:os.close(fd)
+
+
 if __name__ == '__main__': main()

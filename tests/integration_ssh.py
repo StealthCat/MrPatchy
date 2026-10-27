@@ -178,6 +178,25 @@ def main():
         assert ssh.call(host,{'action':'evidence-status','id':operation},timeout=60)==receipt
         assert run('docker','exec',name,'stat','-c','%a','/var/lib/mrpatchy-evidence/'+operation+'/content')=='600'
         print('Evidence preservation passed: guarded vault, source unchanged, copy verification and idempotent recovery receipt')
+        export_request={'action':'evidence-export','id':operation,'snapshot':vault_snapshot,'approved_until':time.time()+240}
+        try:ssh.call(host,{**export_request,'approved_until':time.time()-1},timeout=60)
+        except RuntimeError as error:assert 'approval' in str(error).lower(),str(error)
+        else:raise AssertionError('Expired acquisition approval was accepted')
+        acquired=ssh.call(host,export_request,timeout=150)
+        assert acquired['snapshot']==vault_snapshot and base64.b64decode(acquired['content_base64'],validate=True)==b'evidence-fixture'
+        from app import evidence_archive
+        from app.db import Session,Job
+        from app.evidence_vault import EvidenceCopy,EvidenceArchive
+        archive_id=str(uuid.uuid4())
+        with Session() as session:
+            session.add(EvidenceCopy(id=operation,host_id=host.id,incident_id='native-fixture',state='preserved',snapshot=vault_snapshot,evidence_digest='a'*64))
+            session.add(EvidenceArchive(id=archive_id,host_id=host.id,copy_id=operation,created=time.time(),state='queued',snapshot=vault_snapshot,fingerprint=host.fingerprint,actor='native-test',reason='Exercise the real SSH evidence acquisition.',expires=time.time()+240));session.commit()
+            result=evidence_archive.execute(session,host,Job(id=str(uuid.uuid4()),action='evidence-acquire',payload={'archive_id':archive_id}));session.commit()
+            assert result['state']=='verified' and result['bytes']==len(b'evidence-fixture'),result
+            assert evidence_archive.verify(session.get(EvidenceArchive,archive_id))=='verified'
+        assert (workspace/'evidence-archive'/archive_id/'content').read_bytes()==b'evidence-fixture'
+        assert run('docker','exec',name,'cat',source)=='evidence-fixture'
+        print('Controller acquisition passed: expired approval rejected, real pinned SSH transfer, private archive and independent hash verification')
 
         if not rpm:
             from target.agent import validate_yara_rules

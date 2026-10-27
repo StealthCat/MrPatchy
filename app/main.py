@@ -1216,6 +1216,54 @@ def reconcile_evidence_copy(host_id:str,copy_id:str,user=Depends(auth)):
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['evidence-preserve','evidence-status']),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Evidence work is still pending')
         return {'job_id':worker.enqueue(s,host_id,'evidence-status',{'copy_id':copy.id})}
 
+@app.post('/api/hosts/{host_id}/security/evidence-copies/{copy_id}/acquire')
+def acquire_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Depends(auth)):
+    from . import evidence_archive as archive
+    from .evidence_vault import EvidenceCopy,EvidenceArchive
+    if body.confirmation!='ACQUIRE':raise ValueError('Type ACQUIRE to approve transferring preserved file contents to the controller')
+    if len(body.reason.strip())<10:raise ValueError('Provide a meaningful acquisition reason')
+    with host_change(host_id),Session() as s:
+        host=host_or_404(s,host_id);copy=s.get(EvidenceCopy,copy_id)
+        if not copy or copy.host_id!=host_id:raise HTTPException(404,'Evidence operation not found')
+        if copy.state!='preserved' or incidents.digest(copy.snapshot)!=body.snapshot_digest:raise HTTPException(409,'A matching preserved snapshot is required')
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['evidence-acquire','evidence-archive-status']),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Evidence acquisition work is already pending')
+        now=time.time();row=EvidenceArchive(id=str(uuid.uuid4()),host_id=host_id,copy_id=copy.id,created=now,state='queued',snapshot=copy.snapshot,fingerprint=host.fingerprint,actor=user['username'],reason=body.reason.strip(),expires=now+300)
+        s.add(row);archive.observe(s,row,'approved')
+        job_id=worker.enqueue(s,host_id,'evidence-acquire',{'archive_id':row.id})
+        return {'job_id':job_id,'archive_id':row.id}
+
+@app.get('/api/hosts/{host_id}/security/evidence-archives')
+def evidence_archives(host_id:str,offset:int=0,user=Depends(auth)):
+    from .evidence_vault import EvidenceArchive,ArchiveObservation
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(EvidenceArchive).where(EvidenceArchive.host_id==host_id).order_by(EvidenceArchive.created.desc(),EvidenceArchive.id).offset(offset).limit(21)))
+        items=[]
+        for row in rows[:20]:
+            latest=s.scalar(select(ArchiveObservation).where(ArchiveObservation.archive_id==row.id).order_by(ArchiveObservation.created.desc(),ArchiveObservation.id).limit(1))
+            items.append(object_dict(row)|{'last_observation':object_dict(latest) if latest else None})
+        return {'items':items,'more':len(rows)>20}
+
+@app.get('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/history')
+def evidence_archive_history(host_id:str,archive_id:str,offset:int=0,user=Depends(auth)):
+    from .evidence_vault import EvidenceArchive,ArchiveObservation
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=s.get(EvidenceArchive,archive_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Evidence acquisition not found')
+        rows=list(s.scalars(select(ArchiveObservation).where(ArchiveObservation.archive_id==row.id,ArchiveObservation.host_id==host_id).order_by(ArchiveObservation.created.desc(),ArchiveObservation.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r) for r in rows[:20]],'more':len(rows)>20}
+
+@app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/status')
+def verify_evidence_archive(host_id:str,archive_id:str,user=Depends(auth)):
+    from .evidence_vault import EvidenceArchive
+    with host_change(host_id),Session() as s:
+        row=s.get(EvidenceArchive,archive_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Evidence acquisition not found')
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['evidence-acquire','evidence-archive-status']),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Evidence acquisition work is still pending')
+        return {'job_id':worker.enqueue(s,host_id,'evidence-archive-status',{'archive_id':row.id,'_actor':user['username']})}
+
 @app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/plan')
 def security_plan_queue(host_id:str,incident_id:str,user=Depends(auth)):
     with worker.Lock('security-plan-queue'):
@@ -1503,7 +1551,8 @@ def queue_startup_plan(host_id:str,incident_id:str,body:StartupPlanRequest,user=
             raise HTTPException(409,'An incident plan is already queued or running for this server')
         count=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
         if count>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
-        return {'job_id':worker.enqueue(s,host_id,'startup-plan',{'incident_id':row.id,'expected_updated':row.updated})}
+        # Preserve the exact revision through MySQL's JSON number serialization.
+        return {'job_id':worker.enqueue(s,host_id,'startup-plan',{'incident_id':row.id,'expected_updated':repr(row.updated)})}
 
 @app.post('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/plans/{plan_id}/approve')
 def approve_startup_plan(host_id:str,incident_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(auth)):

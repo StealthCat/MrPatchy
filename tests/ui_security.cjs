@@ -1,7 +1,7 @@
 const assert=require('assert/strict');
 module.exports=async(page)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
- const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open';
+ const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared';
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -18,8 +18,11 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/baseline')&&request.method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
   if(url.pathname.endsWith('/baseline')&&request.method()==='POST'){writes.push(url.pathname);assert.equal(request.postDataJSON().expected,'');assert.equal(request.postDataJSON().inspection_id,'inspection-job');return route.fulfill({json:{id:'baseline-fixture'}});}
   if(url.pathname.endsWith('/comparison'))return route.fulfill({json:{state:'compared',previous_created:Date.now()/1000-3600,note:'Observed changes, not a malware verdict.',changes:[{path:'/etc/cron.d/review-me',kind:'added'}]}});
-  if(url.pathname.endsWith('/evidence-copies'))return route.fulfill({json:{items:[{id:'copy-fixture',state:'prepared',created:Date.now()/1000,snapshot:{path:'/tmp/security-fixture',sha256:'b'.repeat(64)},snapshot_digest:'e'.repeat(64)}],more:false}});
-  if(url.pathname.endsWith('/evidence-copies/copy-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'PRESERVE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));writes.push(url.pathname);return route.fulfill({json:{job_id:'copy-job'}});}
+  if(url.pathname.endsWith('/evidence-copies'))return route.fulfill({json:{items:[{id:'copy-fixture',state:copyState,created:Date.now()/1000,snapshot:{path:'/tmp/security-fixture',sha256:'b'.repeat(64)},snapshot_digest:'e'.repeat(64)}],more:false}});
+  if(url.pathname.endsWith('/evidence-copies/copy-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'PRESERVE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));copyState='preserved';writes.push(url.pathname);return route.fulfill({json:{job_id:'copy-job'}});}
+  if(url.pathname.endsWith('/evidence-copies/copy-fixture/acquire')){assert.equal(request.postDataJSON().confirmation,'ACQUIRE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));writes.push(url.pathname);return route.fulfill({json:{job_id:'acquire-job'}});}
+  if(url.pathname.endsWith('/evidence-archives'))return route.fulfill({json:{items:[{id:'archive-fixture',state:'verified',created:Date.now()/1000,snapshot:{path:'/tmp/security-fixture',sha256:'b'.repeat(64)},actor:'admin',reason:'Retain independent evidence.'}],more:false}});
+  if(url.pathname.endsWith('/evidence-archives/archive-fixture/history'))return route.fulfill({json:{items:[{state:'approved',actor:'admin'},{state:'verified',actor:'admin'}],more:false}});
   if(url.pathname.endsWith('/yara')){assert.deepEqual(request.postDataJSON(),{bundle_id:'rules-fixture',paths:['/tmp']});writes.push(url.pathname);return route.fulfill({json:{job_id:'yara-job'}});}
   if(url.pathname.endsWith('/vendor-inspections')){assert.deepEqual(request.postDataJSON(),{bundle_id:'vendor-fixture'});writes.push(url.pathname);return route.fulfill({json:{job_id:'vendor-job'}});}
   if(url.pathname.endsWith('/inspections')){
@@ -75,6 +78,16 @@ module.exports=async(page)=>{
   await page.locator('#copy-approval [name=confirmation]').fill('PRESERVE');
   await page.getByRole('button',{name:'Execute approved evidence copy',exact:true}).click();
   await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/evidence-copies/copy-fixture/execute');
+  const beforeAcquire=writes.length;await page.getByRole('button',{name:'Review controller acquisition',exact:true}).click();assert.equal(writes.length,beforeAcquire);
+  await page.locator('#archive-approval [name=reason]').fill('Retain independent evidence for investigation.');
+  await page.locator('#archive-approval [name=confirmation]').fill('ACQUIRE');
+  await page.getByRole('button',{name:'Acquire evidence to controller',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/evidence-copies/copy-fixture/acquire');
+  await page.getByRole('button',{name:'Verify controller copy',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Controller evidence verification queued'));
+  assert.equal(writes.at(-1),prefix+'/evidence-archives/archive-fixture/status');
+  await page.getByRole('button',{name:'Acquisition custody history',exact:true}).click();
+  await page.locator('#archive-history').filter({hasText:'verified'}).waitFor();await page.locator('#close-modal').click();
   await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);
   await page.locator('#security-inspection-form').waitFor();
   await page.getByText('Trust basis: local package database',{exact:true}).waitFor();

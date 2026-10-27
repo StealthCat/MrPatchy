@@ -20,6 +20,29 @@ class EvidenceCopy(Base):
     reason:Mapped[str]=mapped_column(Text,default='')
     expires:Mapped[float]=mapped_column(Double,default=0)
 
+class EvidenceArchive(Base):
+    __tablename__='security_evidence_archives'
+    id:Mapped[str]=mapped_column(String(36),primary_key=True)
+    host_id:Mapped[str]=mapped_column(String(36),index=True)
+    copy_id:Mapped[str]=mapped_column(String(36),index=True)
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+    state:Mapped[str]=mapped_column(String(30),default='queued')
+    snapshot:Mapped[dict]=mapped_column(JSON)
+    fingerprint:Mapped[str]=mapped_column(String(100))
+    actor:Mapped[str]=mapped_column(String(120))
+    reason:Mapped[str]=mapped_column(Text)
+    expires:Mapped[float]=mapped_column(Double)
+
+class ArchiveObservation(Base):
+    __tablename__='security_evidence_archive_observations'
+    id:Mapped[str]=mapped_column(String(36),primary_key=True,default=lambda:str(uuid.uuid4()))
+    archive_id:Mapped[str]=mapped_column(String(36),index=True)
+    host_id:Mapped[str]=mapped_column(String(36),index=True)
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+    job_id:Mapped[str]=mapped_column(String(36),default='')
+    state:Mapped[str]=mapped_column(String(30))
+    actor:Mapped[str]=mapped_column(String(120))
+
 
 def validate_snapshot(snapshot,expected):
     import stat

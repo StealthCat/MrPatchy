@@ -292,7 +292,7 @@ def execute_locked(job_id):
         try:
             if not h: raise ValueError('Host no longer exists')
             health=s.get(Setting,'agent-status:'+h.id)
-            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan'):
+            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status'):
                 raise ValueError('Agent verification failed; review Agent health before executing remote operations')
             if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
             elif job.action=='release-upgrade':
@@ -329,7 +329,7 @@ def execute_locked(job_id):
                 from . import startup_ai,incidents
                 incident=s.get(incidents.PersistenceIncident,job.payload['incident_id'])
                 if not incident or incident.host_id!=h.id:raise ValueError('Startup incident not found')
-                plan=startup_ai.generate(s,incident,job.payload['expected_updated'])
+                plan=startup_ai.generate(s,incident,float(job.payload['expected_updated']))
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='security-plan':
                 from . import incidents
@@ -369,6 +369,9 @@ def execute_locked(job_id):
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
+            elif job.action in ('evidence-acquire','evidence-archive-status'):
+                from . import evidence_archive
+                job.output=json.dumps(evidence_archive.execute(s,h,job))
             elif job.action in ('evidence-prepare','evidence-preserve','evidence-status'):
                 from . import evidence_vault
                 job.output=json.dumps(evidence_vault.execute(s,h,job))
@@ -438,6 +441,12 @@ def execute_locked(job_id):
             job=s.get(Job,job_id)
             h=s.get(Host,job.host_id)
             job.state='recovery_required' if protected else 'failed'
+            if job.action=='evidence-acquire':
+                from . import evidence_archive
+                from .evidence_vault import EvidenceArchive
+                acquisition=s.get(EvidenceArchive,job.payload.get('archive_id'))
+                if acquisition and acquisition.host_id==job.host_id and acquisition.state=='queued':
+                    acquisition.state='rejected';evidence_archive.observe(s,acquisition,'rejected',job.id)
             if job.action in ('release-plan','release-upgrade'):
                 plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
                 if plan:plan.state=job.state;plan.error=str(e)[:1000]
