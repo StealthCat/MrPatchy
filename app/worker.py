@@ -348,7 +348,7 @@ def execute_locked(job_id):
                 vendor.validate_receipt(manifest,result)
                 report={'version':1,'trust_basis':'controller_authenticated_debian_artifact','state':'collected' if result['state']!='incomplete' else 'incomplete',
                         'packages':[],'persistence':None,'vendor_verification':result,'vendor_authentication':provenance}
-                incidents.record_inspection(s,h.id,job.id,report)
+                incidents.record_inspection(s,h.id,job.id,report,vendor_authenticated=True)
                 job.output=json.dumps({'state':result['state'],'bundle_id':job.payload['bundle_id'],'examined':result.get('examined')})
             elif job.action=='security-inspect':
                 from . import incidents

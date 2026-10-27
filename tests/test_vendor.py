@@ -183,3 +183,10 @@ def test_controller_rejects_contradictory_or_unscoped_receipts(patch):
     item=manifest(Path('/fixture'))
     receipt={'trust_basis':'controller_authenticated_debian_artifact','package':'patchy-test','version':'1.0-1','architecture':'amd64','state':'matches_artifact_bytes','scope_files':1,'examined':1,'findings':[],'gaps':[]}
     with pytest.raises(ValueError):vendor.validate_receipt(item,{**receipt,**patch})
+
+
+def test_target_cannot_label_local_receipt_as_controller_authenticated():
+    with Session() as s:
+        for basis in ('target_local_package_database','controller_authenticated_debian_artifact'):
+            report={'version':1,'trust_basis':basis,'state':'collected','packages':[],'vendor_authentication':{'signers':['forged']}}
+            with pytest.raises(ValueError):incidents.record_inspection(s,'host','forged-job',report)
