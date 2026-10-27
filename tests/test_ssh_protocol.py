@@ -8,7 +8,8 @@ import pytest
 from app import ssh
 
 @pytest.mark.parametrize('early_status',[False,True])
-def test_real_ssh_drains_large_stderr_without_deadlock(monkeypatch,tmp_path,early_status):
+@pytest.mark.parametrize('iap',[False,True])
+def test_real_ssh_drains_large_stderr_without_deadlock(client,monkeypatch,tmp_path,early_status,iap):
     monkeypatch.setattr(ssh,'DATA',tmp_path)
     host=SimpleNamespace(id='ssh-test',address='127.0.0.1',port=0,fingerprint='')
     ssh.create_key(host.id)
@@ -54,6 +55,26 @@ def test_real_ssh_drains_large_stderr_without_deadlock(monkeypatch,tmp_path,earl
             if transport: transport.close()
             listener.close()
     thread=threading.Thread(target=serve,daemon=True);thread.start()
+    if iap:
+        import subprocess
+        import sys
+        from app import connections
+        relay = """
+import socket,sys,select,os
+s=socket.create_connection(('127.0.0.1',int(sys.argv[1])))
+while True:
+    ready,_,_=select.select([s,sys.stdin.buffer],[],[])
+    for source in ready:
+        data=s.recv(32768) if source is s else os.read(sys.stdin.fileno(),32768)
+        if not data:sys.exit(0)
+        if source is s:
+            sys.stdout.buffer.write(data);sys.stdout.buffer.flush()
+        else:s.sendall(data)
+"""
+        spawn=subprocess.Popen
+        monkeypatch.setattr(connections.shutil,'which',lambda name:'/usr/bin/gcloud')
+        monkeypatch.setattr(connections.subprocess,'Popen',lambda args,**kwargs:spawn([sys.executable,'-c',relay,str(host.port)],**kwargs))
+        monkeypatch.setattr(connections,'for_host',lambda host:connections.Connection(address=host.address,port=host.port,transport='gcp_iap',project='test-project',zone='us-central1-a',instance='vm'))
     result=ssh.call(host,{'action':'snapshot'},timeout=10)
     thread.join(2)
     assert result==expected and seen==[{'action':'snapshot'}] and not failures

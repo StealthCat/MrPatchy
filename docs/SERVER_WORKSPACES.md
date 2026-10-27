@@ -5,6 +5,7 @@ Choose **Servers**, then click a server name or **Open server**. The selected se
 | Tab | Contents | Access |
 |---|---|---|
 | Overview | Identity, SSH fingerprint, OS report, inventory and collector timestamps, package counts, patch status and integrity findings | All roles |
+| Connection | Direct SSH endpoint or Google Cloud IAP project/zone/instance, stale-edit protection and read-only saved connection test; see [GCP setup](GCP.md) | Admin |
 | Packages | Installed and pending packages, holds, priorities, AI importance, installation forecasts and reviewed patch selection | All roles; operators/admins can patch |
 | Patching timeline | Monthly scheduled start windows and run states, assigned schedules, maintenance/recovery policy, pending update forecasts and operation output | All roles; recovery actions require admin |
 | Investigations | This server's process investigations, AI verdicts, evidence and approval state | All roles; trust changes/retries require admin |

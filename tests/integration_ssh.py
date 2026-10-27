@@ -14,6 +14,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 workspace=Path(tempfile.mkdtemp(prefix='patchy-ssh-integration-'))
 os.environ['DATA_DIR']=str(workspace)
 from app import ssh
+from app.db import init
+init()
 
 def run(*args):
     return subprocess.check_output(list(args),text=True).strip()

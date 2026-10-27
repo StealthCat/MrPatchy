@@ -1,5 +1,5 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true]];
+const SERVER_TABS=[['overview','Overview'],['connection','Connection',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true]];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
 
 function serverPagination(root,offset,more,load,size=50){
@@ -27,7 +27,7 @@ async function serverWorkspace(revision){
  const body=$('#server-tab-body'),context={root:body,hostId:id};
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity};
+  const views={overview:serverOverview,connection:serverConnection,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity};
   await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
@@ -133,4 +133,34 @@ function serverIncidentActions(root,hostId,rows,reload){
  };
  root.querySelectorAll('[data-incident-timeline]').forEach(button=>button.onclick=()=>records('Incident timeline','/hosts/'+hostId+'/security/incidents/'+button.dataset.incidentTimeline+'/timeline',e=>'<article><h3>'+esc(e.kind)+' · '+date(e.created)+'</h3><p>'+esc(e.actor)+'</p><pre>'+esc(JSON.stringify(e.details,null,2))+'</pre></article>','Timeline recording begins with this version. Older scan receipts and plans remain available.'));
  root.querySelectorAll('[data-incident-matches]').forEach(button=>button.onclick=()=>{const row=byId.get(button.dataset.incidentMatches);records('Matching file hashes','/security/indicators/'+encodeURIComponent(row.evidence.sha256),r=>'<article class="card"><a href="'+serverLink(r.host_id,'security')+'">'+esc(hostName(r.host_id))+'</a><p>'+esc(r.path)+' · '+badge(r.state)+'</p><small>Updated '+date(r.updated)+'</small></article>','Matches are recorded detections, not a new scan or proof that other servers are clean. Identical hashes do not establish malicious intent.');});
+}
+
+async function serverConnection(revision,{root,hostId}){
+ let saved=await api('/hosts/'+hostId+'/connection');
+ const current=()=>currentView(revision,'servers')&&root.isConnected;
+ if(!current())return;
+ root.innerHTML=`<section class="card"><form id="server-connection-form"><div class="form-grid">
+ <label>Connection mode<select name="transport"><option value="direct">Direct SSH</option><option value="gcp_iap">Google Cloud IAP</option></select></label>
+ <label>SSH address / hostname<input name="address" required maxlength="253" value="${esc(saved.address)}"></label>
+ <label>SSH port<input name="port" type="number" min="1" max="65535" required value="${saved.port}"></label>
+ </div><div id="iap-fields" class="form-grid">
+ <label>GCP project ID<input name="project" maxlength="63" value="${esc(saved.project)}"></label>
+ <label>Zone<input name="zone" placeholder="us-central1-a" maxlength="63" value="${esc(saved.zone)}"></label>
+ <label>Instance name<input name="instance" maxlength="63" value="${esc(saved.instance)}"></label>
+ </div><p class="help">IAP uses the project, zone and instance instead of the saved address. Install Google Cloud CLI and configure its identity in the Mr Patchy runtime first. Grant IAP tunnel access and instance read permissions, and allow the IAP source range to reach the VM’s SSH port. See docs/GCP.md for deployment instructions.</p>
+ <p class="help">The pinned host fingerprint and restricted drpatch key remain required in both modes. A changed VM identity requires verification from a trusted console.</p>
+ <button class="primary" type="submit">Save connection</button> <button type="button" id="server-connection-test">Test saved connection</button><p id="connection-result" role="status"></p></form></section>
+ <section class="card"><h3>GCP connection checks</h3><p>For direct SSH, use a reachable private address or reserved static external IP. Ephemeral external IPs can change after stop/start. A stopped or preempted VM cannot respond to polling.</p><p>Keep drpatch separate from metadata-managed and OS Login users. After an SSH policy change, verify the local account and rerun this server’s installer if needed. IAP provides network access; it does not repair guest SSH authentication or install keys.</p></section>`;
+ const form=root.querySelector('form'),mode=form.elements.transport,fields=root.querySelector('#iap-fields'),result=root.querySelector('#connection-result');
+ mode.value=saved.transport;
+ mode.onchange=()=>{fields.classList.toggle('hidden',mode.value!=='gcp_iap');for(const name of ['project','zone','instance'])form.elements[name].required=mode.value==='gcp_iap';};mode.onchange();
+ const busy=value=>{for(const button of form.querySelectorAll('button'))button.disabled=value;};
+ form.onsubmit=async event=>{event.preventDefault();busy(true);const connection=Object.fromEntries(new FormData(form));connection.port=+connection.port;
+  try{const updated=await api('/hosts/'+hostId+'/connection','PUT',{connection,expected:saved});if(current()){saved=updated;result.textContent='Connection saved. Test it below or wait for normal polling.';}}
+  catch(error){if(current())result.textContent=error.message;}finally{if(current())busy(false);}
+ };
+ root.querySelector('#server-connection-test').onclick=async()=>{busy(true);result.textContent='Testing saved connection…';
+  try{const response=await api('/hosts/'+hostId+'/connection/test','POST',{});if(current())result.textContent=response.message;}
+  catch(error){if(current())result.textContent=error.message;}finally{if(current())busy(false);}
+ };
 }

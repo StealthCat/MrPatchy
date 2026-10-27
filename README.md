@@ -275,6 +275,8 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 
 ## Documentation
 
+- [Google Cloud VM connections and IAP setup](docs/GCP.md)
+
 - [Server workspaces, tabs and permissions](docs/SERVER_WORKSPACES.md)
 - [Fedora, RPM and DNF/Yum support](docs/RPM_SUPPORT.md)
 - [Operations and troubleshooting](docs/OPERATIONS.md)

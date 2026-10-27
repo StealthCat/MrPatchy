@@ -10,6 +10,11 @@ module.exports=async(page,capture)=>{
   if(p==='/api/identity'){const response=await route.fetch();return route.fulfill({response,json:{...await response.json(),role}});}
   if(p==='/api/hosts')return route.fulfill({json:hosts});
   const id=hosts.find(h=>p.startsWith('/api/hosts/'+h.id+'/')||p.startsWith('/api/operations/'+h.id+'/'))?.id;
+  if(id&&p.endsWith('/connection')){
+   if(request.method()==='PUT'){writes.push({path:p,body:request.postDataJSON()});return route.fulfill({json:request.postDataJSON().connection});}
+   return route.fulfill({json:{address:hosts.find(h=>h.id===id).address,port:22,transport:'direct',project:'',zone:'',instance:''}});
+  }
+  if(id&&p.endsWith('/connection/test'))return route.fulfill({json:{ok:true,message:'Pinned SSH identity and bridge response verified.'}});
   if(request.method()!=='GET'&&(id||p.startsWith('/api/investigations/'))){writes.push({path:p,body:request.postDataJSON()});return route.fulfill({json:{ok:true,detail:'Queued'}});}
   if(id&&p.endsWith('/summary')){
    if(id===alpha&&lateStarted){const started=lateStarted;lateStarted=null;started();await new Promise(resolve=>lateRelease=resolve);}
@@ -59,6 +64,17 @@ module.exports=async(page,capture)=>{
   await open('History');await page.locator('#package-history-table tbody tr').filter({hasText:'Atlas-openssl'}).waitFor();assert.equal(await page.locator('#history-host').count(),0);
   await page.locator('#server-inventory-history').click();await page.locator('.history-record summary').click();await page.locator('.history-record pre').filter({hasText:'Atlas'}).waitFor();await page.locator('#close-modal').click();
   await open('Repositories');await page.getByText('/etc/apt/sources.list',{exact:true}).waitFor();
+  await open('Connection');await page.locator('#server-connection-form').waitFor();
+  await page.locator('#server-connection-form [name=transport]').selectOption('gcp_iap');
+  await page.locator('#server-connection-form [name=project]').fill('test-project');
+  await page.locator('#server-connection-form [name=zone]').fill('us-central1-a');
+  await page.locator('#server-connection-form [name=instance]').fill('test-vm');
+  await page.getByRole('button',{name:'Save connection',exact:true}).click();
+  await page.getByText('Connection saved. Test it below or wait for normal polling.',{exact:true}).waitFor();
+  assert.equal(writes.at(-1).body.connection.transport,'gcp_iap');assert.equal(writes.at(-1).body.expected.transport,'direct');
+  await page.getByRole('button',{name:'Test saved connection',exact:true}).click();
+  await page.getByText('Pinned SSH identity and bridge response verified.',{exact:true}).waitFor();
+  await capture('server-connection');
   await open('Maintenance');await page.locator('#server-recovery-form').waitFor();
   await page.locator('#server-recovery-form [name=reboot]').check();
   const formBeforeRefresh=await page.locator('#server-recovery-form').elementHandle();
@@ -71,8 +87,8 @@ module.exports=async(page,capture)=>{
   await page.locator('#server-snapshot summary').first().click();await page.locator('#server-snapshot pre').filter({hasText:'Atlas-current'}).waitFor();
   for(const width of [320,390,1440]){
    await page.setViewportSize({width,height:1000});
-   for(const name of ['Overview','Packages','Patching timeline','Investigations','AI activity','History','Repositories','Maintenance']){
-    await open(name);const marker={'Overview':'.server-facts','Packages':'.pkg-check','Patching timeline':'#server-calendar .server-timeline','Investigations':'.investigation','AI activity':'#ai-log-table tbody tr','History':'#package-history-table tbody tr','Repositories':'#source-files','Maintenance':'#server-recovery-form'}[name];await page.locator(marker).first().waitFor();
+   for(const name of ['Overview','Connection','Packages','Patching timeline','Investigations','AI activity','History','Repositories','Maintenance']){
+    await open(name);const marker={'Overview':'.server-facts','Connection':'#server-connection-form','Packages':'.pkg-check','Patching timeline':'#server-calendar .server-timeline','Investigations':'.investigation','AI activity':'#ai-log-table tbody tr','History':'#package-history-table tbody tr','Repositories':'#source-files','Maintenance':'#server-recovery-form'}[name];await page.locator(marker).first().waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,name+' overflows at '+width);
     assert.equal(await page.locator('#retry-server-tab').count(),0);
    }
@@ -84,6 +100,7 @@ module.exports=async(page,capture)=>{
   lateRelease();await page.waitForTimeout(100);assert.equal(await page.getByText('Atlas-machine',{exact:true}).count(),0);
   for(const nextRole of ['viewer','operator']){
    role=nextRole;await page.goto(new URL('/?server-role='+nextRole+'#servers/'+beta+'/overview',page.url()).href);await page.getByText('Borealis-machine',{exact:true}).waitFor();
+   assert.equal(await tabs.getByRole('link',{name:'Connection',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'Maintenance',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'AI activity',exact:true}).count(),0);
    await open('Packages');await page.locator('.pkg-check').waitFor();assert.equal(await page.locator('.pkg-check').isDisabled(),nextRole==='viewer');
