@@ -103,3 +103,13 @@ Repository credentials, CA/proxy/default-release and mirror mappings are configu
 Target events.db is a bounded SQLite spool. Do not delete it as routine cleanup: unacknowledged observations may be lost. Central history retention is configurable. Overflow counts remain visible as cumulative evidence of lost batches.
 
 See [completion review and upgrade notes](COMPLETION_REVIEW.md) for migration, validation and platform limits.
+
+## Patch rollout service-health baselines
+
+Scheduled patches and multi-server rollouts capture and persist a fresh service-health snapshot immediately before package changes. The post-patch gate compares systemd unit **names**, ignoring display ordering and description text. Existing failed units such as `logrotate.service` or `systemd-networkd-wait-online.service` remain visible in the job's health comparison but do not by themselves stop an ordinary rollout. A newly failed unit, collector loss, or missing/malformed health data still fails the job and stops dependent rollout jobs. A failure that disappears is listed as recovered.
+
+The comparison records pre-existing, remaining, new and recovered units; the original baseline remains in the durable job payload. This is a service-state regression check, not proof that applications work correctly. It cannot detect worsening behavior inside a unit that was already failed or an application failure that systemd does not report. It does not clear failed-unit state or repair those services. Confirmed package inventory/history remains recorded even when the later health check fails; do not assume a failed job means no packages were installed.
+
+Automatic reboot/rollback workflows retain the stricter requirement for clean service health. Both controller preflight and the updated target helper check it before package changes. Controller preflight failures are ordinary failed jobs, not uncertain patch transactions; the target's check happens before creating its transaction journal. Post-mutation disconnects and recovery failures retain their existing reconciliation requirements. Release upgrades and rollback verification keep their existing strict health checks. Single-server on-demand patches without automatic recovery retain their existing behavior; this change fixes the gates used by scheduled/multi-server rollouts.
+
+Redeploy target helpers through **Finish / verify installation** after updating the controller to obtain the target-side preflight and complete, bounded failed-unit output. Older helpers still support the controller's legacy table parser, but their output may be truncated on hosts with unusually many failed units. Previously failed jobs are not automatically rerun or reclassified.

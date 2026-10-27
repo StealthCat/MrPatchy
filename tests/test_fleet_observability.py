@@ -166,10 +166,11 @@ def test_confirmed_inventory_survives_later_health_failure(admin,monkeypatch):
         h=host(s);worker.save_inventory(s,h,inventory('1'));s.commit()
         s.add(Job(id='patch-job',host_id=h.id,action='patch',payload={'packages':['test:amd64=2'],'_depends_on':[],'_actor':'operator'}));s.commit()
     monkeypatch.setattr(worker,'validate_patch',lambda *a:None)
-    calls=[]
+    calls=[];health_calls=[]
     def call(h,body,**kw):
         if body['action']=='inventory':calls.append(1);return inventory('1' if len(calls)==1 else '2')
-        if body['action']=='health':return {'failed_units':['service'],'collector_active':True}
+        if body['action']=='health':
+            health_calls.append(1);return {'failed_units':[] if len(health_calls)==1 else ['service.service'],'collector_active':True}
         return {'ok':True}
     monkeypatch.setattr(worker.ssh,'call',call);worker.execute('patch-job')
     with Session() as s:
