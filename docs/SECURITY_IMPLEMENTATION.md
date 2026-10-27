@@ -1,8 +1,9 @@
 # Security implementation checkpoint
 
 Current response milestone: approved target preservation and separately approved
-controller acquisition are implemented. Destructive quarantine, restoration and
-containment remain unfinished. The sections below retain the scope and limitations
+controller acquisition are implemented. Reviewed quarantine and original-file
+restoration now support protected files under `/srv` and `/opt`. Broader typed
+remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
 This branch is an incomplete first stage of the proposed endpoint protection expansion. It must not be represented as complete malware protection or automated incident response.
@@ -599,3 +600,124 @@ export, interrupted publication and local recovery, custody retention and UI
 confirmation. Native SSH integration exercises export approval and controller
 acquisition on Debian, Ubuntu, Fedora and AlmaLinux containers. These tests still
 stub systemd and do not replace real-VM or production-scale response drills.
+
+## Reviewed file quarantine and original-file restoration
+
+The next response stage is available under server **Security**:
+
+1. Preserve a scanner detection and acquire its bytes to the controller using the
+   separate approvals above.
+2. On a verified acquisition, select **Prepare file quarantine**. This queues
+   read-only checks of the retained controller bytes, current source and helper.
+3. In **Reviewed file responses**, open **Review quarantine approval**, inspect the
+   complete plan, provide a reason and type `QUARANTINE`. Preparation expires after
+   15 minutes; execution approval expires after five minutes.
+4. Review the resulting file state and affected applications. Other Mr Patchy
+   server changes stay paused until verified restoration or a separate review of
+   the pause. AI-plan approval never authorizes a move or restoration.
+
+This first executor intentionally supports only canonical files below `/srv/` and
+`/opt/`, excluding `/opt/drpatch`. Every source ancestor must be root-owned, have
+no group/other write permissions and open without following symlinks. The source
+must be a root-owned regular file, have one hard link, no group/other write or
+special mode bits, and be at most 32 MiB. File capabilities and file access ACLs
+require console response. Extended attributes are hashed (at most 32 names and
+64 KiB of values); values are never uploaded. Plan metadata is capped at 48 KiB.
+These constraints exclude many user-owned uploads, shared temporary directories,
+home directories and operating-system paths. Do not change ownership or remove
+protections merely to bypass refusal; investigate those cases through a reviewed
+console, trusted remediation or rebuild procedure.
+
+Preparation and execution bind the acquired source snapshot, exact scanner
+incident evidence, pinned host, source device/inode, size, UID/GID, mode, timestamps,
+link count, extended-attribute hashes and protected ancestor identities. The
+controller archive is rehashed before a quarantine request. A reviewed agent
+installation and fresh independent **current** agent-health assessment are required
+before imported helper actions, including state verification. An outdated, changed
+or unavailable installation refuses remote response rather than bypassing trust
+checks. Redeploy current helpers through **Finish / verify installation** first.
+
+The target uses Linux `renameat2(RENAME_NOREPLACE)` with no overwrite fallback.
+The vault and source must be on the same filesystem; cross-filesystem copying and
+removal are unsupported. A fresh path/hash/metadata check immediately precedes the
+move. The captured inode and bytes are checked again after the move before its mode
+is restricted to 0600. The vault is `/var/lib/mrpatchy-quarantine/<response-id>/`,
+with root-owned 0700 directories and private, fsynced journals. The held original is
+named `held`; evidence-preservation copies remain separate. Virtual scan scopes
+exclude this vault, preventing automatic rescanning of retained response material.
+
+Quarantine removes the original pathname and execute permissions; this can break an
+application. It **does not** stop processes, revoke existing open descriptors, remove
+other persistence, isolate a host or certify successful malware eradication.
+Protected namespaces exclude unprivileged replacement races. Concurrent privileged
+changes, mounts or kernel compromise remain outside that guarantee; metadata,
+parent, inode or content inconsistencies retain uncertainty and require review.
+There is no automatic rollback that could overwrite a concurrent deployment.
+
+Approval immediately creates a durable server hold. The worker commits uncertainty
+before issuing a mutating RPC. Normal queued jobs, scheduled patching/inspections,
+automatic scanner AI plans and agent maintenance defer while held. The matching
+response's verification/restoration jobs can run; local controller archive
+verification also remains available without target access. A dedicated alert reports
+the hold. A rejected preflight releases only the hold introduced by that attempt;
+after an RPC may have run, connection loss or invalid replies preserve the hold.
+Action jobs with an observed incomplete result fail explicitly. Status jobs can
+complete with an uncertain observation; that is not action success.
+
+**Verify file response** is read-only. It checks the immutable intent journals,
+captured inode, protected metadata, hash and source-path occupancy. A lost final
+journal can be reconciled from positive current filesystem evidence without
+repeating the move. An interrupted move before permission restriction can be
+eligible for explicitly approved restoration while remaining uncertain. Unknown,
+missing, conflicting or changed evidence does not imply successful quarantine or
+restoration. An ID is never automatically replayed, and partial journals are retained.
+If a worker restart leaves an Activity job marked running, first use the existing
+Activity reconciliation workflow; it checks the target mutation lock. That review
+does not clear the separate file-response hold. Then verify the file response.
+
+**Review restoration approval** requires fresh (five-minute) readiness evidence and
+a separate reason-and-`RESTORE` approval bound to the displayed plan and receipt.
+The helper rechecks readiness and expiry, records restoration intent, restores
+the original permitted mode and moves the captured inode back using the same atomic
+no-overwrite primitive. An occupied destination is never replaced, even if it has
+matching bytes. The original inode, hash, ownership, mode, modification time and
+attribute hashes must verify at the original path before the hold clears.
+Restoration can reintroduce malware: it restores the **original captured file**,
+not authenticated vendor content. No file is executed and no incident is resolved.
+An interrupted restoration intent is never retried automatically or authorized as
+a second restore; uncertain recovery requires console review.
+
+To keep a verified file quarantined, **Review server pause** requires a reason and
+typing `KEEP QUARANTINED`. It binds the current receipt and requires verification
+within five minutes. The administrator must check service impact before releasing
+the pause. `CONSOLE RECOVERED` is a separate explicit manual override after console
+review; it can release an uncertain hold and records an administrator's assertion,
+not a verified or clean-server verdict. Neither option changes retained bytes,
+approvals or incident state. Releasing a pause permits deferred ordinary jobs to
+run under their existing scheduling rules; inspect that queue before release.
+
+Plans, immutable typed approvals and append-only observations/reviews are stored
+in `security_quarantines`, `security_quarantine_approvals` and
+`security_quarantine_events`, with paginated history in Security. Startup schema
+initialization and verified offline SQLite/MySQL migration include those tables.
+Target journals and held bytes, target preservation copies and controller archive
+bytes need separately protected backups; database migration alone does not copy
+them. There is no automatic deletion/retention, cryptographic immutability,
+arbitrary-path restoration, trusted-vendor repair or cloud/process containment.
+
+Each source/hash phase has a 30-second read budget; preparation SSH has a 90-second
+deadline and response/state SSH a five-minute deadline. Filesystem calls blocked
+inside the kernel may outlast userspace read budgets. SSH timeout cannot prove a
+remote process stopped: verify the mutation lock and journals instead of retrying.
+All response approvals are checked again immediately before namespace mutation.
+
+Tests cover typed approval separation, host/role binding, strict scope/identity and
+permissions, capabilities/attribute policy, changed archives and helper health,
+expiry, holds and scheduler deferral, destination conflicts, interrupted move and
+restore phases, no-overwrite races and receipt reconciliation. Privileged namespace
+fixtures skip on unprivileged runners; a local unmapped-UID fixture may also skip.
+Native SSH tests on Debian, Ubuntu, Fedora and AlmaLinux exercise the real controller
+worker, independent helper verification, evidence prerequisite, hold, rename,
+conflict detection, permissions, original restoration and refusal of a file owned
+by an unprivileged user. Systemd remains stubbed; real-VM, SELinux enforcement,
+production-scale and broader failure-injection response drills remain necessary.

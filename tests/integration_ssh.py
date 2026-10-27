@@ -166,7 +166,7 @@ def main():
         assert not any(e['path']==custom+'/config' for e in missing['persistence']['entries']),missing
         print('Custom integrity scope passed: declared root, SHA256, no contents and removed file')
         source=custom+'/evidence-source'
-        run('docker','exec',name,'sh','-c',"printf evidence-fixture > "+source)
+        run('docker','exec',name,'sh','-c',"printf evidence-fixture > "+source+"; chmod 755 "+source)
         identity=json.loads(run('docker','exec',name,'python3','-c',"import os,json; s=os.stat('"+source+"'); print(json.dumps({'device':s.st_dev,'inode':s.st_ino}))"))
         expected={**identity,'path':source,'sha256':ssh.hashlib.sha256(b'evidence-fixture').hexdigest()}
         vault_snapshot=ssh.call(host,{'action':'evidence-prepare','expected':expected},timeout=60)
@@ -197,6 +197,58 @@ def main():
         assert (workspace/'evidence-archive'/archive_id/'content').read_bytes()==b'evidence-fixture'
         assert run('docker','exec',name,'cat',source)=='evidence-fixture'
         print('Controller acquisition passed: expired approval rejected, real pinned SSH transfer, private archive and independent hash verification')
+
+        from app import quarantine,incidents,worker,operations
+        from app.db import Host
+        init() # Register worker-owned models before exercising its real job path.
+        evidence_digest=incidents.digest(expected)
+        with Session() as session:
+            session.add(Host(id=host.id,name=host.name,address=host.address,port=host.port,fingerprint=host.fingerprint,state='online',baseline=host.baseline))
+            session.add(incidents.Incident(id='native-fixture',host_id=host.id,scan_id='native-scan',evidence=expected))
+            session.get(EvidenceCopy,operation).evidence_digest=evidence_digest
+            response_job=worker.enqueue(session,host.id,'quarantine-prepare',{'archive_id':archive_id,'evidence_digest':evidence_digest,'_actor':'native-test'})
+        worker.execute(response_job)
+        def queue_response(action):
+            with Session() as session:
+                q_record=session.query(quarantine.Quarantine).one()
+                if action!='quarantine-status':
+                    review=quarantine.Approval(id=str(uuid.uuid4()),quarantine_id=q_record.id,action='restore' if action=='quarantine-restore' else 'quarantine',expires=time.time()+240,plan_digest=incidents.digest(q_record.plan),actor='native-test',reason='Approved harmless native response fixture.',before_state=q_record.state,before_hold=q_record.hold)
+                    session.add(review);q_record.approval_id=review.id;q_record.state='restore_queued' if action=='quarantine-restore' else 'queued';q_record.hold=True
+                return worker.enqueue(session,host.id,action,{'quarantine_id':q_record.id,'_actor':'native-test'})
+        response_job=queue_response('quarantine-apply');worker.execute(response_job)
+        with Session() as session:
+            q_record=session.query(quarantine.Quarantine).one();q_id=q_record.id
+            assert session.get(Job,response_job).state=='complete',session.get(Job,response_job).output
+            assert q_record.state=='quarantined' and q_record.hold and operations.host_quarantined(session,host.id)
+        assert run('docker','exec',name,'stat','-c','%a','/var/lib/mrpatchy-quarantine/'+q_id+'/held')=='600'
+        run('docker','exec',name,'test','!','-e',source)
+        run('docker','exec',name,'sh','-c',"printf concurrent-deployment > "+source)
+        worker.execute(queue_response('quarantine-status'))
+        with Session() as session:
+            q_record=session.get(quarantine.Quarantine,q_id)
+            assert q_record.state=='uncertain' and not q_record.receipt['restore_ready'] and q_record.hold
+        assert run('docker','exec',name,'cat',source)=='concurrent-deployment'
+        run('docker','exec',name,'rm',source)
+        worker.execute(queue_response('quarantine-status'))
+        restore_job=queue_response('quarantine-restore');worker.execute(restore_job)
+        with Session() as session:
+            q_record=session.get(quarantine.Quarantine,q_id)
+            assert session.get(Job,restore_job).state=='complete',session.get(Job,restore_job).output
+            assert q_record.state=='restored' and not q_record.hold and not operations.host_quarantined(session,host.id)
+        assert run('docker','exec',name,'cat',source)=='evidence-fixture'
+        assert run('docker','exec',name,'stat','-c','%a',source)=='755'
+        assert ssh.call(host,{'action':'quarantine-status','id':q_id,'plan':q_record.plan},timeout=90)['state']=='restored'
+        print('Reviewed quarantine passed: verified independent archive, durable hold, root-only move, destination conflict, no overwrite and exact original restoration')
+        owned=custom+'/user-owned-response'
+        run('docker','exec',name,'sh','-c',"printf owner-fixture > "+owned+"; chmod 644 "+owned)
+        run('docker','exec',name,'chown','65534:65534',owned)
+        owned_identity=json.loads(run('docker','exec',name,'python3','-c',"import os,json; s=os.stat('"+owned+"'); print(json.dumps({'device':s.st_dev,'inode':s.st_ino}))"))
+        owned_snapshot=ssh.call(host,{'action':'evidence-prepare','expected':{**owned_identity,'path':owned,'sha256':ssh.hashlib.sha256(b'owner-fixture').hexdigest()}},timeout=90)
+        try:ssh.call(host,{'action':'quarantine-prepare','snapshot':owned_snapshot},timeout=90)
+        except RuntimeError as error:assert 'root-owned' in str(error),str(error)
+        else:raise AssertionError('Quarantine accepted a file owned by an unprivileged user')
+        assert run('docker','exec',name,'cat',owned)=='owner-fixture'
+        print('Quarantine source ownership guard passed: unprivileged file refused without mutation')
 
         if not rpm:
             from target.agent import validate_yara_rules

@@ -154,6 +154,8 @@ def schedule_tick(now=None):
             for setting in s.scalars(select(Setting).where(Setting.key.like('security-policy:%'))):
                 policy=setting.value;host_id=setting.key.split(':',1)[1]
                 if not policy.get('enabled') or not s.get(Host,host_id):continue
+                from .operations import host_quarantined
+                if host_quarantined(s,host_id):continue
                 if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action=='yara-scan',Job.state.in_(['queued','running'])).limit(1)):continue
                 latest=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-scan').order_by(Job.created.desc()).limit(1))
                 if latest and (latest.state in ('queued','running') or now-latest.created<policy['interval_hours']*3600):continue
@@ -209,6 +211,8 @@ def auto_plan_tick(now=None):
                 Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id).exists()
             rows=list(s.scalars(select(Incident).where(Incident.host_id.in_(enabled),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id).limit(100)))
             for row in rows:
+                from .operations import host_quarantined
+                if host_quarantined(s,row.host_id):continue
                 if row.evidence.get('scan_context',{}).get('engine')=='YARA':continue
                 if remaining<=0:break
                 pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
