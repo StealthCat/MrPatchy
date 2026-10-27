@@ -1163,10 +1163,10 @@ def security_plan_queue(host_id:str,incident_id:str,user=Depends(auth)):
         with Session() as s:
             host_or_404(s,host_id);row=s.get(incidents.Incident,incident_id)
             if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
-            pending=s.scalar(select(Job).where(Job.action=='security-plan',Job.host_id==host_id,Job.state.in_(['queued','running'])))
+            pending=s.scalar(select(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.host_id==host_id,Job.state.in_(['queued','running'])))
             if pending:raise HTTPException(409,'An incident plan is already queued or running for this server')
             # Bound paid work independently of process triage.
-            recent=s.scalar(select(func.count()).select_from(Job).where(Job.action=='security-plan',Job.created>time.time()-3600))
+            recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
             if recent>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
             return {'job_id':worker.enqueue(s,host_id,'security-plan',{'incident_id':row.id})}
 
@@ -1385,7 +1385,8 @@ def startup_incidents(host_id:str,offset:int=0,user=Depends(auth)):
     with Session() as s:
         host_or_404(s,host_id);table=incidents.PersistenceIncident
         rows=list(s.scalars(select(table).where(table.host_id==host_id).order_by(table.updated.desc(),table.id).offset(offset).limit(11)))
-        return {'items':[object_dict(row) for row in rows[:10]],'more':len(rows)>10}
+        from .startup_ai import plans
+        return {'items':[object_dict(row)|{'plans':plans(s,row)} for row in rows[:10]],'more':len(rows)>10}
 
 @app.get('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/history')
 def startup_incident_history(host_id:str,incident_id:str,offset:int=0,user=Depends(auth)):
@@ -1410,3 +1411,35 @@ def review_startup_incident(host_id:str,incident_id:str,body:IncidentReview,user
         s.add(incidents.PersistenceReview(id=str(uuid.uuid4()),incident_id=row.id,actor=user['username'],state=row.state,reason=reason))
         audit(s,'startup incident reviewed',row.id+' '+user['username']+' '+row.state);s.commit()
         return object_dict(row)
+
+
+class StartupPlanRequest(BaseModel):
+    expected_updated:float=Field(ge=0,allow_inf_nan=False)
+
+@app.post('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/plan')
+def queue_startup_plan(host_id:str,incident_id:str,body:StartupPlanRequest,user=Depends(auth)):
+    from . import startup_ai
+    with worker.Lock('security-plan-queue'),host_change(host_id,allow_quarantined=True),Session() as s:
+        host_or_404(s,host_id);row=s.get(incidents.PersistenceIncident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Startup incident not found')
+        if row.updated!=body.expected_updated:raise HTTPException(409,'Incident changed; refresh before requesting a plan')
+        startup_ai.evidence(s,row)
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1)):
+            raise HTTPException(409,'An incident plan is already queued or running for this server')
+        count=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
+        if count>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
+        return {'job_id':worker.enqueue(s,host_id,'startup-plan',{'incident_id':row.id,'expected_updated':row.updated})}
+
+@app.post('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/plans/{plan_id}/approve')
+def approve_startup_plan(host_id:str,incident_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(auth)):
+    from . import startup_ai
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        row=s.get(incidents.PersistenceIncident,incident_id);plan=s.get(incidents.Plan,plan_id)
+        if not row or row.host_id!=host_id or not plan or plan.incident_id!=row.id:raise HTTPException(404,'Startup plan not found')
+        try:current=incidents.digest(startup_ai.evidence(s,row))
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+        if plan.state!='draft' or plan.evidence_digest!=current or body.evidence_digest!=current or time.time()-plan.created>86400:
+            raise HTTPException(409,'Startup plan is stale or already reviewed')
+        plan.state='approved';plan.approved_by=user['username'];plan.expires=time.time()+3600
+        audit(s,'startup plan approved for manual response',host_id+' '+plan.id+' '+user['username']);s.commit()
+        return {'execution':'manual_only','expires':plan.expires}

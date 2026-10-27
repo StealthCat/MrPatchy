@@ -4,6 +4,7 @@ module.exports=async(page)=>{
  const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open';
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
+ const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
  const handler=async route=>{
   const request=route.request(),url=new URL(request.url());
   if(url.pathname.startsWith('/api/security/indicators/'))return route.fulfill({json:{items:[{host_id:host.id,path:'/tmp/security-fixture',state:incidentState,updated:Date.now()/1000}],more:false}});
@@ -11,7 +12,8 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/agent')&&request.method()==='GET')return route.fulfill({json:{policy:{auto_upgrade:false,auto_repair:false},status:{state:'drifted',checked:Date.now()/1000,stale:false,issues:[{path:'/usr/local/lib/mrpatchy/agent.py',kind:'unexpected_content_or_missing'}],report:{}},enrolled_outdated:false}});
   if(url.pathname.endsWith('/agent')&&request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().auto_upgrade,true);return route.fulfill({json:{auto_upgrade:true,auto_repair:false}});}
   if(url.pathname.endsWith('/persistence-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().enabled,true);return route.fulfill({json:{...request.postDataJSON(),revision:'monitor-version'}});}return route.fulfill({json:{enabled:false,interval_hours:12,link_incidents:false,revision:''}});}
-  if(url.pathname.endsWith('/persistence-incidents'))return route.fulfill({json:{items:[{id:'startup-fixture',state:'open',updated:1,baseline_id:'baseline-fixture',evidence:{changes:[{path:'/etc/cron.d/task',kind:'added'}]}}],more:false}});
+  if(url.pathname.endsWith('/persistence-incidents/startup-fixture/plans/startup-plan/approve')){writes.push(url.pathname);startupPlan.state='approved';return route.fulfill({json:{execution:'manual_only'}});}
+  if(url.pathname.endsWith('/persistence-incidents'))return route.fulfill({json:{items:[{id:'startup-fixture',state:'open',updated:1,baseline_id:'baseline-fixture',evidence:{changes:[{path:'/etc/cron.d/task',kind:'added'}]},plans:[startupPlan]}],more:false}});
   if(url.pathname.endsWith('/persistence-incidents/startup-fixture/history'))return route.fulfill({json:{detections:[{inspection_id:'inspection-job'}],reviews:[],more:false}});
   if(url.pathname.endsWith('/baseline')&&request.method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
   if(url.pathname.endsWith('/baseline')&&request.method()==='POST'){writes.push(url.pathname);assert.equal(request.postDataJSON().expected,'');assert.equal(request.postDataJSON().inspection_id,'inspection-job');return route.fulfill({json:{id:'baseline-fixture'}});}
@@ -78,6 +80,16 @@ module.exports=async(page)=>{
   await page.locator('#persistence-monitor-form [name=link_incidents]').check();
   await page.getByRole('button',{name:'Save startup monitoring',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Startup monitoring saved'));
+  const beforeStartupRequest=writes.length;
+  await page.getByRole('button',{name:'Request startup AI plan',exact:true}).click();
+  assert.equal(writes.length,beforeStartupRequest);
+  await page.getByRole('button',{name:'Send metadata and request plan',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});
+  assert.equal(writes.at(-1),prefix+'/persistence-incidents/startup-fixture/plan');
+  await page.getByRole('button',{name:'Review startup plan approval',exact:true}).click();
+  await page.getByRole('button',{name:'Approve for manual startup response',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});
+  assert.equal(writes.at(-1),prefix+'/persistence-incidents/startup-fixture/plans/startup-plan/approve');
   await page.getByRole('button',{name:'Linked inspections and reviews',exact:true}).click();
   await page.locator('#startup-evidence').filter({hasText:'inspection-job'}).waitFor();await page.locator('#close-modal').click();
   await page.getByRole('button',{name:'Review startup incident',exact:true}).click();

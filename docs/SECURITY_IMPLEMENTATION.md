@@ -176,3 +176,41 @@ included in startup schema initialization and verified offline migration metadat
 No new target protocol is required. Remaining work includes AI correlation of
 these evidence types, arbitrary custom baselines, trusted-vendor verification,
 authenticated YARA delivery and approved typed remediation/quarantine.
+
+## Advisory AI plans for startup changes
+
+File integrity startup incidents now offer **Request startup AI plan**. A separate
+confirmation explains that bounded paths, hashes, metadata, symlink targets,
+baseline references and coverage will be sent to the configured AI provider and
+may incur API charges. This is explicit per-request authorization: enabling
+startup monitoring or incident recording does not enable AI uploads.
+
+The evidence packet binds the incident revision and full evidence digest, approved
+baseline receipt/digest, linked detection receipt and current observation digest.
+The original change set and current comparison are distinct. At most 20 changes
+from each are supplied, with omission counts and bounded strings; packets over
+64 KB are refused. Current scope, missing roots, freshness/coverage state and
+bounded gaps remain visible. No raw file contents are collected or uploaded.
+Baseline changes, missing evidence and closed incidents prevent requests. Changed
+incidents at execution prevent provider calls; changed evidence during generation
+rejects the response. Responses must use the existing allowed advisory step types
+and reference supplied evidence IDs only.
+
+Startup and scanner plans share the ten-per-hour fleet queue limit and one
+outstanding incident-plan job per host. Calls use the existing AI Activity usage,
+cost and diagnostic tracking under `security_plan`. Startup plans are not
+scheduled automatically. Generation is metadata-only and performs no remote
+commands. The existing AI enable/model/key settings are checked at execution.
+
+Plans appear alongside the startup incident. Administrators can record manual
+review only while the plan's evidence digest still matches, the incident remains
+open/acknowledged, and the draft is at most 24 hours old. Approval expires after
+one hour. New detections, incident reviews, changed baseline or current coverage
+make older plans stale. Approval never runs commands, changes files, quarantines
+content, isolates hosts or declares them clean. Plans are retained in the existing
+plan table and offline migration metadata; no additional schema is introduced.
+
+This adds bounded AI review across baseline/detection/current-observation evidence.
+Trusted-vendor verification, authenticated rule distribution, arbitrary custom
+file baselines and approved typed remediation with race-resistant quarantine and
+restore remain unfinished.
