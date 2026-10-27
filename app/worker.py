@@ -337,6 +337,11 @@ def execute_locked(job_id):
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='security-inspect':
                 from . import incidents
+                from .persistence import monitor_policy
+                if '_persistence_policy' in job.payload:
+                    policy=monitor_policy(s,h.id)
+                    if not policy['enabled'] or policy['revision']!=job.payload['_persistence_policy']:
+                        raise ValueError('Persistence monitoring policy changed; scheduled inspection cancelled before remote access')
                 result=ssh.call(h,{'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence']},timeout=210)
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
@@ -503,7 +508,9 @@ def loop():
                         del active_jobs[key]
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
                 if is_leader and now-last_schedule>=30:
-                    scheduling.tick(now); incidents.schedule_tick(now); incidents.auto_plan_tick(now); last_schedule=now
+                    scheduling.tick(now); incidents.schedule_tick(now);
+                    from .persistence import schedule_tick as persistence_tick
+                    persistence_tick(now); incidents.auto_plan_tick(now); last_schedule=now
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:

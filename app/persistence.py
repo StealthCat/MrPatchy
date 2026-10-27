@@ -113,3 +113,49 @@ def approve(s,host_id,inspection_id,evidence_digest,expected,reason,actor):
     s.merge(Setting(key='persistence-baseline:'+host_id,value={'id':baseline.id}))
     audit(s,'persistence baseline approved',host_id+' '+baseline.id+' '+inspection_id+' '+actor)
     return baseline.id
+
+
+DEFAULT_MONITOR={'enabled':False,'interval_hours':12,'link_incidents':False,'revision':''}
+
+
+def monitor_policy(s,host_id):
+    from .db import Setting
+    row=s.get(Setting,'persistence-monitor:'+host_id)
+    return {**DEFAULT_MONITOR,**(row.value if row else {})}
+
+
+def schedule_tick(now=None):
+    import time
+    from sqlalchemy import select
+    from .coordination import Lock
+    from .db import Session,Setting,Host,Job
+    from .worker import enqueue
+    now=time.time() if now is None else now
+    # The manual inspection endpoint uses this same queue lock.
+    with Lock('security-inspection-queue'),Session() as s:
+        for setting in s.scalars(select(Setting).where(Setting.key.like('persistence-monitor:%'))):
+            policy=setting.value;host_id=setting.key.split(':',1)[1];host=s.get(Host,host_id)
+            if not policy.get('enabled') or not host or host.state=='enrolling' or not host.fingerprint:continue
+            if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running','recovery_required'])).limit(1)):continue
+            last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-inspect').order_by(Job.created.desc()).limit(1))
+            if last and now-last.created<policy['interval_hours']*3600:continue
+            enqueue(s,host_id,'security-inspect',{'packages':[],'persistence':True,'_persistence_policy':policy['revision']})
+
+
+def record_changes(s,host_id,inspection_id):
+    import time
+    from .incidents import PersistenceIncident,PersistenceDetection,digest
+    if not monitor_policy(s,host_id)['link_incidents']:return
+    assessment=status(s,host_id)
+    if assessment['state']!='drifted' or assessment['latest']['id']!=inspection_id:return
+    changes=assessment['comparison']['changes'];baseline_id=assessment['baseline']['id']
+    # Modification times do not define change identity; they can vary on repeats.
+    stable=[{**c,**{side:({k:v for k,v in c[side].items() if k!='mtime_ns'} if c[side] else None) for side in ('before','after')}} for c in changes]
+    identifier=digest({'host':host_id,'baseline':baseline_id,'changes':stable})
+    row=s.get(PersistenceIncident,identifier)
+    if row:
+        row.updated=max(time.time(),row.updated+.000001);row.state='open'
+    else:
+        row=PersistenceIncident(id=identifier,host_id=host_id,baseline_id=baseline_id,evidence={'changes':changes,'classification':'startup_change_not_malware_verdict'})
+        s.add(row)
+    s.add(PersistenceDetection(inspection_id=inspection_id,incident_id=identifier))
