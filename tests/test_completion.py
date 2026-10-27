@@ -55,6 +55,8 @@ def test_replayed_events_are_idempotent(admin):
         assert s.scalar(select(func.count()).select_from(Behavior))==1
 
 def test_failed_ingestion_never_acknowledges(admin,monkeypatch):
+    from app import agent_maintenance
+    monkeypatch.setattr(agent_maintenance,'inspect',lambda *a,**k:{'state':'current'})
     with Session() as s: create_host(s)
     calls=[]
     event={'id':str(uuid.uuid4()),'observed':time.time(),'processes':[{'malformed':True}]}

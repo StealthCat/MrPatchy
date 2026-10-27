@@ -1263,3 +1263,92 @@ def security_inspections(host_id:str,offset:int=0,user=Depends(auth)):
         host_or_404(s,host_id)
         rows=list(s.scalars(select(incidents.Inspection).where(incidents.Inspection.host_id==host_id).order_by(incidents.Inspection.created.desc(),incidents.Inspection.id).offset(offset).limit(7)))
         return {'items':[object_dict(r) for r in rows[:6]],'more':len(rows)>6}
+
+
+@app.get('/api/hosts/{host_id}/security/inspections/{inspection_id}/comparison')
+def persistence_comparison(host_id:str,inspection_id:str,user=Depends(auth)):
+    from .persistence import compare
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.get(incidents.Inspection,inspection_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Inspection not found')
+        # Skip package-only inspections, but never skip an incomplete inventory:
+        # doing so would conceal the coverage gap between observations.
+        table=incidents.Inspection
+        previous=s.scalar(select(table).where(table.host_id==host_id,
+            (table.created<row.created)|((table.created==row.created)&(table.id<row.id)),
+            table.report['persistence']['state'].as_string().in_(['collected','incomplete']))
+            .order_by(table.created.desc(),table.id.desc()).limit(1))
+        result=compare(previous.report.get('persistence') if previous else None,row.report.get('persistence'))
+        return {**result,'inspection_id':row.id,'previous_id':previous.id if previous else None,
+                'created':row.created,'previous_created':previous.created if previous else None}
+
+
+class AgentPolicyInput(BaseModel):
+    auto_upgrade:bool=False
+    auto_repair:bool=False
+    expected:dict
+
+@app.get('/api/hosts/{host_id}/security/agent')
+def agent_state(host_id:str,user=Depends(auth)):
+    from . import agent_maintenance
+    with Session() as s:return agent_maintenance.public(s,host_or_404(s,host_id))
+
+@app.put('/api/hosts/{host_id}/security/agent')
+def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(auth)):
+    from . import agent_maintenance
+    with host_change(host_id):
+        with Session() as s:
+            host_or_404(s,host_id)
+            if body.expected!=agent_maintenance.policy(s,host_id):raise HTTPException(409,'Agent policy changed; refresh before saving')
+            value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+            row=s.get(Setting,'agent-policy:'+host_id)
+            if row:row.value=value
+            else:s.add(Setting(key='agent-policy:'+host_id,value=value))
+            audit(s,'agent policy updated',host_id+' '+json.dumps(value));s.commit()
+            return value
+
+@app.post('/api/hosts/{host_id}/security/agent/{action}')
+def agent_action(host_id:str,action:str,user=Depends(auth)):
+    from . import agent_maintenance
+    if action not in ('check','update'):raise HTTPException(404,'Unknown agent operation')
+    with host_change(host_id):
+        with Session() as s:
+            host=host_or_404(s,host_id)
+            if not host.fingerprint:raise HTTPException(409,'Pin the host identity first')
+            if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['agent-check','agent-update']),Job.state.in_(['queued','running'])).limit(1)):
+                raise HTTPException(409,'Agent maintenance is already queued')
+            return {'job_id':worker.enqueue(s,host_id,'agent-'+action,{'release':agent_maintenance.release_id(host),'automatic':False})}
+
+
+class PersistenceApproval(BaseModel):
+    inspection_id:str=Field(max_length=36)
+    evidence_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    expected:str=Field(default='',max_length=36)
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/baseline')
+def get_persistence_baseline(host_id:str,user=Depends(auth)):
+    from . import persistence
+    with Session() as s:
+        host_or_404(s,host_id)
+        return persistence.status(s,host_id)
+
+@app.post('/api/hosts/{host_id}/security/baseline')
+def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(auth)):
+    from . import persistence
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host_or_404(s,host_id)
+        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'])
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+        s.commit()
+        return {'id':identifier}
+
+@app.get('/api/hosts/{host_id}/security/baseline/history')
+def persistence_baseline_history(host_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        table=incidents.PersistenceBaseline
+        rows=list(s.scalars(select(table).where(table.host_id==host_id).order_by(table.created.desc(),table.id).offset(offset).limit(21)))
+        return {'items':[object_dict(row) for row in rows[:20]],'more':len(rows)>20}

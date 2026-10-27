@@ -102,6 +102,7 @@ module.exports=async(page,capture)=>{
    role=nextRole;await page.goto(new URL('/?server-role='+nextRole+'#servers/'+beta+'/overview',page.url()).href);await page.getByText('Borealis-machine',{exact:true}).waitFor();
    assert.equal(await tabs.getByRole('link',{name:'File integrity',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'Connection',exact:true}).count(),0);
+   assert.equal(await tabs.getByRole('link',{name:'Agent health',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'Maintenance',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'AI activity',exact:true}).count(),0);
    await open('Packages');await page.locator('.pkg-check').waitFor();assert.equal(await page.locator('.pkg-check').isDisabled(),nextRole==='viewer');

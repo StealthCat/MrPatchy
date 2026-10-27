@@ -76,6 +76,12 @@ def bounded(args,timeout=900,env=None,limit=16_000_000,allowed_codes=(0,),return
         if process.returncode not in allowed_codes: raise RuntimeError((output+errors)[-16000:].decode(errors='replace'))
         result=(output.decode(errors='replace'),errors.decode(errors='replace'))
         return (*result,process.returncode) if return_status else result
+    except BaseException:
+        # A parent may exit while its descendants keep the pipes/work alive.
+        # Kill the original process group on failure even if poll() has reaped it.
+        try:os.killpg(process.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        raise
     finally:
         if process.poll() is None:
             os.killpg(process.pid,signal.SIGKILL);process.wait()
@@ -305,6 +311,55 @@ def protected_patch(req):
     state['state']='complete';state['result']['outcome']='complete'
     atomic(journal,json.dumps(state).encode());return state['result']
 
+AGENT_FILES=('/usr/local/lib/mrpatchy/rpm_support.py','/usr/local/lib/mrpatchy/release.py',
+             '/usr/local/lib/mrpatchy/agent.py','/usr/local/lib/mrpatchy/bridge.py',
+             '/etc/systemd/system/mrpatchy-agent.service','/etc/sudoers.d/mrpatchy',
+             '/opt/drpatch/.ssh/authorized_keys')
+AGENT_DROPIN='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
+
+def agent_file_status(path):
+    """No imports from inspected helpers; reject symlinks and writable parents."""
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY);file_fd=None
+    try:
+        parts=Path(path).parts[1:]
+        for part in parts[:-1]:
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd);fd=child
+            info=os.fstat(fd)
+            if info.st_uid!=0 or info.st_mode & 0o022:raise ValueError('Unsafe parent')
+        file_fd=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+        before=os.fstat(file_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size>1_000_000:raise ValueError('Invalid managed file')
+        digest=hashlib.sha256();total=0
+        while True:
+            chunk=os.read(file_fd,65536)
+            if not chunk:break
+            total+=len(chunk)
+            if total>1_000_000:raise ValueError('Managed file grew')
+            digest.update(chunk)
+        after=os.fstat(file_fd);named=os.stat(parts[-1],dir_fd=fd,follow_symlinks=False)
+        if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) or (named.st_dev,named.st_ino)!=(before.st_dev,before.st_ino):raise ValueError('Managed file changed')
+        return {'sha256':digest.hexdigest(),'uid':before.st_uid,'gid':before.st_gid,'mode':stat.S_IMODE(before.st_mode)}
+    except FileNotFoundError:return {'missing':True}
+    except (OSError,ValueError):return {'unsafe':True}
+    finally:
+        if file_fd is not None:os.close(file_fd)
+        os.close(fd)
+
+def agent_status():
+    files={path:agent_file_status(path) for path in (*AGENT_FILES,AGENT_DROPIN)}
+    def systemctl(*args):
+        out,err,code=bounded(['systemctl',*args,'mrpatchy-agent.service'],timeout=5,limit=32000,allowed_codes=(0,1,3,4),return_status=True)
+        if err:raise ValueError('Service status diagnostics prevent verification')
+        return out.strip(),code
+    active,active_code=systemctl('is-active');enabled,enabled_code=systemctl('is-enabled')
+    properties,code=systemctl('show','--property=FragmentPath','--property=DropInPaths')
+    if code:raise ValueError('Service configuration unavailable')
+    values=dict(line.split('=',1) for line in properties.splitlines() if '=' in line)
+    return {'version':1,'files':files,'directories_secure':not any(row.get('unsafe') for row in files.values()),
+            'active':active_code==0 and active=='active','enabled':enabled_code==0 and enabled=='enabled',
+            'unit_path':values.get('FragmentPath'),'dropins':values.get('DropInPaths','').split()}
+
 def handle(req):
     action = req.get('action')
     if isinstance(action,str) and action.startswith('release-'):
@@ -366,6 +421,7 @@ def handle(req):
         if diagnostics.strip():raise RuntimeError('Unable to obtain an unambiguous failed-unit health snapshot')
         return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists() or (rpm_backend() and (ROOT/'rpm-reboot-required').is_file() and (ROOT/'rpm-reboot-required').read_text().strip()==boot_id()),
                 'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
+    if action == 'agent-status':return agent_status()
     if action == 'verify':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import MANAGED,digest

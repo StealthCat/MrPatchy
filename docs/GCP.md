@@ -69,3 +69,48 @@ References:
 - https://docs.cloud.google.com/compute/docs/connect/add-ssh-keys
 - https://docs.cloud.google.com/compute/docs/ip-addresses/configure-static-external-ip-address
 - https://docs.cloud.google.com/sdk/docs/install
+
+## Installer for a GCP-ready controller
+
+From a trusted checkout on a Linux Docker host with Compose v2 and Python 3:
+
+```sh
+./install-gcp.sh --project YOUR_PROJECT --zone us-central1-a --instance TEST_VM \
+  --public-url https://patchy.example.com:8443
+```
+
+The installer preserves an existing `.env`, or creates one with a random initial
+administrator password and mode 0600. It builds the regular image and a derived
+image using Google's signed APT repository for Google Cloud CLI, configures both
+app and worker, checks token acquisition without printing the token, verifies
+instance-read access from each runtime, then starts the stack. Docker itself,
+Google APIs, IAM grants and the IAP SSH firewall rule must already be configured
+as described above. No cloud IAM, metadata, firewall or VM mutations are made.
+A successful instance read does not prove IAP tunnel or guest SSH authentication;
+finish enrollment and use **Test saved connection** on a non-production VM.
+
+A clean installation on GCE can use its attached service account. Outside GCE,
+pass `--credential-dir /absolute/path/to/trusted-wif-directory` outside the
+repository and Docker build context. This directory
+must contain `credentials.json` with a trusted Workload Identity Federation
+`external_account` configuration. Referenced token files must be available under
+`/gcp` inside the containers. The directory is mounted read-only in both services;
+UID 10001 must be able to traverse/read it. Service-account private-key files and
+executable credential sources are rejected by this installer. Review federation
+endpoints and rotate external token material using your identity provider's
+workflow. Never commit credentials. Existing authenticated gcloud configuration
+lives in the persistent application data volume; changing identity requires an
+explicit review of that configuration, not just deleting a mount definition.
+
+Use `./gcp-compose.sh logs`, `./gcp-compose.sh up -d`, and
+`./gcp-compose.sh down` for this installation. For application upgrades, pull the
+reviewed release and rerun `install-gcp.sh` with the same project/zone/instance and
+identity arguments so the base and Google CLI images are rebuilt. Using plain
+`docker compose` omits the GCP override. `.env.gcp` and generated credential mount
+definitions are ignored by Git. The installer does not grant the Mr Patchy guest
+account OS Login or replace pinned SSH identities.
+
+CI builds the derived image, verifies Google CLI runs as UID 10001 and validates
+the combined Compose configuration. Installer tests use a fake Docker command to
+verify argument handling, identity configuration and token redaction. Live GCP
+IAM, federation and IAP access still require validation in your project.

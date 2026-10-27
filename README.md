@@ -290,3 +290,12 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 - [Historical reviews](docs/COMPLETION_REVIEW.md) and [expansion checkpoint](docs/OPERATIONS_EXPANSION.md)
 
 Central administrators and holders of target SSH keys can deploy root code. Protect the management network, accounts, database and secret volumes accordingly. A compromised target root/kernel can forge telemetry; hashes are not remote attestation.
+
+### Google Cloud runtime and agent maintenance
+
+Use [`install-gcp.sh`](install-gcp.sh) to build a controller runtime containing
+Google Cloud CLI for both app and worker. See [GCP setup](docs/GCP.md) for attached
+service-account/federation prerequisites and IAP enrollment. Each server's
+**Agent health** tab exposes version/drift checks and opt-in automatic helper
+maintenance; [Agent maintenance](docs/AGENT_MAINTENANCE.md) documents verification,
+retry limits and cases requiring trusted-console recovery.

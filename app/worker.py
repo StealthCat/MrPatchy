@@ -12,7 +12,6 @@ from sqlalchemy import select, delete, update, func
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, package_history, update_scores, packages as package_backend
 from target.agent import MANAGED
-from target.bridge import UNIT
 from .security import unseal
 import httpx
 from .coordination import Lock
@@ -172,6 +171,17 @@ def poll_host(host_id):
         with Session() as s:
             h=s.get(Host,host_id)
             if not h or h.state=='enrolling': return
+            # Snapshot/events may import the collector. Check independently first,
+            # and never consume it after a known failed health/trust assessment.
+            if h.baseline:
+                from . import agent_maintenance
+                saved=s.get(Setting,'agent-status:'+host_id)
+                status=saved.value if saved else None
+                if locked and not operations.host_quarantined(s,host_id) and (not status or time.time()-status.get('checked',0)>=300):
+                    status=agent_maintenance.inspect(s,h)
+                if status and status['state'] not in ('current','outdated'):
+                    h.state='attention';h.error='Agent verification '+status['state']+'; telemetry ingestion paused. Review Agent health.';s.commit()
+                    return
             try:
                 snapshot=ssh.call(h,{'action':'snapshot'})
                 ingest(s,h,snapshot,include_inventory=locked)
@@ -180,6 +190,11 @@ def poll_host(host_id):
                 s.rollback()
                 h=s.get(Host,host_id)
                 if h: h.state='offline'; h.error=str(e)[:4000]; s.commit()
+            if locked and h and not h.baseline and not operations.host_quarantined(s,host_id):
+                from . import agent_maintenance
+                status=s.get(Setting,'agent-status:'+host_id)
+                if not status or time.time()-status.value.get('checked',0)>=300:
+                    agent_maintenance.inspect(s,h)
     finally:
         if locked: lock.release()
 
@@ -276,6 +291,9 @@ def execute_locked(job_id):
         h=s.get(Host,job.host_id);protected=job.action=='release-upgrade';result={}
         try:
             if not h: raise ValueError('Host no longer exists')
+            health=s.get(Setting,'agent-status:'+h.id)
+            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan'):
+                raise ValueError('Agent verification failed; review Agent health before executing remote operations')
             if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
             elif job.action=='release-upgrade':
                 result=releases.execute(s,h,job)
@@ -285,25 +303,24 @@ def execute_locked(job_id):
                 finally:package_history.operation.reset(token)
             elif job.action=='deploy':
                 result=ssh.deploy(h)
-                # Known managed artifact digests; never trust target hashes as the expected baseline.
-                auth=f'restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" {ssh.public_key(h.id)} mrpatchy\n'
-                sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
-                optional={k:v for k,v in h.baseline.items() if k=='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'}
-                h.baseline={**optional,
-                    '/usr/local/lib/mrpatchy/rpm_support.py':hashlib.sha256((ssh.TARGET/'rpm_support.py').read_bytes()).hexdigest(),
-                    '/usr/local/lib/mrpatchy/release.py':hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest(),
-                    '/usr/local/lib/mrpatchy/agent.py':hashlib.sha256((ssh.TARGET/'agent.py').read_bytes()).hexdigest(),
-                    '/usr/local/lib/mrpatchy/bridge.py':hashlib.sha256((ssh.TARGET/'bridge.py').read_bytes()).hexdigest(),
-                    '/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(UNIT.encode()).hexdigest(),
-                    '/opt/drpatch/.ssh/authorized_keys':hashlib.sha256(auth.encode()).hexdigest(),
-                    '/etc/sudoers.d/mrpatchy':hashlib.sha256(sudo.encode()).hexdigest()}
-                verification=ssh.call(h,{'action':'verify'})
-                if not verification.get('active'): raise ValueError('Collector service did not become active')
-                for path,digest in h.baseline.items():
-                    expected={'sha256':digest,'uid':0,'gid':0,'mode':0o440 if path=='/etc/sudoers.d/mrpatchy' else 0o644}
-                    if verification.get('files',{}).get(path)!=expected: raise ValueError('Installation verification failed: '+path)
+                expected_files=ssh.expected_files(h)
+                from . import agent_maintenance
+                verification=ssh.call(h,{'action':'agent-status'})
+                old_baseline=h.baseline;h.baseline=expected_files
+                try:
+                    status=agent_maintenance.assess(h,verification)
+                    if status['state']!='current':raise ValueError('Installation verification failed; review independent agent status')
+                except Exception:
+                    h.baseline=old_baseline
+                    raise
+                status.update(checked=time.time(),release=agent_maintenance.release_id(h),report=verification)
+                s.merge(Setting(key='agent-status:'+h.id,value=status))
                 h.state='waiting'; job.output=json.dumps({'deployment':result,'verification':verification})
                 save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
+            elif job.action in ('agent-check','agent-update'):
+                from . import agent_maintenance
+                result=agent_maintenance.inspect(s,h,queue=False) if job.action=='agent-check' else agent_maintenance.update(s,h,job)
+                job.output=json.dumps(result)
             elif job.action=='rotate-key':
                 result=ssh.rotate(h)
                 h.baseline={**h.baseline,'/opt/drpatch/.ssh/authorized_keys':result['authorized_keys_sha256']}
@@ -385,7 +402,7 @@ def execute_locked(job_id):
             if job.action in ('release-plan','release-upgrade'):
                 plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
                 if plan:plan.state=job.state;plan.error=str(e)[:1000]
-            receipt=job.output if protected else ''
+            receipt=job.output if protected or job.action=='agent-update' else ''
             job.output=(str(e)+'\n'+receipt).encode()[:48000].decode(errors='ignore')
             if h:
                 h.error=str(e)[:4000]
