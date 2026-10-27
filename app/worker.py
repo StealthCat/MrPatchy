@@ -346,7 +346,7 @@ def execute_locked(job_id):
                 manifest,provenance=vendor.authenticate(job.payload['bundle_id'])
                 result=ssh.call(h,{'action':'vendor-inspect','manifest':manifest},timeout=150)
                 vendor.validate_receipt(manifest,result)
-                report={'version':1,'trust_basis':'controller_authenticated_debian_artifact','state':'collected' if result['state']!='incomplete' else 'incomplete',
+                report={'version':1,'trust_basis':vendor.trust_basis(manifest),'state':'collected' if result['state']!='incomplete' else 'incomplete',
                         'packages':[],'persistence':None,'vendor_verification':result,'vendor_authentication':provenance}
                 incidents.record_inspection(s,h.id,job.id,report,vendor_authenticated=True)
                 job.output=json.dumps({'state':result['state'],'bundle_id':job.payload['bundle_id'],'examined':result.get('examined')})

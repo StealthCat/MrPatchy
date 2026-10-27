@@ -213,7 +213,7 @@ def auto_plan_tick(now=None):
 
 def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
     if s.get(Inspection,job_id):return
-    if not isinstance(report,dict) or report.get('version')!=1 or report.get('trust_basis')!=('controller_authenticated_debian_artifact' if vendor_authenticated else 'target_local_package_database') or report.get('state') not in ('collected','incomplete'):
+    if not isinstance(report,dict) or report.get('version')!=1 or report.get('trust_basis') not in (('controller_authenticated_debian_artifact','controller_authenticated_rpm_artifact') if vendor_authenticated else ('target_local_package_database',)) or report.get('state') not in ('collected','incomplete'):
         raise ValueError('Unsupported inspection receipt; update target helpers')
     if not vendor_authenticated and ('vendor_authentication' in report or 'vendor_verification' in report):
         raise ValueError('Vendor authentication must originate on the controller')

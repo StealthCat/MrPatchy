@@ -1,4 +1,4 @@
-"""Offline Debian archive authentication, entirely on the controller."""
+"""Offline vendor package authentication, entirely on the controller."""
 import email.utils
 import hashlib
 import io
@@ -71,6 +71,10 @@ def authenticate(bundle_id,now=None):
     # Reject aliases for operator-configured bundle directories too.
     if root.is_symlink() or (root/bundle_id).is_symlink():raise ValueError('Symlinked vendor bundle directory')
     directory=root/bundle_id
+    if os.path.lexists(directory/'package.rpm'):
+        if os.path.lexists(directory/'package.deb'):raise ValueError('Ambiguous vendor bundle; select one package format')
+        from .vendor_rpm import authenticate as authenticate_rpm
+        return authenticate_rpm(directory,root,bundle_id,now)
     keyring=read_file(root/'trustedkeys.gpg',4*1024*1024)
     release=read_file(directory/'Release',1024*1024)
     signature=read_file(directory/'Release.gpg',1024*1024)
@@ -128,8 +132,12 @@ def authenticate(bundle_id,now=None):
                 'excluded_nonregular_entries':excluded,'scope':'Regular-file bytes only; no permissions, symlinks, maintainer-generated files or clean-host verdict.'}
     return manifest,provenance
 
+def trust_basis(manifest):
+    return 'controller_authenticated_rpm_artifact' if manifest.get('package_manager')=='rpm' else 'controller_authenticated_debian_artifact'
+
+
 def validate_receipt(manifest,result):
-    if not isinstance(result,dict) or result.get('trust_basis')!='controller_authenticated_debian_artifact' or any(result.get(k)!=manifest[k] for k in ('package','version','architecture')):
+    if not isinstance(result,dict) or result.get('trust_basis')!=trust_basis(manifest) or any(result.get(k)!=manifest[k] for k in ('package','version','architecture')):
         raise ValueError('Unsupported vendor receipt; update target helpers')
     state=result.get('state');count=len(manifest['entries']);examined=result.get('examined')
     if state not in ('incomplete','differences','matches_artifact_bytes') or type(examined) is not int or not 0<=examined<=count or result.get('scope_files')!=count:
