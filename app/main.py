@@ -1240,3 +1240,26 @@ def security_indicator_matches(sha256:str,offset:int=0,user=Depends(auth)):
     with Session() as s:
         rows=list(s.scalars(select(incidents.Incident).where(incidents.Incident.evidence['sha256'].as_string()==sha256).order_by(incidents.Incident.updated.desc(),incidents.Incident.id).offset(offset).limit(51)))
         return {'items':[{'id':r.id,'host_id':r.host_id,'state':r.state,'path':r.evidence['path'],'updated':r.updated,'scan_id':r.scan_id} for r in rows[:50]],'more':len(rows)>50,'scope':'Recorded detections only; this does not perform a fleet scan.'}
+
+
+class SecurityInspectionInput(BaseModel):
+    packages:list[str]=Field(default_factory=list,max_length=16)
+    persistence:bool=True
+
+@app.post('/api/hosts/{host_id}/security/inspections')
+def queue_security_inspection(host_id:str,body:SecurityInspectionInput,user=Depends(auth)):
+    from target.agent import validate_inspection
+    validate_inspection(body.packages,body.persistence)
+    with worker.Lock('security-inspection-queue'), Session() as s:
+        host_or_404(s,host_id)
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action=='security-inspect',Job.state.in_(['queued','running'])).limit(1)):
+            raise HTTPException(409,'A security inspection is already queued or running for this server')
+        return {'job_id':worker.enqueue(s,host_id,'security-inspect',body.model_dump())}
+
+@app.get('/api/hosts/{host_id}/security/inspections')
+def security_inspections(host_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(incidents.Inspection).where(incidents.Inspection.host_id==host_id).order_by(incidents.Inspection.created.desc(),incidents.Inspection.id).offset(offset).limit(7)))
+        return {'items':[object_dict(r) for r in rows[:6]],'more':len(rows)>6}

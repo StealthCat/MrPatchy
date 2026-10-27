@@ -12,6 +12,7 @@ Choose **Servers**, then click a server name or **Open server**. The selected se
 | AI activity | Linked triage, update-scoring and release-configuration runs, call details and estimated API costs | Admin |
 | History | Package changes and reasons; inventory revisions and process observations for admins | All roles for package history |
 | Repositories | Repository files, signing keys and access configuration | Admin |
+| File integrity | Read-only local package verification, common persistence metadata inventory and durable inspection history | Admin |
 | Maintenance | Installation/repair tools, repository refresh, release plans, SBOM download, recovery policy, UTC maintenance windows and stored raw snapshots | Admin |
 
 Automatic refresh applies to the fleet overview, server list and server overview. Other server tabs refresh on navigation or with the toolbar Refresh button, preserving selections and unsaved forms while you work.

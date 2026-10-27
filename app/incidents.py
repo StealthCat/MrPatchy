@@ -15,6 +15,13 @@ class Scan(Base):
     created:Mapped[float]=mapped_column(Double,default=time.time)
     report:Mapped[dict]=mapped_column(JSON)
 
+class Inspection(Base):
+    __tablename__='security_inspections'
+    id:Mapped[str]=mapped_column(String(36),primary_key=True)
+    host_id:Mapped[str]=mapped_column(String(36),index=True)
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+    report:Mapped[dict]=mapped_column(JSON)
+
 class Incident(Base):
     __tablename__='security_incidents'
     id:Mapped[str]=mapped_column(String(64),primary_key=True)
@@ -202,3 +209,30 @@ def auto_plan_tick(now=None):
                 if pending or not s.get(Host,row.host_id):continue
                 try:enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True});remaining-=1
                 except ValueError:continue
+
+
+def record_inspection(s,host_id,job_id,report):
+    if s.get(Inspection,job_id):return
+    if not isinstance(report,dict) or report.get('version')!=1 or report.get('trust_basis')!='target_local_package_database' or report.get('state') not in ('collected','incomplete'):
+        raise ValueError('Unsupported inspection receipt; update target helpers')
+    packages=report.get('packages')
+    if not isinstance(packages,list) or len(packages)>16:raise ValueError('Invalid inspection package list')
+    total=0
+    for package in packages:
+        if not isinstance(package,dict) or not isinstance(package.get('package'),str) or package.get('state') not in ('incomplete','differences','no_reported_differences'):
+            raise ValueError('Invalid inspection package receipt')
+        if not isinstance(package.get('gaps'),list) or not all(isinstance(g,str) for g in package['gaps']):raise ValueError('Invalid inspection coverage')
+        findings=package.get('findings')
+        if not isinstance(findings,list):raise ValueError('Invalid package discrepancies')
+        total+=len(findings)
+        for finding in findings:
+            if not isinstance(finding,dict) or not isinstance(finding.get('path'),str) or len(finding['path'])>4096 or not isinstance(finding.get('checks'),str) or type(finding.get('configuration_file')) is not bool:
+                raise ValueError('Invalid package discrepancy')
+    if total>200:raise ValueError('Inspection finding limit exceeded')
+    persistence=report.get('persistence')
+    if persistence is not None:
+        if not isinstance(persistence,dict) or persistence.get('state') not in ('collected','incomplete') or not isinstance(persistence.get('entries'),list) or len(persistence['entries'])>256:
+            raise ValueError('Invalid persistence inventory')
+    if len(json.dumps(report).encode())>2_000_000:raise ValueError('Inspection receipt exceeds limit')
+    s.add(Inspection(id=job_id,host_id=host_id,report=report))
+    audit(s,'security inspection receipt',host_id+' '+job_id)
