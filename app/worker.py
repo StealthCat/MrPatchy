@@ -369,6 +369,14 @@ def execute_locked(job_id):
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
+            elif job.action=='yara-scan':
+                from . import yara_rules,incidents
+                rules,proof=yara_rules.authenticate(job.payload['bundle_id'])
+                result=ssh.call(h,{'action':'yara-scan','paths':job.payload['paths'],'rules':rules},timeout=300)
+                if result.get('engine')!='YARA' or result.get('signatures',{}).get('database_version')!=rules['sha256']:
+                    raise ValueError('YARA receipt does not bind authenticated rules; update target helpers')
+                incidents.record(s,h.id,job.id,result,rules_provenance=proof)
+                job.output=json.dumps({'state':result.get('state'),'findings':len(result.get('findings',[])),'bundle_id':job.payload['bundle_id']})
             elif job.action=='security-scan':
                 result=ssh.call(h,{'action':'security-scan','paths':job.payload['paths']},timeout=300)
                 from . import incidents

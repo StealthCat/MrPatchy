@@ -401,3 +401,70 @@ coverage, is bounded, and uses existing stale-plan and manual-only approval chec
 No automatic file repair, quarantine, AI upload or baseline acceptance is enabled.
 Future work includes authenticated YARA rules, automatic trusted artifact retrieval,
 and approved typed quarantine/restoration and containment workflows.
+
+## Authenticated offline YARA source scans
+
+Security now offers a separate **Queue YARA scan** form, with explicit directories
+and an offline bundle ID. This is manual read-only scanning, independently of
+ClamAV scheduling. Provision the target's `yara` CLI (YARA 4.x), update app/workers,
+and redeploy helpers through **Finish / verify installation**. Engine installation
+and automatic rule retrieval remain operator tasks.
+
+Under controller `DATA_DIR` provision `yara-rules/trustedkeys.gpg` as an exported
+OpenPGP public keyring from independently verified rule publishers. Each bundle
+is `yara-rules/<id>/` containing `rules.yar`, `manifest.json` and detached
+`manifest.json.sig`. Trust keys are separate from bundles and never taken from
+managed targets. Use regular files and real directories, with writes limited to
+trusted administrators and read access for workers. Provision bundles atomically.
+
+Manifest JSON has exactly four keys: `version` (1), `sha256` (lowercase SHA-256 of
+exact UTF-8 source bytes), `issued` and `expires` (Unix timestamps). Sign the exact
+manifest bytes with a trusted publisher key, for example:
+
+```bash
+gpg --detach-sign --output manifest.json.sig manifest.json
+python -m app.yara_rules bundle-id
+```
+
+The preview authenticates without target access. Workers repeat authentication
+before SSH, require a strong signature and matching source hash, reject future
+issue times beyond five minutes and expired bundles, and limit validity to 30 days.
+Keys and bundle bytes need separate backups; database receipts retain provenance,
+not replayable rule source. Offline checks do not establish newest rules or latest
+key revocations. Controller/target clock skew can prevent scans.
+
+Only bounded source text is accepted, never compiled rule blobs. Include/import
+words are rejected conservatively even inside comments/strings, preventing external
+includes and modules; simplify such rules rather than bypassing validation. The
+CLI is never given `-C`, module data, process IDs, recursive traversal or string/meta
+printing options. Authenticated rules still require publisher review and can produce
+false positives. See [YARA source and compiled-rule handling](https://yara.readthedocs.io/en/latest/commandline.html).
+
+The target compiles against an empty descriptor before traversal so invalid rules
+cannot report successful empty coverage. Each file is scanned through an opened
+regular-file descriptor; file and parent identity/change metadata are checked as
+in ClamAV scanning. Rules remain in a temporary descriptor for this job only and
+are not installed persistently. Source is capped at 128 KiB, each native invocation
+at 15 seconds, 64 KB output and 512 MiB address space, with YARA's ten-second scan
+timeout. Existing 16-root, 2,000-file, 32 MiB/file, 10,000-entry, depth and four-minute
+traversal limits apply. Per-file compilation is deliberate in this initial version;
+large/expensive bundles may hit coverage limits. No filesystem snapshot or root/kernel
+attestation is provided.
+
+Missing engines, compilation diagnostics, timeouts, unsafe paths, replaced files,
+rule expiry during scanning, and budget limits produce incomplete coverage. Match
+receipts retain rule identifiers and file hashes without matched strings or file
+contents. Immutable scan history and incidents reuse existing reviews, hash search,
+manual AI plans, usage tracking and offline database migration support. Controller
+provenance binds manifest/rule/keyring hashes and verified fingerprints into incident
+coverage. Target-supplied controller provenance is rejected. Rule validity is shown
+separately from ClamAV database freshness.
+
+YARA requests share the pending scan guard with ClamAV. YARA findings do not trigger
+automatic AI proposals, even when ClamAV automatic proposals are enabled. Explicit
+AI requests still require manual plan approval and execute no response actions.
+Native YARA integration runs on disposable Debian/Ubuntu targets; other targets
+require a compatible engine and platform validation. Quarantine/restoration,
+containment, behavioral detection and automatic trusted rule delivery remain future
+milestones. Matches do not establish malicious intent; no matches is not a clean-host
+verdict.

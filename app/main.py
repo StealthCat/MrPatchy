@@ -1137,9 +1137,22 @@ def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(auth)):
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id)
-            pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-scan',Job.state.in_(['queued','running'])))
+            pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan']),Job.state.in_(['queued','running'])))
             if pending:raise HTTPException(409,'A security scan is already queued or running')
             return {'job_id':worker.enqueue(s,host_id,'security-scan',body.model_dump())}
+
+class YaraScanInput(SecurityScanInput):
+    bundle_id:str=Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
+
+@app.post('/api/hosts/{host_id}/security/yara')
+def yara_scan_queue(host_id:str,body:YaraScanInput,user=Depends(auth)):
+    for path in body.paths:
+        if not path.startswith('/') or path.startswith('//') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    with worker.Lock('security-scan-queue'),Session() as s:
+        host_or_404(s,host_id)
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan']),Job.state.in_(['queued','running'])).limit(1)):
+            raise HTTPException(409,'A security scan is already queued or running')
+        return {'job_id':worker.enqueue(s,host_id,'yara-scan',body.model_dump())}
 
 @app.get('/api/hosts/{host_id}/security/history')
 def security_history(host_id:str,offset:int=0,user=Depends(auth)):
