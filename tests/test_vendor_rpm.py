@@ -132,3 +132,15 @@ def test_rpm_worker_retains_provenance_and_rejects_target_trust_forgery(admin,mo
         assert report['trust_basis']=='controller_authenticated_rpm_artifact' and report['vendor_authentication']==proof
         with pytest.raises(ValueError):incidents.record_inspection(s,'rpm-vendor','forged',{**report,'trust_basis':'controller_authenticated_rpm_artifact'})
     with pytest.raises(ValueError):vendor.validate_receipt(manifest,{**receipt,'trust_basis':'controller_authenticated_debian_artifact'})
+
+
+def test_native_xml_array_wrappers_and_wrong_tag_names():
+    root=ET.fromstring(metadata())
+    for node in root:
+        if node.tag in vendor_rpm.ARRAYS:
+            wrapper=ET.Element('rpmTag',{'name':vendor_rpm.ARRAYS[node.tag].capitalize()})
+            wrapper.extend(list(node));node[:]=[wrapper]
+    manifest,_=vendor_rpm.metadata_manifest(ET.tostring(root,encoding='unicode'))
+    assert manifest['version']=='2:1.0-1' and len(manifest['entries'])==1
+    root.find('paths/rpmTag').set('name','Unexpected')
+    with pytest.raises(ValueError,match='wrapper'):vendor_rpm.metadata_manifest(ET.tostring(root,encoding='unicode'))

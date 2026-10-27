@@ -30,8 +30,15 @@ def metadata_manifest(output):
     if root.tag!='metadata' or len(root)!=len(FIELDS)+len(ARRAYS):raise ValueError('Invalid RPM metadata')
     values={}
     for node in root:
-        if node.tag in values or node.tag not in FIELDS|ARRAYS or len(node)>2048 or any(child.tag not in ('string','integer') or len(child) for child in node):raise ValueError('Invalid RPM metadata tag')
-        values[node.tag]=[child.text or '' for child in node]
+        if node.tag in values or node.tag not in FIELDS|ARRAYS:raise ValueError('Invalid RPM metadata tag')
+        children=node
+        # librpm's array formatter adds a named rpmTag wrapper around XML values.
+        if len(node)==1 and node[0].tag=='rpmTag':
+            wrapper=node[0]
+            if node.tag not in ARRAYS or wrapper.attrib!={'name':ARRAYS[node.tag].capitalize()}:raise ValueError('Unexpected RPM XML array wrapper')
+            children=wrapper
+        if len(children)>2048 or any(child.tag not in ('string','integer') or len(child) for child in children):raise ValueError('Invalid RPM metadata values')
+        values[node.tag]=[child.text or '' for child in children]
     def scalar(name):
         if len(values[name])!=1:raise ValueError('Ambiguous RPM package identity')
         return values[name][0]
