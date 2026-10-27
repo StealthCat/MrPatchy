@@ -53,3 +53,20 @@ the durable baseline and retry limits make partial failures visible.
 Policies and latest status use existing Settings storage and participate in the
 offline SQLite/MySQL migration. Jobs and audits provide history; retention and
 external immutable evidence storage remain separate unfinished work.
+
+## Verification before polling and after installation
+
+Due independent checks now run before normal telemetry polling on enrolled hosts.
+A drifted, blocked or unavailable result pauses telemetry ingestion and blocks new
+ordinary remote jobs. Agent checks, agent maintenance and the reviewed installation
+workflow remain available; ongoing release recovery observation is not cancelled.
+An agent-health alert is retained even while the last telemetry is old. A successful
+Finish installation uses the independent bridge receipt and updates health and
+baseline together. An unenrolled managed `observability.conf` blocks maintenance
+even when it has not yet been loaded by systemd.
+
+Checks are periodic, not continuous attestation. Existing helpers must be upgraded
+through Finish installation to obtain the latest bridge behavior. Unknown or
+unsupported status receipts fail closed; review Agent health and use a trusted
+console if necessary. A compromised root/kernel and arbitrary dormant systemd
+configuration outside the managed-file set remain outside this guarantee.

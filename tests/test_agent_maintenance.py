@@ -123,3 +123,65 @@ def test_unavailable_check_never_queues_repairs(admin,enrolled,monkeypatch):
         status=maintenance.inspect(s,host)
         assert status['state']=='unavailable' and 'secret output' not in str(status)
         assert s.query(Job).count()==0
+
+
+def test_dormant_unenrolled_override_blocks_maintenance(enrolled):
+    report=receipt(enrolled)
+    report['files'][maintenance.OPTIONAL]={'sha256':'c'*64,'uid':0,'gid':0,'mode':0o644}
+    assert maintenance.assess(enrolled,report)['state']=='blocked'
+
+
+def test_poll_checks_before_importing_changed_collector(admin,enrolled,monkeypatch):
+    with Session() as s:
+        s.add(Host(id=enrolled.id,name='agent',address='x',fingerprint='pinned',baseline=enrolled.baseline,state='online'))
+        s.add(Setting(key='agent-policy:'+enrolled.id,value={'auto_upgrade':False,'auto_repair':True}));s.commit()
+    report=receipt(enrolled);report['files']['/usr/local/lib/mrpatchy/agent.py']['sha256']='b'*64
+    calls=[]
+    def call(host,payload,**kwargs):
+        calls.append(payload['action'])
+        assert payload['action']=='agent-status'
+        return report
+    monkeypatch.setattr(ssh,'call',call)
+    worker.poll_host(enrolled.id)
+    assert calls==['agent-status']
+    with Session() as s:
+        assert s.query(Job).one().action=='agent-update'
+        assert s.get(Host,enrolled.id).state=='attention'
+    # Even polling beside an active operation must honor the failed assessment.
+    with worker.host_lock(enrolled.id):worker.poll_host(enrolled.id)
+    assert calls==['agent-status']
+    operations=maintenance.operations
+    operations.collect_alerts()
+    with Session() as s:assert s.query(operations.Alert).filter_by(kind='agent health').one().state=='open'
+
+
+def test_known_drift_blocks_remote_jobs(admin,enrolled,monkeypatch):
+    with Session() as s:
+        s.add(Host(id=enrolled.id,name='agent',address='x',fingerprint='pinned',baseline=enrolled.baseline))
+        s.add(Setting(key='agent-status:'+enrolled.id,value={'state':'drifted'}));s.commit()
+        job=worker.enqueue(s,enrolled.id,'repair')
+    monkeypatch.setattr(ssh,'call',lambda *a,**k:pytest.fail('Known drift must block remote execution'))
+    worker.execute(job)
+    with Session() as s:assert s.get(Job,job).state=='failed'
+
+
+@pytest.mark.parametrize('invalid',[False,True])
+def test_manual_deploy_independently_verifies_and_clears_stale_health(admin,enrolled,monkeypatch,invalid):
+    with Session() as s:
+        s.add(Host(id=enrolled.id,name='agent',address='x',fingerprint='pinned',baseline=enrolled.baseline))
+        s.add(Setting(key='agent-status:'+enrolled.id,value={'state':'blocked'}));s.commit()
+        job_id=worker.enqueue(s,enrolled.id,'deploy')
+    calls=[]
+    monkeypatch.setattr(ssh,'deploy',lambda h:{'deployed':True})
+    monkeypatch.setattr(worker,'save_inventory',lambda *a:None)
+    def call(host,payload,**kwargs):
+        calls.append(payload['action'])
+        if payload['action']=='agent-status':return receipt(enrolled)|({'dropins':['/tmp/untrusted.conf']} if invalid else {})
+        assert payload['action']=='inventory'
+        return {}
+    monkeypatch.setattr(ssh,'call',call)
+    worker.execute(job_id)
+    with Session() as s:
+        assert s.get(Job,job_id).state==('failed' if invalid else 'complete')
+        assert s.get(Setting,'agent-status:'+enrolled.id).value['state']==('blocked' if invalid else 'current')
+    assert calls==(['agent-status'] if invalid else ['agent-status','inventory'])

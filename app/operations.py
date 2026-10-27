@@ -75,6 +75,9 @@ def collect_alerts():
             if host.state=='enrolling':continue
             if now-host.last_seen>120:record(host,'stale','Telemetry has not arrived within 120 seconds')
             if host.integrity:record(host,'integrity',json.dumps(host.integrity)[:8000])
+            agent=s.get(Setting,'agent-status:'+host.id)
+            if agent and agent.value.get('state') not in ('current','outdated'):
+                record(host,'agent health','Independent agent verification '+str(agent.value.get('state'))+'. Review Agent health; telemetry ingestion may be paused.')
             if host.repo_error:record(host,'repository',host.repo_error[:8000])
             overdue=s.scalar(select(func.count()).select_from(Package).where(Package.host_id==host.id,Package.candidate!='',Package.available_since>0,
                 Package.available_since<now- min(cfg['deadlines'].values())*3600))

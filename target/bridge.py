@@ -76,6 +76,12 @@ def bounded(args,timeout=900,env=None,limit=16_000_000,allowed_codes=(0,),return
         if process.returncode not in allowed_codes: raise RuntimeError((output+errors)[-16000:].decode(errors='replace'))
         result=(output.decode(errors='replace'),errors.decode(errors='replace'))
         return (*result,process.returncode) if return_status else result
+    except BaseException:
+        # A parent may exit while its descendants keep the pipes/work alive.
+        # Kill the original process group on failure even if poll() has reaped it.
+        try:os.killpg(process.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        raise
     finally:
         if process.poll() is None:
             os.killpg(process.pid,signal.SIGKILL);process.wait()

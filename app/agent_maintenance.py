@@ -2,7 +2,7 @@
 import hashlib
 import json
 import time
-from sqlalchemy import select,func
+from sqlalchemy import select
 from .db import Setting,Job,audit
 from . import ssh,operations
 
@@ -33,6 +33,11 @@ def assess(host,report):
     if not isinstance(report,dict) or report.get('version')!=1 or not isinstance(report.get('files'),dict):
         raise ValueError('Unsupported agent status receipt')
     files=report['files']
+    if any(not isinstance(row,dict) for row in files.values()):
+        raise ValueError('Invalid managed file receipt')
+    # A drop-in on disk can be dormant until the next daemon-reload.
+    if OPTIONAL not in baseline and files.get(OPTIONAL,{'missing':True})!={'missing':True}:
+        issue(OPTIONAL,'unenrolled_override');result['repairable']=False
     if not baseline:issue('enrollment','missing_baseline');result['repairable']=False
     for path,expected in current.items():
         observed=files.get(path,{})

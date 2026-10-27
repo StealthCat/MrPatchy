@@ -1265,6 +1265,25 @@ def security_inspections(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':[object_dict(r) for r in rows[:6]],'more':len(rows)>6}
 
 
+@app.get('/api/hosts/{host_id}/security/inspections/{inspection_id}/comparison')
+def persistence_comparison(host_id:str,inspection_id:str,user=Depends(auth)):
+    from .persistence import compare
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.get(incidents.Inspection,inspection_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Inspection not found')
+        # Skip package-only inspections, but never skip an incomplete inventory:
+        # doing so would conceal the coverage gap between observations.
+        table=incidents.Inspection
+        previous=s.scalar(select(table).where(table.host_id==host_id,
+            (table.created<row.created)|((table.created==row.created)&(table.id<row.id)),
+            table.report['persistence']['state'].as_string().in_(['collected','incomplete']))
+            .order_by(table.created.desc(),table.id.desc()).limit(1))
+        result=compare(previous.report.get('persistence') if previous else None,row.report.get('persistence'))
+        return {**result,'inspection_id':row.id,'previous_id':previous.id if previous else None,
+                'created':row.created,'previous_created':previous.created if previous else None}
+
+
 class AgentPolicyInput(BaseModel):
     auto_upgrade:bool=False
     auto_repair:bool=False

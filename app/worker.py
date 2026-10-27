@@ -171,6 +171,17 @@ def poll_host(host_id):
         with Session() as s:
             h=s.get(Host,host_id)
             if not h or h.state=='enrolling': return
+            # Snapshot/events may import the collector. Check independently first,
+            # and never consume it after a known failed health/trust assessment.
+            if h.baseline:
+                from . import agent_maintenance
+                saved=s.get(Setting,'agent-status:'+host_id)
+                status=saved.value if saved else None
+                if locked and not operations.host_quarantined(s,host_id) and (not status or time.time()-status.get('checked',0)>=300):
+                    status=agent_maintenance.inspect(s,h)
+                if status and status['state'] not in ('current','outdated'):
+                    h.state='attention';h.error='Agent verification '+status['state']+'; telemetry ingestion paused. Review Agent health.';s.commit()
+                    return
             try:
                 snapshot=ssh.call(h,{'action':'snapshot'})
                 ingest(s,h,snapshot,include_inventory=locked)
@@ -179,7 +190,7 @@ def poll_host(host_id):
                 s.rollback()
                 h=s.get(Host,host_id)
                 if h: h.state='offline'; h.error=str(e)[:4000]; s.commit()
-            if locked and h and not operations.host_quarantined(s,host_id):
+            if locked and h and not h.baseline and not operations.host_quarantined(s,host_id):
                 from . import agent_maintenance
                 status=s.get(Setting,'agent-status:'+host_id)
                 if not status or time.time()-status.value.get('checked',0)>=300:
@@ -280,6 +291,9 @@ def execute_locked(job_id):
         h=s.get(Host,job.host_id);protected=job.action=='release-upgrade';result={}
         try:
             if not h: raise ValueError('Host no longer exists')
+            health=s.get(Setting,'agent-status:'+h.id)
+            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan'):
+                raise ValueError('Agent verification failed; review Agent health before executing remote operations')
             if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
             elif job.action=='release-upgrade':
                 result=releases.execute(s,h,job)
@@ -290,12 +304,17 @@ def execute_locked(job_id):
             elif job.action=='deploy':
                 result=ssh.deploy(h)
                 expected_files=ssh.expected_files(h)
-                verification=ssh.call(h,{'action':'verify'})
-                if not verification.get('active'): raise ValueError('Collector service did not become active')
-                for path,digest in expected_files.items():
-                    expected={'sha256':digest,'uid':0,'gid':0,'mode':0o440 if path=='/etc/sudoers.d/mrpatchy' else 0o644}
-                    if verification.get('files',{}).get(path)!=expected: raise ValueError('Installation verification failed: '+path)
-                h.baseline=expected_files
+                from . import agent_maintenance
+                verification=ssh.call(h,{'action':'agent-status'})
+                old_baseline=h.baseline;h.baseline=expected_files
+                try:
+                    status=agent_maintenance.assess(h,verification)
+                    if status['state']!='current':raise ValueError('Installation verification failed; review independent agent status')
+                except Exception:
+                    h.baseline=old_baseline
+                    raise
+                status.update(checked=time.time(),release=agent_maintenance.release_id(h),report=verification)
+                s.merge(Setting(key='agent-status:'+h.id,value=status))
                 h.state='waiting'; job.output=json.dumps({'deployment':result,'verification':verification})
                 save_inventory(s,h,ssh.call(h,{'action':'inventory'}))
             elif job.action in ('agent-check','agent-update'):

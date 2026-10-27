@@ -22,6 +22,12 @@ def bounded(args,timeout=900,env=None,limit=16_000_000,cwd=None):
         process.wait(timeout=max(.1,deadline-time.monotonic()))
         if process.returncode: raise RuntimeError((output+errors)[-16000:].decode(errors='replace'))
         return output.decode(errors='replace'),errors.decode(errors='replace')
+    except BaseException:
+        # A parent may exit while its descendants keep the pipes/work alive.
+        # Kill the original process group on failure even if poll() has reaped it.
+        try:os.killpg(process.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        raise
     finally:
         if process.poll() is None:
             os.killpg(process.pid,signal.SIGKILL);process.wait()

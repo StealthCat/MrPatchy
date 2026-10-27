@@ -95,3 +95,15 @@ repairs. See [Agent maintenance](AGENT_MAINTENANCE.md) for the trust boundary,
 blocked access-path changes, verification and retry limits. This maintains the
 Mr Patchy installation; it is not arbitrary malware remediation or independent
 attestation of a compromised root/kernel.
+
+## Startup inventory comparison
+
+**File integrity → Compare startup inventory** compares immutable observations on
+the same server. It requires two complete, valid inventories with matching scope;
+package-only reports are skipped, while intervening incomplete inventories are not.
+Content, ownership, mode, type, size and link-target differences are displayed with
+before/after metadata. Timestamp-only changes are ignored. Historical malformed
+receipts, coverage gaps or scope changes produce an unavailable comparison, never
+an inferred deletion. This advances persistence history review; approved baselines,
+automatic change alerts and incident linkage remain unfinished. See
+[the October 27 code review](CODE_REVIEW_2026-10-27.md) for findings and limits.

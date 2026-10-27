@@ -231,8 +231,8 @@ def record_inspection(s,host_id,job_id,report):
     if total>200:raise ValueError('Inspection finding limit exceeded')
     persistence=report.get('persistence')
     if persistence is not None:
-        if not isinstance(persistence,dict) or persistence.get('state') not in ('collected','incomplete') or not isinstance(persistence.get('entries'),list) or len(persistence['entries'])>256:
-            raise ValueError('Invalid persistence inventory')
+        from .persistence import validate
+        validate(persistence)
     if len(json.dumps(report).encode())>2_000_000:raise ValueError('Inspection receipt exceeds limit')
     s.add(Inspection(id=job_id,host_id=host_id,report=report))
     audit(s,'security inspection receipt',host_id+' '+job_id)
