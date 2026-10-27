@@ -236,3 +236,15 @@ def record_inspection(s,host_id,job_id,report):
     if len(json.dumps(report).encode())>2_000_000:raise ValueError('Inspection receipt exceeds limit')
     s.add(Inspection(id=job_id,host_id=host_id,report=report))
     audit(s,'security inspection receipt',host_id+' '+job_id)
+
+
+class PersistenceBaseline(Base):
+    """Append-only administrator reviews; active selection is a separate Setting."""
+    __tablename__='persistence_baselines'
+    id:Mapped[str]=mapped_column(String(36),primary_key=True)
+    host_id:Mapped[str]=mapped_column(String(36),index=True)
+    inspection_id:Mapped[str]=mapped_column(String(36))
+    evidence_digest:Mapped[str]=mapped_column(String(64))
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+    actor:Mapped[str]=mapped_column(String(120))
+    reason:Mapped[str]=mapped_column(Text)

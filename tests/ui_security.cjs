@@ -10,6 +10,8 @@ module.exports=async(page)=>{
   if(!url.pathname.startsWith(prefix))return route.fallback();
   if(url.pathname.endsWith('/agent')&&request.method()==='GET')return route.fulfill({json:{policy:{auto_upgrade:false,auto_repair:false},status:{state:'drifted',checked:Date.now()/1000,stale:false,issues:[{path:'/usr/local/lib/mrpatchy/agent.py',kind:'unexpected_content_or_missing'}],report:{}},enrolled_outdated:false}});
   if(url.pathname.endsWith('/agent')&&request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().auto_upgrade,true);return route.fulfill({json:{auto_upgrade:true,auto_repair:false}});}
+  if(url.pathname.endsWith('/baseline')&&request.method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
+  if(url.pathname.endsWith('/baseline')&&request.method()==='POST'){writes.push(url.pathname);assert.equal(request.postDataJSON().expected,'');assert.equal(request.postDataJSON().inspection_id,'inspection-job');return route.fulfill({json:{id:'baseline-fixture'}});}
   if(url.pathname.endsWith('/comparison'))return route.fulfill({json:{state:'compared',previous_created:Date.now()/1000-3600,note:'Observed changes, not a malware verdict.',changes:[{path:'/etc/cron.d/review-me',kind:'added'}]}});
   if(url.pathname.endsWith('/inspections')){
    if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true});return route.fulfill({json:{job_id:'inspection-job'}});}
@@ -63,6 +65,12 @@ module.exports=async(page)=>{
   await page.getByText('/etc/ssh/sshd_config',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Compare startup inventory',exact:true}).click();
   await page.locator('.inspection-comparison pre').filter({hasText:'/etc/cron.d/review-me'}).waitFor();
+  await page.getByRole('button',{name:'Review latest as baseline',exact:true}).click();
+  await page.locator('#startup-baseline-approval textarea').fill('Verified the startup entries against approved configuration.');
+  await page.getByRole('button',{name:'Approve startup baseline',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});
+  assert.equal(writes.at(-1),prefix+'/baseline');
+
   await page.goto(new URL('/#servers/'+host.id+'/agent',page.url()).href);
   await page.locator('#agent-policy').waitFor();
   await page.locator('#agent-policy [name=auto_upgrade]').check();

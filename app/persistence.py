@@ -53,3 +53,63 @@ def compare(before,after):
             changes.append({'path':path,'kind':'added' if previous is None else 'removed' if current is None else 'changed',
                             'fields':changed,'before':previous,'after':current})
     return {'state':'compared','changes':changes,'note':'Observed changes between complete inventories, not an approved baseline or a malware verdict. Modification time alone is ignored.'}
+
+
+MAX_AGE=86400
+
+
+def latest(s,host_id):
+    from sqlalchemy import select
+    from .incidents import Inspection
+    return s.scalar(select(Inspection).where(Inspection.host_id==host_id,
+        Inspection.report['persistence']['state'].as_string().is_not(None))
+        .order_by(Inspection.created.desc(),Inspection.id.desc()).limit(1))
+
+
+def status(s,host_id):
+    import time
+    from .db import Setting
+    from .incidents import PersistenceBaseline,Inspection,digest
+    active=s.get(Setting,'persistence-baseline:'+host_id)
+    baseline=s.get(PersistenceBaseline,active.value['id']) if active else None
+    row=latest(s,host_id)
+    inv=row.report.get('persistence') if row else None
+    eligible=False
+    try:
+        validate(inv)
+        eligible=inv['state']=='collected' and 0<=time.time()-row.created<=MAX_AGE
+    except ValueError:pass
+    before=s.get(Inspection,baseline.inspection_id) if baseline else None
+    trusted=bool(baseline and baseline.host_id==host_id and before and before.host_id==host_id and digest(before.report.get('persistence'))==baseline.evidence_digest)
+    comparison=compare(before.report.get('persistence') if trusted else None,inv)
+    if comparison['state']=='compared':comparison['note']='Compared with the administrator-reviewed startup baseline; matches are not a clean-host verdict.'
+    if active and not trusted:state='unavailable'
+    elif not baseline:state='not_configured'
+    elif not row or not 0<=time.time()-row.created<=MAX_AGE:state='stale'
+    elif comparison['state']!='compared':state='unavailable'
+    else:state='drifted' if comparison['changes'] else 'matches'
+    return {'state':state,'baseline':({'id':baseline.id,'inspection_id':baseline.inspection_id,'actor':baseline.actor,
+        'created':baseline.created,'reason':baseline.reason} if baseline else None),
+        'latest':({'id':row.id,'created':row.created,'digest':digest(inv),'inventory':inv} if row else None),
+        'eligible':eligible,'max_age_seconds':MAX_AGE,'comparison':comparison}
+
+
+def approve(s,host_id,inspection_id,evidence_digest,expected,reason,actor):
+    import uuid
+    from .db import Setting,audit
+    from .incidents import PersistenceBaseline
+    current=status(s,host_id)
+    actual=current['baseline']['id'] if current['baseline'] else ''
+    if actual!=expected:raise ValueError('Baseline changed; refresh and review again')
+    row=current['latest']
+    if not current['eligible'] or not row or row['id']!=inspection_id or row['digest']!=evidence_digest:
+        raise ValueError('Inspection changed, expired or incomplete; collect and review a fresh complete inventory')
+    if current['baseline'] and current['baseline']['inspection_id']==inspection_id:raise ValueError('This inventory is already approved')
+    reason=reason.strip()
+    if not 10<=len(reason)<=4000:raise ValueError('Provide a review reason of 10–4000 characters')
+    baseline=PersistenceBaseline(id=str(uuid.uuid4()),host_id=host_id,inspection_id=inspection_id,
+        evidence_digest=evidence_digest,actor=actor,reason=reason)
+    s.add(baseline);s.flush()
+    s.merge(Setting(key='persistence-baseline:'+host_id,value={'id':baseline.id}))
+    audit(s,'persistence baseline approved',host_id+' '+baseline.id+' '+inspection_id+' '+actor)
+    return baseline.id

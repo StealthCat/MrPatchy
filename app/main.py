@@ -1319,3 +1319,36 @@ def agent_action(host_id:str,action:str,user=Depends(auth)):
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['agent-check','agent-update']),Job.state.in_(['queued','running'])).limit(1)):
                 raise HTTPException(409,'Agent maintenance is already queued')
             return {'job_id':worker.enqueue(s,host_id,'agent-'+action,{'release':agent_maintenance.release_id(host),'automatic':False})}
+
+
+class PersistenceApproval(BaseModel):
+    inspection_id:str=Field(max_length=36)
+    evidence_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    expected:str=Field(default='',max_length=36)
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/baseline')
+def get_persistence_baseline(host_id:str,user=Depends(auth)):
+    from . import persistence
+    with Session() as s:
+        host_or_404(s,host_id)
+        return persistence.status(s,host_id)
+
+@app.post('/api/hosts/{host_id}/security/baseline')
+def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(auth)):
+    from . import persistence
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host_or_404(s,host_id)
+        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'])
+        except ValueError as error:raise HTTPException(409,str(error)) from None
+        s.commit()
+        return {'id':identifier}
+
+@app.get('/api/hosts/{host_id}/security/baseline/history')
+def persistence_baseline_history(host_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        table=incidents.PersistenceBaseline
+        rows=list(s.scalars(select(table).where(table.host_id==host_id).order_by(table.created.desc(),table.id).offset(offset).limit(21)))
+        return {'items':[object_dict(row) for row in rows[:20]],'more':len(rows)>20}

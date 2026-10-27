@@ -107,3 +107,34 @@ receipts, coverage gaps or scope changes produce an unavailable comparison, neve
 an inferred deletion. This advances persistence history review; approved baselines,
 automatic change alerts and incident linkage remain unfinished. See
 [the October 27 code review](CODE_REVIEW_2026-10-27.md) for findings and limits.
+
+## Administrator-reviewed startup baselines
+
+The File integrity tab now offers **Review latest as baseline**. Administrators
+review the full inventory, scope and missing roots, and provide a reason. Only the
+latest persistence receipt on that server can be approved; it must be valid,
+complete and received within 24 hours. The request binds the receipt digest and
+previous active baseline ID, and shares the host operation lock with inspections.
+A newer receipt, concurrent approval, incomplete coverage or expired observation
+rejects the review. Approving a replacement can acknowledge legitimate changes;
+it never repairs files or establishes that they are malware-free.
+
+Approvals are append-only records containing actor, reason, receipt, digest and
+time. The active selection is separate; old approvals and inspection receipts
+remain available. The new `persistence_baselines` table is created at startup and
+included in the existing verified offline SQLite/MySQL migration metadata. Start
+this version to initialize its schema before an offline migration.
+
+Subsequent observations are compared against the approved receipt. State is
+`matches`, `drifted`, `unavailable`, or `stale`; without approval it is
+`not_configured`. A mismatch opens a startup-baseline alert in the existing alert
+system. Incomplete observations, incompatible scope, missing evidence or evidence
+older than 24 hours cannot resolve as matches. The age is measured from controller
+receipt time, not a trusted target clock. Package-only inspections do not refresh
+startup coverage. Queue inspections regularly: approving a baseline does not
+schedule new inspections. Alert delivery follows the existing notification policy.
+
+This milestone covers the existing bounded startup inventory, not arbitrary
+custom file paths. Automatic incident linkage, scheduled persistence inspection,
+trusted-vendor verification and typed remediation remain future work. It requires
+no additional target helper changes beyond the security-inspection protocol.
