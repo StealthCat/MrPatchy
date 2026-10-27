@@ -664,4 +664,68 @@ def security_inspect(packages,persistence=True):
     report['finished']=time.time()
     return report
 
+
+def vendor_inspect(manifest):
+    """Compare controller-authenticated regular-file bytes; never consult local checksums."""
+    if not isinstance(manifest,dict) or not re.fullmatch('[a-z0-9][a-z0-9+.-]{0,199}',manifest.get('package','')) or not re.fullmatch('[a-z0-9][a-z0-9-]{0,63}',manifest.get('architecture','')):
+        raise ValueError('Invalid vendor package identity')
+    version=manifest.get('version');entries=manifest.get('entries')
+    if not isinstance(version,str) or not 1<=len(version)<=200 or any(c.isspace() for c in version):raise ValueError('Invalid vendor version')
+    if not isinstance(entries,list) or not 1<=len(entries)<=200:raise ValueError('Invalid vendor file scope')
+    seen=set()
+    for entry in entries:
+        path=entry.get('path','')
+        if not isinstance(path,str) or not path.startswith('/') or str(Path(path))!=path or '..' in Path(path).parts or path in seen or len(path)>4096 or any(ord(c)<32 for c in path):raise ValueError('Invalid vendor file path')
+        if not re.fullmatch('[a-f0-9]{64}',entry.get('sha256','')) or type(entry.get('size')) is not int or not 0<=entry['size']<=32*1024*1024:raise ValueError('Invalid vendor file hash or size')
+        seen.add(path)
+    try:from bridge import bounded
+    except ImportError:from target.bridge import bounded
+    result={'state':'incomplete','package':manifest['package'],'version':version,'architecture':manifest['architecture'],
+            'scope_files':len(entries),'examined':0,'findings':[],'gaps':[],'trust_basis':'controller_authenticated_debian_artifact'}
+    deadline=time.monotonic()+120;total=0
+    def identity():
+        out,err,code=bounded(['dpkg-query','-W','-f=${db:Status-Status} ${Version} ${Architecture}\n','--',manifest['package']+':'+manifest['architecture']],timeout=10,limit=4000,allowed_codes=(0,1),return_status=True)
+        if code or err or out.strip()!='installed '+version+' '+manifest['architecture']:raise ValueError('Installed package version/architecture does not match authenticated artifact')
+    try:
+        identity()
+        for entry in entries:
+            if time.monotonic()>deadline:raise TimeoutError('Vendor comparison deadline exceeded')
+            path=Path(entry['path']);fd=None
+            try:
+                with scan_root(path.parent) as parent:
+                    before=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
+                    if not stat.S_ISREG(before.st_mode):raise ValueError('Expected regular file; symlink or special file excluded')
+                    fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+                    opened=os.fstat(fd)
+                    if (before.st_dev,before.st_ino)!=(opened.st_dev,opened.st_ino):raise ValueError('File replaced before read')
+                    digest=hashlib.sha256();size=0
+                    while True:
+                        chunk=os.read(fd,65536)
+                        if not chunk:break
+                        size+=len(chunk);total+=len(chunk)
+                        if size>32*1024*1024 or total>128*1024*1024 or time.monotonic()>deadline:raise TimeoutError('Vendor hashing limit exceeded')
+                        digest.update(chunk)
+                    after=os.fstat(fd);named=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
+                    if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) or (named.st_dev,named.st_ino,named.st_ctime_ns)!=(before.st_dev,before.st_ino,before.st_ctime_ns):raise ValueError('File changed during read')
+                    with scan_root(path.parent) as current:
+                        a=os.fstat(current);b=os.fstat(parent)
+                        if (a.st_dev,a.st_ino)!=(b.st_dev,b.st_ino):raise ValueError('Parent replaced during read')
+                result['examined']+=1
+                if digest.hexdigest()!=entry['sha256'] or size!=entry['size']:
+                    result['findings'].append({'path':str(path),'status':'content_differs','expected_sha256':entry['sha256'],'observed_sha256':digest.hexdigest()})
+            except FileNotFoundError:
+                result['findings'].append({'path':str(path),'status':'missing'})
+                result['examined']+=1
+            except (OSError,ValueError,TimeoutError) as error:
+                if len(result['gaps'])<20:result['gaps'].append(str(path)+': '+type(error).__name__)
+                # Keep a persistent count even after the diagnostic cap.
+                result['skipped']=result.get('skipped',0)+1
+            finally:
+                if fd is not None:os.close(fd)
+        identity()
+        result['state']='incomplete' if result['gaps'] or result['examined']!=len(entries) else 'differences' if result['findings'] else 'matches_artifact_bytes'
+    except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:
+        result['gaps'].append(type(error).__name__+': package identity unavailable, mismatched or comparison interrupted')
+    return result
+
 if __name__ == '__main__': main()

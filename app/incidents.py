@@ -213,7 +213,7 @@ def auto_plan_tick(now=None):
 
 def record_inspection(s,host_id,job_id,report):
     if s.get(Inspection,job_id):return
-    if not isinstance(report,dict) or report.get('version')!=1 or report.get('trust_basis')!='target_local_package_database' or report.get('state') not in ('collected','incomplete'):
+    if not isinstance(report,dict) or report.get('version')!=1 or report.get('trust_basis') not in ('target_local_package_database','controller_authenticated_debian_artifact') or report.get('state') not in ('collected','incomplete'):
         raise ValueError('Unsupported inspection receipt; update target helpers')
     packages=report.get('packages')
     if not isinstance(packages,list) or len(packages)>16:raise ValueError('Invalid inspection package list')

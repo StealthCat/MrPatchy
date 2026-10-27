@@ -18,6 +18,7 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/baseline')&&request.method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
   if(url.pathname.endsWith('/baseline')&&request.method()==='POST'){writes.push(url.pathname);assert.equal(request.postDataJSON().expected,'');assert.equal(request.postDataJSON().inspection_id,'inspection-job');return route.fulfill({json:{id:'baseline-fixture'}});}
   if(url.pathname.endsWith('/comparison'))return route.fulfill({json:{state:'compared',previous_created:Date.now()/1000-3600,note:'Observed changes, not a malware verdict.',changes:[{path:'/etc/cron.d/review-me',kind:'added'}]}});
+  if(url.pathname.endsWith('/vendor-inspections')){assert.deepEqual(request.postDataJSON(),{bundle_id:'vendor-fixture'});writes.push(url.pathname);return route.fulfill({json:{job_id:'vendor-job'}});}
   if(url.pathname.endsWith('/inspections')){
    if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true});return route.fulfill({json:{job_id:'inspection-job'}});}
    return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}}],more:false}});
@@ -66,6 +67,10 @@ module.exports=async(page)=>{
   await page.getByRole('button',{name:'Queue inspection',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Inspection queued'));
   assert.equal(writes.at(-1),prefix+'/inspections');
+  await page.locator('#vendor-inspection-form [name=bundle_id]').fill('vendor-fixture');
+  await page.getByRole('button',{name:'Queue vendor verification',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Vendor verification queued'));
+  assert.equal(writes.at(-1),prefix+'/vendor-inspections');
   await page.locator('#inspection-reports summary').filter({hasText:'openssh-server'}).click();
   await page.getByText('/etc/ssh/sshd_config',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Compare startup inventory',exact:true}).click();

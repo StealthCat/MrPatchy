@@ -373,6 +373,10 @@ def handle(req):
         if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
+    if action == 'vendor-inspect':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import vendor_inspect
+        return vendor_inspect(req.get('manifest'))
     if action == 'security-inspect':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_inspect
