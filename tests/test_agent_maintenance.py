@@ -107,7 +107,7 @@ def test_upgrade_commits_only_verified_new_baseline(admin,enrolled,monkeypatch):
         host=Host(id=enrolled.id,name='agent',address='x',fingerprint='pinned',baseline=old)
         s.add(host);s.commit()
         before=receipt(host);after=receipt(enrolled)
-        responses=iter([before,after,after])
+        responses=iter([before,after])
         monkeypatch.setattr(ssh,'call',lambda *a,**k:next(responses))
         monkeypatch.setattr(ssh,'deploy',lambda h:{'deployed':True})
         job=SimpleNamespace(payload={'release':maintenance.release_id(host),'automatic':False})

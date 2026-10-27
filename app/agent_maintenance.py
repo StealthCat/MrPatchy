@@ -102,11 +102,15 @@ def update(s,host,job):
     report=ssh.call(host,{'action':'agent-status'},timeout=30)
     old=host.baseline
     host.baseline=expected
-    verified=assess(host,report)
-    if verified['state']!='current':
+    try:
+        verified=assess(host,report)
+        if verified['state']!='current':raise ValueError('Agent update could not be verified; previous baseline retained')
+    except Exception:
         host.baseline=old
-        raise ValueError('Agent update could not be verified; previous baseline retained')
+        raise
+    # Persist the same successful receipt that authorizes the baseline change.
+    verified.update(checked=time.time(),release=release_id(host),report=report)
+    s.get(Setting,'agent-status:'+host.id).value=verified
     s.commit()
-    inspect(s,host,queue=False)
     audit(s,'agent maintenance verified',host.id+' '+release_id(host))
     return {'before':status,'deployment':result,'verification':report,'state':'current','changed':True}
