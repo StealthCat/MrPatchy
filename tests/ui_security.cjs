@@ -18,6 +18,7 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/baseline')&&request.method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
   if(url.pathname.endsWith('/baseline')&&request.method()==='POST'){writes.push(url.pathname);assert.equal(request.postDataJSON().expected,'');assert.equal(request.postDataJSON().inspection_id,'inspection-job');return route.fulfill({json:{id:'baseline-fixture'}});}
   if(url.pathname.endsWith('/comparison'))return route.fulfill({json:{state:'compared',previous_created:Date.now()/1000-3600,note:'Observed changes, not a malware verdict.',changes:[{path:'/etc/cron.d/review-me',kind:'added'}]}});
+  if(url.pathname.endsWith('/yara')){assert.deepEqual(request.postDataJSON(),{bundle_id:'rules-fixture',paths:['/tmp']});writes.push(url.pathname);return route.fulfill({json:{job_id:'yara-job'}});}
   if(url.pathname.endsWith('/vendor-inspections')){assert.deepEqual(request.postDataJSON(),{bundle_id:'vendor-fixture'});writes.push(url.pathname);return route.fulfill({json:{job_id:'vendor-job'}});}
   if(url.pathname.endsWith('/inspections')){
    if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true,custom_paths:['/srv/myapp/config.json']});return route.fulfill({json:{job_id:'inspection-job'}});}
@@ -60,6 +61,10 @@ module.exports=async(page)=>{
   await page.getByRole('button',{name:'Save incident review',exact:true}).click();
   await page.locator('#security-incidents .badge').filter({hasText:'false_positive'}).waitFor();
   assert.equal(writes.at(-1),prefix+'/incidents/incident-fixture');
+  await page.locator('#yara-scan-form [name=bundle_id]').fill('rules-fixture');
+  await page.getByRole('button',{name:'Queue YARA scan',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('YARA scan queued'));
+  assert.equal(writes.at(-1),prefix+'/yara');
   await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);
   await page.locator('#security-inspection-form').waitFor();
   await page.getByText('Trust basis: local package database',{exact:true}).waitFor();

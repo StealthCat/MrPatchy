@@ -401,7 +401,17 @@ def scan_entries(fd,path,report,deadline,gap,depth=0):
     except OSError:gap(path,'Directory inaccessible')
 
 
-def security_scan(paths):
+def validate_yara_rules(rules):
+    if not isinstance(rules,dict) or not isinstance(rules.get('source'),str):raise ValueError('Invalid YARA source packet')
+    source=rules['source']
+    if not 1<=len(source.encode())<=128*1024 or '\x00' in source or re.search(r'\b(?:include|import)\b',source,re.I):raise ValueError('YARA source must be bounded text without include/import words')
+    if hashlib.sha256(source.encode()).hexdigest()!=rules.get('sha256'):raise ValueError('YARA source digest mismatch')
+    issued=rules.get('issued');expires=rules.get('expires');now=time.time()
+    if type(issued) not in (int,float) or type(expires) not in (int,float) or not (0<=issued<=now+300 and now<expires<=issued+30*86400):raise ValueError('YARA rule validity expired, future dated or exceeds 30 days')
+
+
+def security_scan(paths,yara_rules=None):
+    if yara_rules is not None:validate_yara_rules(yara_rules)
     """Bounded read-only scanning, anchored to open directories and file handles."""
     import shutil
     from contextlib import ExitStack
@@ -414,9 +424,10 @@ def security_scan(paths):
         path=Path(value)
         if scan_excluded(path):raise ValueError('Scan root is in an excluded filesystem or quarantine directory')
         roots.append(path)
-    report={'version':2,'started':time.time(),'roots':paths,'engine':'ClamAV','available':False,
+    report={'version':2,'started':time.time(),'roots':paths,'engine':'YARA' if yara_rules is not None else 'ClamAV','available':False,
             'scanned':0,'examined':0,'entries_examined':0,'skipped':0,'findings':[],'gaps':[], 'state':'incomplete',
             'signatures':{'state':'unknown','max_age_seconds':SIGNATURE_MAX_AGE}}
+    if yara_rules is not None:report['signatures']={'state':'recent','database_version':yara_rules['sha256'],'built_at':yara_rules['issued'],'expires':yara_rules['expires'],'basis':'signed_rule_validity_not_vendor_freshness'}
     def gap(path,reason):
         report['skipped']+=1
         if len(report['gaps'])<100:report['gaps'].append(str(path)+': '+reason)
@@ -433,6 +444,11 @@ def security_scan(paths):
             except (OSError,ValueError,subprocess.TimeoutExpired):
                 report['signatures']['state']='unknown'
                 report['gaps'].append('Final scanner health check failed')
+        if yara_rules is not None:
+            try:validate_yara_rules(yara_rules)
+            except ValueError:
+                report['signatures']['state']='stale'
+                report['gaps'].append('YARA rule validity expired during scanning')
         report['finished']=time.time()
         if not report['gaps']:
             report['state']='completed_with_findings' if report['findings'] else 'no_detections'
@@ -443,18 +459,29 @@ def security_scan(paths):
             for root in roots:
                 fd=stack.enter_context(scan_root(root));handles.append((root,fd))
         except OSError as error:raise ValueError('Scan roots and ancestors must be accessible real directories, without symlinks') from error
-        engine=shutil.which('clamscan');report['available']=bool(engine)
+        rules_file=None
+        if yara_rules is not None:
+            rules_file=stack.enter_context(tempfile.TemporaryFile())
+            rules_file.write(yara_rules['source'].encode());rules_file.flush()
+        engine=shutil.which('yara' if yara_rules is not None else 'clamscan');report['available']=bool(engine)
         if not engine:
-            report['gaps'].append('ClamAV is not installed; no malware scanning performed');return finish()
+            report['gaps'].append(report['engine']+' is not installed; no malware scanning performed');return finish()
         try:
             version=subprocess.run([engine,'--version'],capture_output=True,text=True,timeout=15,env={**os.environ,'LC_ALL':'C','TZ':'UTC'})
             if version.returncode:raise ValueError('Engine version check failed')
             version_text=version.stdout[:500]
+            if yara_rules is not None:
+                try:from bridge import bounded
+                except ImportError:from target.bridge import bounded
+                empty=stack.enter_context(tempfile.TemporaryFile())
+                os.lseek(rules_file.fileno(),0,0)
+                _,errors,_=bounded([engine,'-a','10',f'/proc/self/fd/{rules_file.fileno()}',f'/proc/self/fd/{empty.fileno()}'],pass_fds=(rules_file.fileno(),empty.fileno()),timeout=15,limit=64000,return_status=True,memory_limit=512*1024*1024)
+                if errors:raise ValueError('YARA rule compilation produced diagnostics')
             report['engine_version']=version_text
-            report['signatures']=signature_status(version.stdout[:500],time.time())
+            report['signatures']=({'state':'recent','database_version':yara_rules['sha256'],'built_at':yara_rules['issued'],'expires':yara_rules['expires'],'basis':'signed_rule_validity_not_vendor_freshness'} if yara_rules is not None else signature_status(version.stdout[:500],time.time()))
             if report['signatures']['state']!='recent':
                 report['gaps'].append('Signature freshness is '+report['signatures']['state']+'; update databases or verify scanner configuration and system clock')
-        except (OSError,ValueError,subprocess.TimeoutExpired):
+        except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):
             report['gaps'].append('Scanner health check failed');return finish()
         deadline=time.monotonic()+240
         def entries():
@@ -481,7 +508,21 @@ def security_scan(paths):
                         digest.update(chunk)
                         if time.monotonic()>deadline:raise TimeoutError()
                     os.lseek(fd,0,0)
-                    result=subprocess.run([engine,'--stdout','--no-summary','--alert-exceeds-max=yes','--alert-encrypted=yes','--follow-file-symlinks=2','--max-filesize=32M','--max-scansize=64M','--max-recursion=16',f'/proc/self/fd/{fd}'],pass_fds=(fd,),capture_output=True,text=True,timeout=min(30,max(1,deadline-time.monotonic())))
+                    if yara_rules is not None:
+                        try:from bridge import bounded
+                        except ImportError:from target.bridge import bounded
+                        os.lseek(rules_file.fileno(),0,0)
+                        output,errors,status=bounded([engine,'-a','10',f'/proc/self/fd/{rules_file.fileno()}',f'/proc/self/fd/{fd}'],pass_fds=(rules_file.fileno(),fd),timeout=min(15,max(1,deadline-time.monotonic())),limit=64000,return_status=True,memory_limit=512*1024*1024,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','TZ':'UTC'})
+                        if errors:raise ValueError('YARA diagnostics prevented complete inspection')
+                        identifiers=[]
+                        for line in output.splitlines():
+                            match=re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]{0,127}) '+re.escape(f'/proc/self/fd/{fd}'),line)
+                            if not match or len(identifiers)>=100:raise ValueError('Unexpected or excessive YARA matches')
+                            identifiers.append(match[1])
+                        from types import SimpleNamespace
+                        result=SimpleNamespace(returncode=1 if identifiers else 0,stdout='YARA rules: '+', '.join(identifiers))
+                    else:
+                        result=subprocess.run([engine,'--stdout','--no-summary','--alert-exceeds-max=yes','--alert-encrypted=yes','--follow-file-symlinks=2','--max-filesize=32M','--max-scansize=64M','--max-recursion=16',f'/proc/self/fd/{fd}'],pass_fds=(fd,),capture_output=True,text=True,timeout=min(30,max(1,deadline-time.monotonic())))
                     after=os.fstat(fd)
                     with scan_root(directory) as current_dir:
                         current_info=os.fstat(current_dir);original_info=os.fstat(directory_fd)
@@ -496,11 +537,11 @@ def security_scan(paths):
                     if 'Heuristics.Limits.Exceeded' in result.stdout or 'Heuristics.Encrypted' in result.stdout:gap(path,'Scanner inspection limit or encrypted content prevented complete inspection')
                     report['scanned']+=1
                     if result.returncode==1:
-                        report['findings'].append({'path':str(path),'sha256':digest.hexdigest(),'device':before.st_dev,'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:]})
+                        report['findings'].append({'path':str(path),'sha256':digest.hexdigest(),'device':before.st_dev,'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:],**({'rule_ids':identifiers} if yara_rules is not None else {})})
                         if len(report['findings'])>=100:
                             gap(path,'Finding limit reached; scan stopped');return finish()
 
-                except (OSError,ValueError,TimeoutError,subprocess.TimeoutExpired) as error:gap(path,type(error).__name__)
+                except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:gap(path,type(error).__name__)
                 finally:
                     if fd is not None:os.close(fd)
         except TimeoutError:gap('Traversal','Scan budget exhausted; remaining entries not examined')

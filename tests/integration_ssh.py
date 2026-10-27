@@ -165,6 +165,20 @@ def main():
         missing=ssh.call(host,custom_request,timeout=210)
         assert not any(e['path']==custom+'/config' for e in missing['persistence']['entries']),missing
         print('Custom integrity scope passed: declared root, SHA256, no contents and removed file')
+        if not rpm:
+            from target.agent import validate_yara_rules
+            rules={'source':'rule PatchyFixture { strings: $a = "PATCHY_YARA_TEST" condition: $a }', 'issued':time.time()-60,'expires':time.time()+3600}
+            rules['sha256']=ssh.hashlib.sha256(rules['source'].encode()).hexdigest();validate_yara_rules(rules)
+            run('docker','exec',name,'sh','-c',"printf PATCHY_YARA_TEST > "+custom+"/yara-fixture")
+            result=ssh.call(host,{'action':'yara-scan','paths':[custom],'rules':rules},timeout=300)
+            assert result['engine']=='YARA' and result['state']=='completed_with_findings',result
+            assert result['signatures']['database_version']==rules['sha256']
+            assert result['findings'][0]['evidence']=='YARA rules: PatchyFixture',result
+            run('docker','exec',name,'sh','-c',"printf harmless > "+custom+"/yara-fixture")
+            result=ssh.call(host,{'action':'yara-scan','paths':[custom],'rules':rules},timeout=300)
+            assert result['state']=='no_detections' and not result['findings'],result
+            print('Native YARA source scanning passed: match, benign bytes, bound rule hash')
+
         run('docker','exec',name,'rm',startup)
         print('Native integrity checks passed: unchanged, modified, missing, restored, absent package, persistence and no verification scripts')
         key=next(iter(snapshot['inventory']['keys'].values()))

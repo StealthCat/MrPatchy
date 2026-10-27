@@ -58,8 +58,10 @@ import signal
 import subprocess
 import time
 
-def bounded(args,timeout=900,env=None,limit=16_000_000,allowed_codes=(0,),return_status=False):
-    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,start_new_session=True)
+def bounded(args,timeout=900,env=None,limit=16_000_000,allowed_codes=(0,),return_status=False,pass_fds=(),memory_limit=None):
+    import resource
+    def limits():resource.setrlimit(resource.RLIMIT_AS,(memory_limit,memory_limit))
+    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,start_new_session=True,pass_fds=pass_fds,preexec_fn=limits if memory_limit is not None else None)
     output=bytearray();errors=bytearray();selector=selectors.DefaultSelector()
     selector.register(process.stdout,selectors.EVENT_READ,output)
     selector.register(process.stderr,selectors.EVENT_READ,errors)
@@ -385,6 +387,10 @@ def handle(req):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_inspect
         return security_inspect(req.get('packages'),req.get('persistence',True))
+    if action == 'yara-scan':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import security_scan
+        return security_scan(req.get('paths'),req.get('rules'))
     if action == 'security-scan':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_scan

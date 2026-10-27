@@ -66,12 +66,16 @@ def coverage_context(report):
         value=signatures.get(key)
         if type(value) in (int,float) and math.isfinite(value):result['signatures'][key]=value
     if 'database_version' in signatures:result['signatures']['database_version']=str(signatures['database_version'])[:64]
+    proof=report.get('rule_bundle')
+    if isinstance(proof,dict):result['rule_bundle']={k:proof[k] for k in ('bundle_id','rules_sha256','manifest_sha256','keyring_sha256','issued','expires','signers') if k in proof}
     return result
 
 
-def record(s,host_id,job_id,report):
+def record(s,host_id,job_id,report,*,rules_provenance=None):
     # A worker retry must not rewrite an already persisted evidence receipt.
     if s.get(Scan,job_id):return
+    if 'rule_bundle' in report:raise ValueError('Rule provenance must originate on the controller')
+    if rules_provenance is not None:report={**report,'rule_bundle':rules_provenance}
     findings=report.get('findings',[])
     if not isinstance(findings,list) or len(findings)>100:raise ValueError('Invalid scan findings')
     for item in findings:
@@ -150,6 +154,7 @@ def schedule_tick(now=None):
             for setting in s.scalars(select(Setting).where(Setting.key.like('security-policy:%'))):
                 policy=setting.value;host_id=setting.key.split(':',1)[1]
                 if not policy.get('enabled') or not s.get(Host,host_id):continue
+                if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action=='yara-scan',Job.state.in_(['queued','running'])).limit(1)):continue
                 latest=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-scan').order_by(Job.created.desc()).limit(1))
                 if latest and (latest.state in ('queued','running') or now-latest.created<policy['interval_hours']*3600):continue
                 if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state=='recovery_required').limit(1)):continue
@@ -204,6 +209,7 @@ def auto_plan_tick(now=None):
                 Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id).exists()
             rows=list(s.scalars(select(Incident).where(Incident.host_id.in_(enabled),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id).limit(100)))
             for row in rows:
+                if row.evidence.get('scan_context',{}).get('engine')=='YARA':continue
                 if remaining<=0:break
                 pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
                 if pending or not s.get(Host,row.host_id):continue
