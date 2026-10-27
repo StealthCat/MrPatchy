@@ -192,7 +192,7 @@ def auto_plan_tick(now=None):
         with Session() as s:
             cfg=config(s)
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not s.get(Setting,'openai_key'):return
-            recent=list(s.scalars(select(Job).where(Job.action=='security-plan',Job.created>now-3600)))
+            recent=list(s.scalars(select(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600)))
             remaining=10-len(recent)
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
@@ -205,7 +205,7 @@ def auto_plan_tick(now=None):
             rows=list(s.scalars(select(Incident).where(Incident.host_id.in_(enabled),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id).limit(100)))
             for row in rows:
                 if remaining<=0:break
-                pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action=='security-plan',Job.state.in_(['queued','running'])).limit(1))
+                pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
                 if pending or not s.get(Host,row.host_id):continue
                 try:enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True});remaining-=1
                 except ValueError:continue
