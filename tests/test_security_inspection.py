@@ -125,7 +125,11 @@ def test_native_dpkg_read_only_inspection(tmp_path,monkeypatch):
     monkeypatch.setattr(Path,'exists',lambda p: True if str(p)=='/var/lib/dpkg/status' else exists(p))
     def isolated(args,**kwargs):
         option='--root='+str(root) if args[0]=='dpkg' else '--admindir='+str(db)
-        return original([args[0],option,*args[1:]],**kwargs)
+        # Production bridge runs as root; CI must not read /root/.dpkg.cfg.
+        kwargs['env']={**kwargs['env'],'HOME':str(tmp_path)}
+        result=original([args[0],option,*args[1:]],**kwargs)
+        assert not result[1],result
+        return result
     monkeypatch.setattr(bridge,'bounded',isolated)
     result=agent.security_inspect(['patchy-fixture'],False)
     assert result['packages'][0]['state']=='no_reported_differences',result
