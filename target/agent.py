@@ -332,51 +332,143 @@ def main():
             atomic(ROOT/'collector-error.json', {'error':str(e),'at':time.time()})
         time.sleep(max(0.1, 30-(time.monotonic()-started)))
 
+SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine')
+SCAN_MAX_ENTRIES = 10000
+SCAN_MAX_DEPTH = 32
+SIGNATURE_MAX_AGE = 7*86400
+
+
+def signature_status(version, now):
+    """Assess the advertised daily database build time, not vendor authenticity."""
+    from datetime import datetime, timezone
+    result={'state':'unknown','max_age_seconds':SIGNATURE_MAX_AGE,'checked_at':now}
+    match=re.fullmatch(r'ClamAV ([^/\n]+)/([0-9]+)/[A-Za-z]{3} ([A-Za-z]{3}) +([0-9]{1,2}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) ([0-9]{4})',version.strip())
+    if not match:return result
+    engine,revision,month,day,hour,minute,second,year=match.groups()
+    try:
+        month_number=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].index(month)+1
+        built=datetime(int(year),month_number,int(day),int(hour),int(minute),int(second),tzinfo=timezone.utc).timestamp()
+    except (ValueError,OverflowError):return result
+    age=now-built
+    result.update(database_version=revision,built_at=built,age_seconds=age,
+                  state='future' if age < -300 else 'stale' if age>SIGNATURE_MAX_AGE else 'recent')
+    return result
+
+
+def scan_excluded(path):
+    return any(str(path)==item or str(path).startswith(item+'/') for item in SCAN_EXCLUDED)
+
+
+@contextmanager
+def scan_root(path):
+    """Open every ancestor with O_NOFOLLOW; never resolve a parent symlink."""
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:]:
+            child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd);fd=child
+        yield fd
+    finally:os.close(fd)
+
+
+def scan_entries(fd,path,report,deadline,gap,depth=0):
+    # Keep directory handles while descending, with an explicit depth/entry budget.
+    if depth>SCAN_MAX_DEPTH:
+        gap(path,'Directory depth limit reached');return
+    try:
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                report['entries_examined']+=1
+                if report['entries_examined']>SCAN_MAX_ENTRIES or time.monotonic()>deadline:
+                    raise TimeoutError('Traversal budget exhausted')
+                child=path/entry.name
+                if scan_excluded(child):
+                    gap(child,'Directory excluded from scan');continue
+                try:
+                    info=entry.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(info.st_mode):
+                        child_fd=os.open(entry.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+                        try:
+                            opened=os.fstat(child_fd)
+                            if (opened.st_dev,opened.st_ino)!=(info.st_dev,info.st_ino):
+                                gap(child,'Directory changed during traversal');continue
+                            yield from scan_entries(child_fd,child,report,deadline,gap,depth+1)
+                        finally:os.close(child_fd)
+                    else:yield fd,path,entry.name
+                except TimeoutError:raise
+                except OSError:gap(child,'Entry inaccessible or changed during traversal')
+    except TimeoutError:raise
+    except OSError:gap(path,'Directory inaccessible')
+
+
 def security_scan(paths):
-    """Bounded, read-only file scan. Missing engines and skipped files are coverage gaps."""
+    """Bounded read-only scanning, anchored to open directories and file handles."""
     import shutil
+    from contextlib import ExitStack
     if not isinstance(paths,list) or not 1<=len(paths)<=16:
         raise ValueError('Select 1–16 absolute directories')
     roots=[]
     for value in paths:
-        if not isinstance(value,str) or not value.startswith('/') or '..' in Path(value).parts:
+        if not isinstance(value,str) or not value.startswith('/') or value.startswith('//') or '..' in Path(value).parts or len(value)>4096:
             raise ValueError('Invalid scan directory')
         path=Path(value)
-        if path.is_symlink() or not path.is_dir():raise ValueError('Scan roots must be real directories')
+        if scan_excluded(path):raise ValueError('Scan root is in an excluded filesystem or quarantine directory')
         roots.append(path)
-    engine=shutil.which('clamscan')
-    report={'version':1,'started':time.time(),'roots':paths,'engine':'ClamAV','available':bool(engine),
-            'scanned':0,'examined':0,'skipped':0,'findings':[],'gaps':[], 'state':'incomplete'}
-    if not engine:
-        report['gaps']=['ClamAV is not installed; no malware scanning performed'];return report
-    try:
-        version=subprocess.run([engine,'--version'],capture_output=True,text=True,timeout=15)
-        if version.returncode:raise ValueError('Engine version check failed')
-        report['engine_version']=version.stdout[:500]
-    except (OSError,ValueError,subprocess.TimeoutExpired):
-        report['gaps']=['Scanner health check failed'];report['finished']=time.time();return report
-    deadline=time.monotonic()+240
+    report={'version':2,'started':time.time(),'roots':paths,'engine':'ClamAV','available':False,
+            'scanned':0,'examined':0,'entries_examined':0,'skipped':0,'findings':[],'gaps':[], 'state':'incomplete',
+            'signatures':{'state':'unknown','max_age_seconds':SIGNATURE_MAX_AGE}}
     def gap(path,reason):
         report['skipped']+=1
         if len(report['gaps'])<100:report['gaps'].append(str(path)+': '+reason)
-    for root in roots:
-        for directory,dirs,files in os.walk(root,followlinks=False,onerror=lambda e:gap(e.filename,'Directory inaccessible')):
-            if time.monotonic()>deadline:
-                gap(directory,'Scan budget exhausted; remaining directories not examined');report['finished']=time.time();return report
-            allowed=[]
-            for d in dirs:
-                child=Path(directory,d)
-                if child.is_symlink() or str(child) in ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine'):
-                    gap(child,'Directory excluded from scan')
-                else:allowed.append(d)
-            dirs[:]=allowed
-            for name in files:
-                path=Path(directory,name);report['examined']+=1
+    version_text=None
+    def finish():
+        if version_text is not None:
+            try:
+                final_version=subprocess.run([engine,'--version'],capture_output=True,text=True,timeout=15,env={**os.environ,'LC_ALL':'C','TZ':'UTC'})
+                if final_version.returncode:raise ValueError('Engine version check failed')
+                if final_version.stdout[:500]!=version_text:
+                    report['signatures']['state']='changed'
+                    report['engine_version_after']=final_version.stdout[:500]
+                    report['gaps'].append('Scanner/database version changed during scan; per-file signature provenance is uncertain')
+            except (OSError,ValueError,subprocess.TimeoutExpired):
+                report['signatures']['state']='unknown'
+                report['gaps'].append('Final scanner health check failed')
+        report['finished']=time.time()
+        if not report['gaps']:
+            report['state']='completed_with_findings' if report['findings'] else 'no_detections'
+        return report
+    with ExitStack() as stack:
+        handles=[]
+        try:
+            for root in roots:
+                fd=stack.enter_context(scan_root(root));handles.append((root,fd))
+        except OSError as error:raise ValueError('Scan roots and ancestors must be accessible real directories, without symlinks') from error
+        engine=shutil.which('clamscan');report['available']=bool(engine)
+        if not engine:
+            report['gaps'].append('ClamAV is not installed; no malware scanning performed');return finish()
+        try:
+            version=subprocess.run([engine,'--version'],capture_output=True,text=True,timeout=15,env={**os.environ,'LC_ALL':'C','TZ':'UTC'})
+            if version.returncode:raise ValueError('Engine version check failed')
+            version_text=version.stdout[:500]
+            report['engine_version']=version_text
+            report['signatures']=signature_status(version.stdout[:500],time.time())
+            if report['signatures']['state']!='recent':
+                report['gaps'].append('Signature freshness is '+report['signatures']['state']+'; update databases or verify scanner configuration and system clock')
+        except (OSError,ValueError,subprocess.TimeoutExpired):
+            report['gaps'].append('Scanner health check failed');return finish()
+        deadline=time.monotonic()+240
+        def entries():
+            for root,fd in handles:
+                yield from scan_entries(fd,root,report,deadline,gap)
+        iterator=entries()
+        try:
+            for directory_fd,directory,name in iterator:
+                path=directory/name;report['examined']+=1
                 if report['examined']>2000 or time.monotonic()>deadline:
-                    gap(path,'Scan budget exhausted; remaining files not examined');report['finished']=time.time();return report
+                    gap(path,'Scan budget exhausted; remaining files not examined');return finish()
                 fd=None
                 try:
-                    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+                    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory_fd)
                     before=os.fstat(fd)
                     if not stat.S_ISREG(before.st_mode) or before.st_size>32*1024*1024:
                         gap(path,'Not a regular file within the 32 MiB limit');continue
@@ -391,6 +483,13 @@ def security_scan(paths):
                     os.lseek(fd,0,0)
                     result=subprocess.run([engine,'--stdout','--no-summary','--alert-exceeds-max=yes','--alert-encrypted=yes','--follow-file-symlinks=2','--max-filesize=32M','--max-scansize=64M','--max-recursion=16',f'/proc/self/fd/{fd}'],pass_fds=(fd,),capture_output=True,text=True,timeout=min(30,max(1,deadline-time.monotonic())))
                     after=os.fstat(fd)
+                    with scan_root(directory) as current_dir:
+                        current_info=os.fstat(current_dir);original_info=os.fstat(directory_fd)
+                        if (current_info.st_dev,current_info.st_ino)!=(original_info.st_dev,original_info.st_ino):
+                            gap(path,'Parent directory changed during scanning');continue
+                    named=os.stat(name,dir_fd=directory_fd,follow_symlinks=False)
+                    if (named.st_dev,named.st_ino)!=(before.st_dev,before.st_ino):
+                        gap(path,'File path replaced during scanning');continue
                     if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
                         gap(path,'File changed during scanning');continue
                     if result.returncode not in (0,1):gap(path,'Scanner failed');continue
@@ -399,13 +498,13 @@ def security_scan(paths):
                     if result.returncode==1:
                         report['findings'].append({'path':str(path),'sha256':digest.hexdigest(),'device':before.st_dev,'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:]})
                         if len(report['findings'])>=100:
-                            gap(path,'Finding limit reached; scan stopped');report['finished']=time.time();return report
+                            gap(path,'Finding limit reached; scan stopped');return finish()
+
                 except (OSError,ValueError,TimeoutError,subprocess.TimeoutExpired) as error:gap(path,type(error).__name__)
                 finally:
                     if fd is not None:os.close(fd)
-    report['finished']=time.time()
-    report['state']='completed_with_findings' if report['findings'] else 'no_detections'
-    if report['skipped']:report['state']='incomplete'
-    return report
+        except TimeoutError:gap('Traversal','Scan budget exhausted; remaining entries not examined')
+        finally:iterator.close()
+    return finish()
 
 if __name__ == '__main__': main()
