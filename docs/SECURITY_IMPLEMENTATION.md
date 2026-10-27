@@ -1,5 +1,10 @@
 # Security implementation checkpoint
 
+Current response milestone: approved target preservation and separately approved
+controller acquisition are implemented. Destructive quarantine, restoration and
+containment remain unfinished. The sections below retain the scope and limitations
+of each earlier milestone; later sections describe the features added since then.
+
 This branch is an incomplete first stage of the proposed endpoint protection expansion. It must not be represented as complete malware protection or automated incident response.
 
 Implemented: administrator-only, on-demand and interval-scheduled read-only ClamAV scan jobs; a server Security tab with scan policy, coverage, paginated scan history, incidents and response plans. Scan receipts are stored in dedicated tables and are never overwritten by a later scan. Repeated path/hash detections on the same host update an incident while retaining each scan receipt. Historical reports from the first draft remain readable as a legacy latest report; new scans use durable history.
@@ -527,3 +532,70 @@ Fedora and AlmaLinux containers. Service managers remain stubbed. Quarantine mov
 restore approval, durable destructive-action recovery, process/cloud containment
 and trusted remediation executors remain subsequent milestones. No automatic
 security response is enabled by this preservation feature.
+
+## Separately approved controller evidence acquisition
+
+After a target copy is preserved, **Security → Evidence preservation vault → Review
+controller acquisition** offers a separate reason-and-`ACQUIRE` approval. This
+explicitly authorizes transfer of the preserved **file contents**, which can contain
+malware and sensitive information. Preservation and AI-plan approvals do not
+authorize transfer. Acquisitions never send contents to AI or serve them through
+the browser. A completed incident review does not prevent retaining previously
+preserved evidence. Each approval creates a new independently retained acquisition;
+there is one pending acquisition/verification job per host, with no automatic retry.
+
+Approval binds the server's pinned SSH fingerprint, copy ID and complete snapshot
+and expires after five minutes. The worker rechecks these before access. The target
+also checks expiry and exports only the approved completed vault operation, never
+an arbitrary path. It locks the operation, rehashes and checks protected content and
+receipts around export. The original source is not read or modified during export.
+Transfer uses the existing pinned SSH route, including GCP IAP where configured.
+Old helpers reject the action: redeploy through **Finish / verify installation**.
+
+The controller verifies the exact identity, decoded byte count and SHA-256 before
+writing. Files reside at `/data/evidence-archive/<acquisition-id>/` (or the configured
+`DATA_DIR`). Directories must be owned by the service UID and mode 0700; files are
+0600 with one hard link. The data directory must belong to that UID and have no
+group/world write permissions. Ancestors and files are opened without following
+symlinks. Intent is durable before transfer; content is fsynced before completion
+metadata, then independently rehashed through reopened storage. Nothing is executed,
+extracted, automatically deleted or overwritten by a repeated job.
+
+The existing 32 MiB per-file bound applies. Transfer uses one bounded base64 JSON
+response under the SSH protocol's 64 MiB ceiling, not streaming; budget roughly
+256 MiB of transient worker memory for a maximum-size acquisition and allow for
+network overhead. SSH has a 150-second total deadline, target hashing phases and
+controller rehashing each have 30-second read budgets. Approval must still be valid
+when the controller receives the reply. A slow transfer, full disk, malformed reply,
+hash mismatch or interruption leaves uncertainty/partial intent or bytes, never an
+inferred successful acquisition. No incomplete acquisition is automatically retried
+or promoted. Console review is required for partial-file cleanup; a fresh explicit
+approval can acquire another copy without overwriting the earlier attempt.
+
+**Controller evidence archive** shows the last observed state and time, with
+**Verify controller copy** and paginated **Acquisition custody history**. Verification
+reads only controller storage, so it works with an unavailable or blocked target.
+It reports `verified`, `incomplete`, `not_found`, or `unavailable`; an interrupted
+database update can be reconciled as verified only if completed receipt and bytes
+match the approved acquisition. Append-only application observations retain
+approvals, starts, interruptions/rejections and later verification outcomes; a later
+failed check does not erase earlier records. They are not cryptographically immutable
+or protected from controller administrators. Verified is a bounded observation at
+the last check, not a clean-file verdict, continuous monitoring or root attestation.
+
+The new `security_evidence_archives` and
+`security_evidence_archive_observations` metadata tables are included in startup
+initialization and verified offline SQLite/MySQL migration. **Database migration or
+backup does not copy archive bytes.** Back up the private archive directory together
+with controller metadata, secrets and audit records using an independently protected
+destination. Inspect acquired content only through a controlled forensic workflow.
+Automatic retention, encryption beyond the underlying storage, immutable external
+storage, archive download/delete/restore endpoints and destructive quarantine remain
+future work. Rebuild app/workers and redeploy helpers for this milestone.
+
+Tests cover approval separation, host/role boundaries, expiry/pin/evidence changes,
+malformed/corrupted transfers, symlink/hard-link/mode guards, source-independent
+export, interrupted publication and local recovery, custody retention and UI
+confirmation. Native SSH integration exercises export approval and controller
+acquisition on Debian, Ubuntu, Fedora and AlmaLinux containers. These tests still
+stub systemd and do not replace real-VM or production-scale response drills.

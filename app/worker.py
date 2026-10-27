@@ -292,7 +292,7 @@ def execute_locked(job_id):
         try:
             if not h: raise ValueError('Host no longer exists')
             health=s.get(Setting,'agent-status:'+h.id)
-            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan'):
+            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status'):
                 raise ValueError('Agent verification failed; review Agent health before executing remote operations')
             if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
             elif job.action=='release-upgrade':
@@ -369,6 +369,9 @@ def execute_locked(job_id):
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
+            elif job.action in ('evidence-acquire','evidence-archive-status'):
+                from . import evidence_archive
+                job.output=json.dumps(evidence_archive.execute(s,h,job))
             elif job.action in ('evidence-prepare','evidence-preserve','evidence-status'):
                 from . import evidence_vault
                 job.output=json.dumps(evidence_vault.execute(s,h,job))

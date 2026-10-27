@@ -375,13 +375,14 @@ def handle(req):
         if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
-    if action in ('evidence-prepare','evidence-preserve','evidence-status'):
+    if action in ('evidence-prepare','evidence-preserve','evidence-status','evidence-export'):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
-        from agent import evidence_prepare,evidence_preserve
+        from agent import evidence_prepare,evidence_preserve,evidence_export
         if action=='evidence-prepare':return evidence_prepare(req.get('expected'))
-        if action=='evidence-preserve':
+        if action in ('evidence-preserve','evidence-export'):
             expires=req.get('approved_until')
             if type(expires) not in (int,float) or not time.time()<expires<=time.time()+300:raise ValueError('Evidence execution approval expired or invalid')
+        if action=='evidence-export':return evidence_export(req.get('id'),req.get('snapshot'))
         return evidence_preserve(req.get('id'),req.get('snapshot'),status_only=action=='evidence-status')
     if action == 'vendor-inspect':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')

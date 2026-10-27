@@ -1,3 +1,4 @@
+import base64
 import copy
 import hashlib
 import os
@@ -75,6 +76,27 @@ def test_partial_copy_is_retained_and_never_retried(tmp_path,vault,monkeypatch):
     assert (vault/identifier/'partial').read_bytes()==b'known' and path.read_bytes()==b'known'
     assert agent.evidence_preserve(identifier,status_only=True)['state']=='incomplete'
     assert agent.evidence_preserve(identifier,snapshot)['state']=='incomplete'
+
+
+def test_export_only_completed_preservation_and_rechecks_content(tmp_path,vault):
+    source=tmp_path/'source';source.write_bytes(b'private forensic fixture\x00\xff')
+    snapshot=agent.evidence_prepare(detection(source));identifier=str(uuid.uuid4())
+    agent.evidence_preserve(identifier,snapshot)
+    source.unlink() # Acquisition reads the vault, never the original path.
+    result=agent.evidence_export(identifier,snapshot)
+    assert result['snapshot']==snapshot and base64.b64decode(result['content_base64'])==b'private forensic fixture\x00\xff'
+    with pytest.raises(ValueError):agent.evidence_export('../'+'a'*33,snapshot)
+    with pytest.raises(ValueError):agent.evidence_export(identifier,{**snapshot,'path':'/etc/shadow'})
+    (vault/identifier/'content').write_bytes(b'tampered')
+    with pytest.raises(ValueError):agent.evidence_export(identifier,snapshot)
+
+
+def test_incomplete_vault_cannot_be_exported(tmp_path,vault):
+    identifier=str(uuid.uuid4());folder=vault/identifier;folder.mkdir(parents=True,mode=0o700)
+    fd=os.open(folder,os.O_DIRECTORY)
+    try:agent.evidence_write(fd,'receipt.json',{'id':identifier,'state':'incomplete','snapshot':{}})
+    finally:os.close(fd)
+    with pytest.raises(ValueError):agent.evidence_export(identifier,{})
 
 
 def seed():
