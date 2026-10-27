@@ -22,6 +22,8 @@ Disposable CI test package.
 %install
 mkdir -p %{buildroot}/usr/share/patchy-fixture
 printf '%s\\n' '$version' > %{buildroot}/usr/share/patchy-fixture/version
+%verifyscript
+touch /tmp/patchy-verifyscript-executed
 %files
 /usr/share/patchy-fixture/version
 SPEC

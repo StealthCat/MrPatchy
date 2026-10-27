@@ -109,13 +109,38 @@ def test_inspection_api_worker_history_scope_permissions(admin,monkeypatch):
         assert admin.post(path,json={'packages':[]}).status_code==403
 
 
-def test_native_dpkg_read_only_inspection():
+def test_native_dpkg_read_only_inspection(tmp_path,monkeypatch):
+    """Use an isolated database, not the runner's mutable/protected system files."""
+    import hashlib
     import shutil
-    if not shutil.which('dpkg-query') or not Path('/var/lib/dpkg/status').exists():pytest.skip('dpkg unavailable')
-    result=agent.security_inspect(['base-files'],False)
-    assert result['trust_basis']=='target_local_package_database'
-    assert result['packages'][0]['installed_identity'].startswith('installed ')
-    assert result['packages'][0]['state'] in ('differences','no_reported_differences')
+    if not shutil.which('dpkg-query') or not shutil.which('dpkg'):pytest.skip('dpkg unavailable')
+    root=tmp_path/'root';db=root/'var/lib/dpkg';(db/'info').mkdir(parents=True)
+    payload=root/'usr/share/patchy-fixture/value';payload.parent.mkdir(parents=True)
+    payload.write_text('original\n')
+    (db/'status').write_text('Package: patchy-fixture\nStatus: install ok installed\nArchitecture: all\nVersion: 1\nDescription: disposable verification fixture\nMaintainer: Test <test@example.invalid>\n\n')
+    (db/'info/patchy-fixture.list').write_text('/usr/share/patchy-fixture/value\n')
+    (db/'info/patchy-fixture.md5sums').write_text(hashlib.md5(payload.read_bytes()).hexdigest()+'  usr/share/patchy-fixture/value\n')
+    original=bridge.bounded
+    exists=Path.exists
+    monkeypatch.setattr(Path,'exists',lambda p: True if str(p)=='/var/lib/dpkg/status' else exists(p))
+    def isolated(args,**kwargs):
+        option='--root='+str(root) if args[0]=='dpkg' else '--admindir='+str(db)
+        # Production bridge runs as root; CI must not read /root/.dpkg.cfg.
+        kwargs['env']={**kwargs['env'],'HOME':str(tmp_path)}
+        result=original([args[0],option,*args[1:]],**kwargs)
+        assert not result[1],result
+        return result
+    monkeypatch.setattr(bridge,'bounded',isolated)
+    result=agent.security_inspect(['patchy-fixture'],False)
+    assert result['packages'][0]['state']=='no_reported_differences',result
+    payload.write_text('changed\n')
+    result=agent.security_inspect(['patchy-fixture'],False)
+    assert result['packages'][0]['state']=='differences',result
+    assert result['packages'][0]['findings'][0]['path']=='/usr/share/patchy-fixture/value'
+    payload.unlink()
+    result=agent.security_inspect(['patchy-fixture'],False)
+    assert result['packages'][0]['findings'][0]['status']=='missing',result
+
 
 def test_receipts_are_immutable_and_malformed_reports_rejected(admin):
     receipt={'version':1,'trust_basis':'target_local_package_database','state':'collected','packages':[],'persistence':None}

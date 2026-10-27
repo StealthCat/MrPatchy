@@ -62,6 +62,36 @@ def main():
         run('docker','exec',name,'rm','/etc/mrpatchy-recovery-fixture')
         assert ssh.call(host,{'action':'patch-restored','original':original},timeout=120)['original_state_verified']
         rpm=snapshot['inventory'].get('package_manager')=='rpm'
+        # Real package verifiers over the deployed root bridge, on every distro.
+        package='patchy-fixture:noarch' if rpm else 'patchy-fixture'
+        request={'action':'security-inspect','packages':[package],'persistence':False}
+        def inspected():
+            report=ssh.call(host,request,timeout=210)
+            assert report['trust_basis']=='target_local_package_database',report
+            assert report['state']=='collected',report
+            return report['packages'][0]
+        assert inspected()['state']=='no_reported_differences'
+        fixture_path='/usr/share/patchy-fixture/version'
+        run('docker','exec',name,'sh','-c','printf changed > '+fixture_path)
+        changed=inspected()
+        assert changed['state']=='differences' and changed['findings'][0]['path']==fixture_path,changed
+        run('docker','exec',name,'rm',fixture_path)
+        missing=inspected()
+        assert missing['findings'][0]['status']=='missing',missing
+        run('docker','exec',name,'sh','-c',"printf '1\\n' > "+fixture_path)
+        restored=inspected()
+        assert not any('5' in finding['checks'] for finding in restored['findings']),restored
+        assert run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/tmp/patchy-verifyscript-executed').exists())")=='False'
+        absent=ssh.call(host,{'action':'security-inspect','packages':['patchy-package-does-not-exist'],'persistence':False},timeout=210)
+        assert absent['state']=='incomplete' and absent['packages'][0]['gaps'],absent
+        startup='/etc/cron.d/patchy-inventory-fixture'
+        run('docker','exec',name,'sh','-c',"mkdir -p /etc/cron.d; printf '# inventory fixture only\\n' > "+startup)
+        inventory=ssh.call(host,{'action':'security-inspect','packages':[],'persistence':True},timeout=210)
+        entry=next(row for row in inventory['persistence']['entries'] if row['path']==startup)
+        assert entry['kind']=='regular' and len(entry['sha256'])==64,entry
+        assert 'inventory fixture only' not in json.dumps(inventory)
+        run('docker','exec',name,'rm',startup)
+        print('Native integrity checks passed: unchanged, modified, missing, restored, absent package, persistence and no verification scripts')
         key=next(iter(snapshot['inventory']['keys'].values()))
         ssh.call(host,{'action':'key','name':'review-fixture.gpg','data':key})
         source_path='/etc/yum.repos.d/review.repo' if rpm else '/etc/apt/sources.list.d/review.sources'
@@ -115,7 +145,9 @@ def main():
         assert rotated['authorized_keys_sha256'] and ssh.public_key(host.id)!=old_public
         assert ssh.call(host,{'action':'snapshot'})['telemetry']
         try:ssh.call(host,{'action':'snapshot'},key_file=old_key)
-        except ssh.paramiko.AuthenticationException:pass
+        except RuntimeError as error:
+            assert isinstance(error.__cause__,ssh.paramiko.AuthenticationException),error
+            assert 'SSH authentication rejected' in str(error),error
         else:raise AssertionError('Old identity still authorized after rotation')
         assert ssh.public_key(host.id) in ssh.bootstrap(host)
         host.fingerprint='SHA256:'+'a'*43

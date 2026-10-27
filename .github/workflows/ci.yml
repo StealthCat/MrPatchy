@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 concurrency:
   group: mrpatchy-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
@@ -11,6 +12,7 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,7 +21,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
       - run: python -m compileall -q app target
-      - run: bash -n deploy/entrypoint.sh reset-admin-password.sh tests/fixtures/rpm-repository.sh
+      - run: bash -n deploy/entrypoint.sh reset-admin-password.sh tests/fixtures/rpm-repository.sh tests/fixtures/deb-package.sh
       - run: node --check app/static/app.js && node --check app/static/settings.js && node --check app/static/ui.js && node --check app/static/fleet.js && node --check app/static/schedules.js && node --check app/static/server.js
       - run: docker compose --env-file .env.example config --quiet
       - run: docker build -t mrpatchy:test .
@@ -52,6 +54,7 @@ jobs:
           fi
   mysql:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       mysql:
         image: mysql:8.4
@@ -75,7 +78,9 @@ jobs:
       - run: python -m pytest -q
   ssh-enrollment:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         target: ['ubuntu:24.04', 'debian:bookworm-slim']
     steps:
@@ -84,11 +89,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test .
+      - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test tests/fixtures
       - run: python tests/integration_ssh.py
 
   browser:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -104,6 +110,7 @@ jobs:
 
   recovery:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -115,6 +122,7 @@ jobs:
 
   rpm:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

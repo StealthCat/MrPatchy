@@ -53,6 +53,8 @@ services:
     command: [caddy, run, --config, /tls/Caddyfile, --adapter, caddyfile]
     environment:
       HTTPS_PORT: ${HTTPS_PORT:-443}
+      # Recreate Caddy after app bootstrap when the advertised NAT port changes.
+      PUBLIC_URL: ${PUBLIC_URL:-https://localhost}
     ports:
       - target: 80
         published: "${HTTP_PORT:-80}"

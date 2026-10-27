@@ -203,3 +203,36 @@ def test_public_url_default_https_port_is_not_docker_port(configured,monkeypatch
     monkeypatch.setenv('PUBLIC_URL','https://patchy.external.test')
     assert tls.profile_port({'domain':'patchy.external.test'})==443
     assert tls.profile_port({'domain':'other.test'})==8443
+
+
+def test_bootstrap_refreshes_advertised_ports_without_replacing_profiles(configured,monkeypatch):
+    root,calls=configured
+    monkeypatch.setenv('PUBLIC_URL','https://patchy.internal.test')
+    tls.apply({'domain':'patchy.internal.test','mode':'uploaded',**certificate(['patchy.internal.test'])})
+    tls.apply({'domain':'external.test','mode':'internal','enabled':True,'https_port':9443},'external')
+    profiles=tls.read_profiles();calls.clear()
+    before=(root/'Caddyfile').read_text()
+    monkeypatch.setenv('PUBLIC_URL','https://patchy.internal.test:10443')
+    tls.bootstrap()
+    content=(root/'Caddyfile').read_text()
+    assert content!=before and 'redir https://patchy.internal.test:10443{uri}' in content
+    assert 'h3=\\":10443\\"' in content
+    assert 'redir https://external.test:9443{uri}' in content
+    assert tls.read_profiles()==profiles and not calls
+    tls.bootstrap();assert (root/'Caddyfile').read_text()==content
+    monkeypatch.delenv('PUBLIC_URL')
+    monkeypatch.setenv('HTTPS_PORT','11443')
+    tls.bootstrap()
+    assert tls.public_state()['profiles']['internal']['effective_https_port']==11443
+    assert 'redir https://patchy.internal.test:{$HTTPS_PORT:443}{uri}' in (root/'Caddyfile').read_text()
+    assert tls.read_profiles()==profiles
+
+
+def test_bootstrap_upgrades_generated_configuration_without_port_marker(configured):
+    root,calls=configured
+    tls.bootstrap();profiles=tls.read_profiles()
+    path=root/'Caddyfile'
+    path.write_text('\n'.join(line for line in path.read_text().splitlines() if not line.startswith('# mrpatchy-ports:'))+'\n')
+    tls.bootstrap()
+    assert '# mrpatchy-ports:' in path.read_text() and tls.read_profiles()==profiles
+    assert not calls
