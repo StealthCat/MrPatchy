@@ -138,3 +138,41 @@ This milestone covers the existing bounded startup inventory, not arbitrary
 custom file paths. Automatic incident linkage, scheduled persistence inspection,
 trusted-vendor verification and typed remediation remain future work. It requires
 no additional target helper changes beyond the security-inspection protocol.
+
+## Scheduled startup inspection and linked incidents
+
+File integrity now has two independent opt-in settings: recurring startup
+inspection (1–168 hours, default 12) and startup-change incident recording. Both
+are disabled by default. The scheduler shares the manual inspection queue lock,
+allows at most one outstanding inspection, defers when any host job is queued,
+running or requires recovery, and observes the interval after failed attempts as
+well as successful/manual inspections. Enrollment and missing host pins prevent
+scheduling. These read-only jobs do not install packages. A changed or disabled
+policy is rechecked before a scheduled job accesses the target; already-started
+inspections are not remotely cancelled. Approval of a baseline still does not
+automatically enable either setting.
+
+With incident recording enabled, a complete new persistence receipt that differs
+from the approved baseline creates a startup-change incident. Its identity binds
+the host, approved baseline and normalized change set; timestamp-only differences
+are excluded. Repeat detections reuse that incident, reopen it, and retain a link
+to every immutable inspection receipt. Missing baselines, stale observations,
+incomplete inventories and scope mismatch do not create inferred changes.
+There is no retrospective backfill when the option is enabled.
+
+The File integrity tab lists incidents, before/after evidence, linked inspection
+IDs and review history with pagination. Administrators can acknowledge, reopen,
+mark a false positive or record manual resolution with a reason. Reviews require
+the displayed incident revision and the host operation lock. They never alter a
+baseline, suppress future detections, repair a file or certify a clean host.
+Changing a baseline or observing a later matching inventory does not silently
+resolve existing incidents. Incomplete observations cannot resolve them either.
+The existing baseline alert remains an independent coverage/drift signal.
+
+Startup-change incidents are separate from scanner malware detections and are
+not automatically sent to AI. Existing scanner AI proposals continue to use
+scanner evidence. New persistence incident, detection-link and review tables are
+included in startup schema initialization and verified offline migration metadata.
+No new target protocol is required. Remaining work includes AI correlation of
+these evidence types, arbitrary custom baselines, trusted-vendor verification,
+authenticated YARA delivery and approved typed remediation/quarantine.

@@ -1352,3 +1352,61 @@ def persistence_baseline_history(host_id:str,offset:int=0,user=Depends(auth)):
         table=incidents.PersistenceBaseline
         rows=list(s.scalars(select(table).where(table.host_id==host_id).order_by(table.created.desc(),table.id).offset(offset).limit(21)))
         return {'items':[object_dict(row) for row in rows[:20]],'more':len(rows)>20}
+
+
+class PersistenceMonitorInput(BaseModel):
+    enabled:bool=False
+    interval_hours:int=Field(default=12,ge=1,le=168)
+    link_incidents:bool=False
+    expected_revision:str=Field(default='',max_length=36)
+
+@app.get('/api/hosts/{host_id}/security/persistence-monitor')
+def get_persistence_monitor(host_id:str,user=Depends(auth)):
+    from .persistence import monitor_policy
+    with Session() as s:
+        host_or_404(s,host_id)
+        return monitor_policy(s,host_id)
+
+@app.put('/api/hosts/{host_id}/security/persistence-monitor')
+def save_persistence_monitor(host_id:str,body:PersistenceMonitorInput,user=Depends(auth)):
+    from .persistence import monitor_policy
+    with worker.Lock('security-inspection-queue'),Session() as s:
+        host_or_404(s,host_id)
+        if monitor_policy(s,host_id)['revision']!=body.expected_revision:raise HTTPException(409,'Monitoring policy changed; refresh before saving')
+        value={k:v for k,v in body.model_dump().items() if k!='expected_revision'}
+        value['revision']=str(uuid.uuid4())
+        s.merge(Setting(key='persistence-monitor:'+host_id,value=value))
+        audit(s,'persistence monitoring policy',host_id+' '+user['username']+' '+json.dumps(value));s.commit()
+        return value
+
+@app.get('/api/hosts/{host_id}/security/persistence-incidents')
+def startup_incidents(host_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id);table=incidents.PersistenceIncident
+        rows=list(s.scalars(select(table).where(table.host_id==host_id).order_by(table.updated.desc(),table.id).offset(offset).limit(11)))
+        return {'items':[object_dict(row) for row in rows[:10]],'more':len(rows)>10}
+
+@app.get('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/history')
+def startup_incident_history(host_id:str,incident_id:str,offset:int=0,user=Depends(auth)):
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=s.get(incidents.PersistenceIncident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Startup incident not found')
+        detections=list(s.scalars(select(incidents.PersistenceDetection).where(incidents.PersistenceDetection.incident_id==incident_id).order_by(incidents.PersistenceDetection.created.desc(),incidents.PersistenceDetection.inspection_id).offset(offset).limit(21)))
+        reviews=list(s.scalars(select(incidents.PersistenceReview).where(incidents.PersistenceReview.incident_id==incident_id).order_by(incidents.PersistenceReview.created.desc(),incidents.PersistenceReview.id).offset(offset).limit(21)))
+        return {'baseline_id':row.baseline_id,'detections':[object_dict(r) for r in detections[:20]],'reviews':[object_dict(r) for r in reviews[:20]],'more':len(detections)>20 or len(reviews)>20}
+
+@app.put('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}')
+def review_startup_incident(host_id:str,incident_id:str,body:IncidentReview,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        row=s.get(incidents.PersistenceIncident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Startup incident not found')
+        if row.updated!=body.expected_updated:raise HTTPException(409,'Startup incident changed; refresh before reviewing')
+        reason=body.reason.strip()
+        if len(reason)<10:raise ValueError('Provide a review reason of at least 10 characters')
+        if row.state==body.state:raise HTTPException(409,'Incident already has this state')
+        row.state=body.state;row.updated=max(time.time(),row.updated+.000001)
+        s.add(incidents.PersistenceReview(id=str(uuid.uuid4()),incident_id=row.id,actor=user['username'],state=row.state,reason=reason))
+        audit(s,'startup incident reviewed',row.id+' '+user['username']+' '+row.state);s.commit()
+        return object_dict(row)

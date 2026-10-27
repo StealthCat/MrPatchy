@@ -235,6 +235,9 @@ def record_inspection(s,host_id,job_id,report):
         validate(persistence)
     if len(json.dumps(report).encode())>2_000_000:raise ValueError('Inspection receipt exceeds limit')
     s.add(Inspection(id=job_id,host_id=host_id,report=report))
+    s.flush()
+    from .persistence import record_changes
+    record_changes(s,host_id,job_id)
     audit(s,'security inspection receipt',host_id+' '+job_id)
 
 
@@ -247,4 +250,30 @@ class PersistenceBaseline(Base):
     evidence_digest:Mapped[str]=mapped_column(String(64))
     created:Mapped[float]=mapped_column(Double,default=time.time)
     actor:Mapped[str]=mapped_column(String(120))
+    reason:Mapped[str]=mapped_column(Text)
+
+
+class PersistenceIncident(Base):
+    __tablename__='persistence_incidents'
+    id:Mapped[str]=mapped_column(String(64),primary_key=True)
+    host_id:Mapped[str]=mapped_column(String(36),index=True)
+    baseline_id:Mapped[str]=mapped_column(String(36))
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+    updated:Mapped[float]=mapped_column(Double,default=time.time)
+    state:Mapped[str]=mapped_column(String(30),default='open')
+    evidence:Mapped[dict]=mapped_column(JSON)
+
+class PersistenceDetection(Base):
+    __tablename__='persistence_detections'
+    inspection_id:Mapped[str]=mapped_column(String(36),primary_key=True)
+    incident_id:Mapped[str]=mapped_column(String(64),index=True)
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+
+class PersistenceReview(Base):
+    __tablename__='persistence_reviews'
+    id:Mapped[str]=mapped_column(String(36),primary_key=True)
+    incident_id:Mapped[str]=mapped_column(String(64),index=True)
+    created:Mapped[float]=mapped_column(Double,default=time.time)
+    actor:Mapped[str]=mapped_column(String(120))
+    state:Mapped[str]=mapped_column(String(30))
     reason:Mapped[str]=mapped_column(Text)
