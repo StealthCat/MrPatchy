@@ -329,7 +329,7 @@ def execute_locked(job_id):
                 from . import startup_ai,incidents
                 incident=s.get(incidents.PersistenceIncident,job.payload['incident_id'])
                 if not incident or incident.host_id!=h.id:raise ValueError('Startup incident not found')
-                plan=startup_ai.generate(s,incident,job.payload['expected_updated'])
+                plan=startup_ai.generate(s,incident,float(job.payload['expected_updated']))
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='security-plan':
                 from . import incidents

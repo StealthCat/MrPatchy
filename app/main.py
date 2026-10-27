@@ -1551,7 +1551,8 @@ def queue_startup_plan(host_id:str,incident_id:str,body:StartupPlanRequest,user=
             raise HTTPException(409,'An incident plan is already queued or running for this server')
         count=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
         if count>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
-        return {'job_id':worker.enqueue(s,host_id,'startup-plan',{'incident_id':row.id,'expected_updated':row.updated})}
+        # Preserve the exact revision through MySQL's JSON number serialization.
+        return {'job_id':worker.enqueue(s,host_id,'startup-plan',{'incident_id':row.id,'expected_updated':repr(row.updated)})}
 
 @app.post('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/plans/{plan_id}/approve')
 def approve_startup_plan(host_id:str,incident_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(auth)):
