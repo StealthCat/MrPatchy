@@ -93,6 +93,19 @@ def main():
         run('docker','exec',name,'sh','-c',"printf '1\\n' > "+fixture_path)
         restored=inspected()
         assert not any('5' in finding['checks'] for finding in restored['findings']),restored
+        if not rpm:
+            vendor_manifest={'package':'patchy-fixture','version':'1.0-1','architecture':'all',
+                             'entries':[{'path':fixture_path,'sha256':ssh.hashlib.sha256(b'1\n').hexdigest(),'size':2}]}
+            vendor_request={'action':'vendor-inspect','manifest':vendor_manifest}
+            assert ssh.call(host,vendor_request,timeout=150)['state']=='matches_artifact_bytes'
+            run('docker','exec',name,'sh','-c','printf changed > '+fixture_path)
+            assert ssh.call(host,vendor_request,timeout=150)['state']=='differences'
+            run('docker','exec',name,'rm',fixture_path)
+            assert ssh.call(host,vendor_request,timeout=150)['findings'][0]['status']=='missing'
+            run('docker','exec',name,'sh','-c',"printf '1\\n' > "+fixture_path)
+            vendor_manifest['version']='999'
+            rejected=ssh.call(host,vendor_request,timeout=150)
+            assert rejected['state']=='incomplete' and rejected['examined']==0,rejected
         assert run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/tmp/patchy-verifyscript-executed').exists())")=='False'
         absent=ssh.call(host,{'action':'security-inspect','packages':['patchy-package-does-not-exist'],'persistence':False},timeout=210)
         assert absent['state']=='incomplete' and absent['packages'][0]['gaps'],absent

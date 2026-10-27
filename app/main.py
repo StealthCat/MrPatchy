@@ -1252,9 +1252,21 @@ def queue_security_inspection(host_id:str,body:SecurityInspectionInput,user=Depe
     validate_inspection(body.packages,body.persistence)
     with worker.Lock('security-inspection-queue'), Session() as s:
         host_or_404(s,host_id)
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action=='security-inspect',Job.state.in_(['queued','running'])).limit(1)):
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-inspect','vendor-inspect']),Job.state.in_(['queued','running'])).limit(1)):
             raise HTTPException(409,'A security inspection is already queued or running for this server')
         return {'job_id':worker.enqueue(s,host_id,'security-inspect',body.model_dump())}
+
+class VendorInspectionInput(BaseModel):
+    bundle_id:str=Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
+
+@app.post('/api/hosts/{host_id}/security/vendor-inspections')
+def queue_vendor_inspection(host_id:str,body:VendorInspectionInput,user=Depends(auth)):
+    # Authentication and archive parsing happen on the worker, outside HTTP requests.
+    with worker.Lock('security-inspection-queue'),Session() as s:
+        host_or_404(s,host_id)
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-inspect','vendor-inspect']),Job.state.in_(['queued','running'])).limit(1)):
+            raise HTTPException(409,'An inspection is already queued or running for this server')
+        return {'job_id':worker.enqueue(s,host_id,'vendor-inspect',body.model_dump())}
 
 @app.get('/api/hosts/{host_id}/security/inspections')
 def security_inspections(host_id:str,offset:int=0,user=Depends(auth)):

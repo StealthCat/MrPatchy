@@ -214,3 +214,79 @@ This adds bounded AI review across baseline/detection/current-observation eviden
 Trusted-vendor verification, authenticated rule distribution, arbitrary custom
 file baselines and approved typed remediation with race-resistant quarantine and
 restore remain unfinished.
+
+## Offline authenticated Debian artifact comparisons
+
+File integrity now offers **Queue vendor verification** using an administrator-provisioned
+bundle ID. The worker authenticates the bundle on the controller before contacting
+the target. A separate operator-managed OpenPGP keyring verifies `Release.gpg` over
+`Release`; SHA-256 and byte counts bind the selected `Packages` index and exact
+`package.deb`. Package control metadata must agree with the authenticated index.
+The signed Release must be no more than seven days old, no more than five minutes
+in the future, and within `Valid-Until` when supplied. This follows the archive
+trust chain described in [APT authentication](https://manpages.debian.org/testing/apt/apt-secure.8.en.html).
+It authenticates an archive publisher, not the safety of its software.
+
+Provision these files under the controller's shared `DATA_DIR` (normally `/data`):
+
+```
+vendor-packages/trustedkeys.gpg
+vendor-packages/example/Release
+vendor-packages/example/Release.gpg
+vendor-packages/example/Packages
+vendor-packages/example/index-path
+vendor-packages/example/package.deb
+```
+
+`example` is the bundle ID. `index-path` contains the exact relative index path
+listed in Release's SHA256 section, for example `main/binary-amd64/Packages`.
+Supply the uncompressed index and detached signed Release from the same repository
+snapshot and the exact installed-version artifact. Obtain/verify archive signing
+keys independently through the vendor's documented channel; never copy a target's
+keyring or accept a bundle-supplied key as trust. The keyring must be an exported
+OpenPGP public-key file, not a GnuPG keybox. Limit it to approved publishers.
+Bundle files are regular files, final symlinks are rejected, and bundle directories
+must not be symlink aliases. Restrict their write access to trusted administrators;
+app and workers need read access. Provision atomically and do not edit bundles while
+jobs are running. No network retrieval, trust-key import, repository mutation,
+package installation or maintainer script is performed.
+
+Preview authentication inside the controller before queueing:
+
+```bash
+python -m app.vendor example
+```
+
+Use the same files/read permissions on every worker. The Docker image already
+includes GnuPG. Redeploy app/workers and use **Finish / verify installation** to
+install the updated target bridge and collector. Old helpers reject this action.
+Authentication is repeated when the queued job executes; failures appear in the
+job log and prevent SSH. Bundle IDs do not imply authentication success.
+
+Target comparison requires an exact installed Debian package version and
+architecture before and after inspection, using dpkg only for identity. Expected
+SHA-256 values come from regular file bytes in the authenticated artifact, never
+the target's checksum database. File opens reject symlinked ancestors/final paths
+and special files; file/parent identity and change metadata are rechecked around
+hashing. Missing and differing regular files are findings. Races, unsupported paths,
+limits and identity mismatches are incomplete coverage. Legitimate configuration
+changes, diversions and usr-merge aliases can require review or cause gaps.
+
+Limits: one artifact per job, 64 MiB compressed artifact/index, 200 regular files,
+32 MiB per file, 128 MiB unpacked/read bytes, 2,048 archive members, 20-second tar
+iteration checks, 15-second signature subprocess, and two-minute target work budget.
+Gzip/xz/bzip2/uncompressed tar payloads are supported by Python; zstd payloads
+currently fail closed. Symlinks/hardlinks/special archive entries are counted and
+excluded; permissions, ownership, generated files, extra installed files and
+runtime behavior are outside scope. Tar files are streamed without extraction.
+Controller clocks, controller storage/keyring and the target kernel/root remain
+trust assumptions. Byte matches never establish a clean host.
+
+Immutable inspection receipts retain controller-recorded signing fingerprints,
+keyring/Release/index/artifact digests, publisher/suite/codename, exclusions and
+comparison results. They use the existing inspection history and offline database
+migration support. Bundle bytes and trust keys require separate operator backup;
+receipts alone cannot replay authentication. Comparisons do not automatically
+create malware incidents, send AI evidence or repair files. RPM authentication,
+automatic trusted artifact retrieval, arbitrary custom baselines, YARA and typed
+quarantine/restoration remain future milestones.
