@@ -67,3 +67,22 @@ The optional startup inventory covers `/etc/systemd/system`, system cron directo
 Redeploy the collector and bridge with **Finish / verify installation** before using this feature. Older helpers reject the new action rather than returning a fabricated successful report. Unit tests cover native output parsing, safe argument selection, RPM script suppression, deadlines/limits, symlink handling, report immutability, roles and host scoping. A native read-only dpkg check is exercised where available; RPM behavior also requires validation on a real RPM target.
 
 Package verifier references: [dpkg verification format and limitations](https://dyn.manpages.debian.org/trixie/dpkg/dpkg.1.en.html), [RPM verification flags and script suppression](https://rpm.org/docs/4.20.x/man/rpm.8).
+
+## Native security validation
+
+The SSH integration matrix exercises `security-inspect` through the deployed,
+restricted bridge on Ubuntu 24.04, Debian Bookworm, Fedora 44 and AlmaLinux 9.
+Disposable packages provide known checksums so tests can assert unchanged,
+modified, missing and restored content without assuming the runner's own system
+files are unchanged or readable. An RPM verification script writes a sentinel;
+the test asserts that inspection never executes it. An absent package must report
+incomplete coverage, and a startup inventory fixture must return its hash without
+its contents. These containers stub systemd and are not full VM or runtime-malware
+validation. No quarantine or remediation execution is introduced.
+
+The controller's native dpkg test uses an isolated database and filesystem. This
+avoids depending on GitHub's mutable host `base-files` package. SSH key-rotation
+checks assert the wrapped authentication exception and its underlying cause, so
+unrelated connection errors cannot count as successful key revocation. Both SSH
+matrix entries run even if one fails. CI supports manual dispatch and bounds each
+job to 30 minutes; PR and main-push triggers remain enabled.
