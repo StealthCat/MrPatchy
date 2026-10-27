@@ -441,6 +441,12 @@ def execute_locked(job_id):
             job=s.get(Job,job_id)
             h=s.get(Host,job.host_id)
             job.state='recovery_required' if protected else 'failed'
+            if job.action=='evidence-acquire':
+                from . import evidence_archive
+                from .evidence_vault import EvidenceArchive
+                acquisition=s.get(EvidenceArchive,job.payload.get('archive_id'))
+                if acquisition and acquisition.host_id==job.host_id and acquisition.state=='queued':
+                    acquisition.state='rejected';evidence_archive.observe(s,acquisition,'rejected',job.id)
             if job.action in ('release-plan','release-upgrade'):
                 plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
                 if plan:plan.state=job.state;plan.error=str(e)[:1000]

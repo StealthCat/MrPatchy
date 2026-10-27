@@ -136,7 +136,18 @@ def test_queue_approval_is_rechecked_before_access(admin,storage,monkeypatch,cha
     monkeypatch.setattr(worker.ssh,'call',lambda *a,**k:pytest.fail('Invalid approval accessed target'))
     worker.execute(response.json()['job_id'])
     assert not storage.exists()
+    assert row(admin)['state']=='rejected'
     with Session() as s:assert s.get(Job,response.json()['job_id']).state=='failed'
+
+
+def test_failed_agent_gate_records_rejected_acquisition(admin,storage,monkeypatch):
+    snapshot=seed();response=approve(admin,snapshot)
+    with Session() as s:
+        s.add(Setting(key='agent-status:archive-host',value={'state':'blocked'}));s.commit()
+    monkeypatch.setattr(worker.ssh,'call',lambda *a,**k:pytest.fail('Blocked agent must not be accessed'))
+    worker.execute(response.json()['job_id'])
+    assert row(admin)['state']=='rejected' and not storage.exists()
+    assert {r['state'] for r in history(admin,response.json()['archive_id'])}=={'approved','rejected'}
 
 
 @pytest.mark.parametrize('change',['symlink','hardlink','mode','receipt'])

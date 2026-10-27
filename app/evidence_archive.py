@@ -116,6 +116,7 @@ def execute(s,host,job):
         return {'id':row.id,'state':state,'location':'controller'}
     copy=s.get(EvidenceCopy,row.copy_id)
     if row.state!='queued' or time.time()>=row.expires or host.fingerprint!=row.fingerprint or not copy or copy.host_id!=host.id or copy.state!='preserved' or copy.snapshot!=row.snapshot:
+        if row.state=='queued':row.state='rejected'
         observe(s,row,'rejected',job.id);s.commit()
         raise ValueError('Acquisition approval expired or preserved evidence changed')
     # Commit uncertainty before any file creation or remote acquisition. Never
