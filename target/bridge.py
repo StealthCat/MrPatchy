@@ -273,7 +273,10 @@ def protected_patch(req):
         state=json.loads(journal.read_text())
         if state.get('state')=='complete':return state['result']
         raise RuntimeError('Prior patch attempt is incomplete; reconcile target state before retrying')
-    state={'state':'preparing','job':job,'policy':policy,'boot_before':boot_id()}
+    health_before=handle({'action':'health'})
+    if (not isinstance(health_before,dict) or 'failed_units' not in health_before or health_before['failed_units'] not in ('',[]) or health_before.get('collector_active') is not True):
+        raise ValueError('Pre-patch service health must be clean for automatic recovery; no package changes attempted')
+    state={'state':'preparing','job':job,'policy':policy,'boot_before':boot_id(),'health_before':health_before}
     atomic(journal,json.dumps(state).encode())
     if policy.get('rollback'):
         original=req.get('original')
@@ -352,7 +355,10 @@ def handle(req):
         atomic(ROOT/'.ssh/authorized_keys',content.encode(),0o644)
         return {'authorized_keys_sha256':hashlib.sha256(content.encode()).hexdigest()}
     if action == 'health':
-        failed=run(['systemctl','--failed','--no-legend','--plain'],timeout=15)
+        # Health comparisons need the complete list, never run()'s trailing 20 KB.
+        failed,diagnostics=bounded(['systemctl','--failed','--no-legend','--plain','--no-pager'],timeout=15,
+                                   env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'},limit=1_000_000)
+        if diagnostics.strip():raise RuntimeError('Unable to obtain an unambiguous failed-unit health snapshot')
         return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists() or (rpm_backend() and (ROOT/'rpm-reboot-required').is_file() and (ROOT/'rpm-reboot-required').read_text().strip()==boot_id()),
                 'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
     if action == 'verify':

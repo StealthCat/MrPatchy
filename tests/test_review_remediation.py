@@ -159,6 +159,7 @@ def test_patch_original_receipt_is_durable_before_target_mutation(admin,monkeypa
         s.add(Job(id=identifier,host_id='patch',action='patch',payload={'packages':['demo=2'],'_recovery_policy':policy}));s.commit()
     monkeypatch.setattr(worker,'save_inventory',lambda *a:None);monkeypatch.setattr(worker,'validate_patch',lambda *a:None)
     def call(host,req,**kwargs):
+        if req['action']=='health':return {'failed_units':'','collector_active':True}
         if req['action']=='patch-inspect':return original
         if req['action']=='protected-patch':
             with Session() as other:assert other.get(Job,identifier).payload['_patch_original']==original

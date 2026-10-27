@@ -217,6 +217,7 @@ def test_protected_failure_quarantines_host_and_preserves_receipt(admin,monkeypa
     calls=[]
     def call(h,req,**kw):
         calls.append(req['action'])
+        if req['action']=='health':return healthy()
         return {'outcome':'reboot_pending','reboot_scheduled':True,'boot_before':'old'} if req['action']=='protected-patch' else {}
     def fail(*args):raise worker.RecoveryTimeout('target did not return')
     monkeypatch.setattr(worker.ssh,'call',call)
@@ -228,7 +229,7 @@ def test_protected_failure_quarantines_host_and_preserves_receipt(admin,monkeypa
         job=s.get(Job,'protected')
         assert job.state=='recovery_required' and 'boot_before' in job.output
         assert s.get(Job,'later').state=='queued'
-    assert calls==['inventory','protected-patch']
+    assert calls==['inventory','health','protected-patch']
 
 
 def test_rollout_requires_each_hosts_reviewed_policy(admin):

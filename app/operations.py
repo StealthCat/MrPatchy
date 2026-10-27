@@ -106,3 +106,36 @@ def deliver_one():
             alert.notified=time.time();alert.error=''
         except Exception as e:alert.error=type(e).__name__
         s.commit()
+
+
+def failed_unit_names(health):
+    """Normalize legacy systemctl tables and structured lists; reject uncertain data."""
+    import re
+    if not isinstance(health,dict) or type(health.get('collector_active')) is not bool:
+        raise ValueError('Unable to verify collector health')
+    raw=health.get('failed_units')
+    if isinstance(raw,str):rows=raw.splitlines()
+    elif isinstance(raw,list):rows=raw
+    else:raise ValueError('Unable to verify failed-unit health')
+    if len(rows)>4096:raise ValueError('Failed-unit health exceeds limit')
+    names=set()
+    for row in rows:
+        if not isinstance(row,str):raise ValueError('Invalid failed-unit health entry')
+        if not row.strip():continue
+        parts=row.split()
+        if len(parts)!=1 and (len(parts)<4 or parts[2]!='failed'):
+            raise ValueError('Unrecognized failed-unit health output')
+        name=parts[0]
+        if len(name)>255 or not re.fullmatch(r'[A-Za-z0-9_.:@\\-]+\.(?:service|socket|target|device|mount|automount|swap|timer|path|slice|scope)',name):
+            raise ValueError('Invalid failed-unit name')
+        names.add(name)
+    return names
+
+
+def patch_health_comparison(before,after):
+    previous=failed_unit_names(before);current=failed_unit_names(after)
+    if before['collector_active'] is not True:raise ValueError('Collector was inactive before patching')
+    return {'new_failed_units':sorted(current-previous),'pre_existing_failed_units':sorted(previous),
+            'remaining_failed_units':sorted(current),'recovered_units':sorted(previous-current),
+            'collector_active':after['collector_active'],
+            'passed':not (current-previous) and after['collector_active'] is True}

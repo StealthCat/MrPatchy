@@ -334,6 +334,16 @@ def execute_locked(job_id):
                 if job.action=='patch':
                     approved=job.payload.get('_recovery_policy',{'reboot':False,'rollback':False})
                     if approved!=policy:raise ValueError('Recovery policy changed; review and submit this patch again')
+                checked_patch=job.action=='patch' and ('_depends_on' in job.payload or any(policy.values()))
+                health_before=None
+                if checked_patch:
+                    health_before=ssh.call(h,{'action':'health'})
+                    existing=operations.failed_unit_names(health_before)
+                    if not health_before['collector_active']:
+                        raise ValueError('Pre-patch health failed: collector is inactive; no package changes attempted')
+                    if any(policy.values()) and existing:
+                        raise ValueError('Pre-patch health failed: automatic reboot/rollback requires clean service health; no package changes attempted: '+json.dumps(sorted(existing)))
+                    job.payload={**job.payload,'_health_before':health_before};s.commit()
                 protected=job.action=='patch' and any(policy.values())
                 request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
                 if protected:
@@ -354,8 +364,9 @@ def execute_locked(job_id):
                 finally:package_history.operation.reset(token)
                 if job.action=='patch' and '_depends_on' in job.payload:
                     health=ssh.call(h,{'action':'health'})
-                    if health.get('failed_units') or not health.get('collector_active'):raise RuntimeError('Post-patch service health failed; rollout stopped: '+json.dumps(health))
-                    job.output+='\nPost-patch health: '+json.dumps(health)
+                    comparison=operations.patch_health_comparison(health_before,health)
+                    if not comparison['passed']:raise RuntimeError('Post-patch service health regressed; rollout stopped: '+json.dumps(comparison))
+                    job.output+='\nPost-patch health comparison: '+json.dumps(comparison)
             else: raise ValueError('Unsupported job')
             job.output=job.output.encode()[:48000].decode(errors='ignore')
             job.state='failed' if result.get('outcome')=='rolled_back' else 'complete'
