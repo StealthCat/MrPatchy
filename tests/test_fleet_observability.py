@@ -237,3 +237,25 @@ def test_retained_snapshots_backfill_without_duplicate_current_change(admin):
         assert [(r.action,r.before,r.after) for r in rows]==[('baseline',[],['1']),('version_changed',['1'],['2']),('version_changed',['2'],['3'])]
         assert rows[0].source=='retained_inventory' and rows[1].actor==''
         worker.save_inventory(s,h,inventory('3'));s.commit();assert len(list(s.scalars(select(package_history.PackageEvent))))==3
+
+
+def test_historical_scores_match_installed_version_and_transition(admin):
+    now=time.time()
+    with Session() as s:
+        h=host(s);p=pkg(s,h,version='2',candidate='')
+        s.add(update_scores.UpdateScore(id='old-assessment',host_id=h.id,name=p.name,installed='1',candidate='2',state='complete',score=78,completed=now-50,explanation='Saved rationale'))
+        s.add(update_scores.UpdateScore(id='future-assessment',host_id=h.id,name=p.name,installed='2',candidate='3',state='complete',score=95,completed=now-10))
+        s.add(package_history.PackageEvent(host_id=h.id,name=p.name,action='version_changed',before=['1'],after=['2'],observed=now-20,source='inventory'))
+        s.commit()
+    row=admin.get('/api/hosts/host-a/packages').json()[0]
+    assert row['assessment']['score']==78 and row['assessment']['historical']
+    event=admin.get('/api/package-history?host_id=host-a').json()['items'][0]
+    assert event['assessment']['score']==78 and event['assessment']['to_version']=='2'
+    with Session() as s:
+        s.get(Package,'host-a:openssl:amd64').candidate='3';s.commit()
+    row=admin.get('/api/hosts/host-a/packages').json()[0]
+    assert row['installed_assessment']['score']==78
+    assert row['assessment']['state']!='complete' # Different current evidence identity is not substituted.
+    with Session() as s:
+        s.get(update_scores.UpdateScore,'old-assessment').completed=now+1;s.commit()
+    assert admin.get('/api/package-history?host_id=host-a').json()['items'][0]['assessment'] is None

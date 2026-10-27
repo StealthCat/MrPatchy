@@ -6,6 +6,7 @@ module.exports=async(page,capture)=>{
   {name:'curl:amd64',installed:'1',candidate:'2',held:false,dpkg_state:'install ok installed',priority:'normal',due:now+86400,assessment:{state:'error',explanation:'OpenAI HTTP 429; review API quota.'},installation:{state:'unscheduled',at:null,reason:'No matching schedule.'}},
   {name:'held:amd64',installed:'1',candidate:'2',held:true,dpkg_state:'hold ok installed',priority:'normal',installation:{state:'blocked',at:null,reason:'Held by target policy.'}},
   {name:'broken:amd64',installed:'1',candidate:'2',held:false,dpkg_state:'install ok unpacked',priority:'normal'},
+  {name:'installed:amd64',installed:'2',candidate:'',held:false,dpkg_state:'install ok installed',priority:'normal',assessment:{state:'complete',score:67,historical:true,from_version:'1',to_version:'2',explanation:'Saved installation assessment',completed:now}},
   {name:'queued:amd64',installed:'1',candidate:'2',held:false,dpkg_state:'install ok installed',priority:'normal',installation:{state:'waiting',job_id:'queued-job',at:null,reason:'Waiting for a canary job.'}},
  ];
  const packages=route=>route.fulfill({json:fixture});
@@ -16,6 +17,7 @@ module.exports=async(page,capture)=>{
   await page.locator('#clear-updates').click();assert.equal(await page.locator('.pkg-check:checked').count(),0);
   await page.locator('.package-assessment summary').first().click();await page.getByText('Security repository classification merits timely review.').waitFor();
   await page.getByText('Not scheduled',{exact:true}).waitFor();
+  await page.getByText('Historical AI score',{exact:true}).click();await page.getByText('Saved installation assessment',{exact:true}).waitFor();
   await capture('update-importance');
   await page.locator('#select-all-updates').click();await page.locator('#patch-selected').click();await page.locator('#confirm-patch').waitFor();
   assert.match(await page.locator('#confirm-patch').innerText(),/2 selected updates/);
@@ -28,9 +30,9 @@ module.exports=async(page,capture)=>{
  try{
   await page.locator('[data-nav=ai-logs]').click();await page.getByRole('button',{name:'Inspect run',exact:true}).click();await page.getByText('Check API billing and limits.',{exact:true}).waitFor();await capture('ai-run-detail');await page.keyboard.press('Escape');await capture('ai-run-logs');
  }finally{await page.unroute('**/api/investigation-status',status);await page.unroute('**/api/ai/runs?*',runs);await page.unroute('**/api/ai/runs/fixture-run',run);}
- const history=route=>route.fulfill({json:{items:[{id:1,host_id:'fixture-host',name:'openssl:amd64',action:'version_changed',before:['3.0.1'],after:['3.0.2'],state_before:'install ok installed',state_after:'install ok installed',observed:now,recorded:now,source:'job_observation',actor:'operator',job_id:''}],more:false}});
+ const history=route=>route.fulfill({json:{items:[{id:1,host_id:'fixture-host',name:'openssl:amd64',action:'version_changed',before:['3.0.1'],after:['3.0.2'],state_before:'install ok installed',state_after:'install ok installed',observed:now,recorded:now,source:'job_observation',actor:'operator',job_id:'',assessment:{state:'complete',score:72,historical:true,from_version:'3.0.1',to_version:'3.0.2',explanation:'Original patch importance',completed:now}}],more:false}});
  await page.route('**/api/package-history?*',history);
- try{await page.locator('[data-nav=history]').click();await page.getByText('3.0.1 → 3.0.2',{exact:true}).waitFor();await capture('package-history');}finally{await page.unroute('**/api/package-history?*',history);}
+ try{await page.locator('[data-nav=history]').click();await page.getByText('3.0.1 → 3.0.2',{exact:true}).waitFor();await page.getByText('Historical AI score',{exact:true}).click();await page.getByText('Original patch importance',{exact:true}).waitFor();await capture('package-history');}finally{await page.unroute('**/api/package-history?*',history);}
  // User creation and their own password change use real APIs on the disposable DB.
  await page.locator('[data-nav=users]').click();await page.locator('#new-user').click();
  await page.locator('#user-form [name=username]').fill('new-teammate');await page.locator('#user-form [name=password]').fill('temporary-password-long');await page.locator('#user-form [name=confirm_password]').fill('temporary-password-long');await page.getByRole('button',{name:'Save user',exact:true}).click();await page.getByText('new-teammate',{exact:true}).waitFor();await capture('users');

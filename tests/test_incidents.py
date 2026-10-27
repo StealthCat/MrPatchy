@@ -82,3 +82,37 @@ def test_schedule_policy_queues_once_and_preserves_host_scope(admin,recorded):
     with Session() as s:
         rows=list(s.scalars(select(Job).where(Job.action=='security-scan')))
         assert len(rows)==1 and rows[0].host_id=='a' and rows[0].payload['scheduled']
+
+
+def test_automatic_plans_are_opt_in_bounded_and_do_not_retry_same_evidence(admin,recorded):
+    from app.db import Job
+    identifier,report=recorded
+    with Session() as s:
+        s.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture'}));s.commit()
+    incidents.auto_plan_tick()
+    with Session() as s:assert not list(s.scalars(select(Job).where(Job.action=='security-plan')))
+    assert admin.put('/api/hosts/a/security/policy',json={'paths':['/tmp'],'auto_ai_plan':True}).status_code==200
+    incidents.auto_plan_tick();incidents.auto_plan_tick()
+    with Session() as s:
+        jobs=list(s.scalars(select(Job).where(Job.action=='security-plan')))
+        assert len(jobs)==1 and jobs[0].payload['scan_id']=='scan-1' and jobs[0].payload['automatic']
+        jobs[0].state='failed';s.commit()
+    incidents.auto_plan_tick()
+    with Session() as s:
+        assert len(list(s.scalars(select(Job).where(Job.action=='security-plan'))))==1
+        incidents.record(s,'a','new-scan',report);s.commit()
+    incidents.auto_plan_tick()
+    with Session() as s:assert len(list(s.scalars(select(Job).where(Job.action=='security-plan'))))==2
+
+
+def test_automatic_plan_fleet_hourly_limit(admin,recorded):
+    from app.db import Job
+    with Session() as s:
+        s.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture'}))
+        s.add(Setting(key='security-policy:a',value={'auto_ai_plan':True}))
+        for n in range(10):s.add(Job(id='plan-'+str(n),host_id='b',action='security-plan',state='failed'))
+        s.commit()
+    incidents.auto_plan_tick()
+    with Session() as s:assert len(list(s.scalars(select(Job).where(Job.action=='security-plan'))))==10

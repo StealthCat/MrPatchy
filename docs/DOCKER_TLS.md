@@ -75,3 +75,10 @@ Existing saved profiles survive app/Caddy restarts. Changing `DOMAIN` later does
 Validation includes native Caddy adaptation of independent ACME policies and EAB/trust configuration, migration and rollback regressions, browser profile switching/redaction, and CI using real Docker IP/port publication, verified TLS for both names, redirects on 18443, and Caddy restart persistence. Live public/private CA issuance still depends on your DNS, trust, CA policy and network routing.
 
 ![HTTPS profile editor](screenshots/https-profiles.jpg)
+
+
+### Port forwarding and advertised HTTPS ports
+
+Browser-facing port precedence is: an explicit HTTPS profile port, then the port in PUBLIC_URL when its hostname matches the profile domain or an alias, then HTTPS_PORT. An HTTPS PUBLIC_URL without a port means 443, even when Docker publishes 8443. This port is used consistently for HTTP redirects, HTTP/3 advertisements, and profile enrollment URLs. PUBLIC_URL still controls the default enrollment URL and SSO callback origin.
+
+For example, with HTTPS_PORT=8443 and PUBLIC_URL=https://patchy.example.com:10443, configure the external profile for patchy.example.com and forward router TCP 10443 to host TCP 8443. Caddy still listens on container port 443. Forward UDP similarly only if using HTTP/3. Settings do not configure the router or change Docker port bindings. Public ACME HTTP-01/TLS-ALPN-01 validation still requires the CA's standard external ports 80/443; arbitrary browser ports do not change challenge ports.
