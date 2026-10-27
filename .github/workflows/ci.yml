@@ -89,7 +89,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test .
+      - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test tests/fixtures
       - run: python tests/integration_ssh.py
 
   browser:
