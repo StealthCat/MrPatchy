@@ -622,7 +622,7 @@ no group/other write permissions and open without following symlinks. The source
 must be a root-owned regular file, have one hard link, no group/other write or
 special mode bits, and be at most 32 MiB. File capabilities and file access ACLs
 require console response. Extended attributes are hashed (at most 32 names and
-64 KiB of values); values are never uploaded. Plan metadata is capped at 48 KiB.
+64 KiB of values); values are never uploaded. Plan metadata is capped at 48,000 bytes.
 These constraints exclude many user-owned uploads, shared temporary directories,
 home directories and operating-system paths. Do not change ownership or remove
 protections merely to bypass refusal; investigate those cases through a reviewed
@@ -710,6 +710,8 @@ deadline and response/state SSH a five-minute deadline. Filesystem calls blocked
 inside the kernel may outlast userspace read budgets. SSH timeout cannot prove a
 remote process stopped: verify the mutation lock and journals instead of retrying.
 All response approvals are checked again immediately before namespace mutation.
+Expiry checks depend on controller and target clock accuracy; keep both clocks
+synchronized. Remote timestamps are not independently attested.
 
 Tests cover typed approval separation, host/role binding, strict scope/identity and
 permissions, capabilities/attribute policy, changed archives and helper health,

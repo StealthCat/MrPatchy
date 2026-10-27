@@ -122,6 +122,7 @@ def execute(s,host,job):
             archive,copy=acquired(s,host,row.archive_id)
             current=incident(s,host.id,row.incident_id)
             if archive.snapshot!=row.plan['file'] or incidents.digest(current.evidence)!=row.evidence_digest:raise ValueError('Acquired evidence or incident changed before quarantine')
+        if time.time()>=approval.expires:raise ValueError('Response approval expired during preflight; no mutation requested')
         request['approval']={'id':approval.id,'action':action,'expires':approval.expires,'actor':approval.actor,'reason':approval.reason}
         actor=approval.actor;row.state='uncertain';row.hold=True
         event(s,row,'restore_started' if action=='restore' else 'quarantine_started',actor,{'job_id':job.id});s.commit()

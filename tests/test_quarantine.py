@@ -135,6 +135,17 @@ def test_readonly_reconciliation_can_recheck_a_cached_connection_outage(admin,sc
     assert len([r for r in scenario['calls'] if r['action']=='quarantine-apply'])==1
 
 
+def test_approval_expiry_during_local_preflight_never_requests_mutation(admin,scenario,monkeypatch):
+    record=row(admin);response=approve(admin,record);now=time.time()
+    def expired(archive):
+        monkeypatch.setattr(quarantine.time,'time',lambda:now+600)
+        return 'verified'
+    monkeypatch.setattr(quarantine.evidence_archive,'verify',expired)
+    worker.execute(response.json()['job_id'])
+    assert row(admin)['state']=='rejected' and not row(admin)['hold']
+    assert not any(r['action']=='quarantine-apply' for r in scenario['calls'])
+
+
 def test_running_job_after_restart_requires_existing_activity_reconciliation(admin,scenario):
     record=row(admin);response=approve(admin,record)
     with Session() as s:
