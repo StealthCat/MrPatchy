@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import socket
 import time
 from pathlib import Path
 import paramiko
@@ -98,13 +99,18 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
 
 def call(host, payload, timeout=60, key_file=None):
     deadline=time.monotonic()+timeout
+    from . import connections
+    route=connections.for_host(host)
+    tunnel=None
     client=paramiko.SSHClient()
     client.set_missing_host_key_policy(Pinned(host.fingerprint))
     try:
-        client.connect(host.address,port=host.port,username='drpatch',key_filename=str(key_file or key_path(host.id)),
+        if route.transport=='gcp_iap': tunnel=connections.IAPSocket(route,deadline)
+        client.connect(host.address,port=host.port,sock=tunnel,username='drpatch',key_filename=str(key_file or key_path(host.id)),
                        look_for_keys=False,allow_agent=False,timeout=min(15,timeout),auth_timeout=min(15,timeout),banner_timeout=min(15,timeout),
                        disabled_algorithms={'keys':['ssh-rsa'],'pubkeys':['ssh-rsa'],
                                             'kex':['diffie-hellman-group1-sha1','diffie-hellman-group14-sha1','diffie-hellman-group-exchange-sha1']})
+        client.get_transport().set_keepalive(20)
         remaining=deadline-time.monotonic()
         if remaining<=0: raise TimeoutError('SSH connection exceeded its total deadline')
         stdin,stdout,stderr=client.exec_command('mrpatchy',timeout=remaining)
@@ -113,8 +119,19 @@ def call(host, payload, timeout=60, key_file=None):
         except RuntimeError as error:
             action=payload.get('action','request')
             raise type(error)('SSH '+str(action)+' failed: '+str(error)) from error
+    except paramiko.AuthenticationException as error:
+        raise RuntimeError('SSH authentication rejected for drpatch. Re-run this server’s installer from a trusted console and verify its local account/key. On GCP, check OS Login username/UID conflicts and guest-agent key management; IAP does not replace SSH authentication.') from error
+    except (socket.timeout, paramiko.ssh_exception.NoValidConnectionsError, socket.gaierror) as error:
+        hint=('Check the runtime gcloud identity, IAP tunnel permissions, VM state and IAP firewall rule.'
+              if route.transport=='gcp_iap' else 'Check the saved address/port, VM state, routing and SSH firewall. GCP ephemeral external IPs can change after stop/start.')
+        raise RuntimeError('SSH connection unavailable. '+hint+' Verify target operation state before retrying a patch.') from error
+    except paramiko.SSHException as error:
+        if route.transport=='gcp_iap' and 'fingerprint mismatch' not in str(error):
+            raise RuntimeError('SSH over Google IAP failed. Check runtime gcloud authentication, IAP permissions, VM state, firewall and sshd. Verify target operation state before retrying.') from error
+        raise
     finally:
         client.close()
+        if tunnel is not None: tunnel.close()
 
 def deploy(host):
     from target.bridge import UNIT

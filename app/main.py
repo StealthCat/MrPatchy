@@ -19,7 +19,7 @@ from .db import Session, Host, Package, Behavior, Job, Setting, Audit, Inventory
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents
+from . import operations, incidents, connections
 from .identity import User,actor,consume_otp,new_secret
 from .security import unseal
 
@@ -80,7 +80,7 @@ def auth(request:Request):
         path=request.url.path
         self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
         operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/security' in path or '/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/repositories','/snapshot','/security'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
+        sensitive_read=('/security' in path or '/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/connection','/repositories','/snapshot','/security'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
         if not self_service:
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
@@ -202,6 +202,39 @@ def add_host(body:HostInput,user=Depends(auth)):
     if body.fingerprint and not re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}',body.fingerprint): raise HTTPException(400,'Invalid SHA256 SSH fingerprint')
     with Session() as s:
         h=Host(id=str(uuid.uuid4()),**body.model_dump()); ssh.create_key(h.id); s.add(h); audit(s,'add server',h.name); s.commit(); return {'id':h.id}
+class ConnectionUpdate(BaseModel):
+    connection: connections.Connection
+    expected: connections.Connection
+
+@app.get('/api/hosts/{host_id}/connection')
+def get_connection(host_id:str,user=Depends(auth)):
+    with Session() as s:
+        h=host_or_404(s,host_id)
+        return connections.saved(s,h).model_dump()
+
+@app.put('/api/hosts/{host_id}/connection')
+def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True), Session() as s:
+        h=host_or_404(s,host_id)
+        if connections.saved(s,h)!=body.expected:
+            raise HTTPException(409,'Connection changed since this page loaded. Reload before saving.')
+        h.address=body.connection.address; h.port=body.connection.port
+        s.merge(Setting(key='connection:'+host_id,value=body.connection.model_dump(exclude={'address','port'})))
+        if h.state!='enrolling':
+            h.state='offline'; h.error='Connection updated; awaiting a successful check'
+        audit(s,'update server connection',host_id+' '+body.connection.transport)
+        s.commit()
+        return body.connection.model_dump()
+
+@app.post('/api/hosts/{host_id}/connection/test')
+def test_connection(host_id:str,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True), Session() as s:
+        h=host_or_404(s,host_id)
+        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
+        try: ssh.call(h,{'action':'snapshot'},timeout=30)
+        except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
+        return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
+
 class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(auth)):
