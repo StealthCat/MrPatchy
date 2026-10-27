@@ -290,3 +290,67 @@ receipts alone cannot replay authentication. Comparisons do not automatically
 create malware incidents, send AI evidence or repair files. RPM authentication,
 automatic trusted artifact retrieval, arbitrary custom baselines, YARA and typed
 quarantine/restoration remain future milestones.
+
+## Offline authenticated RPM artifact comparisons
+
+The same File integrity vendor-verification form now also accepts RPM bundles.
+Provision `vendor-packages/<bundle-id>/package.rpm` and the separate operator-managed
+`vendor-packages/rpm-trustedkeys.asc` under the shared controller `DATA_DIR`.
+The key file is an ASCII-armored export of independently verified publisher public
+keys. It is outside the individual bundles; target keys and the controller's normal
+RPM key database are never used. A bundle containing both `package.deb` and
+`package.rpm` is rejected. Existing Debian bundle provisioning remains supported.
+`python -m app.vendor <bundle-id>` previews either format without contacting a host.
+
+The controller copies bounded artifact/key snapshots into a private temporary
+workspace. Native `rpmkeys` imports approved keys into a new isolated database,
+then checks the package. Explicit strong header signature success plus SHA-256
+header and compressed-payload digest success are required. A successful process
+exit alone is insufficient: unsigned RPMs can otherwise pass digest checks.
+Unknown/weak signature output fails closed. The initial supported native output
+is RPM 4.x verbose verification (as supplied by the controller Docker image);
+newer package/signature formats unsupported by that runtime require a controller
+upgrade and validation, not verification bypasses. See [RPM verification](https://rpm.org/docs/4.20.x/man/rpmkeys.8)
+and [signed header/file digests](https://rpm.org/docs/4.20.x/manual/signatures_digests.html).
+
+After authentication, a bounded native RPM query returns selected XML-escaped
+metadata. Expected file SHA-256 values come from the authenticated package header,
+never installed target checksums. File digest algorithm 8 (SHA-256) is mandatory;
+missing or weaker file digests are rejected. Regular hardlinked paths with valid
+hashes can be compared separately. Directories, symlinks, special files and ghost
+files are excluded; exclusions are recorded. No payload extraction, installation,
+RPM plugins or package scripts (including `%verifyscript`) execute. The isolated
+database is deleted after the operation; the normal controller database is untouched.
+
+The target's read-only RPM identity query requires the exact name, numeric epoch,
+version-release and architecture before and after descriptor-based hashing.
+An absent epoch is normalized to zero by RPM. Ambiguous multiple installed versions
+produce incomplete coverage; this initial workflow does not resolve install-only
+kernel package selections. File-read races, aliases, missing files and differences
+use the existing comparison semantics and coverage reporting. This compares bytes,
+not permissions, ownership, generated files or runtime behavior; discrepancies
+still require review and matches are not a clean-host verdict.
+
+Limits: 64 MiB artifact, 4 MiB trusted key export, three native subprocesses with
+30-second deadlines and 1 MiB combined output caps each, at most 2,048 file metadata
+entries and 200 comparable regular files, 32 MiB per regular file and 128 MiB total
+expected bytes. Target hashing retains its two-minute/128 MiB work limits.
+Unsafe/duplicate paths, malformed metadata, mismatched arrays and limits fail closed.
+
+Controller-recorded immutable receipts distinguish RPM from Debian trust, retain
+artifact/keyring SHA-256, verified signature **key IDs** (not full fingerprints),
+excluded-entry counts, exact package identity and comparison results. Receipt
+validation rejects mismatched trust formats. Targets cannot originate trusted
+controller provenance. Existing history and database migration support apply.
+The artifact and key files require separate operator backups. Offline signatures
+do not prove current repository membership, support status, or up-to-date key
+revocation information. No repository freshness claim is made for RPM bundles.
+
+Rebuild app/workers and redeploy helpers through **Finish / verify installation**.
+The controller Docker image already includes native RPM tools. RPM integration CI
+exercises signed Fedora/AlmaLinux fixture packages through controller authentication
+and the restricted SSH bridge, including changed/missing files, epoch mismatch,
+unsigned and tampered artifacts, invalid trust, and a sentinel proving the package
+verification script did not run. Systemd remains stubbed in these container tests.
+Automatic trusted artifact retrieval, custom baselines, YARA delivery and typed
+quarantine/restoration remain subsequent milestones.

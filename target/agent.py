@@ -667,7 +667,12 @@ def security_inspect(packages,persistence=True):
 
 def vendor_inspect(manifest):
     """Compare controller-authenticated regular-file bytes; never consult local checksums."""
-    if not isinstance(manifest,dict) or not re.fullmatch('[a-z0-9][a-z0-9+.-]{0,199}',manifest.get('package','')) or not re.fullmatch('[a-z0-9][a-z0-9-]{0,63}',manifest.get('architecture','')):
+    if not isinstance(manifest,dict):raise ValueError('Invalid vendor manifest')
+    manager=manifest.get('package_manager','dpkg')
+    if manager not in ('dpkg','rpm'):raise ValueError('Unsupported vendor package manager')
+    name_pattern='[A-Za-z0-9][A-Za-z0-9+_.-]{0,199}' if manager=='rpm' else '[a-z0-9][a-z0-9+.-]{0,199}'
+    arch_pattern='[A-Za-z0-9_]{1,64}' if manager=='rpm' else '[a-z0-9][a-z0-9-]{0,63}'
+    if not re.fullmatch(name_pattern,manifest.get('package','')) or not re.fullmatch(arch_pattern,manifest.get('architecture','')):
         raise ValueError('Invalid vendor package identity')
     version=manifest.get('version');entries=manifest.get('entries')
     if not isinstance(version,str) or not 1<=len(version)<=200 or any(c.isspace() for c in version):raise ValueError('Invalid vendor version')
@@ -675,17 +680,23 @@ def vendor_inspect(manifest):
     seen=set()
     for entry in entries:
         path=entry.get('path','')
-        if not isinstance(path,str) or not path.startswith('/') or str(Path(path))!=path or '..' in Path(path).parts or path in seen or len(path)>4096 or any(ord(c)<32 for c in path):raise ValueError('Invalid vendor file path')
+        if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or str(Path(path))!=path or '..' in Path(path).parts or path in seen or len(path)>4096 or any(ord(c)<32 for c in path):raise ValueError('Invalid vendor file path')
         if not re.fullmatch('[a-f0-9]{64}',entry.get('sha256','')) or type(entry.get('size')) is not int or not 0<=entry['size']<=32*1024*1024:raise ValueError('Invalid vendor file hash or size')
         seen.add(path)
     try:from bridge import bounded
     except ImportError:from target.bridge import bounded
     result={'state':'incomplete','package':manifest['package'],'version':version,'architecture':manifest['architecture'],
-            'scope_files':len(entries),'examined':0,'findings':[],'gaps':[],'trust_basis':'controller_authenticated_debian_artifact'}
+            'scope_files':len(entries),'examined':0,'findings':[],'gaps':[],'trust_basis':'controller_authenticated_rpm_artifact' if manager=='rpm' else 'controller_authenticated_debian_artifact'}
     deadline=time.monotonic()+120;total=0
     def identity():
-        out,err,code=bounded(['dpkg-query','-W','-f=${db:Status-Status} ${Version} ${Architecture}\n','--',manifest['package']+':'+manifest['architecture']],timeout=10,limit=4000,allowed_codes=(0,1),return_status=True)
-        if code or err or out.strip()!='installed '+version+' '+manifest['architecture']:raise ValueError('Installed package version/architecture does not match authenticated artifact')
+        if manager=='rpm':
+            query=['rpm','-q','--qf','%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n','--',manifest['package']+'.'+manifest['architecture']]
+            expected=manifest['package']+' '+version+' '+manifest['architecture']
+        else:
+            query=['dpkg-query','-W','-f=${db:Status-Status} ${Version} ${Architecture}\n','--',manifest['package']+':'+manifest['architecture']]
+            expected='installed '+version+' '+manifest['architecture']
+        out,err,code=bounded(query,timeout=10,limit=4000,allowed_codes=(0,1),return_status=True)
+        if code or err or out.strip()!=expected:raise ValueError('Installed package version/architecture is ambiguous or does not match authenticated artifact')
     try:
         identity()
         for entry in entries:

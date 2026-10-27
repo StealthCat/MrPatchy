@@ -106,6 +106,44 @@ def main():
             vendor_manifest['version']='999'
             rejected=ssh.call(host,vendor_request,timeout=150)
             assert rejected['state']=='incomplete' and rejected['examined']==0,rejected
+        if rpm:
+            from app import vendor
+            bundle=workspace/'vendor-packages'/'rpm-fixture';bundle.mkdir(parents=True)
+            source='/tmp/fixture-build/RPMS/noarch/patchy-fixture-1.0-1.noarch.rpm'
+            run('docker','cp',name+':'+source,str(bundle/'package.rpm'))
+            run('docker','cp',name+':/etc/pki/rpm-gpg/fixture.asc',str(bundle.parent/'rpm-trustedkeys.asc'))
+            vendor_manifest,proof=vendor.authenticate('rpm-fixture')
+            assert vendor_manifest['version']=='1:1.0-1' and proof['signature_key_ids'],proof
+            assert vendor_manifest['entries']==[{'path':fixture_path,'sha256':ssh.hashlib.sha256(b'1\n').hexdigest(),'size':2}],vendor_manifest
+            vendor_request={'action':'vendor-inspect','manifest':vendor_manifest}
+            receipt=ssh.call(host,vendor_request,timeout=150)
+            vendor.validate_receipt(vendor_manifest,receipt)
+            assert receipt['state']=='matches_artifact_bytes',receipt
+            run('docker','exec',name,'sh','-c','printf changed > '+fixture_path)
+            assert ssh.call(host,vendor_request,timeout=150)['state']=='differences'
+            run('docker','exec',name,'rm',fixture_path)
+            assert ssh.call(host,vendor_request,timeout=150)['findings'][0]['status']=='missing'
+            run('docker','exec',name,'sh','-c',"printf '1\\n' > "+fixture_path)
+            vendor_manifest['version']='2:1.0-1'
+            receipt=ssh.call(host,vendor_request,timeout=150)
+            assert receipt['state']=='incomplete' and receipt['examined']==0,receipt
+            artifact=(bundle/'package.rpm').read_bytes()
+            for invalid in (artifact[:-1]+bytes([artifact[-1]^1]),b'not an rpm'):
+                (bundle/'package.rpm').write_bytes(invalid)
+                try:vendor.authenticate('rpm-fixture')
+                except (ValueError,RuntimeError):pass
+                else:raise AssertionError('Invalid/tampered RPM was authenticated')
+            unsigned='/tmp/fixture-build/RPMS/noarch/patchy-fixture-3.0-1.noarch.rpm'
+            run('docker','cp',name+':'+unsigned,str(bundle/'package.rpm'))
+            try:vendor.authenticate('rpm-fixture')
+            except (ValueError,RuntimeError):pass
+            else:raise AssertionError('Unsigned RPM was authenticated')
+            (bundle/'package.rpm').write_bytes(artifact)
+            (bundle.parent/'rpm-trustedkeys.asc').write_text('not a signing key')
+            try:vendor.authenticate('rpm-fixture')
+            except (ValueError,RuntimeError):pass
+            else:raise AssertionError('An untrusted RPM signing key was accepted')
+            print('Native vendor RPM authentication passed: signed header/payload, exact epoch, bytes, tampering, unsigned and invalid trust')
         assert run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/tmp/patchy-verifyscript-executed').exists())")=='False'
         absent=ssh.call(host,{'action':'security-inspect','packages':['patchy-package-does-not-exist'],'persistence':False},timeout=210)
         assert absent['state']=='incomplete' and absent['packages'][0]['gaps'],absent

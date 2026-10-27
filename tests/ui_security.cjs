@@ -21,7 +21,7 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/vendor-inspections')){assert.deepEqual(request.postDataJSON(),{bundle_id:'vendor-fixture'});writes.push(url.pathname);return route.fulfill({json:{job_id:'vendor-job'}});}
   if(url.pathname.endsWith('/inspections')){
    if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true});return route.fulfill({json:{job_id:'inspection-job'}});}
-   return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}}],more:false}});
+   return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}},{id:'rpm-vendor-job',created:Date.now()/1000,report:{state:'collected',trust_basis:'controller_authenticated_rpm_artifact',packages:[],persistence:null,vendor_verification:{state:'matches_artifact_bytes',package:'Patchy_test',version:'2:1.0-1',architecture:'x86_64',examined:1,findings:[],gaps:[]},vendor_authentication:{signature_key_ids:['0123456789abcdef']}}}],more:false}});
   }
   if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
   if(url.pathname.endsWith('/policy'))return route.fulfill({json:{enabled:false,interval_hours:24,paths:['/tmp']}});
@@ -63,6 +63,8 @@ module.exports=async(page)=>{
   await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);
   await page.locator('#security-inspection-form').waitFor();
   await page.getByText('Trust basis: local package database',{exact:true}).waitFor();
+  await page.getByText('Trust basis: controller-authenticated RPM artifact',{exact:true}).waitFor();
+  await page.locator('#inspection-reports pre').filter({hasText:'Patchy_test'}).first().waitFor();
   await page.locator('#security-inspection-form [name=packages]').fill('openssh-server');
   await page.getByRole('button',{name:'Queue inspection',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Inspection queued'));

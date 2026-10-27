@@ -140,10 +140,10 @@ jobs:
         target: ['fedora:44', 'almalinux:9']
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv
+      - run: sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv rpm
       - run: /usr/bin/python3 -m venv --system-site-packages /tmp/patchy-rpm-test
       - run: /tmp/patchy-rpm-test/bin/pip install -r requirements-dev.txt
-      - run: /tmp/patchy-rpm-test/bin/python -m pytest tests/test_rpm.py tests/test_rpm_native.py -q
+      - run: /tmp/patchy-rpm-test/bin/python -m pytest tests/test_rpm.py tests/test_rpm_native.py tests/test_vendor_rpm.py -q
       - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.rpm -t mrpatchy-ssh-test tests/fixtures
       - run: /tmp/patchy-rpm-test/bin/python tests/integration_ssh.py
 
