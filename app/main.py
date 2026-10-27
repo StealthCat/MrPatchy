@@ -1292,11 +1292,66 @@ def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
 @app.get('/api/hosts/{host_id}/security/quarantines')
 def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
     from .quarantine import Quarantine
+    from . import response_monitor
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
         rows=list(s.scalars(select(Quarantine).where(Quarantine.host_id==host_id).order_by(Quarantine.created.desc(),Quarantine.id).offset(offset).limit(21)))
-        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt)} for r in rows[:20]],'more':len(rows)>20}
+        watches,latest,_=response_monitor.context(s,rows[:20])
+        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt),
+            'monitor':{'watch':watches[r.id],'eligible':response_monitor.eligible(r),'last_check':object_dict(latest[r.id]) if r.id in latest else None}} for r in rows[:20]],'more':len(rows)>20}
+
+class ResponseMonitorPolicy(BaseModel):
+    enabled:bool=False
+    interval_minutes:int=Field(default=15,ge=5,le=1440)
+    pause_on_problem:bool=False
+    expected_revision:str=''
+
+@app.get('/api/hosts/{host_id}/security/response-monitor')
+def response_monitor_policy(host_id:str,user=Depends(auth)):
+    from . import response_monitor
+    with Session() as s:
+        host_or_404(s,host_id);return response_monitor.assessment(s,host_id)
+
+@app.put('/api/hosts/{host_id}/security/response-monitor')
+def save_response_monitor_policy(host_id:str,body:ResponseMonitorPolicy,user=Depends(auth)):
+    from . import response_monitor
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host_or_404(s,host_id)
+        if response_monitor.policy(s,host_id)['revision']!=body.expected_revision:raise HTTPException(409,'Response monitoring policy changed; refresh before saving')
+        cfg={**body.model_dump(exclude={'expected_revision'}),'revision':str(uuid.uuid4())}
+        s.merge(Setting(key='response-monitor:'+host_id,value=cfg))
+        audit(s,'response monitoring policy',host_id+' '+user['username']+' '+json.dumps(cfg));s.commit()
+        return cfg
+
+class ResponseWatchReview(BaseModel):
+    enabled:bool
+    expected_revision:str=''
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.put('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/watch')
+def review_response_watch(host_id:str,quarantine_id:str,body:ResponseWatchReview,user=Depends(auth)):
+    from . import response_monitor,quarantine
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        row=response_row(s,host_id,quarantine_id)
+        if row.state in ('prepared','rejected') or (body.enabled and not response_monitor.eligible(row)):raise HTTPException(409,'Only retained or uncertain responses can be watched')
+        if incidents.digest(row.plan)!=body.plan_digest or response_monitor.watch(s,row)['revision']!=body.expected_revision:raise HTTPException(409,'Response evidence or watch changed; refresh before reviewing')
+        reason=body.reason.strip()
+        if len(reason)<10:raise ValueError('Provide a meaningful watch review reason')
+        cfg={'enabled':body.enabled,'revision':str(uuid.uuid4())}
+        s.merge(Setting(key='response-watch:'+row.id,value=cfg))
+        quarantine.event(s,row,'watch_reviewed',user['username'],{**cfg,'reason':reason});s.commit()
+        return cfg
+
+@app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/checks')
+def response_check_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+    from .response_monitor import Check
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=response_row(s,host_id,quarantine_id)
+        checks=list(s.scalars(select(Check).where(Check.host_id==host_id,Check.quarantine_id==row.id).order_by(Check.created.desc(),Check.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r) for r in checks[:20]],'more':len(checks)>20}
 
 @app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/history')
 def quarantine_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):

@@ -723,3 +723,91 @@ worker, independent helper verification, evidence prerequisite, hold, rename,
 conflict detection, permissions, original restoration and refusal of a file owned
 by an unprivileged user. Systemd remains stubbed; real-VM, SELinux enforcement,
 production-scale and broader failure-injection response drills remain necessary.
+
+## Recurring verification of retained responses
+
+Server **Security → Retained response monitoring** adds two separate opt-ins:
+automatic verification (off by default) and pausing other server changes when a
+check reports a problem (also off by default). The server interval is 5–1,440 minutes,
+default 15. Each interval checks **one** retained response, starting with the least
+recently attempted. The estimated full rotation therefore scales with the number
+of watched responses; this is periodic verification, not continuous detection.
+No contents are sent to AI and no paid AI request is triggered.
+
+Retained, uncertain, missing, manually console-reviewed and not-moved responses can
+be watched. A verified completed restoration leaves this scope; use File integrity
+and an approved baseline to monitor the restored file afterward. A not-moved result
+is a monitoring problem because the requested quarantine is not in place, not proof
+that the original file is safe. Reviewed responses are included by default when the
+server policy is enabled. **Review automatic watch** can retire or re-enable a
+watch with a reason and revision-bound review. Retirement acknowledges that watch's
+monitoring alerts after review; it does not delete evidence, resolve incidents or
+release an existing server hold. Reviews remain in File response history.
+
+The new read-only helper action checks the existing intent journals, protected
+ancestors, retained inode/hash/metadata and occupancy of the original path. It
+classifies verified retention, an occupied original path, unverifiable held bytes,
+changed parents, missing evidence, uncertainty, not-quarantined state or completed
+restoration. Source-path occupancy is not a malware verdict: a legitimate deployment
+may have recreated it. Missing/unreadable/changed evidence is never reported as
+verified. The action creates no directories or journals, moves no files, changes no
+permissions and never resumes a quarantine or restore attempt.
+
+The scheduler admits at most one pending response job per host, respects the server
+interval after failed/skipped attempts and selects the oldest attempted observation.
+Running jobs, recovery-required Activity jobs and normal queued work defer checks;
+the response that owns an existing hold can still be checked despite ordinary work
+deferred by that hold. Another response's hold defers unrelated checks. Scheduling
+shares a distributed queue lock and the worker still claims the host lock. Retired
+watches are excluded before the 500-active-response scope limit; reaching that limit
+is an explicit coverage alert, never a complete-coverage claim.
+
+Queued jobs bind policy/watch revisions, the prepared plan digest and pinned host.
+Disabling/changing policy, retiring a watch, completing recovery or changing the
+bound scope prevents stale queued reads. Before importing helper code, every check
+requires fresh independent current-agent verification. Cached connection failures
+can be rechecked through that independent path. A disabled or retired watch cannot
+cancel a read already in progress; its observation may still be retained. Policy,
+watch, host and scope are rechecked after the remote round trip, ending MySQL read
+snapshots before deciding whether a new hold is authorized. Superseded policy/watch
+settings cannot create a new pause, and an observation for changed response scope
+cannot overwrite that scope's operational state.
+
+Problem observations open the existing fleet alert **response integrity**. Missing
+timely positive verification opens **response verification** when monitoring is
+enabled. Coverage uses an estimated full rotation plus one server interval of slack;
+unavailable or future-dated observations cannot count as fresh positive coverage.
+Busy servers and helper failures can therefore produce coverage alerts. Turning the
+server policy off does not silently resolve already-recorded integrity problems.
+A newer manual positive file-response verification or verified restoration can
+supersede an old problem, while its original failed receipt remains in history.
+
+With the separate pause option enabled, a reported problem can create a durable
+server hold, including connection/helper failure or missing evidence. With it off,
+monitoring records the problem and alerts without introducing a new hold. Existing
+holds remain intact until reviewed through the normal workflow; turning the policy
+off or retiring a watch does not unpause work. Successful retained-file verification
+does not automatically accept quarantine's service impact. A verified completion of
+an already approved restoration can reconcile its hold. No new quarantine,
+restoration, process termination or cloud action is automatically authorized.
+
+**Verification check history** provides paginated, append-only receipts in
+`security_response_checks`. Compact records bind the plan digest, observed facts,
+receipt digest, compact receipt, policy revision and hold decision without duplicating
+the entire plan or including contents/exception strings. Skipped jobs are explicitly
+recorded and do not refresh positive coverage. Lost workers leave no invented final
+receipt: the pending Activity job and overdue coverage remain visible until normal
+Activity reconciliation. Receipts and watch reviews are not cryptographically
+immutable and have no automatic deletion policy; plan storage and protected backups.
+The new table participates in startup schema initialization and verified offline
+SQLite/MySQL migration. Retained bytes still require separate backups.
+
+The existing per-file/phase budgets remain; monitoring SSH has a three-minute total
+deadline plus the separate independent health check. Kernel-blocked filesystem I/O
+may outlast a userspace budget. Clocks must be synchronized; no remote-root, kernel
+or trusted-clock attestation is added. Rebuild app/workers and redeploy the current
+helpers before enabling monitoring. Container SSH tests cover the scheduled worker,
+retained verification, source-path occupancy, independent pause policy and completed
+restoration on Debian, Ubuntu, Fedora and AlmaLinux; systemd is stubbed. Real-VM,
+SELinux enforcement, performance and broader failure-injection validation remain
+future work, along with trusted vendor repair and process/cloud containment.

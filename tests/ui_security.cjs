@@ -1,7 +1,7 @@
 const assert=require('assert/strict');
 module.exports=async(page)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
- const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false;
+ const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -21,7 +21,10 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/evidence-copies'))return route.fulfill({json:{items:[{id:'copy-fixture',state:copyState,created:Date.now()/1000,snapshot:{path:'/tmp/security-fixture',sha256:'b'.repeat(64)},snapshot_digest:'e'.repeat(64)}],more:false}});
   if(url.pathname.endsWith('/evidence-copies/copy-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'PRESERVE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));copyState='preserved';writes.push(url.pathname);return route.fulfill({json:{job_id:'copy-job'}});}
   if(url.pathname.endsWith('/evidence-copies/copy-fixture/acquire')){assert.equal(request.postDataJSON().confirmation,'ACQUIRE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));writes.push(url.pathname);return route.fulfill({json:{job_id:'acquire-job'}});}
-  if(url.pathname.endsWith('/quarantines'))return route.fulfill({json:{items:[{id:'response-fixture',state:responseState,hold:responseHold,created:Date.now()/1000,observed:Date.now()/1000,plan:{file:{path:'/srv/security-fixture'}},plan_digest:'f'.repeat(64),receipt_digest:'a'.repeat(64),receipt:{restore_ready:responseState==='quarantined',restore_attempted:responseState==='restored'}}],more:false}});
+  if(url.pathname.endsWith('/response-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);const body=request.postDataJSON();assert.equal(body.enabled,true);assert.equal(body.interval_minutes,5);assert.equal(body.pause_on_problem,true);responsePolicy={...body,revision:'policy-version'};return route.fulfill({json:responsePolicy});}return route.fulfill({json:{policy:responsePolicy,watched:1,problem_count:0,overdue_count:0,rotation_minutes:responsePolicy.interval_minutes,scope_limited:false,pending:null}});}
+  if(url.pathname.endsWith('/quarantines/response-fixture/watch')){const body=request.postDataJSON();assert.equal(body.enabled,false);assert.equal(body.plan_digest,'f'.repeat(64));watchEnabled=false;writes.push(url.pathname);return route.fulfill({json:{enabled:false,revision:'watch-version'}});}
+  if(url.pathname.endsWith('/quarantines/response-fixture/checks'))return route.fulfill({json:{items:[{state:'verified',report:{facts:{held_verified:true}}}],more:false}});
+  if(url.pathname.endsWith('/quarantines'))return route.fulfill({json:{items:[{id:'response-fixture',state:responseState,hold:responseHold,created:Date.now()/1000,observed:Date.now()/1000,plan:{file:{path:'/srv/security-fixture'}},plan_digest:'f'.repeat(64),receipt_digest:'a'.repeat(64),receipt:{restore_ready:responseState==='quarantined',restore_attempted:responseState==='restored'},monitor:{watch:{enabled:watchEnabled,revision:watchEnabled?'':'watch-version'},eligible:responseState==='quarantined',last_check:{state:'verified',created:Date.now()/1000}}}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/history'))return route.fulfill({json:{events:[{kind:'quarantine_approved',actor:'admin'}],approvals:[{action:'quarantine',actor:'admin'}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'QUARANTINE');assert.equal(request.postDataJSON().plan_digest,'f'.repeat(64));responseState='quarantined';responseHold=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'quarantine-job'}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/restore')){assert.equal(request.postDataJSON().confirmation,'RESTORE');assert.equal(request.postDataJSON().receipt_digest,'a'.repeat(64));responseState='restored';responseHold=false;writes.push(url.pathname);return route.fulfill({json:{job_id:'restore-job'}});}
@@ -96,6 +99,12 @@ module.exports=async(page)=>{
   await page.getByRole('button',{name:'Prepare file quarantine',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Read-only quarantine preparation queued'));
   assert.equal(writes.at(-1),prefix+'/evidence-archives/archive-fixture/quarantine');
+  await page.locator('#response-monitor-policy [name=enabled]').check();
+  await page.locator('#response-monitor-policy [name=interval_minutes]').fill('5');
+  await page.locator('#response-monitor-policy [name=pause_on_problem]').check();
+  await page.getByRole('button',{name:'Save response monitoring',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Response monitoring saved'));
+  assert.equal(writes.at(-1),prefix+'/response-monitor');
   const beforeQuarantine=writes.length;await page.getByRole('button',{name:'Review quarantine approval',exact:true}).click();assert.equal(writes.length,beforeQuarantine);
   await page.locator('#response-approval [name=reason]').fill('Reviewed this file and the affected service.');
   await page.locator('#response-approval [name=confirmation]').fill('QUARANTINE');
@@ -110,6 +119,13 @@ module.exports=async(page)=>{
   await page.locator('#response-release [name=typed]').fill('KEEP QUARANTINED');
   await page.getByRole('button',{name:'Release reviewed server pause',exact:true}).click();
   await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/release');
+  const beforeWatch=writes.length;await page.getByRole('button',{name:'Review automatic watch',exact:true}).click();assert.equal(writes.length,beforeWatch);
+  await page.locator('#response-watch-review [name=enabled]').uncheck();
+  await page.locator('#response-watch-review [name=reason]').fill('Reviewed and retired this retained response watch.');
+  await page.getByRole('button',{name:'Save watch review',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/watch');
+  await page.getByRole('button',{name:'Verification check history',exact:true}).click();
+  await page.locator('#response-check-history').filter({hasText:'held_verified'}).waitFor();await page.locator('#close-modal').click();
   const beforeRestore=writes.length;await page.getByRole('button',{name:'Review restoration approval',exact:true}).click();assert.equal(writes.length,beforeRestore);
   await page.locator('#response-approval [name=reason]').fill('Reviewed the original and approved recovery.');
   await page.locator('#response-approval [name=confirmation]').fill('RESTORE');

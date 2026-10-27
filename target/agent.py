@@ -1111,20 +1111,25 @@ def response_present(directory,name):
     except FileNotFoundError:return False
 
 
-def response_status_open(directory,identifier,plan):
+def response_status_open(directory,identifier,plan,facts=None):
+    facts={} if facts is None else facts
     result={'id':identifier,'plan':plan,'state':'uncertain','restore_ready':False,'restore_attempted':False}
     intent=response_json(directory,'intent.json')
     if intent.get('id')!=identifier or intent.get('plan')!=plan:raise ValueError('Response ID is bound to different approval evidence')
+    facts['journal_verified']=True
     restored=response_present(directory,'restore-intent.json');result['restore_attempted']=restored
     if restored:
         review=response_json(directory,'restore-intent.json')
         if review.get('id')!=identifier or review.get('plan')!=plan:raise ValueError('Restoration intent does not bind approved evidence')
     path=Path(plan['file']['path']);mode=stat.S_IMODE(plan['file']['identity']['mode'])
     with response_parent(path.parent) as (parent,chain):
+        facts['parents_match']=chain==plan['ancestors']
         if chain!=plan['ancestors']:return result
         held=response_present(directory,'held');source=response_present(parent,path.name)
+        facts.update(held_present=held,source_present=source)
         if held:
             fd=response_file(directory,'held',plan,(0o600,mode))
+            facts['held_verified']=True
             try:held_mode=stat.S_IMODE(os.fstat(fd).st_mode)
             finally:os.close(fd)
             if not source:
@@ -1134,6 +1139,26 @@ def response_status_open(directory,identifier,plan):
             fd=response_file(parent,path.name,plan,(mode,));os.close(fd)
             result['state']='restored' if restored else 'not_moved'
     return result
+
+
+def response_audit(identifier,plan):
+    """Read-only classified observation; no journal creation or response replay."""
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid response ID')
+    import fcntl
+    facts={'journal_verified':False,'parents_match':None,'held_present':None,'source_present':None,'held_verified':False}
+    receipt=None;state='unavailable'
+    try:
+        with evidence_directory(RESPONSE_ROOT/identifier) as directory:
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            receipt=response_status_open(directory,identifier,plan,facts)
+            state={'quarantined':'verified','restored':'restored','not_moved':'not_quarantined','uncertain':'uncertain'}[receipt['state']]
+            if facts['parents_match'] is False:state='parent_changed'
+            elif facts['held_verified'] and facts['source_present']:state='path_occupied'
+    except FileNotFoundError:state='missing'
+    except (ValueError,OSError,KeyError,TypeError):
+        state='held_unverified' if facts['held_present'] is True else 'unavailable'
+    return {'version':1,'id':identifier,'plan_digest':hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'state':state,'receipt':receipt,'facts':facts}
 
 
 def response_status(identifier,plan):

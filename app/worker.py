@@ -373,6 +373,9 @@ def execute_locked(job_id):
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
+            elif job.action=='quarantine-audit':
+                from . import response_monitor
+                result=response_monitor.execute(s,h,job);job.output=json.dumps(result)
             elif job.action in quarantine.ACTIONS:
                 result=quarantine.execute(s,h,job);job.output=json.dumps(result)
             elif job.action in ('evidence-acquire','evidence-archive-status'):
@@ -565,7 +568,8 @@ def loop():
                 if is_leader and now-last_schedule>=30:
                     scheduling.tick(now); incidents.schedule_tick(now);
                     from .persistence import schedule_tick as persistence_tick
-                    persistence_tick(now); incidents.auto_plan_tick(now); last_schedule=now
+                    from .response_monitor import schedule_tick as response_tick
+                    persistence_tick(now); incidents.auto_plan_tick(now);response_tick(now); last_schedule=now
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:

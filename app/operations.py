@@ -73,6 +73,12 @@ def collect_alerts():
                 if alert.state=='resolved':alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
         from .scheduling import PatchRun
         for host in s.scalars(select(Host)):
+            from . import response_monitor
+            monitored=response_monitor.assessment(s,host.id)
+            if monitored['problem_count']:
+                record(host,'response integrity',str(monitored['problem_count'])+' retained response(s) have unresolved verification problems. Review Security: '+', '.join(r['id']+' '+r['state'] for r in monitored['problems']))
+            if monitored['policy']['enabled'] and (monitored['overdue_count'] or monitored['scope_limited']):
+                record(host,'response verification',str(monitored['overdue_count'])+' retained response(s) lack timely positive verification. '+('The 500-response monitoring scope limit was reached. ' if monitored['scope_limited'] else '')+'Review Security monitoring, pending jobs and agent health; missing verification is not a clean-host verdict.')
             from .quarantine import Quarantine
             response=s.scalar(select(Quarantine.id).where(Quarantine.host_id==host.id,Quarantine.hold==True).limit(1))
             if response:record(host,'file response hold','Server changes paused for reviewed file response '+response+'. Reconcile quarantine state or record reviewed console recovery in Security.')

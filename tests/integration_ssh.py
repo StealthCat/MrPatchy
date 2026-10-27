@@ -222,7 +222,18 @@ def main():
             assert q_record.state=='quarantined' and q_record.hold and operations.host_quarantined(session,host.id)
         assert run('docker','exec',name,'stat','-c','%a','/var/lib/mrpatchy-quarantine/'+q_id+'/held')=='600'
         run('docker','exec',name,'test','!','-e',source)
+        from app import response_monitor
+        from app.db import Setting
+        with Session() as session:
+            session.add(Setting(key='response-monitor:'+host.id,value={'enabled':True,'interval_minutes':5,'pause_on_problem':True,'revision':str(uuid.uuid4())}));session.commit()
+        def audit_retained():
+            response_monitor.schedule_tick(time.time()+601)
+            with Session() as session:check_job=session.query(Job).filter_by(action='quarantine-audit',state='queued').one().id
+            worker.execute(check_job)
+            with Session() as session:return session.get(response_monitor.Check,check_job).state
+        assert audit_retained()=='verified'
         run('docker','exec',name,'sh','-c',"printf concurrent-deployment > "+source)
+        assert audit_retained()=='path_occupied'
         worker.execute(queue_response('quarantine-status'))
         with Session() as session:
             q_record=session.get(quarantine.Quarantine,q_id)
@@ -238,6 +249,11 @@ def main():
         assert run('docker','exec',name,'cat',source)=='evidence-fixture'
         assert run('docker','exec',name,'stat','-c','%a',source)=='755'
         assert ssh.call(host,{'action':'quarantine-status','id':q_id,'plan':q_record.plan},timeout=90)['state']=='restored'
+        assert ssh.call(host,{'action':'quarantine-audit','id':q_id,'plan':q_record.plan},timeout=90)['state']=='restored'
+        with Session() as session:
+            assert session.query(response_monitor.Check).count()==2
+            assert response_monitor.assessment(session,host.id)['watched']==0
+        print('Retained response monitoring passed: real scheduled worker checks, retained hash, occupied source alert, separate pause policy and completed-restoration scope')
         print('Reviewed quarantine passed: verified independent archive, durable hold, root-only move, destination conflict, no overwrite and exact original restoration')
         owned=custom+'/user-owned-response'
         run('docker','exec',name,'sh','-c',"printf owner-fixture > "+owned+"; chmod 644 "+owned)
