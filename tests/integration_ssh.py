@@ -169,8 +169,8 @@ def main():
         run('docker','exec',name,'sh','-c',"printf evidence-fixture > "+source)
         identity=json.loads(run('docker','exec',name,'python3','-c',"import os,json; s=os.stat('"+source+"'); print(json.dumps({'device':s.st_dev,'inode':s.st_ino}))"))
         expected={**identity,'path':source,'sha256':ssh.hashlib.sha256(b'evidence-fixture').hexdigest()}
-        snapshot=ssh.call(host,{'action':'evidence-prepare','expected':expected},timeout=60)
-        operation=str(uuid.uuid4());request={'action':'evidence-preserve','id':operation,'snapshot':snapshot,'approved_until':time.time()+240}
+        vault_snapshot=ssh.call(host,{'action':'evidence-prepare','expected':expected},timeout=60)
+        operation=str(uuid.uuid4());request={'action':'evidence-preserve','id':operation,'snapshot':vault_snapshot,'approved_until':time.time()+240}
         receipt=ssh.call(host,request,timeout=180)
         assert receipt['state']=='preserved' and receipt['original_unchanged'],receipt
         assert run('docker','exec',name,'cat',source)=='evidence-fixture'

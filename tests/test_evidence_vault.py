@@ -15,6 +15,7 @@ def detection(path):
 
 @pytest.fixture
 def vault(tmp_path,monkeypatch):
+    if os.geteuid()!=0:pytest.skip('Root-owned vault fixtures require root; native SSH container tests exercise production ownership checks')
     root=tmp_path/'vault';monkeypatch.setattr(agent,'EVIDENCE_ROOT',root)
     # /tmp is deliberately world-writable. Unit tests anchor an isolated fixture;
     # native SSH integration separately exercises the production ancestor guard.
