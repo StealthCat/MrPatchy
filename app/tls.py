@@ -208,11 +208,15 @@ def _validate_certificate(item, cert_path, key_path):
     return names
 
 
+def _port_marker(profiles):
+    return '# mrpatchy-ports: '+json.dumps({name:profile_port(profiles[name]) for name in PROFILES if profiles[name]['enabled']},sort_keys=True)
+
+
 def _prepare(profiles, validate=True):
     folder = directory() / str(uuid.uuid4())
     folder.mkdir(parents=True, mode=0o700)
     try:
-        lines = ['# mrpatchy-state: ' + folder.name, '{', '  admin 0.0.0.0:2019', '  auto_https disable_redirects', '}']
+        lines = ['# mrpatchy-state: ' + folder.name, _port_marker(profiles), '{', '  admin 0.0.0.0:2019', '  auto_https disable_redirects', '}']
         assigned = set()
         for name in PROFILES:
             item = profiles[name]
@@ -322,9 +326,13 @@ def _activate(folder, content):
 def bootstrap():
     """Run before Caddy starts; migrate generated legacy files without contacting a CA."""
     path = directory() / 'Caddyfile'
-    if path.exists() and '# mrpatchy-state: ' in path.read_text():
-        return
     profiles = read_profiles()
+    if path.exists():
+        content=path.read_text()
+        if '# mrpatchy-state: ' in content and _port_marker(profiles) in content.splitlines():
+            return
+    # Re-render environment-derived ports while preserving saved profiles/material.
+    # Caddy reads this generation after the app's startup health check.
     # Expiry must not prevent access to the UI for replacing an existing certificate.
     folder, _ = _prepare(profiles, validate=False)
     (folder / 'Caddyfile.pending').replace(path)
