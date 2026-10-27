@@ -1258,11 +1258,106 @@ def evidence_archive_history(host_id:str,archive_id:str,offset:int=0,user=Depend
 @app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/status')
 def verify_evidence_archive(host_id:str,archive_id:str,user=Depends(auth)):
     from .evidence_vault import EvidenceArchive
-    with host_change(host_id),Session() as s:
+    with host_change(host_id,allow_quarantined=True),Session() as s:
         row=s.get(EvidenceArchive,archive_id)
         if not row or row.host_id!=host_id:raise HTTPException(404,'Evidence acquisition not found')
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['evidence-acquire','evidence-archive-status']),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Evidence acquisition work is still pending')
         return {'job_id':worker.enqueue(s,host_id,'evidence-archive-status',{'archive_id':row.id,'_actor':user['username']})}
+
+def response_row(s,host_id,quarantine_id):
+    from .quarantine import Quarantine
+    row=s.get(Quarantine,quarantine_id)
+    if not row or row.host_id!=host_id:raise HTTPException(404,'File response not found')
+    return row
+
+def response_idle(s,host_id,response_id=None):
+    from .quarantine import ACTIONS
+    if operations.host_quarantined(s,host_id,response_id=response_id):raise HTTPException(409,'Another operation or file response requires reconciliation')
+    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(ACTIONS),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'File response work is pending; reconcile interrupted running jobs in Activity first')
+
+@app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/quarantine')
+def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
+    from . import quarantine
+    from .evidence_vault import EvidenceArchive,EvidenceCopy,incident
+    with host_change(host_id),Session() as s:
+        host_or_404(s,host_id);archive=s.get(EvidenceArchive,archive_id)
+        if not archive or archive.host_id!=host_id:raise HTTPException(404,'Evidence acquisition not found')
+        copy=s.get(EvidenceCopy,archive.copy_id)
+        if not copy or copy.host_id!=host_id or archive.state!='verified':raise HTTPException(409,'A verified same-host evidence acquisition is required')
+        current=incident(s,host_id,copy.incident_id)
+        if incidents.digest(current.evidence)!=copy.evidence_digest:raise HTTPException(409,'Incident evidence changed; acquire and review current evidence')
+        response_idle(s,host_id)
+        return {'job_id':worker.enqueue(s,host_id,'quarantine-prepare',{'archive_id':archive.id,'evidence_digest':copy.evidence_digest,'_actor':user['username']})}
+
+@app.get('/api/hosts/{host_id}/security/quarantines')
+def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
+    from .quarantine import Quarantine
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(Quarantine).where(Quarantine.host_id==host_id).order_by(Quarantine.created.desc(),Quarantine.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt)} for r in rows[:20]],'more':len(rows)>20}
+
+@app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/history')
+def quarantine_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+    from .quarantine import Event,Approval
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=response_row(s,host_id,quarantine_id)
+        events=list(s.scalars(select(Event).where(Event.quarantine_id==row.id).order_by(Event.created.desc(),Event.id).offset(offset).limit(21)))
+        approvals=list(s.scalars(select(Approval).where(Approval.quarantine_id==row.id).order_by(Approval.created.desc(),Approval.id).offset(offset).limit(21)))
+        return {'events':[object_dict(r) for r in events[:20]],'approvals':[object_dict(r) for r in approvals[:20]],'more':len(events)>20 or len(approvals)>20}
+
+class ResponseApproval(BaseModel):
+    plan_digest:str
+    receipt_digest:str=''
+    reason:str=Field(min_length=10,max_length=4000)
+    confirmation:str
+
+def queue_file_response(s,host,row,body,user,restore=False):
+    from . import quarantine
+    if body.confirmation!=('RESTORE' if restore else 'QUARANTINE') or len(body.reason.strip())<10:raise ValueError('Provide a meaningful reason and type '+('RESTORE' if restore else 'QUARANTINE'))
+    if incidents.digest(row.plan)!=body.plan_digest or row.fingerprint!=host.fingerprint:raise HTTPException(409,'Prepared evidence or pinned host changed')
+    response_idle(s,host.id,response_id=row.id)
+    if restore:
+        if row.state not in ('quarantined','uncertain') or not row.receipt.get('restore_ready') or row.receipt.get('restore_attempted') or time.time()-row.observed>300 or incidents.digest(row.receipt)!=body.receipt_digest:raise HTTPException(409,'Fresh verified restoration readiness is required; verify response state first')
+    else:
+        current=quarantine.incident(s,host.id,row.incident_id)
+        if row.state!='prepared' or time.time()-row.created>900 or incidents.digest(current.evidence)!=row.evidence_digest:raise HTTPException(409,'Quarantine preparation expired or incident changed')
+    approval=quarantine.Approval(id=str(uuid.uuid4()),quarantine_id=row.id,action='restore' if restore else 'quarantine',expires=time.time()+300,plan_digest=body.plan_digest,actor=user['username'],reason=body.reason.strip(),before_state=row.state,before_hold=row.hold)
+    s.add(approval);row.approval_id=approval.id;row.state='restore_queued' if restore else 'queued';row.hold=True
+    quarantine.event(s,row,'restore_approved' if restore else 'quarantine_approved',user['username'],{'approval_id':approval.id})
+    return {'job_id':worker.enqueue(s,host.id,'quarantine-restore' if restore else 'quarantine-apply',{'quarantine_id':row.id,'_actor':user['username']}),'server_changes_paused':True}
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/execute')
+def approve_quarantine(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(auth)):
+    with host_change(host_id),Session() as s:
+        return queue_file_response(s,host_or_404(s,host_id),response_row(s,host_id,quarantine_id),body,user)
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/restore')
+def approve_quarantine_restore(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        return queue_file_response(s,host_or_404(s,host_id),response_row(s,host_id,quarantine_id),body,user,restore=True)
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/status')
+def reconcile_quarantine(host_id:str,quarantine_id:str,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        row=response_row(s,host_id,quarantine_id);response_idle(s,host_id,response_id=row.id)
+        if row.state=='prepared':raise HTTPException(409,'Preparation has not been approved for execution')
+        return {'job_id':worker.enqueue(s,host_id,'quarantine-status',{'quarantine_id':row.id,'_actor':user['username']})}
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/release')
+def release_quarantine_hold(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(auth)):
+    from . import quarantine
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        row=response_row(s,host_id,quarantine_id);response_idle(s,host_id,response_id=row.id)
+        if not row.hold or len(body.reason.strip())<10 or incidents.digest(row.plan)!=body.plan_digest or incidents.digest(row.receipt)!=body.receipt_digest:raise HTTPException(409,'Hold or reviewed evidence changed; provide a meaningful review reason')
+        if body.confirmation=='KEEP QUARANTINED':
+            if row.state!='quarantined' or time.time()-row.observed>300:raise HTTPException(409,'Verify quarantine state before accepting the operational impact')
+        elif body.confirmation=='CONSOLE RECOVERED':row.state='console_recovered'
+        else:raise ValueError('Type KEEP QUARANTINED or CONSOLE RECOVERED after reviewing target and service state')
+        row.hold=False;quarantine.event(s,row,'hold_released',user['username'],{'reason':body.reason.strip(),'confirmation':body.confirmation,'receipt':row.receipt});s.commit()
+        return {'state':row.state,'server_changes_paused':False,'incident_not_resolved':True}
 
 @app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/plan')
 def security_plan_queue(host_id:str,incident_id:str,user=Depends(auth)):

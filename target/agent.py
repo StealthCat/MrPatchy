@@ -993,4 +993,208 @@ def evidence_export(identifier,snapshot):
         finally:os.close(fd)
 
 
+RESPONSE_ROOT=Path('/var/lib/mrpatchy-quarantine')
+RESPONSE_SCOPES=('/srv/','/opt/')
+
+
+@contextmanager
+def response_parent(path):
+    """Only root-controlled namespace entries; no symlinks or writable ancestors."""
+    if len(path.parts)>32:raise ValueError('Response path is too deeply nested')
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY);chain=[]
+    try:
+        for part in ('',*path.parts[1:]):
+            if part:
+                child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+                os.close(fd);fd=child
+            info=os.fstat(fd)
+            if info.st_uid!=0 or stat.S_IMODE(info.st_mode)&0o022:raise ValueError('Response ancestors must be root-owned and not group/world writable')
+            chain.append({k:getattr(info,'st_'+k) for k in ('dev','ino','uid','gid','mode')})
+        yield fd,chain
+    finally:os.close(fd)
+
+
+def response_xattrs(fd):
+    names=sorted(os.listxattr(fd))
+    if len(names)>32 or any(len(n)>255 or n in ('security.capability','system.posix_acl_access') for n in names):raise ValueError('File capabilities or ACLs require console response')
+    result={};total=0
+    for name in names:
+        value=os.getxattr(fd,name);total+=len(value)
+        if total>65536:raise ValueError('Response extended attributes exceed budget')
+        result[name]=hashlib.sha256(value).hexdigest()
+    return result
+
+
+def response_scope(snapshot):
+    if not isinstance(snapshot,dict):raise ValueError('Invalid response snapshot')
+    path=snapshot.get('path','')
+    if not isinstance(path,str) or not path.startswith(RESPONSE_SCOPES) or path.startswith('/opt/drpatch/') or path=='/opt/drpatch':raise ValueError('Quarantine supports protected files under /srv and /opt, excluding Mr Patchy')
+    expected={'path':path,'sha256':snapshot['sha256'],'device':snapshot['identity']['dev'],'inode':snapshot['identity']['ino']}
+    # Reuse canonical path, exclusion, descriptor identity and content checks.
+    if evidence_prepare(expected)!=snapshot:raise ValueError('Response source changed since evidence acquisition')
+    info=snapshot['identity']
+    if info['uid']!=0 or info['nlink']!=1 or info['mode']&0o7022:raise ValueError('Response requires a root-owned single-link file without writable group/other or special mode bits')
+    return Path(path)
+
+
+def response_rename(source_fd,source,dest_fd,dest):
+    """No overwrite fallback. Kernel/filesystem support is mandatory."""
+    import ctypes
+    libc=ctypes.CDLL(None,use_errno=True)
+    rename=getattr(libc,'renameat2',None)
+    if rename is None:raise ValueError('Atomic no-overwrite rename is unavailable')
+    rename.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint];rename.restype=ctypes.c_int
+    if rename(source_fd,os.fsencode(source),dest_fd,os.fsencode(dest),1):
+        code=ctypes.get_errno();raise OSError(code,'Atomic no-overwrite response move failed')
+
+
+def response_prepare(snapshot):
+    path=response_scope(snapshot)
+    with response_parent(path.parent) as (parent,ancestors):
+        fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+        try:
+            if evidence_identity(os.fstat(fd))!=snapshot['identity']:raise ValueError('Response source changed')
+            attrs=response_xattrs(fd)
+            if evidence_identity(os.fstat(fd))!=snapshot['identity']:raise ValueError('Response metadata changed')
+        finally:os.close(fd)
+    with response_parent(RESPONSE_ROOT.parent) as (parent,_):device=os.fstat(parent).st_dev
+    if snapshot['identity']['dev']!=device:raise ValueError('Cross-filesystem quarantine is unsupported')
+    try:
+        with evidence_directory(RESPONSE_ROOT) as existing:
+            if os.fstat(existing).st_dev!=device:raise ValueError('Quarantine vault filesystem differs from its protected parent')
+    except FileNotFoundError:pass
+    # Check the libc entry point without touching the source namespace.
+    import ctypes
+    if not hasattr(ctypes.CDLL(None),'renameat2'):raise ValueError('Atomic no-overwrite rename is unavailable')
+    plan={'file':snapshot,'ancestors':ancestors,'xattrs':attrs,'vault_device':device}
+    if len(json.dumps(plan,sort_keys=True).encode())>48000:raise ValueError('Response metadata exceeds budget')
+    return plan
+
+
+def response_json(directory,name,value=None):
+    if value is not None:
+        encoded=json.dumps(value,sort_keys=True).encode()
+        if len(encoded)>128000:raise ValueError('Response journal exceeds budget')
+        fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory)
+        with os.fdopen(fd,'wb') as stream:stream.write(encoded);stream.flush();os.fsync(stream.fileno())
+        os.fsync(directory);return value
+    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    try:
+        before=os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or stat.S_IMODE(before.st_mode)!=0o600 or before.st_nlink!=1 or before.st_size>128000:raise ValueError('Unsafe response journal')
+        result=json.loads(os.read(fd,128001))
+        if evidence_identity(before)!=evidence_identity(os.fstat(fd)) or evidence_identity(before)!=evidence_identity(os.stat(name,dir_fd=directory,follow_symlinks=False)):raise ValueError('Response journal changed')
+        return result
+    finally:os.close(fd)
+
+
+def response_file(directory,name,plan,modes):
+    """Verify the captured inode, bytes and security metadata after namespace moves."""
+    expected=plan['file']['identity'];fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    try:
+        before=os.fstat(fd);actual=evidence_identity(before)
+        if not stat.S_ISREG(before.st_mode) or any(actual[k]!=expected[k] for k in ('dev','ino','size','uid','gid','mtime_ns','nlink')) or stat.S_IMODE(before.st_mode) not in modes:raise ValueError('Response inode or metadata does not match approval')
+        digest=hashlib.sha256();total=0;deadline=time.monotonic()+30
+        while True:
+            chunk=os.read(fd,65536)
+            if not chunk:break
+            total+=len(chunk)
+            if total>32*1024*1024 or time.monotonic()>deadline:raise ValueError('Response verification budget exceeded')
+            digest.update(chunk)
+        if digest.hexdigest()!=plan['file']['sha256'] or total!=expected['size'] or response_xattrs(fd)!=plan['xattrs'] or evidence_identity(before)!=evidence_identity(os.fstat(fd)) or evidence_identity(before)!=evidence_identity(os.stat(name,dir_fd=directory,follow_symlinks=False)):raise ValueError('Response bytes or metadata changed')
+        return fd
+    except BaseException:os.close(fd);raise
+
+
+def response_present(directory,name):
+    try:os.stat(name,dir_fd=directory,follow_symlinks=False);return True
+    except FileNotFoundError:return False
+
+
+def response_status_open(directory,identifier,plan):
+    result={'id':identifier,'plan':plan,'state':'uncertain','restore_ready':False,'restore_attempted':False}
+    intent=response_json(directory,'intent.json')
+    if intent.get('id')!=identifier or intent.get('plan')!=plan:raise ValueError('Response ID is bound to different approval evidence')
+    restored=response_present(directory,'restore-intent.json');result['restore_attempted']=restored
+    if restored:
+        review=response_json(directory,'restore-intent.json')
+        if review.get('id')!=identifier or review.get('plan')!=plan:raise ValueError('Restoration intent does not bind approved evidence')
+    path=Path(plan['file']['path']);mode=stat.S_IMODE(plan['file']['identity']['mode'])
+    with response_parent(path.parent) as (parent,chain):
+        if chain!=plan['ancestors']:return result
+        held=response_present(directory,'held');source=response_present(parent,path.name)
+        if held:
+            fd=response_file(directory,'held',plan,(0o600,mode))
+            try:held_mode=stat.S_IMODE(os.fstat(fd).st_mode)
+            finally:os.close(fd)
+            if not source:
+                result['restore_ready']=not restored
+                if held_mode==0o600 and not restored:result['state']='quarantined'
+        elif source:
+            fd=response_file(parent,path.name,plan,(mode,));os.close(fd)
+            result['state']='restored' if restored else 'not_moved'
+    return result
+
+
+def response_status(identifier,plan):
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid response ID')
+    import fcntl
+    try:
+        with evidence_directory(RESPONSE_ROOT/identifier) as directory:
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            return response_status_open(directory,identifier,plan)
+    except FileNotFoundError:return {'id':identifier,'plan':plan,'state':'not_found','restore_ready':False,'restore_attempted':False}
+
+
+def response_action(identifier,plan,approval,restore=False):
+    import fcntl
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid response ID')
+    if not isinstance(approval,dict) or approval.get('action')!=('restore' if restore else 'quarantine') or not isinstance(approval.get('id'),str) or not re.fullmatch('[a-f0-9-]{36}',approval['id']):raise ValueError('Invalid typed response approval')
+    expires=approval.get('expires')
+    if type(expires) not in (int,float) or not time.time()<expires<=time.time()+300:raise ValueError('Response approval expired or invalid')
+    if not isinstance(plan,dict) or set(plan)!={'file','ancestors','xattrs','vault_device'}:raise ValueError('Invalid response plan')
+    if not restore:
+        try:
+            with evidence_directory(RESPONSE_ROOT/identifier):return response_status(identifier,plan)
+        except FileNotFoundError:pass
+        if response_prepare(plan['file'])!=plan:raise ValueError('Response source or scope changed after preparation')
+    with evidence_directory(RESPONSE_ROOT,create=not restore) as root:
+        if os.fstat(root).st_dev!=plan['vault_device']:raise ValueError('Quarantine vault filesystem changed')
+        if not restore:
+            try:os.mkdir(identifier,0o700,dir_fd=root);os.fsync(root)
+            except FileExistsError:
+                return response_status(identifier,plan) # Replays observe; never mutate again.
+        with evidence_directory(RESPONSE_ROOT/identifier) as directory:
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            path=Path(plan['file']['path']);mode=stat.S_IMODE(plan['file']['identity']['mode'])
+            if restore:
+                current=response_status_open(directory,identifier,plan)
+                if not current['restore_ready']:return current
+                response_json(directory,'restore-intent.json',{'id':identifier,'plan':plan,'approval':approval,'created':time.time()})
+            else:response_json(directory,'intent.json',{'id':identifier,'plan':plan,'approval':approval,'created':time.time()})
+            with response_parent(path.parent) as (parent,chain):
+                if chain!=plan['ancestors']:raise ValueError('Response parent changed before move')
+                if time.time()>=expires:raise ValueError('Response approval expired before move')
+                if restore:
+                    if response_present(parent,path.name):raise ValueError('Restoration never overwrites an existing path')
+                    source=response_file(directory,'held',plan,(0o600,mode))
+                    try:
+                        if time.time()>=expires:raise ValueError('Restoration approval expired after verification')
+                        os.fchmod(source,mode);os.fsync(source)
+                        response_rename(directory,'held',parent,path.name)
+                    finally:os.close(source)
+                else:
+                    if response_prepare(plan['file'])!=plan:raise ValueError('Response source changed immediately before move')
+                    if time.time()>=expires:raise ValueError('Quarantine approval expired after verification')
+                    response_rename(parent,path.name,directory,'held')
+                    source=response_file(directory,'held',plan,(mode,))
+                    try:os.fchmod(source,0o600);os.fsync(source)
+                    finally:os.close(source)
+                os.fsync(parent);os.fsync(directory)
+            observed=response_status_open(directory,identifier,plan)
+            if observed['state']!=('restored' if restore else 'quarantined'):raise ValueError('Response verification is uncertain; review target console')
+            response_json(directory,'restored.json' if restore else 'quarantined.json',{'id':identifier,'plan':plan,'approval':approval,'observed':observed,'finished':time.time()})
+            return observed
+
+
 if __name__ == '__main__': main()

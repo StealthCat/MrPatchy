@@ -202,6 +202,8 @@ def advance(s, run, now):
     host = s.get(Host, run.host_id)
     if not host:
         run.state = 'skipped'; run.detail = 'Server removed'; return
+    if operations.host_quarantined(s,host.id):
+        run.detail='Waiting for operation or file response reconciliation';return
     if host.state != 'online' or now-host.last_seen > 120 or host.integrity or not host.fingerprint or not host.inventory:
         run.detail = 'Waiting for an enrolled, online server with fresh telemetry and no integrity findings'; return
     if operations.recovery_policy(s, host.id) != policy['recovery']:
