@@ -105,7 +105,12 @@ jobs:
           node-version: '22'
       - run: pip install -r requirements.txt
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - name: Install browser system dependencies
+        timeout-minutes: 5
+        run: npx playwright install-deps chromium
+      - name: Download Chromium
+        timeout-minutes: 5
+        run: npx playwright install chromium
       - run: npm run test:ui
 
   recovery:
