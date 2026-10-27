@@ -2,7 +2,7 @@ const assert=require('assert/strict');
 module.exports=async(page)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
  const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open';
- const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content']};
+ const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const handler=async route=>{
   const request=route.request(),url=new URL(request.url());
@@ -20,6 +20,7 @@ module.exports=async(page)=>{
  try{
   await page.goto(new URL('/#servers/'+host.id+'/security',page.url()).href);
   await page.getByText('Review fixture detection',{exact:true}).waitFor();
+  await page.getByText('Signature freshness: Stale',{exact:true}).waitFor();
   assert.equal(writes.length,0);
   await page.locator('#security-policy-form [name=enabled]').check();
   await page.locator('#security-policy-form [name=auto_ai_plan]').check();

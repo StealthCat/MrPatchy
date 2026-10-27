@@ -116,3 +116,25 @@ def test_automatic_plan_fleet_hourly_limit(admin,recorded):
         s.commit()
     incidents.auto_plan_tick()
     with Session() as s:assert len(list(s.scalars(select(Job).where(Job.action=='security-plan'))))==10
+
+def test_ai_receives_bounded_signature_and_coverage_context(admin,recorded,monkeypatch):
+    import json
+    identifier,original=recorded
+    report={**original,'state':'incomplete','engine_version':'ClamAV fixture','signatures':{'state':'stale','built_at':100,'private_extra':'do not forward'},'gaps':['gap '*400]*30}
+    with Session() as s:
+        incidents.record(s,'a','coverage-scan',report);s.commit()
+        stored=s.get(incidents.Scan,'coverage-scan').report
+        assert 'scan_context' not in stored['findings'][0]
+        row=s.get(incidents.Incident,identifier)
+        context=row.evidence['scan_context']
+        assert context['signatures']['state']=='stale' and 'private_extra' not in context['signatures']
+        assert context['gaps_truncated'] and len(context['gaps'])==20 and len(context['gaps'][0])==500
+        s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture'}));s.commit()
+        def request(payload,key):
+            assert json.loads(payload['input'])['finding']['scan_context']==context
+            return content(identifier,'coverage-scan')
+        monkeypatch.setattr(ai,'request',request)
+        plan=incidents.generate(s,row);pid=plan.id;checksum=plan.evidence_digest
+        row.evidence={**row.evidence,'scan_context':{**context,'state':'changed'}};s.commit()
+    assert admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':checksum}).status_code==409
