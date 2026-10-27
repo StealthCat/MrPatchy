@@ -100,6 +100,7 @@ module.exports=async(page,capture)=>{
   lateRelease();await page.waitForTimeout(100);assert.equal(await page.getByText('Atlas-machine',{exact:true}).count(),0);
   for(const nextRole of ['viewer','operator']){
    role=nextRole;await page.goto(new URL('/?server-role='+nextRole+'#servers/'+beta+'/overview',page.url()).href);await page.getByText('Borealis-machine',{exact:true}).waitFor();
+   assert.equal(await tabs.getByRole('link',{name:'File integrity',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'Connection',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'Maintenance',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'AI activity',exact:true}).count(),0);

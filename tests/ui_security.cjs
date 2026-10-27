@@ -8,6 +8,10 @@ module.exports=async(page)=>{
   const request=route.request(),url=new URL(request.url());
   if(url.pathname.startsWith('/api/security/indicators/'))return route.fulfill({json:{items:[{host_id:host.id,path:'/tmp/security-fixture',state:incidentState,updated:Date.now()/1000}],more:false}});
   if(!url.pathname.startsWith(prefix))return route.fallback();
+  if(url.pathname.endsWith('/inspections')){
+   if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true});return route.fulfill({json:{job_id:'inspection-job'}});}
+   return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}}],more:false}});
+  }
   if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
   if(url.pathname.endsWith('/policy'))return route.fulfill({json:{enabled:false,interval_hours:24,paths:['/tmp']}});
   if(url.pathname===prefix)return route.fulfill({json:report});
@@ -45,6 +49,15 @@ module.exports=async(page)=>{
   await page.getByRole('button',{name:'Save incident review',exact:true}).click();
   await page.locator('#security-incidents .badge').filter({hasText:'false_positive'}).waitFor();
   assert.equal(writes.at(-1),prefix+'/incidents/incident-fixture');
+  await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);
+  await page.locator('#security-inspection-form').waitFor();
+  await page.getByText('Trust basis: local package database',{exact:true}).waitFor();
+  await page.locator('#security-inspection-form [name=packages]').fill('openssh-server');
+  await page.getByRole('button',{name:'Queue inspection',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Inspection queued'));
+  assert.equal(writes.at(-1),prefix+'/inspections');
+  await page.locator('#inspection-reports summary').filter({hasText:'openssh-server'}).click();
+  await page.getByText('/etc/ssh/sshd_config',{exact:true}).waitFor();
   for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);}
  }finally{await page.unroute('**/api/**',handler);await page.setViewportSize({width:1440,height:1000});}
 };

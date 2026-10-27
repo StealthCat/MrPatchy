@@ -58,7 +58,7 @@ import signal
 import subprocess
 import time
 
-def bounded(args,timeout=900,env=None,limit=16_000_000):
+def bounded(args,timeout=900,env=None,limit=16_000_000,allowed_codes=(0,),return_status=False):
     process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,start_new_session=True)
     output=bytearray();errors=bytearray();selector=selectors.DefaultSelector()
     selector.register(process.stdout,selectors.EVENT_READ,output)
@@ -73,8 +73,9 @@ def bounded(args,timeout=900,env=None,limit=16_000_000):
                 key.data.extend(chunk)
                 if len(output)+len(errors)>limit: raise RuntimeError('Operation output exceeded 16 MB limit')
         process.wait(timeout=max(.1,deadline-time.monotonic()))
-        if process.returncode: raise RuntimeError((output+errors)[-16000:].decode(errors='replace'))
-        return output.decode(errors='replace'),errors.decode(errors='replace')
+        if process.returncode not in allowed_codes: raise RuntimeError((output+errors)[-16000:].decode(errors='replace'))
+        result=(output.decode(errors='replace'),errors.decode(errors='replace'))
+        return (*result,process.returncode) if return_status else result
     finally:
         if process.poll() is None:
             os.killpg(process.pid,signal.SIGKILL);process.wait()
@@ -314,6 +315,10 @@ def handle(req):
         if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
+    if action == 'security-inspect':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import security_inspect
+        return security_inspect(req.get('packages'),req.get('persistence',True))
     if action == 'security-scan':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_scan

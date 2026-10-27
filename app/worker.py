@@ -318,6 +318,12 @@ def execute_locked(job_id):
                     if incident.state!='open' or incident.scan_id!=job.payload.get('scan_id'):raise ValueError('Automatic incident evidence changed; no AI call sent')
                 plan=incidents.generate(s,incident)
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
+            elif job.action=='security-inspect':
+                from . import incidents
+                result=ssh.call(h,{'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence']},timeout=210)
+                incidents.record_inspection(s,h.id,job.id,result)
+                job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
+                                       'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
             elif job.action=='security-scan':
                 result=ssh.call(h,{'action':'security-scan','paths':job.payload['paths']},timeout=300)
                 from . import incidents

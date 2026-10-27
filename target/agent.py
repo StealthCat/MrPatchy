@@ -507,4 +507,161 @@ def security_scan(paths):
         finally:iterator.close()
     return finish()
 
+
+# Explicit scope only: this inventory is not a complete enumeration of persistence.
+PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
+                     '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
+                     '/var/spool/cron','/etc/init.d','/etc/profile.d')
+PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload')
+PACKAGE_ID = r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}'
+
+
+def validate_inspection(packages,persistence):
+    if not isinstance(packages,list) or len(packages)>16 or type(persistence) is not bool:
+        raise ValueError('Select up to 16 packages and a persistence inventory option')
+    if any(not isinstance(name,str) or not re.fullmatch(PACKAGE_ID,name) for name in packages):
+        raise ValueError('Invalid package identifier; wildcards and options are not allowed')
+    if len(set(packages))!=len(packages):raise ValueError('Duplicate package identifiers')
+    if not packages and not persistence:raise ValueError('Select packages or persistence inventory')
+
+
+def parse_package_verification(output):
+    findings=[];gaps=[]
+    for line in output.splitlines():
+        if not line.strip():continue
+        match=re.fullmatch(r'(missing|[SM5DLUGTP?.]{9})\s+(?:([c dglrmasn])\s+)?(/.*)',line)
+        if not match:
+            gaps.append('Unrecognized package verification output');continue
+        flags,kind,path=match.groups()
+        if len(path)>4096 or '..' in Path(path).parts or any(ord(c)<32 for c in path):
+            gaps.append('Unrepresentable verification path');continue
+        findings.append({'path':path,'checks':flags,'configuration_file':kind=='c',
+                         'status':'missing' if flags=='missing' else 'metadata_or_content_changed'})
+        if len(findings)>=200:
+            gaps.append('Verification finding limit reached');break
+    return findings,gaps[:20]
+
+
+def persistence_inventory(deadline):
+    report={'scope':list(PERSISTENCE_ROOTS)+list(PERSISTENCE_FILES),'entries':[],'entries_examined':0,
+            'skipped':0,'gaps':[],'missing_roots':[],'state':'incomplete'}
+    def gap(path,reason):
+        report['skipped']+=1
+        if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
+    def capture(directory_fd,directory,name):
+        path=directory/name;fd=None
+        if len(report['entries'])>=256 or time.monotonic()>deadline:
+            raise TimeoutError('Persistence inventory budget exhausted')
+        try:
+            before=os.stat(name,dir_fd=directory_fd,follow_symlinks=False)
+            row={'path':str(path),'uid':before.st_uid,'gid':before.st_gid,
+                 'mode':stat.S_IMODE(before.st_mode),'size':before.st_size,'mtime_ns':before.st_mtime_ns}
+            if stat.S_ISLNK(before.st_mode):
+                row.update(kind='symlink',target=os.readlink(name,dir_fd=directory_fd)[:4096])
+            elif stat.S_ISREG(before.st_mode):
+                if before.st_size>1024*1024:gap(path,'File exceeds 1 MiB inventory limit');return
+                fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory_fd)
+                opened=os.fstat(fd)
+                if (opened.st_dev,opened.st_ino)!=(before.st_dev,before.st_ino):raise ValueError('File replaced')
+                digest=hashlib.sha256();total=0
+                while True:
+                    chunk=os.read(fd,65536)
+                    if not chunk:break
+                    total+=len(chunk)
+                    if total>1024*1024 or time.monotonic()>deadline:raise TimeoutError('Hash budget exhausted')
+                    digest.update(chunk)
+                row.update(kind='regular',sha256=digest.hexdigest())
+                after=os.fstat(fd)
+                if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+                    raise ValueError('File changed')
+            else:gap(path,'Non-regular entry excluded');return
+            after=os.stat(name,dir_fd=directory_fd,follow_symlinks=False)
+            if (before.st_dev,before.st_ino,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_ctime_ns):
+                raise ValueError('Entry changed')
+            with scan_root(directory) as current:
+                now=os.fstat(current);old=os.fstat(directory_fd)
+                if (now.st_dev,now.st_ino)!=(old.st_dev,old.st_ino):raise ValueError('Directory changed')
+            report['entries'].append(row)
+        except (OSError,ValueError) as error:gap(path,type(error).__name__)
+        finally:
+            if fd is not None:os.close(fd)
+    try:
+        for value in PERSISTENCE_ROOTS:
+            path=Path(value)
+            try:
+                with scan_root(path) as fd:
+                    iterator=scan_entries(fd,path,report,deadline,gap)
+                    try:
+                        for directory_fd,directory,name in iterator:capture(directory_fd,directory,name)
+                    finally:iterator.close()
+            except FileNotFoundError:report['missing_roots'].append(value)
+            except OSError:gap(path,'Persistence root inaccessible or symlinked')
+        for value in PERSISTENCE_FILES:
+            path=Path(value)
+            try:
+                with scan_root(path.parent) as fd:
+                    try:os.stat(path.name,dir_fd=fd,follow_symlinks=False)
+                    except FileNotFoundError:report['missing_roots'].append(value);continue
+                    capture(fd,path.parent,path.name)
+            except FileNotFoundError:report['missing_roots'].append(value)
+            except OSError:gap(path,'Persistence file parent inaccessible')
+    except TimeoutError:gap('Inventory','Persistence inventory budget exhausted')
+    report['state']='incomplete' if report['gaps'] else 'collected'
+    return report
+
+
+def security_inspect(packages,persistence=True):
+    """Local database comparison and metadata-only startup inventory; no remediation."""
+    validate_inspection(packages,persistence)
+    try:from bridge import bounded
+    except ImportError:from target.bridge import bounded
+    report={'version':1,'started':time.time(),'state':'incomplete','trust_basis':'target_local_package_database',
+            'packages':[],'gaps':[],'persistence':None,
+            'limitations':['Local package metadata is not an independent trusted vendor baseline.',
+                          'Differences may be legitimate configuration changes; they are not malware verdicts.',
+                          'No differences does not establish complete file coverage or a clean host.']}
+    rpm=not Path('/var/lib/dpkg/status').exists()
+    report['package_manager']='rpm' if rpm else 'dpkg'
+    deadline=time.monotonic()+180
+    def command(args,allowed=(0,)):
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise TimeoutError('Inspection deadline exhausted')
+        return bounded(args,timeout=min(30,remaining),limit=512000,
+                       env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','HOME':'/root'},
+                       allowed_codes=allowed,return_status=True)
+    remaining_findings=200
+    for package in packages:
+        row={'package':package,'state':'incomplete','findings':[],'gaps':[]};report['packages'].append(row)
+        query_name=package.replace(':','.') if rpm else package
+        query=(['rpm','-q','--qf','%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n','--',query_name] if rpm else
+               ['dpkg-query','-W','-f=${db:Status-Status} ${Version}\n','--',query_name])
+        verify=(['rpm','--verify','--noscripts','--nodeps','--',query_name] if rpm else
+                ['dpkg','--verify-format=rpm','--verify','--',query_name])
+        try:
+            before,diagnostic,_=command(query)
+            if diagnostic or not before.strip() or (not rpm and not before.startswith('installed ')):
+                raise ValueError('Package is not installed or cannot be queried')
+            if len(before)>4000:raise ValueError('Package identity exceeds limit')
+            row['installed_identity']=before.strip()
+            output,diagnostic,status=command(verify,(0,1))
+            findings,row['gaps']=parse_package_verification(output)
+            row['findings']=findings[:remaining_findings]
+            remaining_findings-=len(row['findings'])
+            if len(findings)>len(row['findings']):row['gaps'].append('Inspection-wide finding limit reached')
+            if diagnostic:row['gaps'].append('Package manager reported diagnostics; inspection is incomplete')
+            if status and not row['findings']:row['gaps'].append('Verification failed without attributable file findings')
+            after,diagnostic,_=command(query)
+            if diagnostic or after!=before:row['gaps'].append('Package identity changed during verification')
+            row['state']='incomplete' if row['gaps'] else 'differences' if row['findings'] else 'no_reported_differences'
+        except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:
+            # Don't return arbitrary command diagnostics or configuration plaintext.
+            row['gaps'].append(type(error).__name__+': package verification unavailable or interrupted')
+        if time.monotonic()>deadline:
+            report['gaps'].append('Inspection time budget exhausted; remaining packages not examined');break
+    if persistence:report['persistence']=persistence_inventory(min(deadline,time.monotonic()+15))
+    incomplete=report['gaps'] or any(row['state']=='incomplete' for row in report['packages']) or (persistence and report['persistence']['state']=='incomplete')
+    report['state']='incomplete' if incomplete else 'collected'
+    report['finished']=time.time()
+    return report
+
 if __name__ == '__main__': main()

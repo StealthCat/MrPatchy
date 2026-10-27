@@ -1,5 +1,5 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['connection','Connection',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true]];
+const SERVER_TABS=[['overview','Overview'],['connection','Connection',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true]];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
 
 function serverPagination(root,offset,more,load,size=50){
@@ -27,7 +27,7 @@ async function serverWorkspace(revision){
  const body=$('#server-tab-body'),context={root:body,hostId:id};
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,connection:serverConnection,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity};
+  const views={overview:serverOverview,connection:serverConnection,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity};
   await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
@@ -169,4 +169,26 @@ async function serverConnection(revision,{root,hostId}){
   try{const response=await api('/hosts/'+hostId+'/connection/test','POST',{});if(current())result.textContent=response.message;}
   catch(error){if(current())result.textContent=error.message;}finally{if(current())busy(false);}
  };
+}
+
+async function serverIntegrity(revision,{root,hostId}){
+ let offset=0,ticket=0;
+ const current=()=>root.isConnected&&currentView(revision,'servers');
+ root.innerHTML=`<p class="notice">Package verification compares files with this server’s local package database. It does not independently verify vendor signatures or prove malware. Startup entries and configuration changes need review.</p>
+ <section class="card"><form id="security-inspection-form"><label>Installed package names, one per line (maximum 16)<textarea name="packages" placeholder="openssh-server
+coreutils"></textarea></label><label class="check"><input type="checkbox" name="persistence" checked>Inventory common startup and persistence locations</label><p class="help">Read-only: no package scripts, repairs, quarantine or AI uploads. Inventory records paths, ownership, permissions, symlink targets and hashes, without file contents. User home directories and runtime-only persistence are outside this inventory.</p><button class="primary">Queue inspection</button></form></section>
+ <div class="actions"><button id="inspection-refresh">Refresh inspections</button></div><div id="inspection-reports"></div><div class="actions"><button id="inspection-prev">Previous inspections</button><button id="inspection-next">Next inspections</button></div>`;
+ const load=async()=>{const request=++ticket;const result=await api('/hosts/'+hostId+'/security/inspections?offset='+offset);if(!current()||request!==ticket)return;
+ root.querySelector('#inspection-reports').innerHTML=result.items.map(item=>{const report=item.report,inventory=report.persistence;return '<section class="card"><h3>'+date(item.created)+' · '+badge(report.state)+'</h3><p>Trust basis: local package database</p>'+report.packages.map(pkg=>'<details><summary>'+esc(pkg.package)+' · '+esc(pkg.state)+' · '+pkg.findings.length+' discrepancies</summary><p>'+esc(pkg.installed_identity||'Identity unavailable')+'</p><ul>'+pkg.gaps.map(gap=>'<li>'+esc(gap)+'</li>').join('')+'</ul><div class="table-wrap"><table><thead><tr><th>Path</th><th>Result</th><th>Checks</th><th>Configuration</th></tr></thead><tbody>'+pkg.findings.map(f=>'<tr><td>'+esc(f.path)+'</td><td>'+esc(f.status)+'</td><td>'+esc(f.checks)+'</td><td>'+(f.configuration_file?'Yes':'No')+'</td></tr>').join('')+'</tbody></table></div></details>').join('')+(inventory?'<details><summary>Startup inventory · '+inventory.entries.length+' entries · '+esc(inventory.state)+'</summary><pre>'+esc(JSON.stringify(inventory,null,2))+'</pre></details>':'')+'<details><summary>Full inspection receipt and coverage</summary><pre>'+esc(JSON.stringify(report,null,2))+'</pre></details></section>';}).join('')||'<p>No inspection receipts yet. Queue an inspection and refresh when its job completes.</p>';
+ root.querySelector('#inspection-prev').disabled=offset===0;root.querySelector('#inspection-next').disabled=!result.more;
+ };
+ const reload=()=>load().catch(error=>{if(current())toast(error.message);});
+ root.querySelector('#inspection-refresh').onclick=reload;
+ root.querySelector('#inspection-prev').onclick=()=>{offset=Math.max(0,offset-6);reload();};
+ root.querySelector('#inspection-next').onclick=()=>{offset+=6;reload();};
+ root.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.target,button=form.querySelector('button');button.disabled=true;const values=new FormData(form);
+ try{await api('/hosts/'+hostId+'/security/inspections','POST',{packages:values.get('packages').split('\n').map(x=>x.trim()).filter(Boolean),persistence:values.has('persistence')});if(current())toast('Inspection queued. Refresh after the job completes.');}
+ catch(error){if(current())toast(error.message);}finally{if(current())button.disabled=false;}
+ };
+ await load();
 }
