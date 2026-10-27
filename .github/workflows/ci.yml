@@ -21,7 +21,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
       - run: python -m compileall -q app target
-      - run: bash -n deploy/entrypoint.sh reset-admin-password.sh tests/fixtures/rpm-repository.sh tests/fixtures/deb-package.sh
+      - run: bash -n deploy/entrypoint.sh reset-admin-password.sh tests/fixtures/rpm-repository.sh tests/fixtures/deb-package.sh tests/fixtures/systemctl.sh install-gcp.sh gcp-compose.sh
       - run: node --check app/static/app.js && node --check app/static/settings.js && node --check app/static/ui.js && node --check app/static/fleet.js && node --check app/static/schedules.js && node --check app/static/server.js
       - run: docker compose --env-file .env.example config --quiet
       - run: docker build -t mrpatchy:test .
@@ -135,3 +135,16 @@ jobs:
       - run: /tmp/patchy-rpm-test/bin/python -m pytest tests/test_rpm.py tests/test_rpm_native.py -q
       - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.rpm -t mrpatchy-ssh-test tests/fixtures
       - run: /tmp/patchy-rpm-test/bin/python tests/integration_ssh.py
+
+  gcp-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t mrpatchy:base .
+      - run: docker build -f deploy/Dockerfile.gcp -t mrpatchy:gcp .
+      - name: Verify unprivileged Google CLI runtime
+        run: |
+          docker run --rm mrpatchy:gcp gcloud version
+          test "$(docker run --rm mrpatchy:gcp id -u)" = 10001
+          GCP_PROJECT=ci-project GCP_ZONE=us-central1-a docker compose --env-file .env.example -f compose.yaml -f compose.gcp.yaml config --quiet

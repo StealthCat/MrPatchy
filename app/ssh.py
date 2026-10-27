@@ -133,6 +133,18 @@ def call(host, payload, timeout=60, key_file=None):
         client.close()
         if tunnel is not None: tunnel.close()
 
+def expected_files(host):
+    from target.bridge import UNIT
+    files={'/usr/local/lib/mrpatchy/'+name:hashlib.sha256((TARGET/name).read_bytes()).hexdigest() for name in ('agent.py','bridge.py','release.py','rpm_support.py')}
+    auth=f'restrict,command="/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py" {public_key(host.id)} mrpatchy\n'
+    sudo='drpatch ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/local/lib/mrpatchy/bridge.py\n'
+    files.update({'/etc/systemd/system/mrpatchy-agent.service':hashlib.sha256(UNIT.encode()).hexdigest(),
+                  '/opt/drpatch/.ssh/authorized_keys':hashlib.sha256(auth.encode()).hexdigest(),
+                  '/etc/sudoers.d/mrpatchy':hashlib.sha256(sudo.encode()).hexdigest()})
+    optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
+    if optional in host.baseline:files[optional]=host.baseline[optional]
+    return files
+
 def deploy(host):
     from target.bridge import UNIT
     code=(TARGET/'agent.py').read_bytes()

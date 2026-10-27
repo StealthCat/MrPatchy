@@ -86,3 +86,12 @@ checks assert the wrapped authentication exception and its underlying cause, so
 unrelated connection errors cannot count as successful key revocation. Both SSH
 matrix entries run even if one fails. CI supports manual dispatch and bounds each
 job to 30 minutes; PR and main-push triggers remain enabled.
+
+## Managed-agent health and maintenance
+
+The controller now classifies enrolled helper versions and unexpected managed-file
+or service drift, with independent bridge receipts and opt-in bounded upgrades or
+repairs. See [Agent maintenance](AGENT_MAINTENANCE.md) for the trust boundary,
+blocked access-path changes, verification and retry limits. This maintains the
+Mr Patchy installation; it is not arbitrary malware remediation or independent
+attestation of a compromised root/kernel.

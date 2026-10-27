@@ -1,0 +1,10 @@
+ARG BASE_IMAGE=mrpatchy:base
+FROM ${BASE_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
+ && curl --fail --show-error --silent --location https://packages.cloud.google.com/apt/doc/apt-key.gpg -o /tmp/google-cloud-key.gpg \
+ && gpg --batch --dearmor -o /usr/share/keyrings/google-cloud.gpg /tmp/google-cloud-key.gpg \
+ && echo 'deb [signed-by=/usr/share/keyrings/google-cloud.gpg] https://packages.cloud.google.com/apt cloud-sdk main' > /etc/apt/sources.list.d/google-cloud-sdk.list \
+ && apt-get update && apt-get install -y --no-install-recommends google-cloud-cli \
+ && rm -rf /var/lib/apt/lists/* /tmp/google-cloud-key.gpg
+ENV CLOUDSDK_CONFIG=/data/gcloud CLOUDSDK_CORE_DISABLE_PROMPTS=1 CLOUDSDK_PYTHON=/usr/local/bin/python

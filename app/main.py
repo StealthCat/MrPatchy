@@ -1263,3 +1263,40 @@ def security_inspections(host_id:str,offset:int=0,user=Depends(auth)):
         host_or_404(s,host_id)
         rows=list(s.scalars(select(incidents.Inspection).where(incidents.Inspection.host_id==host_id).order_by(incidents.Inspection.created.desc(),incidents.Inspection.id).offset(offset).limit(7)))
         return {'items':[object_dict(r) for r in rows[:6]],'more':len(rows)>6}
+
+
+class AgentPolicyInput(BaseModel):
+    auto_upgrade:bool=False
+    auto_repair:bool=False
+    expected:dict
+
+@app.get('/api/hosts/{host_id}/security/agent')
+def agent_state(host_id:str,user=Depends(auth)):
+    from . import agent_maintenance
+    with Session() as s:return agent_maintenance.public(s,host_or_404(s,host_id))
+
+@app.put('/api/hosts/{host_id}/security/agent')
+def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(auth)):
+    from . import agent_maintenance
+    with host_change(host_id):
+        with Session() as s:
+            host_or_404(s,host_id)
+            if body.expected!=agent_maintenance.policy(s,host_id):raise HTTPException(409,'Agent policy changed; refresh before saving')
+            value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+            row=s.get(Setting,'agent-policy:'+host_id)
+            if row:row.value=value
+            else:s.add(Setting(key='agent-policy:'+host_id,value=value))
+            audit(s,'agent policy updated',host_id+' '+json.dumps(value));s.commit()
+            return value
+
+@app.post('/api/hosts/{host_id}/security/agent/{action}')
+def agent_action(host_id:str,action:str,user=Depends(auth)):
+    from . import agent_maintenance
+    if action not in ('check','update'):raise HTTPException(404,'Unknown agent operation')
+    with host_change(host_id):
+        with Session() as s:
+            host=host_or_404(s,host_id)
+            if not host.fingerprint:raise HTTPException(409,'Pin the host identity first')
+            if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['agent-check','agent-update']),Job.state.in_(['queued','running'])).limit(1)):
+                raise HTTPException(409,'Agent maintenance is already queued')
+            return {'job_id':worker.enqueue(s,host_id,'agent-'+action,{'release':agent_maintenance.release_id(host),'automatic':False})}

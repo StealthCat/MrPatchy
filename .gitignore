@@ -9,3 +9,5 @@ data/
 node_modules/
 .artifacts/
 .env.ci
+.env.gcp
+compose.gcp-auth.json

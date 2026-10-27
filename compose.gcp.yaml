@@ -1,0 +1,19 @@
+services:
+  app:
+    image: mrpatchy:gcp
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.gcp
+    environment:
+      CLOUDSDK_CONFIG: /data/gcloud
+      CLOUDSDK_CORE_PROJECT: ${GCP_PROJECT:?Run install-gcp.sh first}
+      CLOUDSDK_COMPUTE_ZONE: ${GCP_ZONE:?Run install-gcp.sh first}
+  worker:
+    image: mrpatchy:gcp
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.gcp
+    environment:
+      CLOUDSDK_CONFIG: /data/gcloud
+      CLOUDSDK_CORE_PROJECT: ${GCP_PROJECT:?Run install-gcp.sh first}
+      CLOUDSDK_COMPUTE_ZONE: ${GCP_ZONE:?Run install-gcp.sh first}

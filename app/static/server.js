@@ -1,5 +1,5 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['connection','Connection',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true]];
+const SERVER_TABS=[['overview','Overview'],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true]];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
 
 function serverPagination(root,offset,more,load,size=50){
@@ -27,7 +27,7 @@ async function serverWorkspace(revision){
  const body=$('#server-tab-body'),context={root:body,hostId:id};
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,connection:serverConnection,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity};
+  const views={overview:serverOverview,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity};
   await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
@@ -191,4 +191,15 @@ coreutils"></textarea></label><label class="check"><input type="checkbox" name="
  catch(error){if(current())toast(error.message);}finally{if(current())button.disabled=false;}
  };
  await load();
+}
+
+
+async function serverAgent(revision,{root,hostId}){
+ const data=await api('/hosts/'+hostId+'/security/agent');if(!currentView(revision,'servers')||!root.isConnected)return;
+ const status=data.status;
+ root.innerHTML=`<section class="card"><h3>Agent health ${badge(status.state)}</h3>${data.enrolled_outdated?'<p>The enrolled helper version differs from this controller release. Live verification is required before upgrading.</p>':''}<p>Last live verification: ${date(status.checked)}${status.stale?' · verification is stale':''}</p><p class="help">Checks compare the installed helpers with the enrolled baseline and this controller release. Unexpected changes are suspected tampering or configuration drift, not proof of malware. A compromised root/kernel cannot be independently attested through this agent.</p><ul>${(status.issues||[]).map(i=>`<li>${esc(i.path)}: ${esc(i.kind)}</li>`).join('')}</ul><div class="actions"><button id="agent-check">Check agent now</button><button id="agent-update">Upgrade / repair agent</button><button id="agent-refresh">Refresh status</button></div></section>
+ <section class="card"><h3>Automatic maintenance</h3><form id="agent-policy"><label class="check"><input name="auto_upgrade" type="checkbox" ${data.policy.auto_upgrade?'checked':''}>Automatically upgrade outdated enrolled helpers</label><label class="check"><input name="auto_repair" type="checkbox" ${data.policy.auto_repair?'checked':''}>Automatically repair collector/helper drift and inactive services</label><p class="help">Off by default. Checks run about every five minutes when the server is idle. Automatic updates are limited to two attempts per day, at least one hour apart. Active patch/recovery operations block maintenance. Changing SSH keys, sudo policy, bridge identity, unsafe directories or unexpected systemd overrides requires trusted-console recovery. No operating-system packages, cloud permissions or malware quarantine are changed.</p><button class="primary">Save agent policy</button></form></section><section class="card"><h3>Verification receipt</h3><pre>${esc(JSON.stringify(status.report||{},null,2))}</pre></section>`;
+ for(const action of ['check','update'])root.querySelector('#agent-'+action).onclick=async()=>{try{await api('/hosts/'+hostId+'/security/agent/'+action,'POST',{});toast('Agent '+action+' queued');}catch(e){toast(e.message);}};
+ root.querySelector('#agent-refresh').onclick=()=>serverAgent(revision,{root,hostId});
+ root.querySelector('#agent-policy').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{data.policy=await api('/hosts/'+hostId+'/security/agent','PUT',{auto_upgrade:f.elements.auto_upgrade.checked,auto_repair:f.elements.auto_repair.checked,expected:data.policy});toast('Agent policy saved');}catch(error){toast(error.message);}};
 }

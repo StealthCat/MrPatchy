@@ -39,6 +39,18 @@ def main():
         verification=ssh.call(host,{'action':'verify'})
         assert verification['files']['/usr/local/lib/mrpatchy/release.py']=={'uid':0,'gid':0,'mode':0o644,'sha256':ssh.hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest()}
         assert verification['active'] and verification['files']['/usr/local/lib/mrpatchy/agent.py']['uid']==0
+        # Independent health action must work even when the collector is modified.
+        from app import agent_maintenance
+        host.baseline={}
+        host.baseline=ssh.expected_files(host)
+        health=ssh.call(host,{'action':'agent-status'})
+        assert agent_maintenance.assess(host,health)['state']=='current',health
+        run('docker','exec',name,'sh','-c',"printf '# drift fixture\\n' >> /usr/local/lib/mrpatchy/agent.py")
+        run('docker','exec',name,'chmod','666','/usr/local/lib/mrpatchy/agent.py')
+        health=ssh.call(host,{'action':'agent-status'})
+        assert agent_maintenance.assess(host,health)['state']=='drifted',health
+        ssh.deploy(host)
+        assert agent_maintenance.assess(host,ssh.call(host,{'action':'agent-status'}))['state']=='current'
         run('docker','exec','-d',name,'/usr/bin/python3','-I','/usr/local/lib/mrpatchy/agent.py')
         snapshot={}
         for _ in range(30):
