@@ -516,7 +516,21 @@ PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload')
 PACKAGE_ID = r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}'
 
 
-def validate_inspection(packages,persistence):
+def validate_custom_paths(paths):
+    if not isinstance(paths,list) or len(paths)>16:raise ValueError('Select up to 16 custom file or directory paths')
+    selected=list(PERSISTENCE_ROOTS)+list(PERSISTENCE_FILES)
+    for value in paths:
+        if not isinstance(value,str) or not 1<len(value)<=4096 or not value.startswith('/') or value.startswith('//') or str(Path(value))!=value or '..' in Path(value).parts or any(ord(c)<32 for c in value):raise ValueError('Custom paths must be canonical absolute paths without control characters')
+        if scan_excluded(Path(value)):raise ValueError('Custom path is in an excluded filesystem or quarantine directory')
+        if any(value==root or value.startswith(root+'/') or root.startswith(value+'/') for root in selected):raise ValueError('Custom paths must not overlap each other or built-in startup scope')
+        selected.append(value)
+    return selected
+
+
+def validate_inspection(packages,persistence,custom_paths=None):
+    paths=[] if custom_paths is None else custom_paths
+    validate_custom_paths(paths)
+    if paths and persistence is not True:raise ValueError('Custom paths require the integrity inventory option')
     if not isinstance(packages,list) or len(packages)>16 or type(persistence) is not bool:
         raise ValueError('Select up to 16 packages and a persistence inventory option')
     if any(not isinstance(name,str) or not re.fullmatch(PACKAGE_ID,name) for name in packages):
@@ -542,8 +556,10 @@ def parse_package_verification(output):
     return findings,gaps[:20]
 
 
-def persistence_inventory(deadline):
-    report={'scope':list(PERSISTENCE_ROOTS)+list(PERSISTENCE_FILES),'entries':[],'entries_examined':0,
+def persistence_inventory(deadline,custom_paths=None):
+    paths=[] if custom_paths is None else custom_paths
+    scope=validate_custom_paths(paths)
+    report={'scope':scope,'entries':[],'entries_examined':0,
             'skipped':0,'gaps':[],'missing_roots':[],'state':'incomplete'}
     def gap(path,reason):
         report['skipped']+=1
@@ -605,14 +621,37 @@ def persistence_inventory(deadline):
                     capture(fd,path.parent,path.name)
             except FileNotFoundError:report['missing_roots'].append(value)
             except OSError:gap(path,'Persistence file parent inaccessible')
+        for value in paths:
+            path=Path(value);selected=False
+            try:
+                with scan_root(path.parent) as parent:
+                    try:info=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
+                    except FileNotFoundError:report['missing_roots'].append(value);continue
+                    selected=True
+                    if stat.S_ISDIR(info.st_mode):
+                        with scan_root(path) as root:
+                            opened=os.fstat(root)
+                            if (opened.st_dev,opened.st_ino)!=(info.st_dev,info.st_ino):raise ValueError('Custom directory replaced before traversal')
+                            iterator=scan_entries(root,path,report,deadline,gap)
+                            try:
+                                for directory_fd,directory,name in iterator:capture(directory_fd,directory,name)
+                            finally:iterator.close()
+                            with scan_root(path) as current:
+                                after=os.fstat(current)
+                                if (after.st_dev,after.st_ino)!=(opened.st_dev,opened.st_ino):raise ValueError('Custom directory replaced during traversal')
+                    else:capture(parent,path.parent,path.name)
+            except FileNotFoundError:
+                if selected:gap(path,'Custom directory disappeared during traversal')
+                else:report['missing_roots'].append(value)
+            except (OSError,ValueError):gap(path,'Custom path inaccessible, symlinked ancestor or replaced directory')
     except TimeoutError:gap('Inventory','Persistence inventory budget exhausted')
     report['state']='incomplete' if report['gaps'] else 'collected'
     return report
 
 
-def security_inspect(packages,persistence=True):
+def security_inspect(packages,persistence=True,custom_paths=None):
     """Local database comparison and metadata-only startup inventory; no remediation."""
-    validate_inspection(packages,persistence)
+    validate_inspection(packages,persistence,custom_paths)
     try:from bridge import bounded
     except ImportError:from target.bridge import bounded
     report={'version':1,'started':time.time(),'state':'incomplete','trust_basis':'target_local_package_database',
@@ -658,7 +697,7 @@ def security_inspect(packages,persistence=True):
             row['gaps'].append(type(error).__name__+': package verification unavailable or interrupted')
         if time.monotonic()>deadline:
             report['gaps'].append('Inspection time budget exhausted; remaining packages not examined');break
-    if persistence:report['persistence']=persistence_inventory(min(deadline,time.monotonic()+15))
+    if persistence:report['persistence']=persistence_inventory(min(deadline,time.monotonic()+15),custom_paths)
     incomplete=report['gaps'] or any(row['state']=='incomplete' for row in report['packages']) or (persistence and report['persistence']['state']=='incomplete')
     report['state']='incomplete' if incomplete else 'collected'
     report['finished']=time.time()

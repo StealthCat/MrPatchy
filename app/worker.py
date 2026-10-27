@@ -357,7 +357,15 @@ def execute_locked(job_id):
                     policy=monitor_policy(s,h.id)
                     if not policy['enabled'] or policy['revision']!=job.payload['_persistence_policy']:
                         raise ValueError('Persistence monitoring policy changed; scheduled inspection cancelled before remote access')
-                result=ssh.call(h,{'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence']},timeout=210)
+                request={'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence']}
+                paths=job.payload.get('custom_paths',[])
+                if paths:
+                    from target.agent import validate_custom_paths
+                    expected_scope=validate_custom_paths(paths)
+                    request.update(action='security-inspect-custom',custom_paths=paths)
+                result=ssh.call(h,request,timeout=210)
+                if paths and set((result.get('persistence') or {}).get('scope',[]))!=set(expected_scope):
+                    raise ValueError('Custom inventory scope was not returned; update target helpers')
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})

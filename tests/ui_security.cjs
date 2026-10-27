@@ -11,7 +11,7 @@ module.exports=async(page)=>{
   if(!url.pathname.startsWith(prefix))return route.fallback();
   if(url.pathname.endsWith('/agent')&&request.method()==='GET')return route.fulfill({json:{policy:{auto_upgrade:false,auto_repair:false},status:{state:'drifted',checked:Date.now()/1000,stale:false,issues:[{path:'/usr/local/lib/mrpatchy/agent.py',kind:'unexpected_content_or_missing'}],report:{}},enrolled_outdated:false}});
   if(url.pathname.endsWith('/agent')&&request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().auto_upgrade,true);return route.fulfill({json:{auto_upgrade:true,auto_repair:false}});}
-  if(url.pathname.endsWith('/persistence-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().enabled,true);return route.fulfill({json:{...request.postDataJSON(),revision:'monitor-version'}});}return route.fulfill({json:{enabled:false,interval_hours:12,link_incidents:false,revision:''}});}
+  if(url.pathname.endsWith('/persistence-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().enabled,true);assert.deepEqual(request.postDataJSON().custom_paths,['/srv/myapp/config.json']);return route.fulfill({json:{...request.postDataJSON(),revision:'monitor-version'}});}return route.fulfill({json:{enabled:false,interval_hours:12,link_incidents:false,revision:''}});}
   if(url.pathname.endsWith('/persistence-incidents/startup-fixture/plans/startup-plan/approve')){writes.push(url.pathname);startupPlan.state='approved';return route.fulfill({json:{execution:'manual_only'}});}
   if(url.pathname.endsWith('/persistence-incidents'))return route.fulfill({json:{items:[{id:'startup-fixture',state:'open',updated:1,baseline_id:'baseline-fixture',evidence:{changes:[{path:'/etc/cron.d/task',kind:'added'}]},plans:[startupPlan]}],more:false}});
   if(url.pathname.endsWith('/persistence-incidents/startup-fixture/history'))return route.fulfill({json:{detections:[{inspection_id:'inspection-job'}],reviews:[],more:false}});
@@ -20,7 +20,7 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/comparison'))return route.fulfill({json:{state:'compared',previous_created:Date.now()/1000-3600,note:'Observed changes, not a malware verdict.',changes:[{path:'/etc/cron.d/review-me',kind:'added'}]}});
   if(url.pathname.endsWith('/vendor-inspections')){assert.deepEqual(request.postDataJSON(),{bundle_id:'vendor-fixture'});writes.push(url.pathname);return route.fulfill({json:{job_id:'vendor-job'}});}
   if(url.pathname.endsWith('/inspections')){
-   if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true});return route.fulfill({json:{job_id:'inspection-job'}});}
+   if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true,custom_paths:['/srv/myapp/config.json']});return route.fulfill({json:{job_id:'inspection-job'}});}
    return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}},{id:'rpm-vendor-job',created:Date.now()/1000,report:{state:'collected',trust_basis:'controller_authenticated_rpm_artifact',packages:[],persistence:null,vendor_verification:{state:'matches_artifact_bytes',package:'Patchy_test',version:'2:1.0-1',architecture:'x86_64',examined:1,findings:[],gaps:[]},vendor_authentication:{signature_key_ids:['0123456789abcdef']}}}],more:false}});
   }
   if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
@@ -66,6 +66,7 @@ module.exports=async(page)=>{
   await page.getByText('Trust basis: controller-authenticated RPM artifact',{exact:true}).waitFor();
   await page.locator('#inspection-reports pre').filter({hasText:'Patchy_test'}).first().waitFor();
   await page.locator('#security-inspection-form [name=packages]').fill('openssh-server');
+  await page.locator('#security-inspection-form [name=custom_paths]').fill('/srv/myapp/config.json');
   await page.getByRole('button',{name:'Queue inspection',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Inspection queued'));
   assert.equal(writes.at(-1),prefix+'/inspections');
@@ -83,7 +84,7 @@ module.exports=async(page)=>{
   await page.locator('#modal').waitFor({state:'hidden'});
   assert.equal(writes.at(-1),prefix+'/baseline');
 
-  await page.locator('#persistence-monitor-form [name=enabled]').check();
+  await page.locator('#persistence-monitor-form [name=enabled]').check();await page.locator('#persistence-monitor-form [name=custom_paths]').fill('/srv/myapp/config.json');
   await page.locator('#persistence-monitor-form [name=link_incidents]').check();
   await page.getByRole('button',{name:'Save startup monitoring',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Startup monitoring saved'));

@@ -377,6 +377,10 @@ def handle(req):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import vendor_inspect
         return vendor_inspect(req.get('manifest'))
+    if action == 'security-inspect-custom':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import security_inspect
+        return security_inspect(req.get('packages'),req.get('persistence',True),req.get('custom_paths'))
     if action == 'security-inspect':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_inspect

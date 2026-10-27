@@ -354,3 +354,50 @@ unsigned and tampered artifacts, invalid trust, and a sentinel proving the packa
 verification script did not run. Systemd remains stubbed in these container tests.
 Automatic trusted artifact retrieval, custom baselines, YARA delivery and typed
 quarantine/restoration remain subsequent milestones.
+
+## Reviewed custom integrity scope
+
+File integrity now accepts up to 16 additional canonical absolute file or directory
+paths in manual inspections and the recurring monitoring policy. They are combined
+with the built-in startup scope and use its existing approval, comparison, alert,
+incident, review and explicitly requested advisory AI workflows. This is one active
+combined baseline per server, not independent baselines per path. Saving a policy
+does not collect evidence or approve a baseline; status describes the latest stored
+observation, with its existing 24-hour age limit. Keep manual and scheduled scope
+consistent so a built-in-only inspection does not replace custom coverage.
+
+Directories are traversed without following symlinks; explicitly selected regular
+files are hashed, and selected symlink leaves retain link metadata only. Symlinked
+ancestors, special files, read failures and directory replacement races are coverage
+gaps. A genuinely absent selected path is listed under missing roots. No file
+contents are stored. Directory metadata itself, access-control lists, extended
+attributes and runtime behavior are outside the file inventory. A local approved
+baseline is administrator evidence, not independent vendor authenticity.
+
+Custom paths may not overlap each other or built-in startup scope. Root `/`, virtual
+filesystem paths (`/proc`, `/sys`, `/dev`, `/run`) and the reserved quarantine tree
+are rejected. Traversal exclusions also apply below selected directories; excluded
+descendants make coverage incomplete. Scope shares the existing 15-second budget,
+256-entry receipt, 10,000 examined-entry/32-level traversal limits and 1 MiB regular
+file hash limit. Adding paths does not increase those budgets. Over-limit or
+incomplete observations cannot be approved or used to infer removals.
+
+To use: update app/workers and redeploy helpers through **Finish / verify
+installation**, enter additional paths, queue an inspection, review its full scope
+and coverage, then approve the complete latest inventory. Configure the same paths
+in recurring monitoring and opt in to scheduling/incident recording as needed.
+A scope change makes comparison with the previous baseline unavailable after the
+new observation; collect and explicitly review a new complete baseline. Old
+approvals, receipts and incidents remain retained. Scope edits cancel queued
+scheduled work through the existing policy revision check; already-running jobs
+are not cancelled. Custom-path requests use a separate bridge action so older
+helpers reject them, and the controller verifies returned scope before storing a
+receipt. Missing custom scope can never count as a successful inspection.
+
+Custom-path changes remain ordinary reviewed change incidents, not automatic malware
+verdicts. They retain the startup workflow's historical labels. AI metadata upload
+still requires its separate confirmation; evidence includes the combined scope and
+coverage, is bounded, and uses existing stale-plan and manual-only approval checks.
+No automatic file repair, quarantine, AI upload or baseline acceptance is enabled.
+Future work includes authenticated YARA rules, automatic trusted artifact retrieval,
+and approved typed quarantine/restoration and containment workflows.
