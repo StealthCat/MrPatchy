@@ -1243,13 +1243,14 @@ def security_indicator_matches(sha256:str,offset:int=0,user=Depends(auth)):
 
 
 class SecurityInspectionInput(BaseModel):
+    custom_paths:list[str]=Field(default_factory=list,max_length=16)
     packages:list[str]=Field(default_factory=list,max_length=16)
     persistence:bool=True
 
 @app.post('/api/hosts/{host_id}/security/inspections')
 def queue_security_inspection(host_id:str,body:SecurityInspectionInput,user=Depends(auth)):
     from target.agent import validate_inspection
-    validate_inspection(body.packages,body.persistence)
+    validate_inspection(body.packages,body.persistence,body.custom_paths)
     with worker.Lock('security-inspection-queue'), Session() as s:
         host_or_404(s,host_id)
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-inspect','vendor-inspect']),Job.state.in_(['queued','running'])).limit(1)):
@@ -1367,6 +1368,7 @@ def persistence_baseline_history(host_id:str,offset:int=0,user=Depends(auth)):
 
 
 class PersistenceMonitorInput(BaseModel):
+    custom_paths:list[str]=Field(default_factory=list,max_length=16)
     enabled:bool=False
     interval_hours:int=Field(default=12,ge=1,le=168)
     link_incidents:bool=False
@@ -1382,6 +1384,8 @@ def get_persistence_monitor(host_id:str,user=Depends(auth)):
 @app.put('/api/hosts/{host_id}/security/persistence-monitor')
 def save_persistence_monitor(host_id:str,body:PersistenceMonitorInput,user=Depends(auth)):
     from .persistence import monitor_policy
+    from target.agent import validate_custom_paths
+    validate_custom_paths(body.custom_paths)
     with worker.Lock('security-inspection-queue'),Session() as s:
         host_or_404(s,host_id)
         if monitor_policy(s,host_id)['revision']!=body.expected_revision:raise HTTPException(409,'Monitoring policy changed; refresh before saving')

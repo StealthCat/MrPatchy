@@ -115,7 +115,7 @@ def approve(s,host_id,inspection_id,evidence_digest,expected,reason,actor):
     return baseline.id
 
 
-DEFAULT_MONITOR={'enabled':False,'interval_hours':12,'link_incidents':False,'revision':''}
+DEFAULT_MONITOR={'custom_paths':[],'enabled':False,'interval_hours':12,'link_incidents':False,'revision':''}
 
 
 def monitor_policy(s,host_id):
@@ -139,7 +139,9 @@ def schedule_tick(now=None):
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running','recovery_required'])).limit(1)):continue
             last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-inspect').order_by(Job.created.desc()).limit(1))
             if last and now-last.created<policy['interval_hours']*3600:continue
-            enqueue(s,host_id,'security-inspect',{'packages':[],'persistence':True,'_persistence_policy':policy['revision']})
+            payload={'packages':[],'persistence':True,'_persistence_policy':policy['revision']}
+            if policy.get('custom_paths'):payload['custom_paths']=policy['custom_paths']
+            enqueue(s,host_id,'security-inspect',payload)
 
 
 def record_changes(s,host_id,inspection_id):

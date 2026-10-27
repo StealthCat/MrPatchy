@@ -153,6 +153,18 @@ def main():
         entry=next(row for row in inventory['persistence']['entries'] if row['path']==startup)
         assert entry['kind']=='regular' and len(entry['sha256'])==64,entry
         assert 'inventory fixture only' not in json.dumps(inventory)
+        custom='/srv/patchy-custom-fixture'
+        run('docker','exec',name,'sh','-c',"mkdir -p "+custom+"; printf 'custom metadata only\\n' > "+custom+"/config")
+        custom_request={'action':'security-inspect-custom','packages':[],'persistence':True,'custom_paths':[custom]}
+        custom_report=ssh.call(host,custom_request,timeout=210)
+        assert custom in custom_report['persistence']['scope'],custom_report
+        entry=next(e for e in custom_report['persistence']['entries'] if e['path']==custom+'/config')
+        assert entry['sha256']==ssh.hashlib.sha256(b'custom metadata only\n').hexdigest(),entry
+        assert 'custom metadata only' not in json.dumps(custom_report)
+        run('docker','exec',name,'rm',custom+'/config')
+        missing=ssh.call(host,custom_request,timeout=210)
+        assert not any(e['path']==custom+'/config' for e in missing['persistence']['entries']),missing
+        print('Custom integrity scope passed: declared root, SHA256, no contents and removed file')
         run('docker','exec',name,'rm',startup)
         print('Native integrity checks passed: unchanged, modified, missing, restored, absent package, persistence and no verification scripts')
         key=next(iter(snapshot['inventory']['keys'].values()))
