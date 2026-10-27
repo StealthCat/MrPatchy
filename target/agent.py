@@ -332,7 +332,7 @@ def main():
             atomic(ROOT/'collector-error.json', {'error':str(e),'at':time.time()})
         time.sleep(max(0.1, 30-(time.monotonic()-started)))
 
-SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine')
+SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine','/var/lib/mrpatchy-evidence')
 SCAN_MAX_ENTRIES = 10000
 SCAN_MAX_DEPTH = 32
 SIGNATURE_MAX_AGE = 7*86400
@@ -818,5 +818,154 @@ def vendor_inspect(manifest):
     except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:
         result['gaps'].append(type(error).__name__+': package identity unavailable, mismatched or comparison interrupted')
     return result
+
+
+EVIDENCE_ROOT=Path('/var/lib/mrpatchy-evidence')
+
+
+def evidence_identity(info):
+    return {k:getattr(info,'st_'+k) for k in ('dev','ino','size','uid','gid','mode','mtime_ns','ctime_ns','nlink')}
+
+
+def evidence_prepare(expected):
+    if not isinstance(expected,dict):raise ValueError('Invalid detection identity')
+    path=expected.get('path','');sha=expected.get('sha256')
+    if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or str(Path(path))!=path or '..' in Path(path).parts or len(path)>4096 or scan_excluded(Path(path)) or not re.fullmatch('[a-f0-9]{64}',sha or ''):raise ValueError('Invalid evidence scope')
+    if type(expected.get('device')) is not int or type(expected.get('inode')) is not int:raise ValueError('A fresh scanner receipt with device/inode identity is required')
+    path=Path(path);fd=None;deadline=time.monotonic()+30
+    try:
+        with scan_root(path.parent) as parent:
+            before=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or before.st_size>32*1024*1024 or (before.st_dev,before.st_ino)!=(expected['device'],expected['inode']):raise ValueError('Detected file changed or is outside regular-file limits')
+            fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+            if evidence_identity(os.fstat(fd))!=evidence_identity(before):raise ValueError('Evidence replaced before reading')
+            digest=hashlib.sha256();total=0
+            while True:
+                chunk=os.read(fd,65536)
+                if not chunk:break
+                total+=len(chunk)
+                if total>32*1024*1024 or time.monotonic()>deadline:raise TimeoutError('Evidence read budget exceeded')
+                digest.update(chunk)
+            if evidence_identity(os.fstat(fd))!=evidence_identity(before) or evidence_identity(os.stat(path.name,dir_fd=parent,follow_symlinks=False))!=evidence_identity(before):raise ValueError('Evidence changed while reading')
+            with scan_root(path.parent) as current:
+                a=os.fstat(current);b=os.fstat(parent)
+                if (a.st_dev,a.st_ino)!=(b.st_dev,b.st_ino):raise ValueError('Evidence parent replaced')
+            if digest.hexdigest()!=sha:raise ValueError('Evidence hash changed since detection')
+            return {'path':str(path),'sha256':sha,'identity':evidence_identity(before),'parent':{'dev':b.st_dev,'ino':b.st_ino}}
+    finally:
+        if fd is not None:os.close(fd)
+
+
+@contextmanager
+def evidence_directory(path,create=False):
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:]:
+            try:child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            except FileNotFoundError:
+                if not create:raise
+                os.mkdir(part,0o700,dir_fd=fd)
+                os.fsync(fd)
+                child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            info=os.fstat(child)
+            if info.st_uid!=0 or stat.S_IMODE(info.st_mode)&0o022:
+                os.close(child);raise ValueError('Evidence vault ancestors must be root-owned and not group/world writable')
+            os.close(fd);fd=child
+        if stat.S_IMODE(os.fstat(fd).st_mode)!=0o700:raise ValueError('Evidence vault directory must be mode 0700')
+        yield fd
+    finally:os.close(fd)
+
+
+def evidence_write(directory,name,value):
+    temp='receipt-'+uuid.uuid4().hex
+    fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory)
+    try:
+        with os.fdopen(os.dup(fd),'wb') as stream:
+            stream.write(json.dumps(value,sort_keys=True).encode());stream.flush();os.fsync(stream.fileno())
+    finally:os.close(fd)
+    os.replace(temp,name,src_dir_fd=directory,dst_dir_fd=directory);os.fsync(directory)
+
+
+def evidence_read(directory,name):
+    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1 or info.st_size>32000:raise ValueError('Unsafe evidence receipt')
+        return json.loads(os.read(fd,32001))
+    finally:os.close(fd)
+
+
+def evidence_status_open(directory,identifier):
+    receipt=evidence_read(directory,'receipt.json')
+    if receipt.get('id')!=identifier:raise ValueError('Evidence receipt ID mismatch')
+    if receipt.get('state')!='preserved':return {**receipt,'state':'incomplete'}
+    fd=os.open('content',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    try:
+        before=os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or stat.S_IMODE(before.st_mode)!=0o600 or before.st_nlink!=1 or before.st_size>32*1024*1024:raise ValueError('Unsafe vault content')
+        digest=hashlib.sha256();total=0;deadline=time.monotonic()+30
+        while True:
+            chunk=os.read(fd,65536)
+            if not chunk:break
+            total+=len(chunk)
+            if total>32*1024*1024 or time.monotonic()>deadline:raise TimeoutError('Vault verification budget exceeded')
+            digest.update(chunk)
+        if evidence_identity(before)!=evidence_identity(os.fstat(fd)) or digest.hexdigest()!=receipt['snapshot']['sha256'] or total!=receipt['snapshot']['identity']['size']:raise ValueError('Vault content changed or does not match receipt')
+        return receipt
+    finally:os.close(fd)
+
+
+def evidence_preserve(identifier,snapshot=None,status_only=False):
+    import fcntl
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid evidence operation ID')
+    if not status_only:
+        if not isinstance(snapshot,dict) or set(snapshot)!={'path','sha256','identity','parent'}:raise ValueError('Invalid evidence snapshot')
+        expected={'path':snapshot['path'],'sha256':snapshot['sha256'],'device':snapshot['identity']['dev'],'inode':snapshot['identity']['ino']}
+    try:
+        with evidence_directory(EVIDENCE_ROOT,create=not status_only) as root:
+            if not status_only:
+                try:os.mkdir(identifier,0o700,dir_fd=root);os.fsync(root)
+                except FileExistsError:pass
+            with evidence_directory(EVIDENCE_ROOT/identifier) as directory:
+                fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                try:
+                    old=evidence_status_open(directory,identifier)
+                    if not status_only and old['snapshot']!=snapshot:raise ValueError('Operation ID is bound to different evidence')
+                    return old
+                except FileNotFoundError:
+                    try:partial=evidence_read(directory,'receipt.json')
+                    except FileNotFoundError:partial=None
+                    if partial is not None:return {**partial,'state':'incomplete'}
+                    if status_only:return {'id':identifier,'state':'incomplete'}
+                if evidence_prepare(expected)!=snapshot:raise ValueError('Evidence metadata changed after preparation')
+                receipt={'id':identifier,'state':'incomplete','snapshot':snapshot,'created':time.time(),'original_unchanged':True}
+                evidence_write(directory,'receipt.json',receipt)
+                path=Path(snapshot['path']);output=None;source=None
+                try:
+                    with scan_root(path.parent) as parent:
+                        if {'dev':os.fstat(parent).st_dev,'ino':os.fstat(parent).st_ino}!=snapshot['parent']:raise ValueError('Evidence parent changed')
+                        source=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+                        if evidence_identity(os.fstat(source))!=snapshot['identity']:raise ValueError('Evidence changed before copying')
+                        output=os.open('partial',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory)
+                        digest=hashlib.sha256();total=0;deadline=time.monotonic()+30
+                        with os.fdopen(os.dup(output),'wb') as stream:
+                            while True:
+                                chunk=os.read(source,65536)
+                                if not chunk:break
+                                total+=len(chunk)
+                                if total>32*1024*1024 or time.monotonic()>deadline:raise TimeoutError('Evidence copy budget exceeded')
+                                digest.update(chunk);stream.write(chunk)
+                            stream.flush();os.fsync(stream.fileno())
+                        if digest.hexdigest()!=snapshot['sha256'] or evidence_identity(os.fstat(source))!=snapshot['identity']:raise ValueError('Evidence changed during copy')
+                        if evidence_prepare(expected)!=snapshot:raise ValueError('Evidence path changed during copy')
+                        os.rename('partial','content',src_dir_fd=directory,dst_dir_fd=directory);os.fsync(directory)
+                        receipt['state']='preserved';receipt['finished']=time.time();evidence_write(directory,'receipt.json',receipt)
+                        return evidence_status_open(directory,identifier)
+                finally:
+                    if output is not None:os.close(output)
+                    if source is not None:os.close(source)
+    except FileNotFoundError:
+        if status_only:return {'id':identifier,'state':'not_found'}
+        raise
 
 if __name__ == '__main__': main()

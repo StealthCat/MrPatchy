@@ -369,6 +369,9 @@ def execute_locked(job_id):
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
+            elif job.action in ('evidence-prepare','evidence-preserve','evidence-status'):
+                from . import evidence_vault
+                job.output=json.dumps(evidence_vault.execute(s,h,job))
             elif job.action=='yara-scan':
                 from . import yara_rules,incidents
                 rules,proof=yara_rules.authenticate(job.payload['bundle_id'])

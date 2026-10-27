@@ -1170,6 +1170,52 @@ def security_incidents(host_id:str,offset:int=0,user=Depends(auth)):
         rows=list(s.scalars(select(incidents.Incident).where(incidents.Incident.host_id==host_id).order_by(incidents.Incident.updated.desc(),incidents.Incident.id).offset(offset).limit(21)))
         return {'items':[object_dict(r)|{'plans':[object_dict(p) for p in s.scalars(select(incidents.Plan).where(incidents.Plan.incident_id==r.id).order_by(incidents.Plan.created.desc()).limit(10))]} for r in rows[:20]],'more':len(rows)>20}
 
+class EvidenceApproval(BaseModel):
+    snapshot_digest:str
+    reason:str=Field(min_length=10,max_length=4000)
+    confirmation:str
+
+@app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/preservation')
+def prepare_evidence_copy(host_id:str,incident_id:str,user=Depends(auth)):
+    from . import evidence_vault as vault
+    with host_change(host_id),Session() as s:
+        row=vault.incident(s,host_id,incident_id)
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['evidence-prepare','evidence-preserve','evidence-status']),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Evidence work is already pending')
+        return {'job_id':worker.enqueue(s,host_id,'evidence-prepare',{'incident_id':row.id,'evidence_digest':incidents.digest(row.evidence)})}
+
+@app.get('/api/hosts/{host_id}/security/evidence-copies')
+def evidence_copies(host_id:str,offset:int=0,user=Depends(auth)):
+    from .evidence_vault import EvidenceCopy
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(EvidenceCopy).where(EvidenceCopy.host_id==host_id).order_by(EvidenceCopy.created.desc(),EvidenceCopy.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r)|{'snapshot_digest':incidents.digest(r.snapshot)} for r in rows[:20]],'more':len(rows)>20}
+
+@app.post('/api/hosts/{host_id}/security/evidence-copies/{copy_id}/execute')
+def approve_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Depends(auth)):
+    from . import evidence_vault as vault
+    if body.confirmation!='PRESERVE':raise ValueError('Type PRESERVE to approve copying evidence; the original remains in place')
+    if len(body.reason.strip())<10:raise ValueError('Provide a meaningful preservation reason')
+    with host_change(host_id),Session() as s:
+        copy=s.get(vault.EvidenceCopy,copy_id)
+        if not copy or copy.host_id!=host_id:raise HTTPException(404,'Evidence operation not found')
+        row=vault.incident(s,host_id,copy.incident_id)
+        if copy.state!='prepared' or time.time()-copy.created>900 or incidents.digest(copy.snapshot)!=body.snapshot_digest or incidents.digest(row.evidence)!=copy.evidence_digest:raise HTTPException(409,'Preparation expired, changed or was already approved')
+        copy.state='queued';copy.actor=user['username'];copy.reason=body.reason.strip();copy.expires=time.time()+300
+        job_id=worker.enqueue(s,host_id,'evidence-preserve',{'copy_id':copy.id})
+        audit(s,'evidence preservation approved',host_id+' '+copy.id+' '+copy.actor+' '+copy.reason);s.commit()
+        return {'job_id':job_id,'original_not_removed':True}
+
+@app.post('/api/hosts/{host_id}/security/evidence-copies/{copy_id}/status')
+def reconcile_evidence_copy(host_id:str,copy_id:str,user=Depends(auth)):
+    from .evidence_vault import EvidenceCopy
+    with host_change(host_id),Session() as s:
+        copy=s.get(EvidenceCopy,copy_id)
+        if not copy or copy.host_id!=host_id:raise HTTPException(404,'Evidence operation not found')
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['evidence-preserve','evidence-status']),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Evidence work is still pending')
+        return {'job_id':worker.enqueue(s,host_id,'evidence-status',{'copy_id':copy.id})}
+
 @app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/plan')
 def security_plan_queue(host_id:str,incident_id:str,user=Depends(auth)):
     with worker.Lock('security-plan-queue'):

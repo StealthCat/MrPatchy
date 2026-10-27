@@ -468,3 +468,62 @@ require a compatible engine and platform validation. Quarantine/restoration,
 containment, behavioral detection and automatic trusted rule delivery remain future
 milestones. Matches do not establish malicious intent; no matches is not a clean-host
 verdict.
+
+## Approved evidence-preservation vault
+
+Security scanner incidents now offer **Prepare evidence copy**. This queues a
+read-only target check against the detection's path, SHA-256 and device/inode.
+It captures fresh size, ownership, full mode, link count, modification/change times
+and parent identity. Old receipts lacking device/inode require a new scan. Only
+regular files up to 32 MiB qualify. Virtual filesystems, symlinked ancestors/leaves
+and the quarantine/evidence stores are excluded. No contents return over SSH.
+
+Completed preparations appear in **Evidence preservation vault**. Review the full
+snapshot, provide a reason and type `PRESERVE` in the separate approval dialog.
+Preparation expires after 15 minutes; execution approval after five minutes and is
+checked by both controller and target. A changed/resolved incident, stale snapshot,
+changed bytes/identity or mismatched host/digest rejects execution. AI plan approval
+never authorizes this action; it uses a separate explicit preservation approval.
+
+The target copies descriptor-read bytes to
+`/var/lib/mrpatchy-evidence/<operation-id>/content`. All vault ancestors must be
+root-owned and not group/world writable; vault/operation directories are 0700,
+content/receipts are root-owned 0600. Root directories cannot be symlink aliases.
+The source is never renamed, unlinked, chmodded or repaired. Reads may update its
+access time. This is **evidence preservation**, not quarantine or containment:
+original bytes can remain executable and running processes are not stopped.
+
+Hash/identity checks surround bounded reads and are repeated immediately before
+and after copying. The copy is fsynced, independently rehashed, and bound to a
+protected, fsynced operation receipt. An operation ID is bound to one snapshot;
+retries return its receipt rather than making another copy. Metadata/partial files
+are retained on interrupted copies and are never automatically overwritten or
+promoted to verified evidence. There is no automatic cleanup or retention policy;
+plan storage for approved copies. Source/copy phases each have 30-second and 32 MiB
+limits; SSH execution has a three-minute deadline. These are bounded observations,
+not a filesystem snapshot, remote-root attestation, trusted timestamp or immutable
+external evidence archive.
+
+A controller marks an operation uncertain before requesting the copy. Lost replies
+or restarts therefore do not imply success or re-execute copying automatically.
+**Verify vault status** queues read-only reconciliation, validates protected receipts
+and rehashes complete vault content. Incomplete or missing evidence remains explicit.
+Target-console review is required for partial files; no arbitrary file download,
+execution, deletion or restore endpoint is exposed. Controller metadata retains
+approval actor/reason, snapshot digest and latest observed receipt, with audit events.
+Repeated read-only status observations update this latest observation; target
+content and its original completed receipt are retained. Incidents are not silently
+resolved, and no clean-host verdict is recorded.
+
+The `security_evidence_copies` table is initialized at startup and included in
+verified offline database migration metadata. Initialize the current schema before
+migrating. Vault bytes live on targets and require separate protected backups;
+controller database backups alone do not retain them. Rebuild app/workers and
+redeploy target helpers through **Finish / verify installation** before use.
+
+Native integration tests exercise guarded vault creation, unchanged source bytes,
+copy verification, permissions and idempotent status/retry on Debian, Ubuntu,
+Fedora and AlmaLinux containers. Service managers remain stubbed. Quarantine moves,
+restore approval, durable destructive-action recovery, process/cloud containment
+and trusted remediation executors remain subsequent milestones. No automatic
+security response is enabled by this preservation feature.
