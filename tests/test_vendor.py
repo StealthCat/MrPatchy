@@ -100,6 +100,33 @@ def test_tar_traversal_duplicate_and_budget():
     with pytest.raises(ValueError):list(vendor.tar_members(out.getvalue()))
 
 
+@pytest.mark.parametrize('content_size',[True,False])
+def test_zstd_tar_bounded_and_strict(monkeypatch,content_size):
+    import gzip
+    import zstandard
+    raw=gzip.decompress(tar([('./srv/test',b'known bytes')]))
+    compressor=zstandard.ZstdCompressor(write_content_size=content_size,write_checksum=True)
+    if content_size:compressed=compressor.compress(raw)
+    else:
+        stream=compressor.compressobj();compressed=stream.compress(raw)+stream.flush()
+        assert zstandard.get_frame_parameters(compressed).window_size>128*1024
+    members=[]
+    for archive,member,path in vendor.tar_members(compressed):
+        members.append((path,archive.extractfile(member).read()))
+    assert members==[('/srv/test',b'known bytes')]
+    for invalid in (compressed[:-1],compressed+b'extra',compressed+compressed):
+        with pytest.raises(ValueError):list(vendor.tar_members(invalid))
+    monkeypatch.setattr(vendor,'TAR_STREAM_LIMIT',len(raw)-1)
+    with pytest.raises(ValueError):list(vendor.tar_members(compressed))
+
+
+def test_zstd_tar_window_limit():
+    import zstandard
+    compressor=zstandard.ZstdCompressor(compression_params=zstandard.ZstdCompressionParameters.from_level(1,window_log=28,force_max_window=True,write_content_size=False)).compressobj()
+    # A streaming frame advertises its configured window even for a small input.
+    with pytest.raises(ValueError,match='work limit'):list(vendor.tar_members(compressor.compress(b'x'*1024)+compressor.flush()))
+
+
 def manifest(path):return {'package':'patchy-test','version':'1.0-1','architecture':'amd64','entries':[{'path':str(path),'sha256':vendor.sha(b'known bytes'),'size':11}]}
 
 

@@ -1077,6 +1077,10 @@ retention policy. Back up operator bundles/payloads separately from database met
 
 The existing artifact limits remain: 64 MiB package artifact, 32 MiB selected payload,
 and bounded archive work. Retained preparation provenance is capped at 32,000 bytes.
+Debian zstd sections are decoded incrementally without extraction, with a 128 MiB
+window limit, 130 MiB decoded stream limit and 20-second decode budget. Truncated,
+concatenated and trailing-data frames are rejected; the existing per-member,
+aggregate-content and member-count limits still apply after decoding.
 Signature/native RPM command deadlines apply independently; package identity/owner
 queries each have ten seconds. Target readiness has a 150-second SSH deadline plus
 independent health verification; each retained hash phase keeps its 30-second budget.
