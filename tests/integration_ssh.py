@@ -373,7 +373,7 @@ print(json.dumps(matches))"""
         native_file_action(executable_qid,True)
         print('Reviewed process response passed: independent evidence, executable match, real stable-pidfd suspension, read-only reconciliation, separate recovery approval and independent file hold')
         # Authenticate a separately supplied replacement, but publish no bytes.
-        from app import repair_preparation,repair_staging,vendor
+        from app import repair_preparation,repair_staging,repair_publication,vendor
         repair_path='/srv/patchy-vendor-fixture/data'
         if rpm:
             repair_bundle='rpm-fixture';bundle=workspace/'vendor-packages'/repair_bundle
@@ -459,6 +459,59 @@ print(json.dumps(matches))"""
             assert session.get(repair_staging.Stage,staging_id).state=='uncertain'
             assert session.get(quarantine.Quarantine,repair_qid).hold
         print('Trusted replacement staging passed: signed artifact bytes transferred through real worker/bridge, root-only mode 0600, read-only reconciliation, tamper refusal, retained original and unchanged hold without live-file publication')
+        # A fresh, separately approved staging operation is required after tamper.
+        state,publication_preparation,publication_preparation_id=trusted_preparation()
+        assert state=='ready'
+        with Session() as session:
+            staged=repair_staging.approve(session,session.get(Host,host.id),publication_preparation_id,incidents.digest(publication_preparation),'native-test','Approved fresh private staging before publication.')
+            publication_stage_id=staged.id
+            stage_job=worker.enqueue(session,host.id,'trusted-repair-stage',{'stage_id':staged.id,'quarantine_id':repair_qid,'_actor':'native-test'})
+        worker.execute(stage_job)
+        with Session() as session:
+            assert session.get(Job,stage_job).state=='complete',session.get(Job,stage_job).output
+            staged=session.get(repair_staging.Stage,publication_stage_id)
+            published=repair_publication.approve(session,session.get(Host,host.id),staged.id,incidents.digest(staged.report),'native-test','Separately approved live publication and reviewed permission policy.')
+            publication_id=published.id;published_inode=published.plan['payload']['identity']['ino']
+            publish_job=worker.enqueue(session,host.id,'trusted-repair-publish',{'publication_id':published.id,'quarantine_id':repair_qid,'_actor':'native-test'})
+        worker.execute(publish_job)
+        with Session() as session:
+            assert session.get(Job,publish_job).state=='complete',session.get(Job,publish_job).output
+            published=session.get(repair_publication.Publication,publication_id)
+            assert published.state=='published' and published.hold and published.receipt['facts']['held_verified'],published.report
+            assert session.get(quarantine.Quarantine,repair_qid).state=='replaced'
+            publication_verify=worker.enqueue(session,host.id,'trusted-repair-publish-status',{'publication_id':published.id,'quarantine_id':repair_qid,'_actor':'native-test'})
+        worker.execute(publication_verify)
+        with Session() as session:
+            assert session.get(Job,publication_verify).state=='complete',session.get(Job,publication_verify).output
+            published=session.get(repair_publication.Publication,publication_id)
+            assert published.state=='published' and published.hold and published.report['trust_current']
+            # Explicit native-fixture service-impact review; production uses typed
+            # KEEP REPLACEMENT through the API, covered by controller tests.
+            published.hold=False;session.get(quarantine.Quarantine,repair_qid).hold=False
+            repair_publication.event(session,published,'hold_released','native-test',{'confirmation':'KEEP REPLACEMENT','reason':'Reviewed harmless native-fixture publication and service impact.'});session.commit()
+        assert run('docker','exec',name,'cat',repair_path)=='1'
+        assert int(run('docker','exec',name,'stat','-c','%i',repair_path))==published_inode
+        assert run('docker','exec',name,'stat','-c','%a',repair_path)=='644'
+        assert run('docker','exec',name,'cat','/var/lib/mrpatchy-quarantine/'+repair_qid+'/held')=='changed'
+        def publication_audit(advance):
+            response_monitor.schedule_tick(time.time()+advance)
+            with Session() as session:
+                queued=session.query(Job).filter_by(host_id=host.id,action='quarantine-audit',state='queued').one()
+                assert queued.payload['publication_id']==publication_id
+                identifier=queued.id
+            worker.execute(identifier)
+            with Session() as session:return session.get(response_monitor.Check,identifier).state
+        assert publication_audit(601)=='replacement_verified'
+        run('docker','exec',name,'sh','-c',"printf modified-live > "+repair_path)
+        assert publication_audit(1201)=='uncertain'
+        assert run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/tmp/patchy-verifyscript-executed').exists())")=='False'
+        with Session() as session:
+            published=session.get(repair_publication.Publication,publication_id)
+            assert published.hold and session.get(quarantine.Quarantine,repair_qid).hold and published.state=='uncertain'
+            # Trusted-console fixture cleanup is explicit; no automatic undo runs.
+            published.state='console_recovered';published.hold=False;session.get(quarantine.Quarantine,repair_qid).state='console_recovered';session.commit()
+        run('docker','exec',name,'rm',repair_path)
+        print('Trusted replacement publication passed: separate approval, exact staged inode and authenticated bytes made live, original retained, independent hold and review, read-only recovery, bound recurring verification and tamper pause without scripts or process signals')
         # Existing original-file restoration is a separate fixture cleanup action.
         with Session() as session:
             original_check=worker.enqueue(session,host.id,'quarantine-status',{'quarantine_id':repair_qid,'_actor':'native-test'})

@@ -821,10 +821,14 @@ def cancel_job(job_id:str,user=Depends(auth)):
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
         host_id=job.host_id
-    with host_change(host_id),Session() as s:
+        publication_cancel=job.action=='trusted-repair-publish'
+    with host_change(host_id,allow_quarantined=publication_cancel),Session() as s:
         job=s.get(Job,job_id)
         if job.state!='queued':raise HTTPException(409,'Only queued operations can be cancelled')
         job.state='cancelled'
+        if job.action=='trusted-repair-publish':
+            from . import repair_publication
+            repair_publication.reject_unstarted(s,job,user['username'],'cancelled')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(releases.ReleasePlan,job.payload.get('plan_id'))
             if plan and plan.host_id==host_id and plan.job_id==job.id:
@@ -1292,14 +1296,16 @@ def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
 @app.get('/api/hosts/{host_id}/security/quarantines')
 def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
     from .quarantine import Quarantine
-    from . import response_monitor,response_processes
+    from . import response_monitor,response_processes,repair_publication
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
         rows=list(s.scalars(select(Quarantine).where(Quarantine.host_id==host_id).order_by(Quarantine.created.desc(),Quarantine.id).offset(offset).limit(21)))
         watches,latest,_=response_monitor.context(s,rows[:20])
         processes=response_processes.latest(s,rows[:20])
+        publications=repair_publication.latest(s,rows[:20])
         return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt),
+            'publication_id':publications[r.id].id if r.id in publications else None,
             'process_observation':{'id':processes[r.id].id,'state':processes[r.id].state,'created':processes[r.id].created,'scope_current':processes[r.id].report['scope_current']} if r.id in processes else None,
             'monitor':{'watch':watches[r.id],'eligible':response_monitor.eligible(r),'last_check':object_dict(latest[r.id]) if r.id in latest else None}} for r in rows[:20]],'more':len(rows)>20}
 
@@ -1364,16 +1370,26 @@ def staging_row(s,host_id,stage_id):
 @app.get('/api/hosts/{host_id}/security/repair-stages')
 def replacement_staging_history(host_id:str,offset:int=0,user=Depends(auth)):
     from .repair_staging import Stage
+    from . import repair_publication
+    from .quarantine import Quarantine
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
         rows=list(s.scalars(select(Stage).where(Stage.host_id==host_id).order_by(Stage.created.desc(),Stage.id).offset(offset).limit(21)))
-        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan)} for r in rows[:20]],'more':len(rows)>20}
+        original=list(s.scalars(select(Quarantine).where(Quarantine.host_id==host_id,Quarantine.id.in_([r.quarantine_id for r in rows[:20]]))))
+        publications=repair_publication.latest(s,original)
+        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'report_digest':incidents.digest(r.report),'publication_id':publications[r.quarantine_id].id if r.quarantine_id in publications and publications[r.quarantine_id].stage_id==r.id else None} for r in rows[:20]],'more':len(rows)>20}
 
 @app.post('/api/hosts/{host_id}/security/repair-stages/{stage_id}/status')
 def verify_replacement_stage(host_id:str,stage_id:str,user=Depends(auth)):
+    from . import repair_publication
     with host_change(host_id,allow_quarantined=True),Session() as s:
-        host_or_404(s,host_id);row=staging_row(s,host_id,stage_id);staging_idle(s,host_id,row.quarantine_id)
+        host_or_404(s,host_id);row=staging_row(s,host_id,stage_id)
+        publication=repair_publication.active(s,row.quarantine_id)
+        if publication and publication.stage_id==row.id:
+            publication_idle(s,publication)
+            return {'job_id':worker.enqueue(s,host_id,'trusted-repair-publish-status',{'publication_id':publication.id,'quarantine_id':publication.quarantine_id,'_actor':user['username']})}
+        staging_idle(s,host_id,row.quarantine_id)
         if row.state=='queued':raise HTTPException(409,'Staging is still queued')
         return {'job_id':worker.enqueue(s,host_id,'trusted-repair-stage-status',{'stage_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
 
@@ -1385,6 +1401,84 @@ def replacement_stage_events(host_id:str,stage_id:str,offset:int=0,user=Depends(
         row=staging_row(s,host_id,stage_id)
         records=list(s.scalars(select(Event).where(Event.stage_id==row.id,Event.host_id==host_id).order_by(Event.created.desc(),Event.id).offset(offset).limit(21)))
         return {'items':[object_dict(r) for r in records[:20]],'more':len(records)>20}
+
+def publication_row(s,host_id,publication_id):
+    from .repair_publication import Publication
+    row=s.get(Publication,publication_id)
+    if not row or row.host_id!=host_id:raise HTTPException(404,'Replacement publication not found')
+    return row
+
+def publication_idle(s,row):
+    from .quarantine import ACTIONS
+    if operations.host_quarantined(s,row.host_id,response_id=row.quarantine_id,publication_id=row.id,publication_response_id=row.quarantine_id):raise HTTPException(409,'Another operation or response requires reconciliation')
+    actions=tuple(a for a in ACTIONS if a!='quarantine-audit')
+    if s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
+
+@app.post('/api/hosts/{host_id}/security/repair-stages/{stage_id}/publish')
+def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingApproval,user=Depends(auth)):
+    from . import repair_publication
+    if body.confirmation!='PUBLISH' or len(body.reason.strip())<10:raise ValueError('Type PUBLISH and provide a meaningful reason')
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);staged=staging_row(s,host_id,stage_id)
+        # Before a publication exists, use its response scope without bypassing
+        # any existing publication hold. Related process pauses remain active.
+        if operations.host_quarantined(s,host_id,response_id=staged.quarantine_id,publication_response_id=staged.quarantine_id):raise HTTPException(409,'An unrelated operation or response requires reconciliation')
+        from .quarantine import ACTIONS
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(tuple(a for a in ACTIONS if a!='quarantine-audit')),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        row=repair_publication.approve(s,host,stage_id,body.report_digest,user['username'],body.reason.strip())
+        return {'publication_id':row.id,'publication_hold':True,'job_id':worker.enqueue(s,host_id,'trusted-repair-publish',{'publication_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
+
+@app.get('/api/hosts/{host_id}/security/repair-publications')
+def replacement_publications(host_id:str,offset:int=0,user=Depends(auth)):
+    from .repair_publication import Publication
+    from .quarantine import Quarantine
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        records=list(s.scalars(select(Publication).where(Publication.host_id==host_id).order_by(Publication.created.desc(),Publication.id).offset(offset).limit(21)))
+        originals={r.id:r.hold for r in s.scalars(select(Quarantine).where(Quarantine.host_id==host_id,Quarantine.id.in_([r.quarantine_id for r in records[:20]])))}
+        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt),'file_hold':originals.get(r.quarantine_id,False)} for r in records[:20]],'more':len(records)>20}
+
+@app.post('/api/hosts/{host_id}/security/repair-publications/{publication_id}/status')
+def verify_replacement_publication(host_id:str,publication_id:str,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        row=publication_row(s,host_id,publication_id);publication_idle(s,row)
+        if row.state in ('queued','rejected','console_recovered'):raise HTTPException(409,'Publication is queued, unstarted or archived by console review')
+        return {'job_id':worker.enqueue(s,host_id,'trusted-repair-publish-status',{'publication_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
+
+@app.get('/api/hosts/{host_id}/security/repair-publications/{publication_id}/history')
+def replacement_publication_events(host_id:str,publication_id:str,offset:int=0,user=Depends(auth)):
+    from .repair_publication import Event
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=publication_row(s,host_id,publication_id)
+        records=list(s.scalars(select(Event).where(Event.publication_id==row.id,Event.host_id==host_id).order_by(Event.created.desc(),Event.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r) for r in records[:20]],'more':len(records)>20}
+
+class PublicationReview(BaseModel):
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    receipt_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    reason:str=Field(min_length=10,max_length=4000)
+    confirmation:str
+
+@app.post('/api/hosts/{host_id}/security/repair-publications/{publication_id}/release')
+def review_publication_pause(host_id:str,publication_id:str,body:PublicationReview,user=Depends(auth)):
+    from . import repair_publication,quarantine
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=publication_row(s,host_id,publication_id);publication_idle(s,row)
+        if row.state in ('rejected','console_recovered'):raise HTTPException(409,'This rejected or archived publication has no active publication review')
+        original=response_row(s,host_id,row.quarantine_id)
+        if len(body.reason.strip())<10 or incidents.digest(row.plan)!=body.plan_digest or incidents.digest(row.receipt)!=body.receipt_digest or not (row.hold or original.hold):raise HTTPException(409,'Publication pause or reviewed receipt changed')
+        if body.confirmation=='KEEP REPLACEMENT':
+            if not repair_publication.bound(s,host,row) or not repair_publication.positive(original,row) or not row.report.get('scope_current') or not row.report.get('trust_current') or not 0<=time.time()-row.observed<=300:raise HTTPException(409,'Fresh verified publication and current vendor trust are required')
+            original.hold=False
+        elif body.confirmation=='CONSOLE RECOVERED':
+            row.state='console_recovered'
+            if repair_publication.bound(s,host,row):original.state='console_recovered'
+        else:raise ValueError('Type KEEP REPLACEMENT or CONSOLE RECOVERED after service and console review')
+        row.hold=False;repair_publication.event(s,row,'hold_released',user['username'],{'reason':body.reason.strip(),'confirmation':body.confirmation,'receipt_digest':body.receipt_digest})
+        quarantine.event(s,original,'publication_reviewed',user['username'],{'publication_id':row.id,'confirmation':body.confirmation,'reason':body.reason.strip()});s.commit()
+        return {'publication_hold':False,'file_hold':original.hold,'server_changes_paused':operations.host_quarantined(s,host_id),'incident_not_resolved':True}
 
 class ResponseProcessRequest(BaseModel):
     plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -1590,16 +1684,24 @@ def approve_quarantine_restore(host_id:str,quarantine_id:str,body:ResponseApprov
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/status')
 def reconcile_quarantine(host_id:str,quarantine_id:str,user=Depends(auth)):
+    from . import repair_publication
     with host_change(host_id,allow_quarantined=True),Session() as s:
-        row=response_row(s,host_id,quarantine_id);response_idle(s,host_id,response_id=row.id)
+        row=response_row(s,host_id,quarantine_id)
+        publication=repair_publication.active(s,row.id)
+        if publication:
+            publication_idle(s,publication)
+            return {'job_id':worker.enqueue(s,host_id,'trusted-repair-publish-status',{'publication_id':publication.id,'quarantine_id':row.id,'_actor':user['username']})}
+        response_idle(s,host_id,response_id=row.id)
         if row.state=='prepared':raise HTTPException(409,'Preparation has not been approved for execution')
         return {'job_id':worker.enqueue(s,host_id,'quarantine-status',{'quarantine_id':row.id,'_actor':user['username']})}
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/release')
 def release_quarantine_hold(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(auth)):
-    from . import quarantine
+    from . import quarantine,repair_publication
     with host_change(host_id,allow_quarantined=True),Session() as s:
-        row=response_row(s,host_id,quarantine_id);response_idle(s,host_id,response_id=row.id)
+        row=response_row(s,host_id,quarantine_id)
+        if repair_publication.active(s,row.id):raise HTTPException(409,'Review the independent publication pause and receipt in Replacement publications')
+        response_idle(s,host_id,response_id=row.id)
         if not row.hold or len(body.reason.strip())<10 or incidents.digest(row.plan)!=body.plan_digest or incidents.digest(row.receipt)!=body.receipt_digest:raise HTTPException(409,'Hold or reviewed evidence changed; provide a meaningful review reason')
         if body.confirmation=='KEEP QUARANTINED':
             if row.state!='quarantined' or time.time()-row.observed>300:raise HTTPException(409,'Verify quarantine state before accepting the operational impact')

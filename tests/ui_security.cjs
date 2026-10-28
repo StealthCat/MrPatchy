@@ -1,7 +1,7 @@
 const assert=require('assert/strict');
 module.exports=async(page)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
- const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
+ const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false,publicationCreated=false,publicationHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -25,7 +25,12 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/quarantines/response-fixture/watch')){const body=request.postDataJSON();assert.equal(body.enabled,false);assert.equal(body.plan_digest,'f'.repeat(64));watchEnabled=false;writes.push(url.pathname);return route.fulfill({json:{enabled:false,revision:'watch-version'}});}
   if(url.pathname===prefix+'/repair-preparations')return route.fulfill({json:{items:repairQueued?[{id:'repair-fixture',report_digest:'9'.repeat(64),stage_id:stagingCreated?'stage-fixture':null,state:'ready',path:'/srv/security-fixture',bundle_id:'vendor-fixture',actor:'admin',finished:Date.now()/1000,report:{scope_current:true,manifest:{entries:[{path:'/srv/security-fixture',sha256:'b'.repeat(64),size:10}]},read_only:true,publication:'not_implemented',authentication:{artifact_sha256:'b'.repeat(64),signers:['publisher-fixture']},target:{replacement_mode:420,gaps:[],facts:{retained_verified:true,destination_empty:true,package_matches:true,owner_matches:true}}}}]:[],more:false}});
   if(url.pathname===prefix+'/repair-preparations/repair-fixture/stage'){const body=request.postDataJSON();assert.equal(body.confirmation,'STAGE');assert.equal(body.report_digest,'9'.repeat(64));stagingCreated=true;writes.push(url.pathname);return route.fulfill({json:{stage_id:'stage-fixture',job_id:'stage-job',publication:'not_authorized'}});}
-  if(url.pathname===prefix+'/repair-stages')return route.fulfill({json:{items:stagingCreated?[{id:'stage-fixture',state:'staged',actor:'admin',reason:'Reviewed private staging.',created:Date.now()/1000,expires:Date.now()/1000+300,observed:Date.now()/1000,plan:{manifest:{entries:[{path:'/srv/security-fixture',size:10}]}},report:{scope_current:true,trust_current:true,target:{received:10,facts:{payload_verified:true}}}}]:[],more:false}});
+  if(url.pathname===prefix+'/repair-stages')return route.fulfill({json:{items:stagingCreated?[{id:'stage-fixture',publication_id:publicationCreated?'publication-fixture':null,report_digest:'6'.repeat(64),state:publicationCreated?'published':'staged',actor:'admin',reason:'Reviewed private staging.',created:Date.now()/1000,expires:Date.now()/1000+300,observed:Date.now()/1000,plan:{manifest:{entries:[{path:'/srv/security-fixture',size:10}]}},report:{scope_current:true,trust_current:true,target:{received:10,facts:{payload_verified:true}}}}]:[],more:false}});
+  if(url.pathname===prefix+'/repair-stages/stage-fixture/publish'){const body=request.postDataJSON();assert.equal(body.confirmation,'PUBLISH');assert.equal(body.report_digest,'6'.repeat(64));publicationCreated=true;publicationHold=true;responseState='replaced';responseHold=true;writes.push(url.pathname);return route.fulfill({json:{publication_id:'publication-fixture',job_id:'publication-job',publication_hold:true}});}
+  if(url.pathname===prefix+'/repair-publications')return route.fulfill({json:{items:publicationCreated?[{id:'publication-fixture',state:'published',hold:publicationHold,file_hold:publicationHold,actor:'admin',reason:'Reviewed live publication and service impact.',created:Date.now()/1000,observed:Date.now()/1000,plan_digest:'7'.repeat(64),receipt_digest:'8'.repeat(64),plan:{stage_id:'stage-fixture',stage_plan:{replacement_mode:420,manifest:{entries:[{path:'/srv/security-fixture',size:10}]}}},receipt:{facts:{intent_verified:true,held_verified:true,parents_match:true,published_verified:true,private_present:false,package_matches:true,owner_matches:true,rechecked:true,completion_recorded:true},gaps:[]},report:{scope_current:true,trust_current:true}}]:[],more:false}});
+  if(url.pathname===prefix+'/repair-publications/publication-fixture/status'){writes.push(url.pathname);return route.fulfill({json:{job_id:'publication-status-job'}});}
+  if(url.pathname===prefix+'/repair-publications/publication-fixture/release'){const body=request.postDataJSON();assert.equal(body.confirmation,'KEEP REPLACEMENT');assert.equal(body.plan_digest,'7'.repeat(64));assert.equal(body.receipt_digest,'8'.repeat(64));publicationHold=false;responseHold=false;writes.push(url.pathname);return route.fulfill({json:{publication_hold:false,file_hold:false,server_changes_paused:false}});}
+  if(url.pathname===prefix+'/repair-publications/publication-fixture/history')return route.fulfill({json:{items:[{kind:'approved',actor:'admin',details:{reason:'Reviewed live publication.'}},{kind:'observed_published',actor:'admin'}],more:false}});
   if(url.pathname===prefix+'/repair-stages/stage-fixture/status'){writes.push(url.pathname);return route.fulfill({json:{job_id:'stage-status-job'}});}
   if(url.pathname===prefix+'/repair-stages/stage-fixture/history')return route.fulfill({json:{items:[{kind:'approved',actor:'admin',report:{reason:'Reviewed private staging.'}},{kind:'observed_staged',actor:'admin'}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/repair-preparations')){assert.deepEqual(request.postDataJSON(),{bundle_id:'vendor-fixture',plan_digest:'f'.repeat(64)});repairQueued=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'repair-job',read_only:true,publication:'not_implemented'}});}
@@ -243,6 +248,30 @@ module.exports=async(page)=>{
   await page.locator('#startup-review-form [name=reason]').fill('Investigating the new startup entry.');
   await page.getByRole('button',{name:'Save startup review',exact:true}).click();
   await page.locator('#modal').waitFor({state:'hidden'});
+  // Publication controls belong to Security; the preceding checks use File integrity.
+  await page.goto(new URL('/#servers/'+host.id+'/security',page.url()).href);
+  await page.getByRole('heading',{name:'Trusted replacement staging',exact:true}).waitFor();
+  const beforePublication=writes.length;
+  await page.getByRole('button',{name:'Review replacement publication',exact:true}).click();assert.equal(writes.length,beforePublication);
+  await page.locator('#publication-approval [name=reason]').fill('Reviewed authenticated bytes, permissions, activation risk and service impact.');
+  await page.locator('#publication-approval [name=confirmation]').fill('PUBLISH');
+  await page.getByRole('button',{name:'Publish approved replacement',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/repair-stages/stage-fixture/publish');
+  await page.getByRole('button',{name:'Refresh replacement publications',exact:true}).click();
+  await page.getByText('Published permission policy: 0644 root/root',{exact:false}).waitFor();
+  await page.getByRole('button',{name:'Verify replacement publication',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Read-only publication verification queued'));
+  assert.equal(writes.at(-1),prefix+'/repair-publications/publication-fixture/status');
+  await page.getByRole('button',{name:'Replacement publication history',exact:true}).click();
+  await page.locator('#publication-history').filter({hasText:'observed_published'}).waitFor();
+  for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'Publication records must fit the viewport');}
+  await page.locator('#close-modal').click();
+  const beforePublicationReview=writes.length;
+  await page.getByRole('button',{name:'Review publication pause',exact:true}).click();assert.equal(writes.length,beforePublicationReview);
+  await page.locator('#publication-release [name=reason]').fill('Verified replacement and original evidence; reviewed affected services.');
+  await page.locator('#publication-release [name=typed]').fill('KEEP REPLACEMENT');
+  await page.getByRole('button',{name:'Release reviewed publication pause',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/repair-publications/publication-fixture/release');
   await page.goto(new URL('/#servers/'+host.id+'/agent',page.url()).href);
   await page.locator('#agent-policy').waitFor();
   await page.locator('#agent-policy [name=auto_upgrade]').check();

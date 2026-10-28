@@ -206,6 +206,17 @@ Each action now shows **estimated API cost in USD**, including follow-up calls. 
 
 The target's durable spool acknowledges batches only after central commit; overflow is visible. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
 
+## Reviewed file replacement
+
+Under **Servers → server → Security**, administrators can preserve evidence, review
+quarantine, authenticate an offline vendor replacement, separately approve private
+staging, and then use **Review replacement publication** with `PUBLISH` to make that
+exact staged inode live without overwriting an existing destination. The original
+stays quarantined. Publication creates a separate server pause; verify the result
+and review service impact before using `KEEP REPLACEMENT`. Process pauses remain
+independent. Existing opt-in retained-response monitoring verifies both the live
+replacement and original evidence. See [scope, approvals, recovery and limits](docs/SECURITY_IMPLEMENTATION.md#separately-approved-live-replacement-publication).
+
 ## Accounts, SSO, notifications and keys
 
 **Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring.

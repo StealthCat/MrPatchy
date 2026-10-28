@@ -6,7 +6,9 @@ restoration now support protected files under `/srv` and `/opt`. Retained-respon
 monitoring, manual process-reference observations and separately approved suspension/
 recovery of selected root-owned executable processes are available. Authenticated
 replacement preparation is read-only. Separately approved private replacement staging
-is available; approved live-file publication remains next.
+is available, along with separately approved no-overwrite live-file publication,
+independent publication pauses and verification of the published file plus retained
+original. Service restart/rollback, broader repair and cloud isolation remain future work.
 Broader typed remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
@@ -1097,12 +1099,9 @@ including positive readiness and a legitimate occupied destination, while preser
 original evidence and holds and checking that no package verification script runs.
 Containers still stub systemd; real-VM/SELinux and broader performance drills remain.
 
-Private transfer/staging is described below. Next: separately approved atomic
-no-overwrite live-file publication, publication intent/reconciliation and recovery
-holds, fresh identity/ownership/parent/trust revalidation at publication, and
-integration with retained-file monitoring and process holds. No preparation record
-is an execution token. Broader trusted repair, cloud isolation and rebuild/credential
-workflows remain unfinished.
+Private transfer/staging and separate live-file publication are described below.
+No preparation record is an execution token. Broader trusted repair, cloud isolation
+and rebuild/credential workflows remain unfinished.
 
 ## Separately approved private replacement staging
 
@@ -1208,6 +1207,163 @@ quota, read-only reconciliation, role/host boundaries, history and database copy
 Native SSH validation stages authentic signed Debian/RPM fixture bytes through the
 real worker/bridge on Debian, Ubuntu, Fedora and AlmaLinux, verifies mode 0600,
 tamper refusal, retained original and unchanged holds, and never publishes the live
-file. Browser tests cover the approval and verification/history flows at mobile and
+file. The separate publication executor is described below. Browser tests cover the approval and verification/history flows at mobile and
 desktop widths. Containers still stub systemd; live GCP/IAP, real-VM/SELinux,
 low-bandwidth and failure/performance drills require operator validation.
+
+## Separately approved live replacement publication
+
+**Trusted replacement staging → Review replacement publication** requires a
+separate reason and `PUBLISH`. STAGE, AI-plan review, process response and quarantine
+approvals do not authorize this move. Choose a successful staged receipt observed
+within five minutes, with unchanged pinned SSH host, original quarantine, selected
+manifest, inode/hash and staging report digest, and successfully rechecked vendor
+trust. The original must still be quarantined. The publication approval expires
+after five minutes and binds the complete staged plan and exact private payload
+identity. An existing active publication for the original prevents another approval.
+
+Publication makes authenticated regular-file bytes available in the original live
+pathname. Programs and supervisors may start using them immediately, including
+execution when the selected mode permits it. The UI discloses that activation risk
+before approval. Scope remains root/root single-link protected files under `/srv/`
+or `/opt/`, excluding `/opt/drpatch`, on the approved filesystem. Only original modes
+0600, 0640, 0644, 0700, 0750 and 0755, with no extended attributes, are supported.
+These are the reviewed original permissions, **not authenticated vendor
+permissions**. The executor does not reconstruct a whole package installation,
+configuration semantics, generated files, symlinks, ACLs/capabilities or service
+dependencies. Authenticated same-version bytes may still be vulnerable. Publication
+is not a malware-eradication, service-health or clean-host verdict.
+
+Approval creates a separate durable **publication pause** before queueing. Existing
+file and process pauses remain independent. The worker reauthenticates the offline
+artifact, selected bytes and publisher-key snapshot before target access and after
+fresh independent current-helper verification. It ends MySQL snapshots before
+checking the current scope again. Before a mutating RPC, it commits publication and
+file uncertainty with holds and removes stale restoration readiness. A controller
+or worker restart never automatically replays publication. A job left running must
+first be reconciled in Activity using the existing target-operation lock proof.
+Cancelling a still-queued publication releases only its newly created publication
+pause; the owning file/process pauses and original evidence stay unchanged.
+
+The helper locks the existing staging directory and reads its bound staging and
+finish journals. It rehashes the approved staged inode, verifies its root-only
+metadata/attributes and rechecks exact installed package version/architecture,
+unique path ownership, unchanged protected ancestors, intact quarantined original
+and an empty destination. RPM queries use `--noplugins`; no package verification or
+installation script runs. A legitimate concurrent deployment, symlink or any other
+occupied destination is never overwritten or removed. No arbitrary destination,
+download, package install, service restart, process signal or AI-generated command
+is accepted by this executor.
+
+Under the original-response lock, a root-owned 0600 **publish-intent.json** binds
+the publication ID, full plan and typed approval and is fsynced before permissions
+or namespace changes. The helper rechecks approval expiry before intent, permission
+change and rename. It applies the explicitly reviewed mode to the existing staged
+inode, fsyncs it, verifies that identity/metadata still agree, then uses mandatory
+`renameat2(RENAME_NOREPLACE)` to move that inode into the live pathname. Both parent
+directories are fsynced. There is no overwrite fallback, new-inode copy or automatic
+rollback to potentially malicious original bytes. If a rename fails after chmod,
+the payload can remain at the changed mode inside the root-only 0700 staging
+directory; it is not automatically retried or promoted to ready staging.
+
+After the move, verification hashes the expected live inode, checks root ownership,
+reviewed mode, size, link count and absence of attributes, and independently verifies
+the retained original and protected parents. Package identity/owner and filesystem
+observations are checked again around I/O. The root-only completion journal records
+the publication ID, plan digest and payload metadata. A positive result requires
+all current facts to agree. Concurrent privileged interference, compromised root/
+kernel and unobservable changes between observations remain outside these bounds.
+Each file hash has a 30-second userspace budget, package queries retain their
+10-second limits, and publication/status RPCs have 300-second SSH deadlines.
+Kernel-blocked I/O can exceed userspace deadlines.
+
+The controller rechecks publisher trust and scope after the reply. A change detected
+before the RPC prevents requesting the move. A change discovered during/after the
+RPC retains uncertainty and pauses because bytes may already be live; no distributed
+instantaneous revocation or safe automatic undo is claimed. Invalid receipts,
+transport loss, contradictory facts and stale controller scope never become current
+positive proof. Only classified stages and exception types are retained for errors;
+arbitrary diagnostics and file contents are not copied into records or sent to AI.
+
+**Verify replacement publication** is read-only. It can reconcile a lost reply or
+missing final completion record from the existing bound intent, current live inode/
+hash/permissions, exact package observations and retained original. It creates no
+directories, changes no mode, renames nothing and never rewrites a completion record.
+An existing intent binds its publication ID permanently; even a new approval/ID
+cannot reuse it for another move. A private, fully verified staged inode with no
+publication intent can report **not_started**; this does not automatically release
+a pause or authorize retry. Partial/failed mutation, missing or modified evidence,
+changed parent/package/live inode and corrupt journals remain uncertain. The stored
+approval and observation history survive later failed checks. Rejected preflight
+and cancelled unstarted approvals can be replaced by a new explicit approval;
+attempts with an existing target intent need trusted-console review and normally a
+fresh staging operation, rather than continuing an old move.
+
+**Reviewed replacement publications** retains the actor, reason, approval deadline,
+mode policy, state, independent pause and timestamped receipts/history. A verified
+file response becomes **replaced**, keeping its original quarantine plan/evidence;
+uncertain publication becomes **replacement_uncertain**. Original-file restoration
+is not offered over a live replacement. Existing file-response and staging
+verification endpoints route to publication verification while that publication is
+active, so the legitimate new path is not misclassified by the old quarantine
+protocol. Process reference observations can still inspect the retained original.
+Previously prepared process recovery remains a separate explicit decision that may
+resume malicious execution; publication sends no signal and clears no process pause.
+
+**Review publication pause** requires a separate meaningful reason and the selected
+typed phrase. **KEEP REPLACEMENT** requires a verified publication and successful
+approved-trust recheck no more than five minutes old, matching the displayed receipt
+and plan. After the operator reviews affected services, it clears that publication
+pause and its owning file-response pause. Related process and unrelated response
+pauses remain active, and the result reports whether server work is still paused.
+**CONSOLE RECOVERED** is the operator's trusted-console assertion, archives the
+publication and clears only its publication pause. It does not claim verification
+or clear a remaining file pause; review that separately after console recovery and
+fresh file-state checks. Neither review resolves the incident. There is no automatic
+service-health approval, rollback, original restoration, resume or credential change.
+
+Existing opt-in **Retained response monitoring** now covers both the approved live
+replacement and its original held inode. Its queue binds the publication ID and
+publication-plan digest as well as original plan, pinned host, policy and watch
+revision. A successful check records **replacement_verified**; it does not turn an
+unknown occupied path into an approved replacement. Old queued quarantine checks
+without the publication binding are skipped after publication. Monitoring defers
+while publication/process pauses or other running/recovery work require review.
+The existing independent **pause on problem** choice controls whether an automatic
+negative observation introduces publication/file pauses. Disabling the policy
+during I/O cannot create a new pause; existing holds remain until reviewed. A newer
+manual positive verification can supersede an old alert without deleting its check.
+Published-file, original-evidence, identity, parent and package changes remain
+negative observations, not permission to republish or overwrite anything.
+
+Read-only status can still verify the previously approved hash when the local
+offline bundle has expired, changed or been removed, while reporting the approved
+trust recheck separately as unavailable/failed. That historical hash is not current
+publisher authorization, and KEEP REPLACEMENT cannot use a failed trust recheck.
+New staging/publication still requires currently authenticated operator-provisioned
+Debian/RPM bundles. Automatic artifact/rule retrieval, key-revocation synchronization,
+file retirement/rollback, wider permissions/paths and service orchestration remain
+future work.
+
+`security_repair_publications` and `security_repair_publication_events` are included
+in startup initialization and verified offline SQLite/MySQL migration. Approval
+metadata is retained; observation/review events are append-only through feature
+APIs, while current state/receipt changes on verification. These are protected
+application records, not cryptographically immutable evidence. Back up the original,
+target staging/publication journals and active live files separately; database
+migration copies metadata, not their bytes. Published journal directories are
+active verification evidence and must not be deleted merely to free the existing
+eight-operation staging quota. No automatic retention cleanup is introduced.
+
+Rebuild app/workers and redeploy current helpers before use. Tests cover separate
+approval, stale scope/trust, cancellation, holds, expiry at both mutation boundaries,
+no-overwrite races, partial chmod/rename, lost replies/completions, read-only recovery,
+live/original/journal tampering, metadata policy, immutable history, roles, host
+boundaries and offline migration. Native SSH validation publishes real signed
+Debian/RPM fixture bytes on Debian, Ubuntu, Fedora and AlmaLinux, checks the same
+inode and reviewed mode with the original retained, separately reviews the hold,
+then verifies scheduled replacement monitoring and a tamper pause. Browser checks
+exercise PUBLISH, verification, separate pause review and paginated history at mobile
+and desktop widths. Containers stub systemd; real-VM/SELinux, live GCP/IAP and broader
+service, power-loss, filesystem, performance and recovery drills remain operator
+acceptance work.

@@ -202,13 +202,13 @@ def test_bad_receipts_are_never_positive(admin,transfer,change):
     assert stages(admin)[0]['state']=='uncertain' and 'BINARY_STAGING_SECRET_' not in json.dumps(stages(admin)[0])
 
 
-def test_roles_host_scope_pagination_and_no_publication_endpoint(admin,transfer):
+def test_roles_host_scope_pagination_and_publication_requires_its_own_approval(admin,transfer):
     f=transfer;approved=approve(admin,f);worker.execute(approved.json()['job_id']);row=stages(admin)[0]
     assert admin.get(BASE.replace('response-host','other')+'/repair-stages/'+row['id']+'/history').status_code==404
     assert admin.post(BASE.replace('response-host','other')+'/repair-preparations/'+f['prepared']['id']+'/stage',json={'report_digest':f['prepared']['report_digest'],'confirmation':'STAGE','reason':'Reviewed staging only.'}).status_code==404
     assert admin.get(BASE+'/repair-stages?offset=-1').status_code==400
     assert admin.get(BASE+'/repair-stages/'+row['id']+'/history?offset=-1').status_code==400
-    assert admin.post(BASE+'/repair-stages/'+row['id']+'/publish',json={}).status_code==404
+    assert admin.post(BASE+'/repair-stages/'+row['id']+'/publish',json={}).status_code==422
     with Session() as s:
         for i in range(21):s.add(staging.Event(stage_id=row['id'],host_id='response-host',kind='fixture',actor='admin'))
         s.commit()

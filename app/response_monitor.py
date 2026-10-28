@@ -6,9 +6,9 @@ from .db import Base,Session,Setting,Host,Job,audit
 from . import quarantine,incidents,ssh
 
 DEFAULT={'enabled':False,'interval_minutes':15,'pause_on_problem':False,'revision':''}
-STATES=('quarantined','uncertain','not_found','console_recovered','not_moved')
+STATES=('quarantined','uncertain','not_found','console_recovered','not_moved','replaced','replacement_uncertain')
 PROBLEMS=('path_occupied','held_unverified','parent_changed','missing','uncertain','not_quarantined','unavailable')
-GOOD=('verified','restored')
+GOOD=('verified','restored','replacement_verified')
 LIMIT=500
 
 class Check(Base):
@@ -60,24 +60,32 @@ def rows(s,host_id):
 
 
 def assessment(s,host_id,now=None):
+    from . import repair_publication
     now=time.time() if now is None else now;cfg=policy(s,host_id);records=rows(s,host_id)
     truncated=len(records)>LIMIT;records=records[:LIMIT]
     watches,latest,_=context(s,records);watched=[r for r in records if watches[r.id]['enabled']]
     rotation=cfg['interval_minutes']*len(watched);budget=(rotation+cfg['interval_minutes'])*60
     problems=[];overdue=[];host=s.get(Host,host_id)
+    publications=repair_publication.latest(s,records)
     for row in watched:
+        publication=publications.get(row.id) if row.state in ('replaced','replacement_uncertain') else None
         check=latest.get(row.id)
         # A newer manual positive verification can supersede a failed check.
         identity=bool(host and row.fingerprint==host.fingerprint)
         bound=bool(check and check.report.get('plan_digest')==incidents.digest(row.plan) and check.report.get('fingerprint')==row.fingerprint)
+        if publication:bound=bound and check.report.get('publication_id')==publication.id and check.report.get('publication_plan_digest')==incidents.digest(publication.plan)
+        elif check and check.report.get('publication_id'):bound=False
         positive=identity and row.state=='quarantined' and row.receipt.get('id')==row.id and row.receipt.get('plan')==row.plan and row.receipt.get('state')=='quarantined' and row.receipt.get('restore_ready') is True and row.receipt.get('restore_attempted') is False and 0<row.observed<=now
+        positive=positive or bool(identity and publication and repair_publication.positive(row,publication) and 0<row.observed<=now)
+        manual_problem=bool(publication and publication.state in ('uncertain','blocked','not_started') and publication.observed and (not check or publication.observed>check.created))
         superseded=positive and check and row.observed>check.created
         if not identity and (cfg['enabled'] or check):problems.append({'id':row.id,'state':'identity_changed','checked':None})
-        elif check and not bound:problems.append({'id':row.id,'state':'evidence_binding_changed','checked':check.created})
+        elif manual_problem:problems.append({'id':row.id,'state':'uncertain','checked':publication.observed})
+        elif check and not bound and not superseded:problems.append({'id':row.id,'state':'evidence_binding_changed','checked':check.created})
         elif check and check.state in PROBLEMS and not superseded:
             problems.append({'id':row.id,'state':check.state,'checked':check.created})
         verified=row.observed if positive else (check.created if check and bound and check.state in GOOD else 0)
-        if not identity:verified=0
+        if not identity or manual_problem:verified=0
         if cfg['enabled'] and (not verified or not 0<=now-verified<=budget):overdue.append(row.id)
     pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='quarantine-audit',Job.state.in_(['queued','running'])).order_by(Job.created).limit(1))
     return {'policy':cfg,'watched':len(watched),'rotation_minutes':rotation,'problems':problems[:20],
@@ -87,6 +95,7 @@ def assessment(s,host_id,now=None):
 
 def valid(s,host,row,payload):
     cfg=policy(s,host.id)
+    if not publication_binding(s,row,payload):return False
     return bool(row and row.host_id==host.id and eligible(row) and row.fingerprint==host.fingerprint
         and host.fingerprint==payload.get('fingerprint')
         and incidents.digest(row.plan)==payload.get('plan_digest') and cfg['enabled']
@@ -94,8 +103,16 @@ def valid(s,host,row,payload):
         and watch(s,row)['revision']==payload.get('watch_revision'))
 
 
+def publication_binding(s,row,payload):
+    from . import repair_publication
+    if row and row.state in ('replaced','replacement_uncertain'):
+        publication=repair_publication.active(s,row.id)
+        return bool(publication and publication.id==payload.get('publication_id') and incidents.digest(publication.plan)==payload.get('publication_plan_digest'))
+    return not payload.get('publication_id')
+
+
 def validate(report,row):
-    if not isinstance(report,dict) or set(report)!={'version','id','plan_digest','state','receipt','facts'} or type(report['version']) is not int or report['version']!=1 or report['id']!=row.id or report['plan_digest']!=incidents.digest(row.plan) or report['state'] not in (*GOOD,*PROBLEMS):raise ValueError('Unsupported response monitoring report')
+    if not isinstance(report,dict) or set(report)!={'version','id','plan_digest','state','receipt','facts'} or type(report['version']) is not int or report['version']!=1 or report['id']!=row.id or report['plan_digest']!=incidents.digest(row.plan) or report['state'] not in ('verified','restored',*PROBLEMS):raise ValueError('Unsupported response monitoring report')
     facts=report['facts']
     if not isinstance(facts,dict) or set(facts)!={'journal_verified','parents_match','held_present','source_present','held_verified'}:raise ValueError('Invalid response observation facts')
     if any(type(facts[k]) is not bool for k in ('journal_verified','held_verified')) or any(facts[k] is not None and type(facts[k]) is not bool for k in ('parents_match','held_present','source_present')):raise ValueError('Invalid response observation types')
@@ -109,6 +126,7 @@ def validate(report,row):
 
 
 def execute(s,host,job):
+    from . import repair_publication
     existing=s.get(Check,job.id)
     if existing:return {'check_id':existing.id,'state':existing.state}
     row=s.get(quarantine.Quarantine,job.payload['quarantine_id'])
@@ -124,8 +142,17 @@ def execute(s,host,job):
             s.add(Check(id=job.id,host_id=host.id,quarantine_id=job.payload['quarantine_id'],state='skipped',report={'reason':'policy_watch_identity_or_state_changed'}))
             return {'check_id':job.id,'state':'skipped'}
         stage='remote'
-        report=ssh.call(host,{'action':'quarantine-audit','id':row.id,'plan':row.plan},timeout=180)
-        stage='protocol';validate(report,row)
+        if job.payload.get('publication_id'):
+            publication=s.get(repair_publication.Publication,job.payload['publication_id'])
+            result=ssh.call(host,{'action':'repair-publish-status','id':publication.id,'plan':publication.plan},timeout=300)
+            stage='protocol';repair_publication.validate(result,publication)
+            trust_current=False
+            try:repair_publication.trust(s,publication);trust_current=True
+            except Exception:pass
+            report={'state':'replacement_verified' if result['state']=='published' else 'uncertain','publication':result,'receipt':None,'facts':result['facts'],'trust_current':trust_current}
+        else:
+            report=ssh.call(host,{'action':'quarantine-audit','id':row.id,'plan':row.plan},timeout=180)
+            stage='protocol';validate(report,row)
     except Exception as error:
         # No contents, exception strings or unverified target claims become proof.
         s.rollback()
@@ -136,9 +163,15 @@ def execute(s,host,job):
     if not row or row.host_id!=host.id:raise ValueError('Response removed during monitoring')
     cfg=policy(s,host.id);state=report['state'];receipt=report.get('receipt')
     current_watch=watch(s,row)
-    applies=eligible(row) and row.fingerprint==host.fingerprint==job.payload['fingerprint'] and incidents.digest(row.plan)==job.payload['plan_digest']
+    applies=eligible(row) and row.fingerprint==host.fingerprint==job.payload['fingerprint'] and incidents.digest(row.plan)==job.payload['plan_digest'] and publication_binding(s,row,job.payload)
     pause=applies and cfg['enabled'] and cfg['pause_on_problem'] and cfg['revision']==job.payload['policy_revision'] and current_watch['enabled'] and current_watch['revision']==job.payload['watch_revision']
-    if applies:
+    if job.payload.get('publication_id'):
+        publication=s.get(repair_publication.Publication,job.payload['publication_id'])
+        receipt=report.get('publication')
+        if applies:
+            repair_publication.apply(s,host,publication,receipt,{'trust_current':report.get('trust_current',False),'failure':report.get('failure')},pause=pause)
+            repair_publication.event(s,publication,'automatic_verification','system',{'job_id':job.id,'receipt':receipt,'pause_on_problem':pause})
+    elif applies:
         row.state={'verified':'quarantined','restored':'restored','not_quarantined':'not_moved'}.get(state,'uncertain')
         row.receipt=receipt if state in GOOD else {};row.observed=time.time()
         if state=='restored':row.hold=False
@@ -147,6 +180,7 @@ def execute(s,host,job):
              'server_changes_paused':row.hold,'policy_revision':job.payload['policy_revision'],
              'receipt':{k:v for k,v in receipt.items() if k!='plan'} if receipt else None,
              'receipt_digest':incidents.digest(receipt) if receipt else None,'failure':report.get('failure')}
+    if job.payload.get('publication_id'):summary.update(publication_id=job.payload['publication_id'],publication_plan_digest=job.payload['publication_plan_digest'])
     s.add(Check(id=job.id,host_id=host.id,quarantine_id=row.id,state=state,report=summary))
     quarantine.event(s,row,'automatic_verification','system',{'check_id':job.id,'state':state})
     return {'check_id':job.id,'state':state,'server_changes_paused':row.hold,'outcome':'response_incomplete' if state in PROBLEMS else 'observed'}
@@ -156,21 +190,25 @@ def schedule_tick(now=None):
     from .coordination import Lock
     from .worker import enqueue
     from .process_response import ProcessResponse
+    from . import repair_publication
     now=time.time() if now is None else now
     with Lock('response-monitor-queue'),Session() as s:
         for setting in s.scalars(select(Setting).where(Setting.key.like('response-monitor:%'))):
             cfg={**DEFAULT,**setting.value};host_id=setting.key.split(':',1)[1];host=s.get(Host,host_id)
             if not cfg['enabled'] or not host or host.state=='enrolling' or not host.fingerprint:continue
             if s.scalar(select(ProcessResponse.id).where(ProcessResponse.host_id==host_id,ProcessResponse.hold==True).limit(1)):continue
+            if s.scalar(select(repair_publication.Publication.id).where(repair_publication.Publication.host_id==host_id,repair_publication.Publication.hold==True).limit(1)):continue
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['running','recovery_required'])).limit(1)):continue
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(quarantine.ACTIONS),Job.state.in_(['queued','running'])).limit(1)):continue
             last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='quarantine-audit').order_by(Job.created.desc()).limit(1))
             if last and now-last.created<cfg['interval_minutes']*60:continue
             candidates=[];records=rows(s,host_id)[:LIMIT];watches,_,attempts=context(s,records)
             holds=set(s.scalars(select(quarantine.Quarantine.id).where(quarantine.Quarantine.host_id==host_id,quarantine.Quarantine.hold==True)))
+            publications=repair_publication.latest(s,records)
             for row in records:
                 watched=watches[row.id]
                 if not watched['enabled'] or row.fingerprint!=host.fingerprint or holds-{row.id}:continue
+                if row.state in ('replaced','replacement_uncertain') and row.id not in publications:continue
                 attempt=attempts.get(row.id) or 0
                 candidates.append((max(attempt,row.observed),row.id,row,watched))
             if not candidates:continue
@@ -178,6 +216,8 @@ def schedule_tick(now=None):
             if now-observed<cfg['interval_minutes']*60:continue
             # Normal queued work takes precedence unless this response owns the hold.
             if not row.hold and s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state=='queued').limit(1)):continue
+            publication=publications.get(row.id) if row.state in ('replaced','replacement_uncertain') else None
+            extra={'publication_id':publication.id,'publication_plan_digest':incidents.digest(publication.plan)} if publication else {}
             try:enqueue(s,host_id,'quarantine-audit',{'quarantine_id':row.id,'policy_revision':cfg['revision'],
-                'watch_revision':watched['revision'],'plan_digest':incidents.digest(row.plan),'fingerprint':host.fingerprint,'_actor':'system'})
+                'watch_revision':watched['revision'],'plan_digest':incidents.digest(row.plan),'fingerprint':host.fingerprint,'_actor':'system',**extra})
             except ValueError:continue

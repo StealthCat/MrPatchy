@@ -10,15 +10,18 @@ from test_quarantine_target import response_files,approval as quarantine_approva
 
 
 @pytest.fixture
-def staging(response_files,monkeypatch):
+def staging(response_files,monkeypatch,request):
     source,vault,original=response_files;qid=str(uuid.uuid4())
+    if getattr(request,'param',None) is not None:
+        source.chmod(request.param)
+        original=agent.response_prepare(agent.evidence_prepare({'path':str(source),'sha256':original['file']['sha256'],'device':source.stat().st_dev,'inode':source.stat().st_ino}))
     agent.response_action(qid,original,quarantine_approval())
     root=source.parent/'staging';monkeypatch.setattr(agent,'REPAIR_STAGE_ROOT',root)
     monkeypatch.setattr(agent,'vendor_identity',lambda manifest:'expected')
     monkeypatch.setattr(agent,'vendor_owner',lambda *args:None)
     data=b'trusted replacement\n'+b'x'*agent.REPAIR_CHUNK_SIZE
     manifest={'package':'fixture','version':'1.0-1','architecture':'all','entries':[{'path':str(source),'sha256':agent.hashlib.sha256(data).hexdigest(),'size':len(data)}]}
-    plan={'quarantine_id':qid,'quarantine_plan':original,'manifest':manifest,'authentication_digest':'a'*64,'replacement_mode':0o640}
+    plan={'quarantine_id':qid,'quarantine_plan':original,'manifest':manifest,'authentication_digest':'a'*64,'replacement_mode':stat.S_IMODE(original['file']['identity']['mode'])}
     identifier=str(uuid.uuid4())
     review={'id':identifier,'action':'stage','expires':time.time()+240,'actor':'admin','reason':'Reviewed authenticated private staging only.','plan_digest':agent.repair_digest(plan)}
     return {'source':source,'vault':vault,'qid':qid,'root':root,'id':identifier,'plan':plan,'approval':review,'data':data}

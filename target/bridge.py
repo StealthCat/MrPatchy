@@ -379,6 +379,10 @@ def handle(req):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import repair_readiness
         return repair_readiness(req.get('id'),req.get('plan'),req.get('manifest'))
+    if action in ('repair-publish','repair-publish-status'):
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import repair_publication
+        return repair_publication(req.get('id'),req.get('plan'),req.get('approval'),status_only=action=='repair-publish-status')
     if action in ('repair-stage-begin','repair-stage-chunk','repair-stage-finish','repair-stage-status'):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import repair_stage_begin,repair_stage_chunk,repair_stage_finish,repair_stage_status
