@@ -375,6 +375,11 @@ def handle(req):
         if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
+    if action in ('process-prepare','process-suspend','process-status','process-resume'):
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import process_prepare,process_response
+        if action=='process-prepare':return process_prepare(req.get('quarantine_id'),req.get('quarantine_plan'),req.get('expected'),req.get('boot_id'),req.get('pid_namespace'))
+        return process_response(req.get('id'),req.get('plan'),req.get('approval'),status_only=action=='process-status',resume=action=='process-resume')
     if action in ('quarantine-prepare','quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit','quarantine-processes'):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import response_prepare,response_status,response_action,response_audit,response_processes

@@ -3,7 +3,8 @@
 Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
 restoration now support protected files under `/srv` and `/opt`. Retained-response
-monitoring and manual process-reference observations are available. Broader typed
+monitoring, manual process-reference observations and separately approved suspension/
+recovery of selected root-owned executable processes are available. Broader typed
 remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
@@ -884,3 +885,107 @@ descriptor across quarantine and checks the real worker/helper on Debian, Ubuntu
 Fedora and AlmaLinux. Those containers stub systemd; real-VM/SELinux, performance
 and broader response drills remain future work. Approved process suspension/recovery,
 cloud isolation and authenticated vendor repair remain subsequent milestones.
+
+## Separately approved process suspension and recovery
+
+After a **fresh process reference observation**, an executable match in **Process
+reference history** offers **Prepare process suspension**. This is read-only
+preparation plus a zero-signal permission/support probe. Descriptor-only and
+mapping-only references cannot authorize suspension. The observation must be no
+more than five minutes old and bind the same pinned host and quarantined original.
+The helper verifies retained bytes and journals, boot identity, the selected process
+and its executable before returning a plan. Preparation expires after 15 minutes.
+
+**Reviewed process responses → Review process suspension** requires a reason and
+`SUSPEND`. It authorizes one SIGSTOP for the selected root-owned process leader and
+its thread group, with a five-minute execution approval. This can interrupt
+services, retain locks and leave transactions unfinished. It does not stop children,
+other holders, other copies, containers, network access or the host. It is not a
+malware-eradication or complete process-containment verdict. AI-plan review, file
+quarantine approval and process inspection never authorize this signal.
+
+Scope is deliberately narrow: all four reported process UIDs must be root, its PID
+namespace must match the helper's, it must be a thread-group leader with at most 256
+observable threads, and its executable must be the verified held original inode.
+Init, the helper and its ancestors are excluded. Already stopped/traced, exited,
+unobservable, mismatched and unsupported targets require console response. Do not
+change credentials or protections to bypass refusal. A process can exec a different
+image between inspection and signal; approval identifies the process, and failed
+post-signal executable/identity checks retain uncertainty for console recovery.
+Concurrent root interference is outside these guarantees.
+
+Linux `pidfd_send_signal` is mandatory. The helper uses the opened `/proc/<pid>`
+**directory descriptor**, supported by that syscall as a stable reference to the
+selected task. There is no numeric `kill()` fallback. This also avoids confusing
+PIDs from a mounted procfs view with the helper's own numeric PID coordinates.
+Preparation and execution bind boot ID, namespace, PID, start ticks and the opened
+proc-directory device/inode. The extra proc inode binding can conservatively refuse
+an evicted/recreated proc entry. A reboot, changed credentials, namespace, executable,
+retained bytes or process identity refuses new signals. See the Linux
+[pidfd signal interface](https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html).
+Older kernels/Python runtimes without this interface refuse preparation.
+
+Before signal delivery, protected 0700 directories and 0600 append-only intent
+journals are fsynced under `/var/lib/mrpatchy-process-response/<response-id>/`.
+An operation ID never sends SIGSTOP twice. Post-action checks require all observed
+threads to be stopped (`T`) and revalidate the retained original before reporting
+`suspended`. The helper observes for up to eight seconds; blocked/unobservable or
+changed threads remain uncertain. A lost completion journal can be reconciled from
+its bound intent and positive current evidence without replaying the signal.
+Clock-dependent approvals are checked immediately before intent and again before
+the syscall. Expiry after durable intent deliberately leaves reviewable uncertainty.
+
+**Verify process response** reads journals, process identity, thread states,
+executable and retained original without delivering a signal or changing journals.
+It reports `suspended`, `resumed`, `exited`, `identity_changed`, `not_started` or
+`uncertain`. Missing or corrupted existing journals do not establish an unstarted
+operation. Process exit is an observation, not proof that its children or a service
+supervisor did not start another process. No automated resuspension occurs.
+
+**Review process recovery** requires fresh (five-minute) verified suspension and a
+separate reason-and-`RESUME` approval. Resumption can continue malicious execution.
+The helper rechecks identity, held executable and all stopped threads, durably writes
+a separate resume intent, and sends one SIGCONT through the same stable descriptor.
+Only a positive current running/sleeping thread-group observation with that intent
+reports `resumed`. Interrupted resume intent is never retried by a new approval;
+uncertain recovery requires console review. No signal terminates the process, and
+no signal authorizes restoration of its file.
+
+Approval creates a separate **process response hold** before queueing. The worker
+commits uncertainty before a mutating RPC, rechecks approvals after fresh independent
+current-agent verification, and ends MySQL snapshots before final state decisions.
+Lost replies, bad receipts and scope changes retain that hold. Preflight refusal
+before requesting a signal releases only that attempt's new process hold. Matching
+verification/recovery can run through its own process hold and owning file hold;
+other response/recovery holds still block it. Ordinary work, agent maintenance,
+scans and retained-file monitoring defer. A process hold has its own fleet alert and
+cannot be cleared by the file-response review. Local controller archive verification
+remains available. After verified resumption only the process hold clears; the
+independent file-response hold remains until its separate review or restoration.
+
+**Review process pause** can record `ACCEPT PROCESS EXIT` after fresh observed exit,
+or `CONSOLE RECOVERED` following trusted-console recovery and service review. These
+are reason-bound administrative reviews, send no signals and never resolve the
+incident. Console review can release uncertainty, so inspect deferred jobs before
+releasing any pause. Other independent holds continue to block work.
+
+The Security panel retains paginated plans, typed approvals, observations and manual
+reviews with actors/timestamps in `security_process_responses`,
+`security_process_approvals` and `security_process_events`. Startup initialization
+and verified offline SQLite/MySQL migration include all three. Host journals need
+separate protected backup; application records are not cryptographically immutable.
+No command lines, environment, memory bytes or file contents are collected by this
+executor. There are no automatic signals, retries, expiry-driven resumes or paid AI
+calls. Rebuild app/workers and redeploy current helpers before using it.
+
+Target/controller tests cover real stable-descriptor stop/resume, identity/boot/
+namespace/credential/executable changes, init/ancestor exclusion, thread budgets,
+expiry before and after intent, lost completions, interrupted recovery, PID exit,
+separate approvals, role/host binding, independent holds, stale evidence, malformed
+receipts, read-only recovery, scheduling deferral and database migration. Native SSH
+integration repeats full preservation, independent acquisition, executable quarantine,
+worker preparation, suspension, verification, separately approved recovery and file
+restoration on Debian, Ubuntu, Fedora and AlmaLinux. Privileged fixtures skip on
+unprivileged runners; production guards remain enforced. Containers stub systemd;
+real-VM/SELinux, supervisor/child-process coverage, performance and broader response
+drills remain future work, along with cloud isolation and authenticated vendor repair.

@@ -1324,6 +1324,94 @@ def response_process_history(host_id:str,quarantine_id:str,offset:int=0,user=Dep
         records=list(s.scalars(select(Observation).where(Observation.host_id==host_id,Observation.quarantine_id==row.id).order_by(Observation.created.desc(),Observation.id).offset(offset).limit(21)))
         return {'items':[object_dict(r) for r in records[:20]],'more':len(records)>20}
 
+class ProcessPreparationRequest(BaseModel):
+    observation_id:str
+    pid:int=Field(strict=True,gt=1,le=2147483647)
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/process-preparations')
+def prepare_process_response(host_id:str,quarantine_id:str,body:ProcessPreparationRequest,user=Depends(auth)):
+    from . import process_response
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);response_row(s,host_id,quarantine_id);response_idle(s,host_id,response_id=quarantine_id)
+        payload={**body.model_dump(),'quarantine_id':quarantine_id,'fingerprint':host.fingerprint,'_actor':user['username']}
+        process_response.source(s,host,payload)
+        return {'job_id':worker.enqueue(s,host_id,'process-prepare',payload)}
+
+def process_row(s,host_id,process_id):
+    from .process_response import ProcessResponse
+    row=s.get(ProcessResponse,process_id)
+    if not row or row.host_id!=host_id:raise HTTPException(404,'Process response not found')
+    return row
+
+def process_idle(s,row):
+    from .quarantine import ACTIONS
+    if operations.host_quarantined(s,row.host_id,response_id=row.quarantine_id,process_id=row.id):raise HTTPException(409,'Another operation or response requires reconciliation')
+    # A scheduler can enqueue a read while approval commits its new hold. That
+    # deferred automatic read must not deadlock explicit process recovery.
+    actions=tuple(a for a in ACTIONS if not (row.hold and a=='quarantine-audit'))
+    if s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
+
+@app.get('/api/hosts/{host_id}/security/process-responses')
+def process_responses(host_id:str,offset:int=0,user=Depends(auth)):
+    from .process_response import ProcessResponse
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(ProcessResponse).where(ProcessResponse.host_id==host_id).order_by(ProcessResponse.created.desc(),ProcessResponse.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt)} for r in rows[:20]],'more':len(rows)>20}
+
+class ProcessApprovalRequest(BaseModel):
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    receipt_digest:str=''
+    reason:str=Field(min_length=10,max_length=4000)
+    confirmation:str
+
+@app.post('/api/hosts/{host_id}/security/process-responses/{process_id}/actions/{action}')
+def review_process_response(host_id:str,process_id:str,action:str,body:ProcessApprovalRequest,user=Depends(auth)):
+    from . import process_response
+    if action not in ('suspend','resume','release'):raise HTTPException(404,'Process response action not found')
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=process_row(s,host_id,process_id);reason=body.reason.strip()
+        if len(reason)<10:raise ValueError('Provide a meaningful process response review reason')
+        if incidents.digest(row.plan)!=body.plan_digest:raise HTTPException(409,'Process plan changed; refresh before reviewing')
+        if action=='release':
+            if not row.hold or incidents.digest(row.receipt)!=body.receipt_digest:raise HTTPException(409,'Process hold or receipt changed; refresh before reviewing')
+            if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.payload['process_id'].as_string()==row.id,Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Process response work is pending')
+            if body.confirmation=='ACCEPT PROCESS EXIT':
+                if row.state!='exited' or not 0<=time.time()-row.observed<=300:raise HTTPException(409,'Fresh observed process exit is required')
+            elif body.confirmation=='CONSOLE RECOVERED':row.state='console_recovered'
+            else:raise ValueError('Type ACCEPT PROCESS EXIT or CONSOLE RECOVERED after console and service review')
+            row.hold=False;process_response.event(s,row,'hold_released',user['username'],{'reason':reason,'confirmation':body.confirmation,'receipt_digest':body.receipt_digest});s.commit()
+            return {'state':row.state,'process_hold':False,'server_changes_paused':operations.host_quarantined(s,host_id)}
+        process_idle(s,row)
+        if not process_response.bound(s,host,row):raise HTTPException(409,'Process response or pinned host changed')
+        if body.confirmation!=('RESUME' if action=='resume' else 'SUSPEND'):raise ValueError('Type '+('RESUME' if action=='resume' else 'SUSPEND')+' to approve this process action')
+        if action=='suspend':
+            if row.state!='prepared' or not 0<=time.time()-row.created<=900:raise HTTPException(409,'Process preparation expired or changed')
+        elif row.state!='suspended' or not row.receipt.get('resume_ready') or row.receipt.get('resume_attempted') or not 0<=time.time()-row.observed<=300 or incidents.digest(row.receipt)!=body.receipt_digest:raise HTTPException(409,'Fresh verified suspension is required before separate recovery approval')
+        approval=process_response.Approval(id=str(uuid.uuid4()),process_id=row.id,action=action,expires=time.time()+300,plan_digest=body.plan_digest,actor=user['username'],reason=reason,before_state=row.state,before_hold=row.hold)
+        s.add(approval);row.approval_id=approval.id;row.state='resume_queued' if action=='resume' else 'queued';row.hold=True
+        process_response.event(s,row,action+'_approved',user['username'],{'approval_id':approval.id})
+        return {'job_id':worker.enqueue(s,host_id,'process-'+action,{'process_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']}),'process_hold':True}
+
+@app.post('/api/hosts/{host_id}/security/process-responses/{process_id}/verify')
+def verify_process_response(host_id:str,process_id:str,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        row=process_row(s,host_id,process_id);process_idle(s,row)
+        if row.state in ('prepared','rejected'):raise HTTPException(409,'This preparation has not requested process suspension')
+        return {'job_id':worker.enqueue(s,host_id,'process-status',{'process_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
+
+@app.get('/api/hosts/{host_id}/security/process-responses/{process_id}/history')
+def process_response_history(host_id:str,process_id:str,offset:int=0,user=Depends(auth)):
+    from .process_response import Approval,Event
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=process_row(s,host_id,process_id)
+        events=list(s.scalars(select(Event).where(Event.process_id==row.id).order_by(Event.created.desc(),Event.id).offset(offset).limit(21)))
+        approvals=list(s.scalars(select(Approval).where(Approval.process_id==row.id).order_by(Approval.created.desc(),Approval.id).offset(offset).limit(21)))
+        return {'events':[object_dict(r) for r in events[:20]],'approvals':[object_dict(r) for r in approvals[:20]],'more':len(events)>20 or len(approvals)>20}
+
 class ResponseMonitorPolicy(BaseModel):
     enabled:bool=False
     interval_minutes:int=Field(default=15,ge=5,le=1440)

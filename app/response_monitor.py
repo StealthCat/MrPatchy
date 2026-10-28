@@ -155,11 +155,13 @@ def execute(s,host,job):
 def schedule_tick(now=None):
     from .coordination import Lock
     from .worker import enqueue
+    from .process_response import ProcessResponse
     now=time.time() if now is None else now
     with Lock('response-monitor-queue'),Session() as s:
         for setting in s.scalars(select(Setting).where(Setting.key.like('response-monitor:%'))):
             cfg={**DEFAULT,**setting.value};host_id=setting.key.split(':',1)[1];host=s.get(Host,host_id)
             if not cfg['enabled'] or not host or host.state=='enrolling' or not host.fingerprint:continue
+            if s.scalar(select(ProcessResponse.id).where(ProcessResponse.host_id==host_id,ProcessResponse.hold==True).limit(1)):continue
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['running','recovery_required'])).limit(1)):continue
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(quarantine.ACTIONS),Job.state.in_(['queued','running'])).limit(1)):continue
             last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='quarantine-audit').order_by(Job.created.desc()).limit(1))

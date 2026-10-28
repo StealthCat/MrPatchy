@@ -31,7 +31,7 @@ def in_window(windows,now=None):
 
 QUARANTINE_STATES=('running','recovery_required')
 
-def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False):
+def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None):
     query=select(Job.id).where(Job.host_id==host_id,Job.state.in_(QUARANTINE_STATES))
     if exclude:query=query.where(Job.id!=exclude)
     if s.scalar(query.limit(1)) is not None:return True
@@ -39,7 +39,11 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     from .quarantine import Quarantine
     holds=select(Quarantine.id).where(Quarantine.host_id==host_id,Quarantine.hold==True)
     if response_id:holds=holds.where(Quarantine.id!=response_id)
-    return s.scalar(holds.limit(1)) is not None
+    if s.scalar(holds.limit(1)) is not None:return True
+    from .process_response import ProcessResponse
+    processes=select(ProcessResponse.id).where(ProcessResponse.host_id==host_id,ProcessResponse.hold==True)
+    if process_id:processes=processes.where(ProcessResponse.id!=process_id)
+    return s.scalar(processes.limit(1)) is not None
 
 def recovery_policy(s,host_id):
     row=s.get(Setting,'recovery:'+host_id)
@@ -82,6 +86,9 @@ def collect_alerts():
             from .quarantine import Quarantine
             response=s.scalar(select(Quarantine.id).where(Quarantine.host_id==host.id,Quarantine.hold==True).limit(1))
             if response:record(host,'file response hold','Server changes paused for reviewed file response '+response+'. Reconcile quarantine state or record reviewed console recovery in Security.')
+            from .process_response import ProcessResponse
+            process=s.scalar(select(ProcessResponse.id).where(ProcessResponse.host_id==host.id,ProcessResponse.hold==True).limit(1))
+            if process:record(host,'process response hold','Server changes paused for process response '+process+'. Review suspension, recovery and affected services in Security.')
             failed_runs=s.scalar(select(func.count()).select_from(PatchRun).where(PatchRun.host_id==host.id,PatchRun.state.in_(('failed','blocked','skipped')),PatchRun.due>now-86400))
             if failed_runs:record(host,'scheduled patching',str(failed_runs)+' scheduled run(s) failed, were blocked, or missed their start window in the last 24 hours. Review Patch schedules and Activity.')
             recovery=list(s.scalars(select(Job.id).where(Job.host_id==host.id,Job.state=='recovery_required')))

@@ -1,7 +1,7 @@
 const assert=require('assert/strict');
 module.exports=async(page)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
- const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
+ const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -23,9 +23,14 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/evidence-copies/copy-fixture/acquire')){assert.equal(request.postDataJSON().confirmation,'ACQUIRE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));writes.push(url.pathname);return route.fulfill({json:{job_id:'acquire-job'}});}
   if(url.pathname.endsWith('/response-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);const body=request.postDataJSON();assert.equal(body.enabled,true);assert.equal(body.interval_minutes,5);assert.equal(body.pause_on_problem,true);responsePolicy={...body,revision:'policy-version'};return route.fulfill({json:responsePolicy});}return route.fulfill({json:{policy:responsePolicy,watched:1,problem_count:0,overdue_count:0,rotation_minutes:responsePolicy.interval_minutes,scope_limited:false,pending:null}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/watch')){const body=request.postDataJSON();assert.equal(body.enabled,false);assert.equal(body.plan_digest,'f'.repeat(64));watchEnabled=false;writes.push(url.pathname);return route.fulfill({json:{enabled:false,revision:'watch-version'}});}
+  if(url.pathname.endsWith('/process-responses'))return route.fulfill({json:{items:[{id:'process-response-fixture',state:processState,hold:processHold,created:Date.now()/1000,observed:Date.now()/1000,plan:{process:{pid:41,start_ticks:100,pid_namespace:123,proc_device:7,proc_inode:8}},plan_digest:'c'.repeat(64),receipt_digest:'d'.repeat(64),receipt:{resume_ready:processState==='suspended',resume_attempted:processState==='resumed'}}],more:false}});
+  if(url.pathname.endsWith('/process-responses/process-response-fixture/actions/suspend')){assert.equal(request.postDataJSON().confirmation,'SUSPEND');assert.equal(request.postDataJSON().plan_digest,'c'.repeat(64));processState='suspended';processHold=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'suspend-job'}});}
+  if(url.pathname.endsWith('/process-responses/process-response-fixture/actions/resume')){assert.equal(request.postDataJSON().confirmation,'RESUME');assert.equal(request.postDataJSON().receipt_digest,'d'.repeat(64));processState='resumed';processHold=false;writes.push(url.pathname);return route.fulfill({json:{job_id:'resume-job'}});}
+  if(url.pathname.endsWith('/process-responses/process-response-fixture/history'))return route.fulfill({json:{events:[{kind:'suspend_approved',actor:'admin'}],approvals:[{action:'suspend',actor:'admin'}],more:false}});
+  if(url.pathname.endsWith('/quarantines/response-fixture/process-preparations')){assert.deepEqual(request.postDataJSON(),{observation_id:'process-job',pid:41,plan_digest:'f'.repeat(64)});writes.push(url.pathname);return route.fulfill({json:{job_id:'process-prepare-job'}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/processes')){
    if(request.method()==='POST'){assert.deepEqual(request.postDataJSON(),{plan_digest:'f'.repeat(64)});writes.push(url.pathname);return route.fulfill({json:{job_id:'process-job'}});}
-   return route.fulfill({json:{items:[{id:'process-job',state:'references_found',actor:'admin',created:Date.now()/1000,report:{scope_current:true,observation:{processes_examined:12,entries_examined:80,matches:[{pid:41,start_ticks:100,references:{descriptor:1}}],gaps:{memory_map_unavailable:2}}}}],more:false}});
+   return route.fulfill({json:{items:[{id:'process-job',state:'references_found',actor:'admin',created:Date.now()/1000,report:{scope_current:true,observation:{processes_examined:12,entries_examined:80,matches:[{pid:41,start_ticks:100,references:{descriptor:1,executable:1}}],gaps:{memory_map_unavailable:2}}}}],more:false}});
   }
   if(url.pathname.endsWith('/quarantines/response-fixture/checks'))return route.fulfill({json:{items:[{state:'verified',report:{facts:{held_verified:true}}}],more:false}});
   if(url.pathname.endsWith('/quarantines'))return route.fulfill({json:{items:[{id:'response-fixture',state:responseState,hold:responseHold,created:Date.now()/1000,observed:Date.now()/1000,plan:{file:{path:'/srv/security-fixture'}},plan_digest:'f'.repeat(64),receipt_digest:'a'.repeat(64),receipt:{restore_ready:responseState==='quarantined',restore_attempted:responseState==='restored'},monitor:{watch:{enabled:watchEnabled,revision:watchEnabled?'':'watch-version'},eligible:responseState==='quarantined',last_check:{state:'verified',created:Date.now()/1000}}}],more:false}});
@@ -126,7 +131,24 @@ module.exports=async(page)=>{
   await page.getByText('Inspection gaps: memory map unavailable: 2',{exact:true}).waitFor();
   assert.equal(await page.locator('#response-process-next').isDisabled(),true);
   for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'Process observations must fit the viewport');}
+  await page.getByRole('button',{name:'Prepare process suspension',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/process-preparations');
+  const beforeSuspend=writes.length;await page.getByRole('button',{name:'Review process suspension',exact:true}).click();assert.equal(writes.length,beforeSuspend);
+  await page.locator('#process-approval [name=reason]').fill('Reviewed exact process identity and service impact.');
+  await page.locator('#process-approval [name=confirmation]').fill('SUSPEND');
+  await page.getByRole('button',{name:'Suspend approved process',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/process-responses/process-response-fixture/actions/suspend');
+  await page.getByRole('button',{name:'Verify process response',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Read-only process response verification queued'));
+  await page.getByRole('button',{name:'Process response history',exact:true}).click();
+  await page.locator('#process-response-history').filter({hasText:'suspend_approved'}).waitFor();
+  for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'Process response history must fit the viewport');}
   await page.locator('#close-modal').click();
+  const beforeResume=writes.length;await page.getByRole('button',{name:'Review process recovery',exact:true}).click();assert.equal(writes.length,beforeResume);
+  await page.locator('#process-approval [name=reason]').fill('Reviewed recovery and the risk of resuming the process.');
+  await page.locator('#process-approval [name=confirmation]').fill('RESUME');
+  await page.getByRole('button',{name:'Resume approved process',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/process-responses/process-response-fixture/actions/resume');
   await page.getByRole('button',{name:'Review server pause',exact:true}).click();
   await page.locator('#response-release [name=reason]').fill('Verified service health and accepted quarantine impact.');
   await page.locator('#response-release [name=typed]').fill('KEEP QUARANTINED');
