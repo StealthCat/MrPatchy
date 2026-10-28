@@ -20,12 +20,14 @@ BuildArch: noarch
 %description
 Disposable CI test package.
 %install
-mkdir -p %{buildroot}/usr/share/patchy-fixture
+mkdir -p %{buildroot}/usr/share/patchy-fixture %{buildroot}/srv/patchy-vendor-fixture
 printf '%s\\n' '$version' > %{buildroot}/usr/share/patchy-fixture/version
+printf '%s\\n' '$version' > %{buildroot}/srv/patchy-vendor-fixture/data
 %verifyscript
 touch /tmp/patchy-verifyscript-executed
 %files
 /usr/share/patchy-fixture/version
+/srv/patchy-vendor-fixture/data
 SPEC
   rpmbuild --define '_topdir /tmp/fixture-build' -bb /tmp/fixture-build/SPECS/patchy-fixture.spec
   package=/tmp/fixture-build/RPMS/noarch/patchy-fixture-$version.0-1.noarch.rpm

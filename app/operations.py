@@ -31,7 +31,7 @@ def in_window(windows,now=None):
 
 QUARANTINE_STATES=('running','recovery_required')
 
-def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None):
+def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None,read_only_response_id=None):
     query=select(Job.id).where(Job.host_id==host_id,Job.state.in_(QUARANTINE_STATES))
     if exclude:query=query.where(Job.id!=exclude)
     if s.scalar(query.limit(1)) is not None:return True
@@ -43,6 +43,9 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     from .process_response import ProcessResponse
     processes=select(ProcessResponse.id).where(ProcessResponse.host_id==host_id,ProcessResponse.hold==True)
     if process_id:processes=processes.where(ProcessResponse.id!=process_id)
+    # Only the repair-preparation read uses this scope: related process holds
+    # remain active and no mutation/recovery job inherits this exemption.
+    if read_only_response_id:processes=processes.where(ProcessResponse.quarantine_id!=read_only_response_id)
     return s.scalar(processes.limit(1)) is not None
 
 def recovery_policy(s,host_id):

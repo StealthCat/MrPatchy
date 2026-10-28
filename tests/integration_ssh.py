@@ -114,7 +114,7 @@ def main():
             run('docker','cp',name+':/etc/pki/rpm-gpg/fixture.asc',str(bundle.parent/'rpm-trustedkeys.asc'))
             vendor_manifest,proof=vendor.authenticate('rpm-fixture')
             assert vendor_manifest['version']=='1:1.0-1' and proof['signature_key_ids'],proof
-            assert vendor_manifest['entries']==[{'path':fixture_path,'sha256':ssh.hashlib.sha256(b'1\n').hexdigest(),'size':2}],vendor_manifest
+            assert sorted(vendor_manifest['entries'],key=lambda e:e['path'])==[{'path':'/srv/patchy-vendor-fixture/data','sha256':ssh.hashlib.sha256(b'1\n').hexdigest(),'size':2},{'path':fixture_path,'sha256':ssh.hashlib.sha256(b'1\n').hexdigest(),'size':2}],vendor_manifest
             vendor_request={'action':'vendor-inspect','manifest':vendor_manifest}
             receipt=ssh.call(host,vendor_request,timeout=150)
             vendor.validate_receipt(vendor_manifest,receipt)
@@ -326,15 +326,15 @@ print(json.dumps(matches))"""
         with Session() as session:
             assert session.get(Job,executable_prepare).state=='complete',session.get(Job,executable_prepare).output
             executable_response=session.query(quarantine.Quarantine).filter_by(archive_id=executable_archive).one();executable_qid=executable_response.id
-        def executable_file_action(restore=False):
+        def native_file_action(quarantine_id,restore=False):
             with Session() as session:
-                record=session.get(quarantine.Quarantine,executable_qid)
+                record=session.get(quarantine.Quarantine,quarantine_id)
                 approval=quarantine.Approval(id=str(uuid.uuid4()),quarantine_id=record.id,action='restore' if restore else 'quarantine',expires=time.time()+240,plan_digest=incidents.digest(record.plan),actor='native-test',reason='Reviewed harmless running executable file response.',before_state=record.state,before_hold=record.hold)
                 session.add(approval);record.approval_id=approval.id;record.hold=True;record.state='restore_queued' if restore else 'queued'
                 identifier=worker.enqueue(session,host.id,'quarantine-restore' if restore else 'quarantine-apply',{'quarantine_id':record.id,'_actor':'native-test'})
             worker.execute(identifier)
             with Session() as session:assert session.get(Job,identifier).state=='complete',session.get(Job,identifier).output
-        executable_file_action()
+        native_file_action(executable_qid)
         with Session() as session:
             record=session.get(quarantine.Quarantine,executable_qid)
             observed_job=worker.enqueue(session,host.id,'quarantine-processes',{'quarantine_id':record.id,'fingerprint':host.fingerprint,'plan_digest':incidents.digest(record.plan),'_actor':'native-test'})
@@ -370,8 +370,73 @@ print(json.dumps(matches))"""
             assert session.get(quarantine.Quarantine,executable_qid).hold
             assert session.query(process_response.Approval).count()==2
         run('docker','exec',name,'kill',str(process_match['pid']))
-        executable_file_action(True)
+        native_file_action(executable_qid,True)
         print('Reviewed process response passed: independent evidence, executable match, real stable-pidfd suspension, read-only reconciliation, separate recovery approval and independent file hold')
+        # Authenticate a separately supplied replacement, but publish no bytes.
+        from app import repair_preparation,vendor
+        repair_path='/srv/patchy-vendor-fixture/data'
+        if rpm:
+            repair_bundle='rpm-fixture';bundle=workspace/'vendor-packages'/repair_bundle
+            run('docker','cp',name+':/etc/pki/rpm-gpg/fixture.asc',str(bundle.parent/'rpm-trustedkeys.asc'))
+        else:
+            from email.utils import formatdate
+            repair_bundle='deb-fixture';bundle=workspace/'vendor-packages'/repair_bundle;bundle.mkdir(parents=True)
+            run('docker','cp',name+':/tmp/patchy-fixture.deb',str(bundle/'package.deb'))
+            artifact=(bundle/'package.deb').read_bytes()
+            index=('Package: patchy-fixture\nVersion: 1.0-1\nArchitecture: all\nSize: '+str(len(artifact))+'\nSHA256: '+vendor.sha(artifact)+'\n\n').encode()
+            (bundle/'Packages').write_bytes(index);(bundle/'index-path').write_text('main/binary-all/Packages\n')
+            (bundle/'Release').write_text('Origin: Native test\nDate: '+formatdate(time.time(),usegmt=True)+'\nSHA256:\n '+vendor.sha(index)+' '+str(len(index))+' main/binary-all/Packages\n')
+            keys=workspace/'vendor-test-keys';keys.mkdir(mode=0o700)
+            run('gpg','--homedir',str(keys),'--batch','--pinentry-mode','loopback','--passphrase','','--quick-generate-key','Patchy native vendor fixture <fixture@example.invalid>','rsa2048','sign','0')
+            run('gpg','--homedir',str(keys),'--batch','--output',str(bundle.parent/'trustedkeys.gpg'),'--export')
+            run('gpg','--homedir',str(keys),'--batch','--pinentry-mode','loopback','--passphrase','','--output',str(bundle/'Release.gpg'),'--detach-sign',str(bundle/'Release'))
+        (bundle/'replacement').write_bytes(b'1\n')
+        selected,authentication=vendor.replacement(repair_bundle,repair_path)
+        assert selected['entries']==[{'path':repair_path,'sha256':vendor.sha(b'1\n'),'size':2}]
+        run('docker','exec',name,'sh','-c',"printf changed > "+repair_path)
+        repair_expected=json.loads(run('docker','exec',name,'python3','-c',"import os,json,hashlib; p='"+repair_path+"'; s=os.stat(p); print(json.dumps({'path':p,'device':s.st_dev,'inode':s.st_ino,'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest()}))"))
+        repair_snapshot=ssh.call(host,{'action':'evidence-prepare','expected':repair_expected},timeout=90)
+        repair_copy=str(uuid.uuid4());repair_archive=str(uuid.uuid4());repair_digest=incidents.digest(repair_expected)
+        ssh.call(host,{'action':'evidence-preserve','id':repair_copy,'snapshot':repair_snapshot,'approved_until':time.time()+240},timeout=180)
+        with Session() as session:
+            session.add(incidents.Incident(id='native-repair-fixture',host_id=host.id,scan_id='native-repair-scan',evidence=repair_expected))
+            session.add(EvidenceCopy(id=repair_copy,host_id=host.id,incident_id='native-repair-fixture',state='preserved',snapshot=repair_snapshot,evidence_digest=repair_digest))
+            session.add(EvidenceArchive(id=repair_archive,host_id=host.id,copy_id=repair_copy,created=time.time(),state='queued',snapshot=repair_snapshot,fingerprint=host.fingerprint,actor='native-test',reason='Retain original before read-only trusted repair preparation.',expires=time.time()+240));session.commit()
+            evidence_archive.execute(session,host,Job(id=str(uuid.uuid4()),action='evidence-acquire',payload={'archive_id':repair_archive}));session.commit()
+            preparation_job=worker.enqueue(session,host.id,'quarantine-prepare',{'archive_id':repair_archive,'evidence_digest':repair_digest,'_actor':'native-test'})
+        worker.execute(preparation_job)
+        with Session() as session:
+            assert session.get(Job,preparation_job).state=='complete',session.get(Job,preparation_job).output
+            repair_response=session.query(quarantine.Quarantine).filter_by(archive_id=repair_archive).one();repair_qid=repair_response.id
+        native_file_action(repair_qid)
+        def trusted_preparation():
+            with Session() as session:
+                record=session.get(quarantine.Quarantine,repair_qid)
+                prepared=repair_preparation.Preparation(id=str(uuid.uuid4()),host_id=host.id,quarantine_id=record.id,bundle_id=repair_bundle,path=repair_path,actor='native-test',fingerprint=host.fingerprint,response_plan_digest=incidents.digest(record.plan))
+                session.add(prepared)
+                identifier=worker.enqueue(session,host.id,'trusted-repair-prepare',{'preparation_id':prepared.id,'quarantine_id':record.id,'_actor':'native-test'});preparation_id=prepared.id
+            worker.execute(identifier)
+            with Session() as session:
+                assert session.get(Job,identifier).state=='complete',session.get(Job,identifier).output
+                record=session.get(repair_preparation.Preparation,preparation_id)
+                assert session.get(quarantine.Quarantine,repair_qid).hold
+                return record.state,record.report
+        state,prepared_report=trusted_preparation()
+        assert state=='ready' and all(v is True for v in prepared_report['target']['facts'].values()),prepared_report
+        run('docker','exec',name,'test','!','-e',repair_path)
+        assert run('docker','exec',name,'cat','/var/lib/mrpatchy-quarantine/'+repair_qid+'/held')=='changed'
+        run('docker','exec',name,'sh','-c',"printf deployment > "+repair_path)
+        state,prepared_report=trusted_preparation()
+        assert state=='blocked' and 'destination_occupied' in prepared_report['target']['gaps'],prepared_report
+        assert run('docker','exec',name,'cat',repair_path)=='deployment'
+        assert run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/tmp/patchy-verifyscript-executed').exists())")=='False'
+        run('docker','exec',name,'rm',repair_path)
+        # Existing original-file restoration is a separate fixture cleanup action.
+        with Session() as session:
+            original_check=worker.enqueue(session,host.id,'quarantine-status',{'quarantine_id':repair_qid,'_actor':'native-test'})
+        worker.execute(original_check);native_file_action(repair_qid,True)
+        run('docker','exec',name,'sh','-c',"printf '1\\n' > "+repair_path)
+        print('Trusted replacement preparation passed: real signed artifact and replacement authentication, exact installed package/owner, retained bytes, empty destination, occupied-path refusal, unchanged holds and no publication or package scripts')
         owned=custom+'/user-owned-response'
         run('docker','exec',name,'sh','-c',"printf owner-fixture > "+owned+"; chmod 644 "+owned)
         run('docker','exec',name,'chown','65534:65534',owned)

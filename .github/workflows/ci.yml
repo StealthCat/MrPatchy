@@ -88,6 +88,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install native Debian fixture signing tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
       - run: pip install -r requirements.txt
       - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test tests/fixtures
       - run: python tests/integration_ssh.py

@@ -745,6 +745,25 @@ def security_inspect(packages,persistence=True,custom_paths=None):
     return report
 
 
+def vendor_identity(manifest):
+    """Compatibility evidence from the local DB; never vendor authentication."""
+    manager=manifest.get('package_manager','dpkg')
+    name=manifest.get('package','');version=manifest.get('version','');arch=manifest.get('architecture','')
+    if manager not in ('dpkg','rpm') or not isinstance(version,str) or not 1<=len(version)<=200 or any(c.isspace() for c in version):raise ValueError('Invalid vendor package identity')
+    if not isinstance(name,str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9+_.-]{0,199}' if manager=='rpm' else '[a-z0-9][a-z0-9+.-]{0,199}',name) or not isinstance(arch,str) or not re.fullmatch('[A-Za-z0-9_]{1,64}' if manager=='rpm' else '[a-z0-9][a-z0-9-]{0,63}',arch):raise ValueError('Invalid vendor package identity')
+    try:from bridge import bounded
+    except ImportError:from target.bridge import bounded
+    if manager=='rpm':
+        query=['rpm','--noplugins','-q','--qf','%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n','--',name+'.'+arch]
+        expected=name+' '+version+' '+arch
+    else:
+        query=['dpkg-query','-W','-f=${db:Status-Status} ${Version} ${Architecture}\n','--',name+':'+arch]
+        expected='installed '+version+' '+arch
+    out,err,code=bounded(query,timeout=10,limit=4000,allowed_codes=(0,1),return_status=True)
+    if code or err or out.strip()!=expected:raise ValueError('Installed package version/architecture is ambiguous or does not match authenticated artifact')
+    return expected
+
+
 def vendor_inspect(manifest):
     """Compare controller-authenticated regular-file bytes; never consult local checksums."""
     if not isinstance(manifest,dict):raise ValueError('Invalid vendor manifest')
@@ -768,15 +787,7 @@ def vendor_inspect(manifest):
     result={'state':'incomplete','package':manifest['package'],'version':version,'architecture':manifest['architecture'],
             'scope_files':len(entries),'examined':0,'findings':[],'gaps':[],'trust_basis':'controller_authenticated_rpm_artifact' if manager=='rpm' else 'controller_authenticated_debian_artifact'}
     deadline=time.monotonic()+120;total=0
-    def identity():
-        if manager=='rpm':
-            query=['rpm','-q','--qf','%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n','--',manifest['package']+'.'+manifest['architecture']]
-            expected=manifest['package']+' '+version+' '+manifest['architecture']
-        else:
-            query=['dpkg-query','-W','-f=${db:Status-Status} ${Version} ${Architecture}\n','--',manifest['package']+':'+manifest['architecture']]
-            expected='installed '+version+' '+manifest['architecture']
-        out,err,code=bounded(query,timeout=10,limit=4000,allowed_codes=(0,1),return_status=True)
-        if code or err or out.strip()!=expected:raise ValueError('Installed package version/architecture is ambiguous or does not match authenticated artifact')
+    def identity():return vendor_identity(manifest)
     try:
         identity()
         for entry in entries:
@@ -1474,6 +1485,68 @@ def process_response(identifier,plan,approval=None,status_only=False,resume=Fals
     except FileNotFoundError:
         if status_only and not opened:return {'id':identifier,'plan_digest':digest,'state':'not_started','resume_ready':False,'resume_attempted':False,'threads':0}
         raise
+
+
+def vendor_owner(manifest,path):
+    try:from bridge import bounded
+    except ImportError:from target.bridge import bounded
+    if manifest.get('package_manager','dpkg')=='rpm':
+        query=['rpm','--noplugins','-q','--whatprovides','--qf','%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n','--',path]
+        expected=manifest['package']+' '+manifest['version']+' '+manifest['architecture']
+        out,err,code=bounded(query,timeout=10,limit=4000,allowed_codes=(0,1),return_status=True)
+        if code or err or out.splitlines()!=[expected]:raise ValueError('Package ownership is ambiguous or mismatched')
+    else:
+        out,err,code=bounded(['dpkg-query','-S','--',path],timeout=10,limit=4000,allowed_codes=(0,1),return_status=True)
+        lines=out.splitlines();owner,separator,owned=(lines[0].rpartition(': ') if len(lines)==1 else ('','',''))
+        if code or err or not separator or owned!=path or owner not in (manifest['package'],manifest['package']+':'+manifest['architecture']):raise ValueError('Package ownership is ambiguous or mismatched')
+
+
+def repair_readiness(identifier,plan,manifest):
+    """Read-only preparation. No payload, creation, chmod, move or publication."""
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier) or not isinstance(plan,dict) or not isinstance(manifest,dict):raise ValueError('Invalid repair preparation request')
+    entries=manifest.get('entries')
+    if not isinstance(entries,list) or len(entries)!=1 or not isinstance(entries[0],dict) or set(entries[0])!={'path','sha256','size'}:raise ValueError('One authenticated regular-file entry is required')
+    entry=entries[0];path=entry['path']
+    if not isinstance(path,str) or not re.fullmatch('/[A-Za-z0-9_./+-]+',path) or str(Path(path))!=path or '..' in Path(path).parts or not path.startswith(RESPONSE_SCOPES) or path.startswith('/opt/drpatch/') or path=='/opt/drpatch' or path!=plan.get('file',{}).get('path') or len(path)>4095 or not isinstance(entry['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',entry['sha256']) or type(entry['size']) is not int or not 0<=entry['size']<=32*1024*1024:raise ValueError('Unsupported repair path or authenticated file metadata')
+    import fcntl
+    facts={'retained_verified':False,'quarantine_complete':False,'parents_match':None,'destination_empty':None,
+           'metadata_supported':False,'package_matches':False,'owner_matches':False,'rechecked':False}
+    result={'version':1,'quarantine_id':identifier,'response_plan_digest':hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'manifest_digest':hashlib.sha256(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'state':'blocked','facts':facts,'gaps':[],'replacement_mode':None}
+    def gap(code):
+        if code not in result['gaps']:result['gaps'].append(code)
+    try:
+        with evidence_directory(RESPONSE_ROOT/identifier) as directory:
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            observed={};receipt=response_status_open(directory,identifier,plan,observed)
+            facts.update(retained_verified=observed.get('held_verified',False),quarantine_complete=receipt['state']=='quarantined' and not receipt['restore_attempted'],
+                         parents_match=observed.get('parents_match'),destination_empty=not observed['source_present'] if observed.get('source_present') is not None else None)
+            if not facts['retained_verified']:gap('retained_unverified')
+            if not facts['quarantine_complete']:gap('quarantine_incomplete')
+            if facts['parents_match'] is not True:gap('parent_changed')
+            if facts['destination_empty'] is not True:gap('destination_occupied')
+            identity=plan['file']['identity'];mode=stat.S_IMODE(identity['mode'])
+            facts['metadata_supported']=identity['uid']==0 and identity['gid']==0 and mode in (0o600,0o640,0o644,0o700,0o750,0o755) and not plan['xattrs']
+            if facts['metadata_supported']:result['replacement_mode']=mode
+            else:gap('unsupported_metadata')
+            try:vendor_identity(manifest);facts['package_matches']=True
+            except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):gap('package_identity')
+            if facts['package_matches']:
+                try:vendor_owner(manifest,path);facts['owner_matches']=True
+                except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):gap('package_owner')
+            # Recheck both DB observations and the protected namespace after I/O.
+            if facts['package_matches'] and facts['owner_matches']:
+                try:vendor_identity(manifest);vendor_owner(manifest,path)
+                except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):gap('package_changed')
+            final={};last=response_status_open(directory,identifier,plan,final)
+            facts['rechecked']=last==receipt and final==observed
+            facts.update(retained_verified=final.get('held_verified',False),quarantine_complete=last['state']=='quarantined' and not last['restore_attempted'],
+                         parents_match=final.get('parents_match'),destination_empty=not final['source_present'] if final.get('source_present') is not None else None)
+            if not facts['rechecked']:gap('changed_during_read')
+            if all(value is True for value in facts.values()) and not result['gaps']:result['state']='ready'
+    except (OSError,ValueError,KeyError,TypeError,IndexError):gap('verification_unavailable')
+    return result
 
 
 def response_action(identifier,plan,approval,restore=False):

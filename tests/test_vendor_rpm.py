@@ -102,7 +102,7 @@ def test_rpm_target_checks_exact_epoch_and_architecture_before_and_after_hashing
     calls=[];identity='Patchy_test 2:1.0-1 x86_64\n'
     def bounded(args,**kwargs):
         calls.append(args)
-        assert args==['rpm','-q','--qf','%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n','--','Patchy_test.x86_64']
+        assert args==['rpm','--noplugins','-q','--qf','%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n','--','Patchy_test.x86_64']
         return identity,'',0
     monkeypatch.setattr(bridge,'bounded',bounded)
     receipt=agent.vendor_inspect(manifest)

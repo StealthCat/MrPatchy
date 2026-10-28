@@ -11,6 +11,33 @@ import tarfile
 import tempfile
 import time
 
+TAR_STREAM_LIMIT=130*1024*1024
+
+
+def zstd_tar(data):
+    """Decode one bounded Debian zstd frame, including unknown-size frames."""
+    import zstandard
+    started=time.monotonic()
+    try:
+        frame=zstandard.get_frame_parameters(data)
+        if frame.window_size>128*1024*1024 or (frame.content_size!=zstandard.CONTENTSIZE_UNKNOWN and frame.content_size>TAR_STREAM_LIMIT):
+            raise ValueError('Vendor zstd archive work limit exceeded')
+        decoder=zstandard.ZstdDecompressor(max_window_size=128*1024*1024).decompressobj()
+        output=io.BytesIO()
+        # Small compressed slices also bound any single decoder allocation.
+        for offset in range(0,len(data),256):
+            chunk=decoder.decompress(data[offset:offset+256])
+            if output.tell()+len(chunk)>TAR_STREAM_LIMIT or time.monotonic()-started>20:
+                raise ValueError('Vendor zstd archive work limit exceeded')
+            output.write(chunk)
+            if decoder.eof:
+                if decoder.unused_data or offset+256<len(data):raise ValueError('Trailing vendor zstd archive data')
+                break
+        if not decoder.eof:raise ValueError('Truncated vendor zstd archive')
+        return output.getvalue()
+    except zstandard.ZstdError as error:
+        raise ValueError('Invalid or oversized vendor zstd archive') from error
+
 
 def sha(data):return hashlib.sha256(data).hexdigest()
 
@@ -52,6 +79,8 @@ def archive_files(data):
 
 def tar_members(data):
     total=0;started=time.monotonic()
+    if data.startswith(b'\x28\xb5\x2f\xfd'):data=zstd_tar(data)
+    if time.monotonic()-started>20:raise ValueError('Vendor archive work limit exceeded')
     with tarfile.open(fileobj=io.BytesIO(data),mode='r|*') as archive:
         for count,member in enumerate(archive):
             total+=member.size
@@ -134,6 +163,30 @@ def authenticate(bundle_id,now=None):
 
 def trust_basis(manifest):
     return 'controller_authenticated_rpm_artifact' if manifest.get('package_manager')=='rpm' else 'controller_authenticated_debian_artifact'
+
+
+def replacement(bundle_id,path):
+    """Authenticate separately supplied bytes by their signed artifact file hash.
+
+    No archive extraction, package scripts or target metadata authorize the bytes.
+    Operators place the selected regular file at the constant `replacement` leaf.
+    Contents stay local and are never part of the returned preparation metadata.
+    """
+    manifest,proof=authenticate(bundle_id)
+    import json
+    if len(json.dumps(proof).encode())>32000:raise ValueError('Authentication provenance exceeds preparation budget')
+    entries=[entry for entry in manifest['entries'] if entry['path']==path]
+    if len(entries)!=1:raise ValueError('Quarantined path is not a regular file in the authenticated artifact')
+    entry=entries[0]
+    data=read_file(Path(os.getenv('DATA_DIR','/data'))/'vendor-packages'/bundle_id/'replacement',32*1024*1024)
+    if len(data)!=entry['size'] or sha(data)!=entry['sha256']:raise ValueError('Replacement bytes do not match the authenticated artifact file')
+    selected={**{k:v for k,v in manifest.items() if k!='entries'},'entries':[entry]}
+    return selected,proof
+
+
+def authentication_digest(manifest,proof):
+    import json
+    return sha(json.dumps({'manifest':manifest,'authentication':{k:v for k,v in proof.items() if k!='authenticated_at'}},sort_keys=True,separators=(',',':')).encode())
 
 
 def validate_receipt(manifest,result):
