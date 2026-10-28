@@ -84,7 +84,9 @@ administrator password and mode 0600. It builds the regular image and a derived
 image using Google's signed APT repository for Google Cloud CLI, configures both
 app and worker, and checks token acquisition and instance-read access in a
 temporary worker container before starting the stack. It then verifies the CLI,
-token acquisition and instance read inside both running services with `exec -T`.
+token acquisition and instance read inside both running services with `exec -T`,
+explicitly selecting the `mrpatchy` user and its home directory because `exec`
+bypasses the entrypoint's switch to the service account.
 Token output is discarded in every check. Temporary worker containers use
 dynamically assigned management-network addresses, so rerunning the installer
 does not compete with the running app's fixed control-network address. Docker itself,

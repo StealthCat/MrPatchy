@@ -45,9 +45,12 @@ def test_fresh_installer_configures_both_runtimes_without_leaking_token(installe
     checks=[(i,row) for i,row in enumerate(commands) if 'gcloud' in row]
     assert all('worker' in row for i,row in checks if i<startup)
     for service in ('app','worker'):
-        assert any(i>startup and row[-5:]==['exec','-T',service,'gcloud','version'] for i,row in checks)
+        assert any(i>startup and row[-3:]==[service,'gcloud','version'] for i,row in checks)
         assert any(i>startup and 'exec' in row and service in row and 'print-access-token' in row for i,row in checks)
         assert any(i>startup and 'exec' in row and service in row and 'describe' in row for i,row in checks)
+    for i,row in checks:
+        if i>startup:
+            assert row[row.index('exec'):row.index('exec')+6]==['exec','-T','--user','mrpatchy','-e','HOME=/home/mrpatchy']
     again=run('--public-url','https://ignored.example.test')
     assert again.returncode==0 and (root/'.env').read_text()==config
 
