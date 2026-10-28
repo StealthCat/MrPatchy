@@ -1324,11 +1324,67 @@ def prepare_trusted_replacement(host_id:str,quarantine_id:str,body:RepairPrepara
 @app.get('/api/hosts/{host_id}/security/repair-preparations')
 def trusted_replacement_history(host_id:str,offset:int=0,user=Depends(auth)):
     from .repair_preparation import Preparation
+    from .repair_staging import Stage
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
         rows=list(s.scalars(select(Preparation).where(Preparation.host_id==host_id).order_by(Preparation.created.desc(),Preparation.id).offset(offset).limit(21)))
-        return {'items':[object_dict(r)|{'report_digest':incidents.digest(r.report)} for r in rows[:20]],'more':len(rows)>20}
+        stages={r.preparation_id:r.id for r in s.scalars(select(Stage).where(Stage.host_id==host_id,Stage.preparation_id.in_([r.id for r in rows[:20]])))}
+        return {'items':[object_dict(r)|{'report_digest':incidents.digest(r.report),'stage_id':stages.get(r.id)} for r in rows[:20]],'more':len(rows)>20}
+
+def staging_idle(s,host_id,quarantine_id):
+    from .quarantine import ACTIONS
+    if operations.host_quarantined(s,host_id,response_id=quarantine_id,staging_response_id=quarantine_id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
+    actions=tuple(action for action in ACTIONS if action!='quarantine-audit')
+    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted work in Activity first')
+
+class RepairStagingApproval(BaseModel):
+    report_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    confirmation:str
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.post('/api/hosts/{host_id}/security/repair-preparations/{preparation_id}/stage')
+def approve_replacement_staging(host_id:str,preparation_id:str,body:RepairStagingApproval,user=Depends(auth)):
+    from . import repair_staging,repair_preparation
+    if body.confirmation!='STAGE' or len(body.reason.strip())<10:raise ValueError('Type STAGE and provide a meaningful review reason')
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);prepared=s.get(repair_preparation.Preparation,preparation_id)
+        if not prepared or prepared.host_id!=host_id:raise HTTPException(404,'Replacement preparation not found')
+        staging_idle(s,host_id,prepared.quarantine_id)
+        if s.scalar(select(repair_staging.Stage.id).where(repair_staging.Stage.preparation_id==prepared.id).limit(1)):raise HTTPException(409,'This preparation already has a staging approval; review its history')
+        row=repair_staging.approve(s,host,prepared.id,body.report_digest,user['username'],body.reason.strip())
+        return {'stage_id':row.id,'publication':'not_authorized','job_id':worker.enqueue(s,host_id,'trusted-repair-stage',{'stage_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
+
+def staging_row(s,host_id,stage_id):
+    from .repair_staging import Stage
+    row=s.get(Stage,stage_id)
+    if not row or row.host_id!=host_id:raise HTTPException(404,'Replacement staging not found')
+    return row
+
+@app.get('/api/hosts/{host_id}/security/repair-stages')
+def replacement_staging_history(host_id:str,offset:int=0,user=Depends(auth)):
+    from .repair_staging import Stage
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(Stage).where(Stage.host_id==host_id).order_by(Stage.created.desc(),Stage.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan)} for r in rows[:20]],'more':len(rows)>20}
+
+@app.post('/api/hosts/{host_id}/security/repair-stages/{stage_id}/status')
+def verify_replacement_stage(host_id:str,stage_id:str,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host_or_404(s,host_id);row=staging_row(s,host_id,stage_id);staging_idle(s,host_id,row.quarantine_id)
+        if row.state=='queued':raise HTTPException(409,'Staging is still queued')
+        return {'job_id':worker.enqueue(s,host_id,'trusted-repair-stage-status',{'stage_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
+
+@app.get('/api/hosts/{host_id}/security/repair-stages/{stage_id}/history')
+def replacement_stage_events(host_id:str,stage_id:str,offset:int=0,user=Depends(auth)):
+    from .repair_staging import Event
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=staging_row(s,host_id,stage_id)
+        records=list(s.scalars(select(Event).where(Event.stage_id==row.id,Event.host_id==host_id).order_by(Event.created.desc(),Event.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r) for r in records[:20]],'more':len(records)>20}
 
 class ResponseProcessRequest(BaseModel):
     plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')

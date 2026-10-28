@@ -1,7 +1,7 @@
 const assert=require('assert/strict');
 module.exports=async(page)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
- const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
+ const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -23,7 +23,11 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/evidence-copies/copy-fixture/acquire')){assert.equal(request.postDataJSON().confirmation,'ACQUIRE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));writes.push(url.pathname);return route.fulfill({json:{job_id:'acquire-job'}});}
   if(url.pathname.endsWith('/response-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);const body=request.postDataJSON();assert.equal(body.enabled,true);assert.equal(body.interval_minutes,5);assert.equal(body.pause_on_problem,true);responsePolicy={...body,revision:'policy-version'};return route.fulfill({json:responsePolicy});}return route.fulfill({json:{policy:responsePolicy,watched:1,problem_count:0,overdue_count:0,rotation_minutes:responsePolicy.interval_minutes,scope_limited:false,pending:null}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/watch')){const body=request.postDataJSON();assert.equal(body.enabled,false);assert.equal(body.plan_digest,'f'.repeat(64));watchEnabled=false;writes.push(url.pathname);return route.fulfill({json:{enabled:false,revision:'watch-version'}});}
-  if(url.pathname===prefix+'/repair-preparations')return route.fulfill({json:{items:repairQueued?[{id:'repair-fixture',state:'ready',path:'/srv/security-fixture',bundle_id:'vendor-fixture',actor:'admin',finished:Date.now()/1000,report:{read_only:true,publication:'not_implemented',authentication:{artifact_sha256:'b'.repeat(64),signers:['publisher-fixture']},target:{replacement_mode:420,gaps:[],facts:{retained_verified:true,destination_empty:true,package_matches:true,owner_matches:true}}}}]:[],more:false}});
+  if(url.pathname===prefix+'/repair-preparations')return route.fulfill({json:{items:repairQueued?[{id:'repair-fixture',report_digest:'9'.repeat(64),stage_id:stagingCreated?'stage-fixture':null,state:'ready',path:'/srv/security-fixture',bundle_id:'vendor-fixture',actor:'admin',finished:Date.now()/1000,report:{scope_current:true,manifest:{entries:[{path:'/srv/security-fixture',sha256:'b'.repeat(64),size:10}]},read_only:true,publication:'not_implemented',authentication:{artifact_sha256:'b'.repeat(64),signers:['publisher-fixture']},target:{replacement_mode:420,gaps:[],facts:{retained_verified:true,destination_empty:true,package_matches:true,owner_matches:true}}}}]:[],more:false}});
+  if(url.pathname===prefix+'/repair-preparations/repair-fixture/stage'){const body=request.postDataJSON();assert.equal(body.confirmation,'STAGE');assert.equal(body.report_digest,'9'.repeat(64));stagingCreated=true;writes.push(url.pathname);return route.fulfill({json:{stage_id:'stage-fixture',job_id:'stage-job',publication:'not_authorized'}});}
+  if(url.pathname===prefix+'/repair-stages')return route.fulfill({json:{items:stagingCreated?[{id:'stage-fixture',state:'staged',actor:'admin',reason:'Reviewed private staging.',created:Date.now()/1000,expires:Date.now()/1000+300,observed:Date.now()/1000,plan:{manifest:{entries:[{path:'/srv/security-fixture',size:10}]}},report:{scope_current:true,trust_current:true,target:{received:10,facts:{payload_verified:true}}}}]:[],more:false}});
+  if(url.pathname===prefix+'/repair-stages/stage-fixture/status'){writes.push(url.pathname);return route.fulfill({json:{job_id:'stage-status-job'}});}
+  if(url.pathname===prefix+'/repair-stages/stage-fixture/history')return route.fulfill({json:{items:[{kind:'approved',actor:'admin',report:{reason:'Reviewed private staging.'}},{kind:'observed_staged',actor:'admin'}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/repair-preparations')){assert.deepEqual(request.postDataJSON(),{bundle_id:'vendor-fixture',plan_digest:'f'.repeat(64)});repairQueued=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'repair-job',read_only:true,publication:'not_implemented'}});}
   if(url.pathname.endsWith('/process-responses'))return route.fulfill({json:{items:[{id:'process-response-fixture',state:processState,hold:processHold,created:Date.now()/1000,observed:Date.now()/1000,plan:{process:{pid:41,start_ticks:100,pid_namespace:123,proc_device:7,proc_inode:8}},plan_digest:'c'.repeat(64),receipt_digest:'d'.repeat(64),receipt:{resume_ready:processState==='suspended',resume_attempted:processState==='resumed'}}],more:false}});
   if(url.pathname.endsWith('/process-responses/process-response-fixture/actions/suspend')){assert.equal(request.postDataJSON().confirmation,'SUSPEND');assert.equal(request.postDataJSON().plan_digest,'c'.repeat(64));processState='suspended';processHold=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'suspend-job'}});}
@@ -159,7 +163,22 @@ module.exports=async(page)=>{
   await page.getByText('Readiness gaps: None recorded',{exact:true}).waitFor();
   await page.getByText('Review replacement authentication and readiness receipt',{exact:true}).click();
   await page.locator('#repair-preparation-panel pre').filter({hasText:'publisher-fixture'}).waitFor();
-  assert.equal(await page.locator('#repair-preparation-panel').getByRole('button').count(),3,'Preparation must expose only history navigation and refresh, not execution');
+  const beforeStaging=writes.length;
+  await page.getByRole('button',{name:'Review replacement staging',exact:true}).click();assert.equal(writes.length,beforeStaging);
+  await page.locator('#replacement-stage-approval [name=reason]').fill('Reviewed private staging; publication needs a separate approval.');
+  await page.locator('#replacement-stage-approval [name=confirmation]').fill('STAGE');
+  await page.getByRole('button',{name:'Stage approved replacement',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/repair-preparations/repair-fixture/stage');
+  await page.getByRole('button',{name:'Refresh replacement staging',exact:true}).click();
+  await page.getByText('Retained transfer progress: 10 bytes · Payload verified: Yes',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Verify staged replacement',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Read-only staging verification queued'));
+  assert.equal(writes.at(-1),prefix+'/repair-stages/stage-fixture/status');
+  await page.getByRole('button',{name:'Replacement staging history',exact:true}).click();
+  await page.locator('#repair-stage-history').filter({hasText:'observed_staged'}).waitFor();
+  for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'Replacement staging history must fit the viewport');}
+  await page.locator('#close-modal').click();
+  assert.equal(await page.getByRole('button',{name:/Publish replacement/i}).count(),0,'Staging must not expose live-file publication');
   for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'Trusted replacement preparation must fit the viewport');}
   await page.getByRole('button',{name:'Review server pause',exact:true}).click();
   await page.locator('#response-release [name=reason]').fill('Verified service health and accepted quarantine impact.');

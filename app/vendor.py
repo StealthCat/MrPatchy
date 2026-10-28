@@ -189,6 +189,15 @@ def authentication_digest(manifest,proof):
     return sha(json.dumps({'manifest':manifest,'authentication':{k:v for k,v in proof.items() if k!='authenticated_at'}},sort_keys=True,separators=(',',':')).encode())
 
 
+def replacement_payload(bundle_id,path):
+    """Return locally authenticated bytes only for the approved staging worker."""
+    manifest,proof=replacement(bundle_id,path)
+    data=read_file(Path(os.getenv('DATA_DIR','/data'))/'vendor-packages'/bundle_id/'replacement',32*1024*1024)
+    entry=manifest['entries'][0]
+    if len(data)!=entry['size'] or sha(data)!=entry['sha256']:raise ValueError('Replacement changed before transfer')
+    return manifest,proof,data
+
+
 def validate_receipt(manifest,result):
     if not isinstance(result,dict) or result.get('trust_basis')!=trust_basis(manifest) or any(result.get(k)!=manifest[k] for k in ('package','version','architecture')):
         raise ValueError('Unsupported vendor receipt; update target helpers')
