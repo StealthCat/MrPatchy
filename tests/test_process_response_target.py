@@ -8,13 +8,14 @@ import time
 import uuid
 import pytest
 from target import agent
+from fixture_process import sleep_image
 
 
 @pytest.fixture
 def process_files(monkeypatch):
     if os.geteuid()!=0:pytest.skip('Real protected root-owned process fixture runs in native SSH containers')
     root=Path('/srv')/('patchy-process-test-'+uuid.uuid4().hex);root.mkdir(mode=0o700)
-    source=root/'sleep';shutil.copyfile(shutil.which('sleep'),source);source.chmod(0o755)
+    source=root/'sleep';shutil.copyfile(sleep_image(shutil.which('sleep')),source);source.chmod(0o755)
     monkeypatch.setattr(agent,'RESPONSE_ROOT',root/'quarantine');monkeypatch.setattr(agent,'PROCESS_RESPONSE_ROOT',root/'processes')
     try:process=subprocess.Popen([str(source),'120'])
     except PermissionError:

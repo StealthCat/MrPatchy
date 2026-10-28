@@ -289,9 +289,12 @@ def main():
         print('Retained response monitoring passed: real scheduled worker checks, retained hash, occupied source alert, separate pause policy and completed-restoration scope')
         print('Reviewed quarantine passed: verified independent archive, durable hold, root-only move, destination conflict, no overwrite and exact original restoration')
         # A second full evidence/quarantine workflow retains a running executable.
-        # Preserve the applet name on distributions using multicall coreutils.
+        # Coreutils single-binary installations expose sleep as a shebang
+        # wrapper. Quarantine the actual ELF copy, not its interpreter script.
         executable=custom+'/sleep'
-        run('docker','exec',name,'cp','/usr/bin/sleep',executable)
+        image_code=Path(__file__).with_name('fixture_process.py').read_text()
+        native_image=run('docker','exec',name,'python3','-c',image_code,'/usr/bin/sleep')
+        run('docker','exec',name,'cp',native_image,executable)
         run('docker','exec',name,'chmod','755',executable)
         executable_expected=json.loads(run('docker','exec',name,'python3','-c',"import os,json,hashlib; p='"+executable+"'; s=os.stat(p); print(json.dumps({'path':p,'device':s.st_dev,'inode':s.st_ino,'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest()}))"))
         executable_snapshot=ssh.call(host,{'action':'evidence-prepare','expected':executable_expected},timeout=90)
