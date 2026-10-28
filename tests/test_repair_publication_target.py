@@ -171,3 +171,16 @@ def test_selected_permission_policy_is_explicit_and_retained_original_stays_priv
     assert result['state']=='published'
     assert stat.S_IMODE(f['source'].stat().st_mode)==f['plan']['replacement_mode']
     assert stat.S_IMODE((f['vault']/f['qid']/'held').stat().st_mode)==0o600
+
+
+def test_attribute_change_during_final_live_hash_cannot_be_reported_published(publication,monkeypatch):
+    f=publication;publish(f);read=agent.os.read;passes=0;inode=f['source'].stat().st_ino
+    def changed(fd,length):
+        nonlocal passes
+        data=read(fd,length)
+        if data and os.fstat(fd).st_ino==inode and os.lseek(fd,0,os.SEEK_CUR)==len(data):
+            passes+=1
+            if passes==2:os.setxattr(f['source'],'user.during-final-hash',b'changed')
+        return data
+    monkeypatch.setattr(agent.os,'read',changed)
+    assert observe(f)['state']=='uncertain' and passes==2

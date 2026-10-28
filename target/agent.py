@@ -1764,7 +1764,7 @@ def repair_published_file(parent,name,plan):
     expected={**plan['payload']['identity'],'mode':stat.S_IFREG|plan['stage_plan']['replacement_mode']}
     fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
     try:
-        before=repair_payload_identity(os.fstat(fd))
+        info=os.fstat(fd);before=repair_payload_identity(info)
         if before!=expected or response_xattrs(fd):raise ValueError('Published identity or metadata changed')
         digest=hashlib.sha256();deadline=time.monotonic()+30
         while True:
@@ -1772,7 +1772,10 @@ def repair_published_file(parent,name,plan):
             if not data:break
             if time.monotonic()>deadline:raise TimeoutError('Published hash budget exceeded')
             digest.update(data)
-        if digest.hexdigest()!=plan['payload']['sha256'] or repair_payload_identity(os.fstat(fd))!=before or repair_payload_identity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=before:raise ValueError('Published bytes or namespace changed')
+        # ctime is deliberately excluded from the pre-move approved identity,
+        # but must remain stable during each individual verification read.
+        attrs=response_xattrs(fd)
+        if digest.hexdigest()!=plan['payload']['sha256'] or attrs or evidence_identity(os.fstat(fd))!=evidence_identity(info) or evidence_identity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=evidence_identity(info):raise ValueError('Published bytes or namespace changed')
         return {'sha256':digest.hexdigest(),'size':before['size'],'identity':before}
     finally:os.close(fd)
 
