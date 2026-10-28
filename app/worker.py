@@ -373,6 +373,9 @@ def execute_locked(job_id):
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
+            elif job.action=='quarantine-processes':
+                from . import response_processes
+                result=response_processes.execute(s,h,job);job.output=json.dumps(result)
             elif job.action=='quarantine-audit':
                 from . import response_monitor
                 result=response_monitor.execute(s,h,job);job.output=json.dumps(result)

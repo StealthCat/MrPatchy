@@ -215,6 +215,16 @@ def main():
                     review=quarantine.Approval(id=str(uuid.uuid4()),quarantine_id=q_record.id,action='restore' if action=='quarantine-restore' else 'quarantine',expires=time.time()+240,plan_digest=incidents.digest(q_record.plan),actor='native-test',reason='Approved harmless native response fixture.',before_state=q_record.state,before_hold=q_record.hold)
                     session.add(review);q_record.approval_id=review.id;q_record.state='restore_queued' if action=='quarantine-restore' else 'queued';q_record.hold=True
                 return worker.enqueue(session,host.id,action,{'quarantine_id':q_record.id,'_actor':'native-test'})
+        # A harmless target process retains a descriptor across the namespace move.
+        holder_code="import os,sys,time; f=open(sys.argv[1],'rb'); open(sys.argv[2],'w').write(os.readlink('/proc/self')); time.sleep(300)"
+        holder_ready=custom+'/reference-holder.pid'
+        run('docker','exec','-d',name,'python3','-c',holder_code,source,holder_ready)
+        for attempt in range(100):
+            holder_result=subprocess.run(['docker','exec',name,'cat',holder_ready],capture_output=True,text=True)
+            if holder_result.returncode==0 and holder_result.stdout.strip():break
+            time.sleep(.05)
+        else:raise AssertionError('Reference holder did not become ready')
+        holder_pid=int(holder_result.stdout.strip())
         response_job=queue_response('quarantine-apply');worker.execute(response_job)
         with Session() as session:
             q_record=session.query(quarantine.Quarantine).one();q_id=q_record.id
@@ -222,6 +232,29 @@ def main():
             assert q_record.state=='quarantined' and q_record.hold and operations.host_quarantined(session,host.id)
         assert run('docker','exec',name,'stat','-c','%a','/var/lib/mrpatchy-quarantine/'+q_id+'/held')=='600'
         run('docker','exec',name,'test','!','-e',source)
+        from app import response_processes
+        def inspect_process_references():
+            with Session() as session:
+                response=session.get(quarantine.Quarantine,q_id)
+                check=worker.enqueue(session,host.id,'quarantine-processes',{'quarantine_id':q_id,'fingerprint':host.fingerprint,'plan_digest':incidents.digest(response.plan),'_actor':'native-test'})
+            worker.execute(check)
+            with Session() as session:
+                assert session.get(Job,check).state=='complete',session.get(Job,check).output
+                assert session.get(quarantine.Quarantine,q_id).hold
+                return session.get(response_processes.Observation,check).report
+        process_report=inspect_process_references()
+        assert process_report['held_verified'],process_report
+        assert any(m['pid']==holder_pid and m['references'].get('descriptor',0)>0 for m in process_report['observation']['matches']),process_report
+        run('docker','exec',name,'kill','-0',str(holder_pid))
+        run('docker','exec',name,'kill',str(holder_pid))
+        # Wait only for our fixture's descriptor to close, never retry a mutation.
+        for attempt in range(100):
+            holder_result=subprocess.run(['docker','exec',name,'test','-d','/proc/'+str(holder_pid)+'/fd'],capture_output=True)
+            if holder_result.returncode:break
+            time.sleep(.05)
+        process_report=inspect_process_references()
+        assert not process_report['observation']['matches'],process_report
+        print('Process references passed: real restricted bridge and held descriptor across quarantine, no signals from inspector, durable receipts and unchanged hold')
         from app import response_monitor
         from app.db import Setting
         with Session() as session:

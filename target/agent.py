@@ -1171,6 +1171,134 @@ def response_status(identifier,plan):
     except FileNotFoundError:return {'id':identifier,'plan':plan,'state':'not_found','restore_ready':False,'restore_attempted':False}
 
 
+RESPONSE_PROC_LIMITS={'processes':4096,'entries':50000,'matches':128,'seconds':15}
+
+
+def response_proc_root():
+    """Only inspect the kernel procfs mounted at the helper's /proc."""
+    import ctypes
+    fd=os.open('/proc',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        libc=ctypes.CDLL(None,use_errno=True);buffer=ctypes.create_string_buffer(256)
+        if libc.fstatfs(fd,ctypes.byref(buffer)) or ctypes.c_long.from_buffer(buffer).value!=0x9fa0:
+            raise ValueError('Process inspection requires Linux procfs')
+        return fd
+    except BaseException:os.close(fd);raise
+
+
+def response_proc_read(directory,name,limit=4096):
+    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    try:
+        value=os.read(fd,limit+1)
+        if len(value)>limit:raise ValueError('Process metadata exceeds budget')
+        return value
+    finally:os.close(fd)
+
+
+def response_proc_identity(directory,pid):
+    value=response_proc_read(directory,'stat');end=value.rfind(b') ')
+    if end<0 or value.split(b' ',1)[0]!=str(pid).encode():raise ValueError('Invalid process identity')
+    ticks=int(value[end+2:].split()[19])
+    namespace=os.stat('ns/pid',dir_fd=directory).st_ino
+    if ticks<=0 or namespace<=0:raise ValueError('Invalid process identity')
+    return {'pid':pid,'start_ticks':ticks,'pid_namespace':namespace}
+
+
+def response_proc_scan(identity):
+    """Sample metadata only. Never read cmdline, environ, file bytes or memory."""
+    limits=dict(RESPONSE_PROC_LIMITS);deadline=time.monotonic()+limits['seconds']
+    result={'scope':'helper_visible_process_leaders','boot_id':None,'pid_namespace':None,'observer_pid':None,
+            'processes_examined':0,'entries_examined':0,'matches':[],'gaps':{}}
+    def gap(code):result['gaps'][code]=result['gaps'].get(code,0)+1
+    class LimitReached(Exception):pass
+    class DeadlineReached(Exception):pass
+    def budget():
+        if time.monotonic()>=deadline:gap('time_limit');raise DeadlineReached()
+    def entry():
+        budget()
+        if result['entries_examined']>=limits['entries']:gap('entry_limit');raise LimitReached()
+        result['entries_examined']+=1
+    def same(info):return stat.S_ISREG(info.st_mode) and (info.st_dev,info.st_ino)==(identity['dev'],identity['ino'])
+    try:
+        root=response_proc_root()
+        try:
+            boot=response_proc_read(root,'sys/kernel/random/boot_id',64).decode('ascii').strip()
+            if not re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',boot):raise ValueError('Invalid boot identity')
+            result['boot_id']=boot;result['pid_namespace']=os.stat('self/ns/pid',dir_fd=root).st_ino
+            observer=os.readlink('self',dir_fd=root)
+            if not re.fullmatch('[1-9][0-9]*',observer):raise ValueError('Invalid observer identity')
+            result['observer_pid']=int(observer)
+            with os.scandir(root) as processes:
+                for process in processes:
+                    entry()
+                    if not re.fullmatch('[1-9][0-9]*',process.name) or process.name==observer:continue
+                    if result['processes_examined']>=limits['processes']:gap('process_limit');break
+                    result['processes_examined']+=1;directory=None
+                    try:
+                        directory=os.open(process.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root)
+                        before=response_proc_identity(directory,int(process.name));references={}
+                        try:
+                            if same(os.stat('exe',dir_fd=directory)):references['executable']=1
+                        except FileNotFoundError:pass # Kernel threads have no executable link.
+                        except OSError:gap('executable_unavailable')
+                        stopped=False
+                        try:
+                            for name,kind,pattern in (('fd','descriptor',r'[0-9]+'),('map_files','memory_map',r'[a-f0-9]+-[a-f0-9]+')):
+                                links=None
+                                try:
+                                    links=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory)
+                                    with os.scandir(links) as entries:
+                                        for link in entries:
+                                            entry()
+                                            if not re.fullmatch(pattern,link.name):gap('unexpected_entry');continue
+                                            try:
+                                                if same(os.stat(link.name,dir_fd=links)):references[kind]=references.get(kind,0)+1
+                                            except FileNotFoundError:gap('reference_disappeared')
+                                            except OSError:gap(kind+'_unavailable')
+                                except OSError:gap(kind+'_unavailable')
+                                finally:
+                                    if links is not None:os.close(links)
+                        except (LimitReached,DeadlineReached):stopped=True
+                        if response_proc_identity(directory,int(process.name))!=before:gap('process_changed');continue
+                        if references:
+                            result['matches'].append({**before,'references':references})
+                            if len(result['matches'])>=limits['matches']:gap('match_limit');break
+                        if stopped:break
+                    except (OSError,ValueError,IndexError):gap('process_unavailable')
+                    finally:
+                        if directory is not None:os.close(directory)
+        finally:os.close(root)
+    except (LimitReached,DeadlineReached):pass
+    except (OSError,ValueError,UnicodeError):gap('procfs_unavailable')
+    return result
+
+
+def response_processes(identifier,plan):
+    """Bind a bounded process reference observation to a still-held original inode."""
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid response ID')
+    import fcntl
+    result={'version':1,'id':identifier,'plan_digest':hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'state':'unavailable','held_verified':False,'observation':None}
+    try:
+        with evidence_directory(RESPONSE_ROOT/identifier) as directory:
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            facts={};receipt=response_status_open(directory,identifier,plan,facts)
+            if not facts.get('held_verified') or receipt['restore_attempted']:return result
+            # Keep the captured inode open so it cannot be freed and reused while
+            # comparing procfs references. Both hashes remain local to the helper.
+            fd=response_file(directory,'held',plan,(0o600,stat.S_IMODE(plan['file']['identity']['mode'])))
+            try:
+                observation=response_proc_scan(plan['file']['identity'])
+                after={};response_status_open(directory,identifier,plan,after)
+                if not after.get('held_verified'):return result
+                result.update(held_verified=True,observation=observation)
+                if observation['boot_id'] and observation['pid_namespace'] and observation['observer_pid']:
+                    result['state']='references_found' if observation['matches'] else 'none_observed'
+            finally:os.close(fd)
+    except (OSError,ValueError,KeyError,TypeError):pass
+    return result
+
+
 def response_action(identifier,plan,approval,restore=False):
     import fcntl
     if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid response ID')
