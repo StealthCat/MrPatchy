@@ -19,7 +19,7 @@ class MigrationError(ValueError):
 
 def metadata():
     # Register every durable model, without importing main or starting workers.
-    for name in ('identity', 'operations', 'releases', 'scheduling', 'ai_runs', 'update_scores', 'package_history', 'incidents', 'evidence_vault', 'quarantine', 'response_monitor', 'response_processes', 'process_response', 'repair_preparation', 'repair_staging'):
+    for name in ('identity', 'operations', 'releases', 'scheduling', 'ai_runs', 'update_scores', 'package_history', 'incidents', 'evidence_vault', 'quarantine', 'response_monitor', 'response_processes', 'process_response', 'repair_preparation', 'repair_staging', 'repair_publication'):
         importlib.import_module('app.' + name)
     from .db import Base
     return Base.metadata

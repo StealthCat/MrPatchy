@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base
 from . import incidents,quarantine,ssh
 
-STATES=('quarantined','uncertain','not_found','console_recovered')
+STATES=('quarantined','uncertain','not_found','console_recovered','replaced','replacement_uncertain')
 GAPS=('entry_limit','process_limit','match_limit','time_limit','procfs_unavailable',
       'executable_unavailable','descriptor_unavailable','memory_map_unavailable',
       'reference_disappeared','unexpected_entry','process_changed','process_unavailable')

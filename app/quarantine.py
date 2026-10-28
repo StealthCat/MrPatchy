@@ -17,6 +17,8 @@ ACTIONS+=('process-prepare','process-suspend','process-status','process-resume')
 RECOVERY_ACTIONS+=('process-prepare','process-suspend','process-status','process-resume')
 ACTIONS+=('trusted-repair-prepare','trusted-repair-stage','trusted-repair-stage-status')
 RECOVERY_ACTIONS+=('trusted-repair-prepare','trusted-repair-stage','trusted-repair-stage-status')
+ACTIONS+=('trusted-repair-publish','trusted-repair-publish-status')
+RECOVERY_ACTIONS+=('trusted-repair-publish','trusted-repair-publish-status')
 
 class Quarantine(Base):
     __tablename__='security_quarantines'

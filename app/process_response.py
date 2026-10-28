@@ -58,7 +58,7 @@ def event(s,row,kind,actor,details=None):
 def source(s,host,payload):
     row=s.get(quarantine.Quarantine,payload['quarantine_id'])
     observation=s.get(response_processes.Observation,payload['observation_id'])
-    if not row or row.host_id!=host.id or row.state!='quarantined' or row.fingerprint!=host.fingerprint or host.fingerprint!=payload['fingerprint'] or incidents.digest(row.plan)!=payload['plan_digest']:raise ValueError('Retained file response or pinned host changed')
+    if not row or row.host_id!=host.id or row.state not in ('quarantined','replaced') or row.fingerprint!=host.fingerprint or host.fingerprint!=payload['fingerprint'] or incidents.digest(row.plan)!=payload['plan_digest']:raise ValueError('Retained file response or pinned host changed')
     if not observation or observation.host_id!=host.id or observation.quarantine_id!=row.id or observation.state!='references_found' or not 0<=time.time()-observation.created<=300:raise ValueError('Fresh same-host process reference evidence is required')
     report=observation.report;observed=report.get('observation') or {}
     if not report.get('held_verified') or not report.get('scope_current') or report.get('fingerprint')!=host.fingerprint or report.get('plan_digest')!=payload['plan_digest']:raise ValueError('Process evidence binding changed')

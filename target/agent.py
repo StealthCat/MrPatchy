@@ -1742,6 +1742,128 @@ def repair_stage_finish(identifier,plan):
         result=repair_stage_status_open(directory,identifier,plan);result['readiness']=readiness;return result
 
 
+PUBLICATION_FACTS=('intent_verified','held_verified','parents_match','published_verified','private_present','package_matches','owner_matches','rechecked','completion_recorded')
+
+
+def repair_publication_plan(identifier,plan):
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier) or not isinstance(plan,dict) or set(plan)!={'stage_id','stage_plan','payload'} or len(json.dumps(plan).encode())>100000:raise ValueError('Invalid publication plan')
+    entry=repair_stage_plan(plan['stage_id'],plan['stage_plan']);payload=plan['payload']
+    if not isinstance(payload,dict) or set(payload)!={'sha256','size','identity'} or payload['sha256']!=entry['sha256'] or type(payload['size']) is not int or payload['size']!=entry['size']:raise ValueError('Publication does not bind staged bytes')
+    info=payload['identity']
+    if not isinstance(info,dict) or set(info)!={'dev','ino','size','uid','gid','mode','mtime_ns','nlink'} or any(type(v) is not int or v<0 for v in info.values()) or info['mode']!=0o100600 or info['uid']!=0 or info['gid']!=0 or info['nlink']!=1 or info['dev']!=plan['stage_plan']['quarantine_plan']['vault_device'] or info['size']!=entry['size']:raise ValueError('Unsupported staged publication identity')
+    return entry
+
+
+def repair_publication_receipt(identifier,plan):
+    return {'version':1,'id':identifier,'stage_id':plan['stage_id'],'quarantine_id':plan['stage_plan']['quarantine_id'],
+            'response_plan_digest':repair_digest(plan['stage_plan']['quarantine_plan']),'plan_digest':repair_digest(plan),
+            'state':'uncertain','payload':None,'facts':{key:False for key in PUBLICATION_FACTS},'gaps':[],'readiness':None}
+
+
+def repair_published_file(parent,name,plan):
+    expected={**plan['payload']['identity'],'mode':stat.S_IFREG|plan['stage_plan']['replacement_mode']}
+    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+    try:
+        before=repair_payload_identity(os.fstat(fd))
+        if before!=expected or response_xattrs(fd):raise ValueError('Published identity or metadata changed')
+        digest=hashlib.sha256();deadline=time.monotonic()+30
+        while True:
+            data=os.read(fd,65536)
+            if not data:break
+            if time.monotonic()>deadline:raise TimeoutError('Published hash budget exceeded')
+            digest.update(data)
+        if digest.hexdigest()!=plan['payload']['sha256'] or repair_payload_identity(os.fstat(fd))!=before or repair_payload_identity(os.stat(name,dir_fd=parent,follow_symlinks=False))!=before:raise ValueError('Published bytes or namespace changed')
+        return {'sha256':digest.hexdigest(),'size':before['size'],'identity':before}
+    finally:os.close(fd)
+
+
+def repair_publication_status_open(directory,identifier,plan):
+    result=repair_publication_receipt(identifier,plan);facts=result['facts'];stage=plan['stage_plan'];original=stage['quarantine_plan']
+    def gap(code):
+        if code not in result['gaps']:result['gaps'].append(code)
+    repair_stage_intent(directory,plan['stage_id'],stage)
+    if not response_present(directory,'publish-intent.json'):
+        staged=repair_stage_status_open(directory,plan['stage_id'],stage)
+        if staged['state']=='staged' and staged['payload']==plan['payload']:
+            result['state']='not_started';facts['private_present']=True
+        return result
+    intent=response_json(directory,'publish-intent.json')
+    if intent.get('id')!=identifier or intent.get('plan')!=plan:raise ValueError('Publication journal binds another operation')
+    facts['intent_verified']=True;facts['private_present']=response_present(directory,'payload') or response_present(directory,'payload.partial')
+    if facts['private_present']:gap('private_payload_present')
+    import fcntl
+    try:
+        with evidence_directory(RESPONSE_ROOT/stage['quarantine_id']) as held:
+            fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            before={};receipt=response_status_open(held,stage['quarantine_id'],original,before)
+            facts['held_verified']=before.get('held_verified') is True and not receipt['restore_attempted']
+            facts['parents_match']=before.get('parents_match') is True
+            if not facts['held_verified']:gap('retained_original')
+            if not facts['parents_match']:gap('parent_changed')
+            path=Path(original['file']['path'])
+            with response_parent(path.parent) as (parent,chain):
+                if chain!=original['ancestors']:gap('parent_changed');facts['parents_match']=False
+                else:
+                    try:result['payload']=repair_published_file(parent,path.name,plan);facts['published_verified']=True
+                    except FileNotFoundError:gap('destination_missing')
+                    except (OSError,ValueError,TimeoutError):gap('destination_changed')
+            try:vendor_identity(stage['manifest']);facts['package_matches']=True
+            except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):gap('package_identity')
+            try:vendor_owner(stage['manifest'],str(path));facts['owner_matches']=True
+            except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):gap('package_owner')
+            # Reopen current parents/live inode and rehash the original after DB I/O.
+            after={};last=response_status_open(held,stage['quarantine_id'],original,after)
+            with response_parent(path.parent) as (parent,chain):
+                if facts['published_verified'] and chain==original['ancestors'] and repair_published_file(parent,path.name,plan)==result['payload'] and after==before and last==receipt:
+                    vendor_identity(stage['manifest']);vendor_owner(stage['manifest'],str(path));facts['rechecked']=True
+            if not facts['rechecked']:gap('changed_during_read')
+    except (OSError,ValueError,KeyError,TypeError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):gap('verification_unavailable')
+    if response_present(directory,'published.json'):
+        completed=response_json(directory,'published.json')
+        if completed.get('id')!=identifier or completed.get('plan_digest')!=repair_digest(plan) or completed.get('payload')!={**plan['payload'],'identity':{**plan['payload']['identity'],'mode':stat.S_IFREG|stage['replacement_mode']}}:raise ValueError('Publication completion journal changed')
+        facts['completion_recorded']=True
+    required=('intent_verified','held_verified','parents_match','published_verified','package_matches','owner_matches','rechecked')
+    if all(facts[key] for key in required) and not facts['private_present'] and not result['gaps']:result['state']='published'
+    return result
+
+
+def repair_publication(identifier,plan,approval=None,status_only=False):
+    repair_publication_plan(identifier,plan)
+    import fcntl
+    with evidence_directory(REPAIR_STAGE_ROOT/plan['stage_id']) as directory:
+        fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        if status_only or response_present(directory,'publish-intent.json'):return repair_publication_status_open(directory,identifier,plan)
+        def expires():
+            if not isinstance(approval,dict) or set(approval)!={'id','action','expires','actor','reason','plan_digest'} or approval['id']!=identifier or approval['action']!='publish' or approval['plan_digest']!=repair_digest(plan) or type(approval['expires']) not in (int,float) or not time.time()<approval['expires']<=time.time()+600 or not isinstance(approval['actor'],str) or not 1<=len(approval['actor'])<=120 or not isinstance(approval['reason'],str) or not 10<=len(approval['reason'])<=4000 or len(approval['reason'].strip())<10:raise ValueError('Publication approval expired or invalid')
+        expires();stage=plan['stage_plan'];original=stage['quarantine_plan']
+        staged=repair_stage_status_open(directory,plan['stage_id'],stage)
+        if staged['state']!='staged' or staged['payload']!=plan['payload']:raise ValueError('Fresh publication requires the approved staged inode and bytes')
+        readiness=repair_readiness(stage['quarantine_id'],original,stage['manifest'])
+        if readiness['state']!='ready':
+            result=repair_publication_receipt(identifier,plan);result.update(state='blocked',readiness=readiness);return result
+        with evidence_directory(RESPONSE_ROOT/stage['quarantine_id']) as held:
+            fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            current=response_status_open(held,stage['quarantine_id'],original)
+            if current['state']!='quarantined' or current['restore_attempted']:raise ValueError('Original quarantine changed before publication')
+            if repair_stage_status_open(directory,plan['stage_id'],stage)['payload']!=plan['payload']:raise ValueError('Staged bytes changed before publication')
+            path=Path(original['file']['path'])
+            with response_parent(path.parent) as (parent,chain):
+                if chain!=original['ancestors'] or response_present(parent,path.name):raise ValueError('Publication requires unchanged parents and an empty destination')
+                fd=os.open('payload',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+                try:
+                    if repair_payload_identity(os.fstat(fd))!=plan['payload']['identity'] or response_xattrs(fd):raise ValueError('Staged inode changed before publication')
+                    expires();response_json(directory,'publish-intent.json',{'id':identifier,'plan':plan,'approval':approval})
+                    expires();os.fchmod(fd,stage['replacement_mode']);os.fsync(fd)
+                    expected={**plan['payload']['identity'],'mode':stat.S_IFREG|stage['replacement_mode']}
+                    if repair_payload_identity(os.fstat(fd))!=expected or repair_payload_identity(os.stat('payload',dir_fd=directory,follow_symlinks=False))!=expected or response_xattrs(fd):raise ValueError('Publication inode changed after permissions')
+                    expires();response_rename(directory,'payload',parent,path.name);os.fsync(parent);os.fsync(directory)
+                finally:os.close(fd)
+        result=repair_publication_status_open(directory,identifier,plan)
+        if result['state']!='published':return result
+        response_json(directory,'published.json',{'id':identifier,'plan_digest':repair_digest(plan),'payload':result['payload']})
+        return repair_publication_status_open(directory,identifier,plan)
+
+
 def response_action(identifier,plan,approval,restore=False):
     import fcntl
     if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid response ID')
