@@ -288,6 +288,90 @@ def main():
             assert response_monitor.assessment(session,host.id)['watched']==0
         print('Retained response monitoring passed: real scheduled worker checks, retained hash, occupied source alert, separate pause policy and completed-restoration scope')
         print('Reviewed quarantine passed: verified independent archive, durable hold, root-only move, destination conflict, no overwrite and exact original restoration')
+        # A second full evidence/quarantine workflow retains a running executable.
+        # Coreutils single-binary installations expose sleep as a shebang
+        # wrapper. Quarantine the actual ELF copy, not its interpreter script.
+        executable=custom+'/sleep'
+        image_code=Path(__file__).with_name('fixture_process.py').read_text()
+        native_image=run('docker','exec',name,'python3','-c',image_code,'/usr/bin/sleep')
+        run('docker','exec',name,'cp',native_image,executable)
+        run('docker','exec',name,'chmod','755',executable)
+        executable_expected=json.loads(run('docker','exec',name,'python3','-c',"import os,json,hashlib; p='"+executable+"'; s=os.stat(p); print(json.dumps({'path':p,'device':s.st_dev,'inode':s.st_ino,'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest()}))"))
+        executable_snapshot=ssh.call(host,{'action':'evidence-prepare','expected':executable_expected},timeout=90)
+        executable_copy=str(uuid.uuid4());executable_archive=str(uuid.uuid4())
+        ssh.call(host,{'action':'evidence-preserve','id':executable_copy,'snapshot':executable_snapshot,'approved_until':time.time()+240},timeout=180)
+        executable_digest=incidents.digest(executable_expected)
+        with Session() as session:
+            session.add(incidents.Incident(id='native-process-fixture',host_id=host.id,scan_id='native-process-scan',evidence=executable_expected))
+            session.add(EvidenceCopy(id=executable_copy,host_id=host.id,incident_id='native-process-fixture',state='preserved',snapshot=executable_snapshot,evidence_digest=executable_digest))
+            session.add(EvidenceArchive(id=executable_archive,host_id=host.id,copy_id=executable_copy,created=time.time(),state='queued',snapshot=executable_snapshot,fingerprint=host.fingerprint,actor='native-test',reason='Retain a harmless running executable independently.',expires=time.time()+240));session.commit()
+            evidence_archive.execute(session,host,Job(id=str(uuid.uuid4()),action='evidence-acquire',payload={'archive_id':executable_archive}));session.commit()
+            executable_prepare=worker.enqueue(session,host.id,'quarantine-prepare',{'archive_id':executable_archive,'evidence_digest':executable_digest,'_actor':'native-test'})
+        run('docker','exec','-d',name,executable,'300')
+        ready_code="""import os,json,sys
+source=os.stat(sys.argv[1]);matches=[]
+for entry in os.scandir('/proc'):
+    if not entry.name.isdecimal():continue
+    try:
+        target=os.stat(entry.path+'/exe')
+        if (target.st_dev,target.st_ino)==(source.st_dev,source.st_ino):matches.append(int(entry.name))
+    except OSError:pass
+print(json.dumps(matches))"""
+        for attempt in range(50):
+            executable_pids=json.loads(run('docker','exec',name,'python3','-c',ready_code,executable))
+            if executable_pids:break
+            time.sleep(.05)
+        else:raise AssertionError('Harmless executable fixture did not become ready')
+        worker.execute(executable_prepare)
+        with Session() as session:
+            assert session.get(Job,executable_prepare).state=='complete',session.get(Job,executable_prepare).output
+            executable_response=session.query(quarantine.Quarantine).filter_by(archive_id=executable_archive).one();executable_qid=executable_response.id
+        def executable_file_action(restore=False):
+            with Session() as session:
+                record=session.get(quarantine.Quarantine,executable_qid)
+                approval=quarantine.Approval(id=str(uuid.uuid4()),quarantine_id=record.id,action='restore' if restore else 'quarantine',expires=time.time()+240,plan_digest=incidents.digest(record.plan),actor='native-test',reason='Reviewed harmless running executable file response.',before_state=record.state,before_hold=record.hold)
+                session.add(approval);record.approval_id=approval.id;record.hold=True;record.state='restore_queued' if restore else 'queued'
+                identifier=worker.enqueue(session,host.id,'quarantine-restore' if restore else 'quarantine-apply',{'quarantine_id':record.id,'_actor':'native-test'})
+            worker.execute(identifier)
+            with Session() as session:assert session.get(Job,identifier).state=='complete',session.get(Job,identifier).output
+        executable_file_action()
+        with Session() as session:
+            record=session.get(quarantine.Quarantine,executable_qid)
+            observed_job=worker.enqueue(session,host.id,'quarantine-processes',{'quarantine_id':record.id,'fingerprint':host.fingerprint,'plan_digest':incidents.digest(record.plan),'_actor':'native-test'})
+        worker.execute(observed_job)
+        from app import process_response
+        with Session() as session:
+            observation=session.get(response_processes.Observation,observed_job)
+            assert observation.state=='references_found',observation.report
+            process_match=next(m for m in observation.report['observation']['matches'] if m['references'].get('executable')==1)
+            process_prepare_job=worker.enqueue(session,host.id,'process-prepare',{'quarantine_id':executable_qid,'observation_id':observation.id,'pid':process_match['pid'],'plan_digest':observation.report['plan_digest'],'fingerprint':host.fingerprint,'_actor':'native-test'})
+        worker.execute(process_prepare_job)
+        with Session() as session:
+            assert session.get(Job,process_prepare_job).state=='complete',session.get(Job,process_prepare_job).output
+            process_record=session.query(process_response.ProcessResponse).one();process_id=process_record.id
+        def process_action(action):
+            with Session() as session:
+                record=session.get(process_response.ProcessResponse,process_id)
+                if action!='status':
+                    approval=process_response.Approval(id=str(uuid.uuid4()),process_id=record.id,action=action,expires=time.time()+240,plan_digest=incidents.digest(record.plan),actor='native-test',reason='Reviewed harmless process fixture and explicit recovery.',before_state=record.state,before_hold=record.hold)
+                    session.add(approval);record.approval_id=approval.id;record.state='resume_queued' if action=='resume' else 'queued';record.hold=True
+                identifier=worker.enqueue(session,host.id,'process-'+action,{'process_id':record.id,'quarantine_id':record.quarantine_id,'_actor':'native-test'})
+            worker.execute(identifier)
+            with Session() as session:
+                assert session.get(Job,identifier).state=='complete',session.get(Job,identifier).output
+                return session.get(process_response.ProcessResponse,process_id).state
+        assert process_action('suspend')=='suspended'
+        assert run('docker','exec',name,'python3','-c',"v=open('/proc/"+str(process_match['pid'])+"/stat').read(); print(v[v.rfind(') ')+2:].split()[0])")=='T'
+        assert process_action('status')=='suspended'
+        with Session() as session:assert operations.host_quarantined(session,host.id) and session.get(process_response.ProcessResponse,process_id).hold
+        assert process_action('resume')=='resumed'
+        with Session() as session:
+            assert not session.get(process_response.ProcessResponse,process_id).hold
+            assert session.get(quarantine.Quarantine,executable_qid).hold
+            assert session.query(process_response.Approval).count()==2
+        run('docker','exec',name,'kill',str(process_match['pid']))
+        executable_file_action(True)
+        print('Reviewed process response passed: independent evidence, executable match, real stable-pidfd suspension, read-only reconciliation, separate recovery approval and independent file hold')
         owned=custom+'/user-owned-response'
         run('docker','exec',name,'sh','-c',"printf owner-fixture > "+owned+"; chmod 644 "+owned)
         run('docker','exec',name,'chown','65534:65534',owned)

@@ -32,8 +32,13 @@ def test_tampered_bundle_rejected(bundle,name):
     with (bundle/name).open('ab') as f:f.write(b'tampered')
     with pytest.raises((ValueError,RuntimeError)):yara_rules.authenticate('fixture')
 
-@pytest.mark.parametrize('patch',[{'expires':0},{'issued':time.time()+600},{'sha256':'0'*64},{'expires':time.time()+40*86400},{'source':'include "private"'},{'source':'import "console"'},{'source':'abc\x00'},{'source':'x'*(128*1024+1)}])
+@pytest.mark.parametrize('patch',[{'expires':0},{'issued_offset':600},{'sha256':'0'*64},{'expires_offset':40*86400},{'source':'include "private"'},{'source':'import "console"'},{'source':'abc\x00'},{'source':'x'*(128*1024+1)}])
 def test_invalid_or_unsafe_rule_packets_rejected(patch):
+    # Collection can precede this test by several minutes in the MySQL suite.
+    # Construct relative timestamps now so the intended invalidity cannot age out.
+    patch=dict(patch)
+    for field in ('issued','expires'):
+        if field+'_offset' in patch:patch[field]=time.time()+patch.pop(field+'_offset')
     with pytest.raises(ValueError):agent.validate_yara_rules({**packet(),**patch})
 
 def fake_engine(tmp_path,monkeypatch,diagnostics=False):

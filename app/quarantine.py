@@ -13,6 +13,8 @@ from .evidence_vault import EvidenceCopy,EvidenceArchive,validate_snapshot,incid
 
 ACTIONS=('quarantine-prepare','quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit','quarantine-processes')
 RECOVERY_ACTIONS=('quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit','quarantine-processes')
+ACTIONS+=('process-prepare','process-suspend','process-status','process-resume')
+RECOVERY_ACTIONS+=('process-prepare','process-suspend','process-status','process-resume')
 
 class Quarantine(Base):
     __tablename__='security_quarantines'

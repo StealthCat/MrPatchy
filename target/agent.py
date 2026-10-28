@@ -332,7 +332,7 @@ def main():
             atomic(ROOT/'collector-error.json', {'error':str(e),'at':time.time()})
         time.sleep(max(0.1, 30-(time.monotonic()-started)))
 
-SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine','/var/lib/mrpatchy-evidence')
+SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine','/var/lib/mrpatchy-evidence','/var/lib/mrpatchy-process-response')
 SCAN_MAX_ENTRIES = 10000
 SCAN_MAX_DEPTH = 32
 SIGNATURE_MAX_AGE = 7*86400
@@ -1297,6 +1297,183 @@ def response_processes(identifier,plan):
             finally:os.close(fd)
     except (OSError,ValueError,KeyError,TypeError):pass
     return result
+
+
+PROCESS_RESPONSE_ROOT=Path('/var/lib/mrpatchy-process-response')
+
+
+def process_environment(root):
+    boot=response_proc_read(root,'sys/kernel/random/boot_id',64).decode('ascii').strip()
+    if not re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',boot):raise ValueError('Invalid process boot identity')
+    return boot,os.stat('self/ns/pid',dir_fd=root).st_ino
+
+
+def process_stat(directory):
+    value=response_proc_read(directory,'stat');end=value.rfind(b') ')
+    if end<0:raise ValueError('Invalid process stat')
+    fields=value[end+2:].split()
+    return fields[0].decode('ascii'),int(fields[1])
+
+
+def process_ancestors(root):
+    pid=int(os.readlink('self',dir_fd=root));ancestors={1}
+    for _ in range(64):
+        if not pid:return ancestors
+        if pid in ancestors and pid!=1:raise ValueError('Ambiguous helper ancestry')
+        ancestors.add(pid)
+        directory=os.open(str(pid),os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root)
+        try:_,pid=process_stat(directory)
+        finally:os.close(directory)
+    raise ValueError('Helper ancestry exceeds response budget')
+
+
+def process_threads(directory):
+    task=os.open('task',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory)
+    try:
+        result={}
+        with os.scandir(task) as entries:
+            for entry in entries:
+                if len(result)>=256 or not re.fullmatch('[1-9][0-9]*',entry.name):raise ValueError('Thread inspection exceeds response scope')
+                thread=os.open(entry.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=task)
+                try:result[entry.name]=process_stat(thread)[0]
+                finally:os.close(thread)
+        if not result:raise ValueError('No process threads are observable')
+        return result
+    finally:os.close(task)
+
+
+@contextmanager
+def process_live(root,expected):
+    pid=expected['pid']
+    if type(pid) is not int or pid<=1 or pid in process_ancestors(root):raise ValueError('Refusing init, helper or ancestor process response')
+    directory=os.open(str(pid),os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root)
+    try:
+        before=response_proc_identity(directory,pid);metadata=os.fstat(directory)
+        identity={**before,'proc_device':metadata.st_dev,'proc_inode':metadata.st_ino}
+        if any(identity[k]!=v for k,v in expected.items()):raise ValueError('Process identity changed')
+        state,_=process_stat(directory)
+        if state in ('Z','X','x'):
+            yield directory,identity,{'state':'exited','threads':{},'executable':None};return
+        status=response_proc_read(directory,'status',32000).decode('ascii',errors='replace')
+        values={line.split(':',1)[0]:line.split(':',1)[1].split() for line in status.splitlines() if ':' in line}
+        if values.get('Uid')!=['0']*4 or values.get('Tgid')!=[str(pid)]:raise ValueError('Only root-owned process leaders are supported')
+        if before['pid_namespace']!=os.stat('self/ns/pid',dir_fd=root).st_ino:raise ValueError('Cross-namespace process response is unsupported')
+        executable=os.stat('exe',dir_fd=directory)
+        if not stat.S_ISREG(executable.st_mode):raise ValueError('Process executable is unavailable')
+        threads=process_threads(directory)
+        if response_proc_identity(directory,pid)!=before:raise ValueError('Process changed during inspection')
+        yield directory,identity,{'state':state,'threads':threads,'executable':{'dev':executable.st_dev,'ino':executable.st_ino}}
+    finally:os.close(directory)
+
+
+@contextmanager
+def process_held(plan):
+    with evidence_directory(RESPONSE_ROOT/plan['quarantine_id']) as directory:
+        import fcntl
+        fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        facts={};receipt=response_status_open(directory,plan['quarantine_id'],plan['quarantine_plan'],facts)
+        if not facts.get('held_verified') or receipt['restore_attempted']:raise ValueError('Verified retained original is required for process response')
+        fd=response_file(directory,'held',plan['quarantine_plan'],(0o600,))
+        try:yield
+        finally:os.close(fd)
+
+
+def process_executable(plan,info):
+    identity=plan['quarantine_plan']['file']['identity']
+    return info['executable']=={k:identity[k] for k in ('dev','ino')}
+
+
+def process_prepare(quarantine_id,quarantine_plan,expected,boot,namespace):
+    import signal
+    if not hasattr(signal,'pidfd_send_signal'):raise ValueError('Kernel/Python pidfd signalling is required')
+    if not isinstance(quarantine_id,str) or not re.fullmatch('[a-f0-9-]{36}',quarantine_id) or not isinstance(expected,dict) or set(expected)!={'pid','start_ticks','pid_namespace'} or any(type(v) is not int or v<=0 for v in expected.values()):raise ValueError('Invalid process preparation identity')
+    plan={'version':1,'quarantine_id':quarantine_id,'quarantine_plan':quarantine_plan,'process':expected,'boot_id':boot,'pid_namespace':namespace}
+    with process_held(plan):
+        root=response_proc_root()
+        try:
+            if process_environment(root)!=(boot,namespace):raise ValueError('Process boot or namespace changed')
+            with process_live(root,expected) as (directory,identity,info):
+                if not process_executable(plan,info) or any(s in ('T','t','Z','X','x') for s in info['threads'].values()) or not info['threads']:raise ValueError('A running process with the retained executable is required')
+                # Linux accepts a proc-directory descriptor as a stable pidfd.
+                # Signal zero checks support/permission without delivering one.
+                signal.pidfd_send_signal(directory,0,None,0)
+                plan['process']=identity
+        finally:os.close(root)
+    if len(json.dumps(plan).encode())>52000:raise ValueError('Process response metadata exceeds budget')
+    return plan
+
+
+def process_status_open(directory,identifier,plan):
+    intent=response_json(directory,'intent.json')
+    if intent.get('id')!=identifier or intent.get('plan')!=plan:raise ValueError('Process response journal binding changed')
+    attempted=response_present(directory,'resume-intent.json')
+    if attempted:
+        resume=response_json(directory,'resume-intent.json')
+        if resume.get('id')!=identifier or resume.get('plan')!=plan:raise ValueError('Process recovery journal binding changed')
+    result={'id':identifier,'plan_digest':hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'state':'uncertain','resume_ready':False,'resume_attempted':attempted,'threads':0}
+    root=response_proc_root()
+    try:
+        if process_environment(root)!=(plan['boot_id'],plan['pid_namespace']):result['state']='identity_changed';return result
+        try:
+            with process_live(root,plan['process']) as (_,identity,info):
+                if info['state']=='exited':result['state']='exited';return result
+                if not process_executable(plan,info):return result
+                with process_held(plan):pass
+                threads=info['threads'];result['threads']=len(threads)
+                if all(s=='T' for s in threads.values()) and not attempted:result.update(state='suspended',resume_ready=True)
+                elif all(s not in ('T','t','Z','X','x') for s in threads.values()) and attempted:result['state']='resumed'
+        except FileNotFoundError:
+            # Only an absent PID directory establishes observed exit. Missing
+            # executable/threads/evidence must remain uncertain.
+            try:os.stat(str(plan['process']['pid']),dir_fd=root,follow_symlinks=False)
+            except FileNotFoundError:result['state']='exited'
+        except (OSError,ValueError,KeyError,IndexError):pass
+    finally:os.close(root)
+    return result
+
+
+def process_response(identifier,plan,approval=None,status_only=False,resume=False):
+    import signal,fcntl
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid process response ID')
+    if not isinstance(plan,dict) or set(plan)!={'version','quarantine_id','quarantine_plan','process','boot_id','pid_namespace'} or type(plan['version']) is not int or plan['version']!=1 or len(json.dumps(plan).encode())>52000:raise ValueError('Invalid process response plan')
+    if not isinstance(plan['quarantine_id'],str) or not re.fullmatch('[a-f0-9-]{36}',plan['quarantine_id']) or not isinstance(plan['process'],dict) or set(plan['process'])!={'pid','start_ticks','pid_namespace','proc_device','proc_inode'} or any(type(v) is not int or v<=0 for v in plan['process'].values()) or plan['process']['pid']<=1 or type(plan['pid_namespace']) is not int or plan['pid_namespace']!=plan['process']['pid_namespace']:raise ValueError('Invalid process response scope')
+    digest=hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    def expires():
+        if not isinstance(approval,dict) or approval.get('action')!=('resume' if resume else 'suspend') or not isinstance(approval.get('id'),str) or not re.fullmatch('[a-f0-9-]{36}',approval['id']) or type(approval.get('expires')) not in (float,int) or not time.time()<approval['expires']<=time.time()+300:raise ValueError('Process response approval expired or invalid')
+    if not status_only:expires()
+    opened=False
+    try:
+        with evidence_directory(PROCESS_RESPONSE_ROOT/identifier,create=not status_only and not resume) as directory:
+            opened=True
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            if status_only:return process_status_open(directory,identifier,plan)
+            if response_present(directory,'intent.json') and not resume:return process_status_open(directory,identifier,plan)
+            if resume:
+                observed=process_status_open(directory,identifier,plan)
+                if observed['resume_attempted'] or not observed['resume_ready']:return observed
+            with process_held(plan):
+                root=response_proc_root()
+                try:
+                    if process_environment(root)!=(plan['boot_id'],plan['pid_namespace']):raise ValueError('Process boot or namespace changed')
+                    with process_live(root,plan['process']) as (process,identity,info):
+                        if not process_executable(plan,info) or not info['threads'] or (resume and not all(s=='T' for s in info['threads'].values())) or (not resume and any(s in ('T','t','Z','X','x') for s in info['threads'].values())):raise ValueError('Process state or executable changed before signal')
+                        signal.pidfd_send_signal(process,0,None,0);expires()
+                        response_json(directory,'resume-intent.json' if resume else 'intent.json',{'id':identifier,'plan':plan,'approval':approval})
+                        # The same open proc-directory descriptor names the task
+                        # through PID reuse. No numeric kill() fallback exists.
+                        expires();signal.pidfd_send_signal(process,signal.SIGCONT if resume else signal.SIGSTOP,None,0)
+                finally:os.close(root)
+            deadline=time.monotonic()+8
+            while True:
+                result=process_status_open(directory,identifier,plan)
+                if result['state']==('resumed' if resume else 'suspended'):
+                    response_json(directory,'resumed.json' if resume else 'suspended.json',{'id':identifier,'plan_digest':digest,'receipt':result});return result
+                if result['state'] in ('exited','identity_changed') or time.monotonic()>=deadline:return result
+                time.sleep(.05)
+    except FileNotFoundError:
+        if status_only and not opened:return {'id':identifier,'plan_digest':digest,'state':'not_started','resume_ready':False,'resume_attempted':False,'threads':0}
+        raise
 
 
 def response_action(identifier,plan,approval,restore=False):

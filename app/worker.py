@@ -282,9 +282,10 @@ def execute_locked(job_id):
         s.refresh(job)
         resuming=job.action=='release-upgrade' and job.state=='running'
         if job.state!='queued' and not resuming:return
-        from . import quarantine
+        from . import quarantine,process_response
         response_id=job.payload.get('quarantine_id') if job.action in quarantine.RECOVERY_ACTIONS else None
-        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,local_observation=job.action=='evidence-archive-status'):return
+        process_id=job.payload.get('process_id') if job.action in process_response.RECOVERY_ACTIONS else None
+        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,local_observation=job.action=='evidence-archive-status'):return
         if not resuming and not operations.eligible(s,job): return
         claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
         s.commit()
@@ -373,6 +374,8 @@ def execute_locked(job_id):
                 incidents.record_inspection(s,h.id,job.id,result)
                 job.output=json.dumps({'state':result.get('state'),'packages':len(result.get('packages',[])),
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
+            elif job.action in process_response.ACTIONS:
+                result=process_response.execute(s,h,job);job.output=json.dumps(result)
             elif job.action=='quarantine-processes':
                 from . import response_processes
                 result=response_processes.execute(s,h,job);job.output=json.dumps(result)
@@ -454,6 +457,12 @@ def execute_locked(job_id):
             h=s.get(Host,job.host_id)
             job.state='recovery_required' if protected else 'failed'
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
+            if job.action in ('process-suspend','process-resume'):process_response.reject_unstarted(s,job)
+            if job.action=='process-status':
+                response=s.get(process_response.ProcessResponse,job.payload.get('process_id'))
+                if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
+                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
+                    process_response.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
             if job.action=='quarantine-status':
                 response=s.get(quarantine.Quarantine,job.payload.get('quarantine_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
@@ -592,9 +601,10 @@ def loop():
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts)).order_by(Job.created)):
                         if len(active_jobs)>=2: break
-                        from . import quarantine
+                        from . import quarantine,process_response
                         response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS else None
-                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,local_observation=j.action=='evidence-archive-status'):continue
+                        process_id=j.payload.get('process_id') if j.action in process_response.RECOVERY_ACTIONS else None
+                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,local_observation=j.action=='evidence-archive-status'):continue
                         if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
                             submit_job(jobs,j,active_jobs,busy_hosts)
                 if is_leader and now-last_cleanup>3600:
