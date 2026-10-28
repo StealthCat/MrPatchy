@@ -1292,7 +1292,7 @@ def response_processes(identifier,plan):
                 after={};response_status_open(directory,identifier,plan,after)
                 if not after.get('held_verified'):return result
                 result.update(held_verified=True,observation=observation)
-                if observation['boot_id'] and observation['pid_namespace'] and observation['observer_pid']:
+                if observation['boot_id'] and observation['pid_namespace'] and observation['observer_pid'] and (observation['matches'] or 'procfs_unavailable' not in observation['gaps']):
                     result['state']='references_found' if observation['matches'] else 'none_observed'
             finally:os.close(fd)
     except (OSError,ValueError,KeyError,TypeError):pass

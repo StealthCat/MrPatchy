@@ -63,7 +63,7 @@ def validate(report,row):
         if not isinstance(match,dict) or set(match)!={'pid','start_ticks','pid_namespace','references'} or any(not integer(match[k],1) for k in ('pid','start_ticks','pid_namespace')) or match['pid'] in seen or match['pid']==observer:raise ValueError('Invalid process reference identity')
         seen.add(match['pid']);refs=match['references']
         if not isinstance(refs,dict) or not refs or any(k not in ('executable','descriptor','memory_map') or not integer(v,1,50000) for k,v in refs.items()) or refs.get('executable',1)!=1:raise ValueError('Invalid process reference kinds')
-    expected=('references_found' if matches else 'none_observed') if boot and namespace and observer else 'unavailable'
+    expected=('references_found' if matches else 'none_observed') if boot and namespace and observer and (matches or 'procfs_unavailable' not in gaps) else 'unavailable'
     if report['state']!=expected or (expected=='unavailable' and not gaps):raise ValueError('Contradictory process reference outcome')
 
 

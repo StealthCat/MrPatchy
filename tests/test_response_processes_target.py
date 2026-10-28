@@ -134,3 +134,12 @@ def test_missing_or_restored_evidence_is_never_process_clearance(response_files)
     assert agent.response_processes(identifier,plan)['state']=='unavailable' and not vault.exists()
     agent.response_action(identifier,plan,approval());agent.response_action(identifier,plan,approval(True),restore=True)
     assert agent.response_processes(identifier,plan)['state']=='unavailable' and source.exists()
+
+
+def test_unreadable_procfs_is_unavailable_even_when_boot_metadata_is_readable(response_files,monkeypatch):
+    source,vault,plan=response_files;identifier=str(uuid.uuid4());agent.response_action(identifier,plan,approval())
+    monkeypatch.setattr(agent,'response_proc_scan',lambda identity:{'scope':'helper_visible_process_leaders',
+        'boot_id':'12345678-1234-1234-1234-123456789abc','pid_namespace':123,'observer_pid':99,
+        'processes_examined':0,'entries_examined':0,'matches':[],'gaps':{'procfs_unavailable':1}})
+    report=agent.response_processes(identifier,plan)
+    assert report['held_verified'] and report['state']=='unavailable' and report['observation']['gaps']
