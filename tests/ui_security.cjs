@@ -248,6 +248,9 @@ module.exports=async(page)=>{
   await page.locator('#startup-review-form [name=reason]').fill('Investigating the new startup entry.');
   await page.getByRole('button',{name:'Save startup review',exact:true}).click();
   await page.locator('#modal').waitFor({state:'hidden'});
+  // Publication controls belong to Security; the preceding checks use File integrity.
+  await page.goto(new URL('/#servers/'+host.id+'/security',page.url()).href);
+  await page.getByRole('heading',{name:'Trusted replacement staging',exact:true}).waitFor();
   const beforePublication=writes.length;
   await page.getByRole('button',{name:'Review replacement publication',exact:true}).click();assert.equal(writes.length,beforePublication);
   await page.locator('#publication-approval [name=reason]').fill('Reviewed authenticated bytes, permissions, activation risk and service impact.');
