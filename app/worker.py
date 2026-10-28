@@ -285,7 +285,8 @@ def execute_locked(job_id):
         from . import quarantine,process_response
         response_id=job.payload.get('quarantine_id') if job.action in quarantine.RECOVERY_ACTIONS else None
         process_id=job.payload.get('process_id') if job.action in process_response.RECOVERY_ACTIONS else None
-        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,local_observation=job.action=='evidence-archive-status'):return
+        read_only_response_id=job.payload.get('quarantine_id') if job.action=='trusted-repair-prepare' else None
+        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,local_observation=job.action=='evidence-archive-status'):return
         if not resuming and not operations.eligible(s,job): return
         claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
         s.commit()
@@ -382,6 +383,9 @@ def execute_locked(job_id):
             elif job.action=='quarantine-audit':
                 from . import response_monitor
                 result=response_monitor.execute(s,h,job);job.output=json.dumps(result)
+            elif job.action=='trusted-repair-prepare':
+                from . import repair_preparation
+                result=repair_preparation.execute(s,h,job);job.output=json.dumps(result)
             elif job.action in quarantine.ACTIONS:
                 result=quarantine.execute(s,h,job);job.output=json.dumps(result)
             elif job.action in ('evidence-acquire','evidence-archive-status'):
@@ -604,7 +608,8 @@ def loop():
                         from . import quarantine,process_response
                         response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS else None
                         process_id=j.payload.get('process_id') if j.action in process_response.RECOVERY_ACTIONS else None
-                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,local_observation=j.action=='evidence-archive-status'):continue
+                        read_only_response_id=j.payload.get('quarantine_id') if j.action=='trusted-repair-prepare' else None
+                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,local_observation=j.action=='evidence-archive-status'):continue
                         if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
                             submit_job(jobs,j,active_jobs,busy_hosts)
                 if is_leader and now-last_cleanup>3600:

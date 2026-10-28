@@ -1303,6 +1303,33 @@ def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
             'process_observation':{'id':processes[r.id].id,'state':processes[r.id].state,'created':processes[r.id].created,'scope_current':processes[r.id].report['scope_current']} if r.id in processes else None,
             'monitor':{'watch':watches[r.id],'eligible':response_monitor.eligible(r),'last_check':object_dict(latest[r.id]) if r.id in latest else None}} for r in rows[:20]],'more':len(rows)>20}
 
+class RepairPreparationInput(BaseModel):
+    bundle_id:str=Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/repair-preparations')
+def prepare_trusted_replacement(host_id:str,quarantine_id:str,body:RepairPreparationInput,user=Depends(auth)):
+    from . import repair_preparation,quarantine
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
+        if operations.host_quarantined(s,host_id,response_id=row.id,read_only_response_id=row.id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
+        actions=tuple(action for action in quarantine.ACTIONS if action!='quarantine-audit')
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        preparation=repair_preparation.Preparation(id=str(uuid.uuid4()),host_id=host_id,quarantine_id=row.id,bundle_id=body.bundle_id,
+            path=row.plan['file']['path'],actor=user['username'],fingerprint=host.fingerprint,response_plan_digest=body.plan_digest)
+        repair_preparation.source(s,host,preparation);s.add(preparation)
+        return {'job_id':worker.enqueue(s,host_id,repair_preparation.ACTION,{'preparation_id':preparation.id,'quarantine_id':row.id,'_actor':user['username']}),
+                'preparation_id':preparation.id,'read_only':True,'publication':'not_implemented'}
+
+@app.get('/api/hosts/{host_id}/security/repair-preparations')
+def trusted_replacement_history(host_id:str,offset:int=0,user=Depends(auth)):
+    from .repair_preparation import Preparation
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(Preparation).where(Preparation.host_id==host_id).order_by(Preparation.created.desc(),Preparation.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r)|{'report_digest':incidents.digest(r.report)} for r in rows[:20]],'more':len(rows)>20}
+
 class ResponseProcessRequest(BaseModel):
     plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
 

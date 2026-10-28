@@ -136,6 +136,30 @@ def trust_basis(manifest):
     return 'controller_authenticated_rpm_artifact' if manifest.get('package_manager')=='rpm' else 'controller_authenticated_debian_artifact'
 
 
+def replacement(bundle_id,path):
+    """Authenticate separately supplied bytes by their signed artifact file hash.
+
+    No archive extraction, package scripts or target metadata authorize the bytes.
+    Operators place the selected regular file at the constant `replacement` leaf.
+    Contents stay local and are never part of the returned preparation metadata.
+    """
+    manifest,proof=authenticate(bundle_id)
+    import json
+    if len(json.dumps(proof).encode())>32000:raise ValueError('Authentication provenance exceeds preparation budget')
+    entries=[entry for entry in manifest['entries'] if entry['path']==path]
+    if len(entries)!=1:raise ValueError('Quarantined path is not a regular file in the authenticated artifact')
+    entry=entries[0]
+    data=read_file(Path(os.getenv('DATA_DIR','/data'))/'vendor-packages'/bundle_id/'replacement',32*1024*1024)
+    if len(data)!=entry['size'] or sha(data)!=entry['sha256']:raise ValueError('Replacement bytes do not match the authenticated artifact file')
+    selected={**{k:v for k,v in manifest.items() if k!='entries'},'entries':[entry]}
+    return selected,proof
+
+
+def authentication_digest(manifest,proof):
+    import json
+    return sha(json.dumps({'manifest':manifest,'authentication':{k:v for k,v in proof.items() if k!='authenticated_at'}},sort_keys=True,separators=(',',':')).encode())
+
+
 def validate_receipt(manifest,result):
     if not isinstance(result,dict) or result.get('trust_basis')!=trust_basis(manifest) or any(result.get(k)!=manifest[k] for k in ('package','version','architecture')):
         raise ValueError('Unsupported vendor receipt; update target helpers')

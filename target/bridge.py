@@ -375,6 +375,10 @@ def handle(req):
         if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
+    if action=='repair-readiness':
+        sys.path.insert(0,'/usr/local/lib/mrpatchy')
+        from agent import repair_readiness
+        return repair_readiness(req.get('id'),req.get('plan'),req.get('manifest'))
     if action in ('process-prepare','process-suspend','process-status','process-resume'):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import process_prepare,process_response

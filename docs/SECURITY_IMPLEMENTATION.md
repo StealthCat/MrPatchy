@@ -4,8 +4,9 @@ Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
 restoration now support protected files under `/srv` and `/opt`. Retained-response
 monitoring, manual process-reference observations and separately approved suspension/
-recovery of selected root-owned executable processes are available. Broader typed
-remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
+recovery of selected root-owned executable processes are available. Authenticated
+replacement preparation is read-only; approved replacement publication remains next.
+Broader typed remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
 This branch is an incomplete first stage of the proposed endpoint protection expansion. It must not be represented as complete malware protection or automated incident response.
@@ -989,3 +990,110 @@ restoration on Debian, Ubuntu, Fedora and AlmaLinux. Privileged fixtures skip on
 unprivileged runners; production guards remain enforced. Containers stub systemd;
 real-VM/SELinux, supervisor/child-process coverage, performance and broader response
 drills remain future work, along with cloud isolation and authenticated vendor repair.
+
+## Authenticated replacement preparation (read-only)
+
+The next trusted-repair prerequisite is available as **Security → Reviewed file
+responses → Prepare trusted replacement**. Enter an operator-provisioned offline
+vendor bundle ID. **Trusted replacement preparations** retains the authenticated
+selected-file metadata and a fresh read-only readiness observation. This feature
+**does not publish a replacement, transfer replacement contents to the target,
+approve execution, run package scripts, signal a process, release a pause or resolve
+an incident**. There is no repair execution endpoint or publication button in this
+milestone. Ready describes the observation, not a continuing guarantee or approval.
+
+Provision the existing Debian or RPM offline package bundle and independently
+approved controller trust keys as described earlier. In that bundle directory,
+place the separately extracted **regular-file bytes** for the quarantined pathname
+at the constant leaf `replacement`, e.g.
+`/data/vendor-packages/<bundle-id>/replacement`. Protect bundles and replacement
+files through the controller's controlled forensic/administrative workflow. They
+are not browser uploads and are never sent to AI. The payload can be supplied
+separately because its exact byte length and SHA-256 must match the unique regular
+file entry in the authenticated package artifact. No new archive extraction or
+maintainer-script execution is introduced. The whole Debian signature/index/artifact
+chain or native isolated-database RPM signature/digest verification still runs.
+Unsigned artifacts, unlisted paths, symlinked payload files, mismatched bytes,
+expired Debian metadata and changed trust fail closed.
+
+The controller authenticates the package and hashes the selected payload **before
+any helper access**, then performs fresh independent current-agent verification.
+The target receives only package/file metadata and the bound quarantine plan; it
+receives no replacement bytes. After target I/O the controller authenticates and
+hashes the payload again. Artifact, keyring, signers, manifest or payload changes
+cannot produce a ready preparation. The stable authentication digest excludes only
+the per-call authentication timestamp; the retained report includes provenance.
+RPM offline verification does not establish current repository membership or the
+latest key revocations. Operators remain responsible for approved publisher keys.
+
+The target checks the protected original-response journals and held inode/hash,
+completed quarantine, unchanged protected ancestors and an empty original pathname.
+The selected path must be the quarantined regular-file path, use the supported
+canonical ASCII path characters, and lie below `/srv/` or `/opt/`, excluding
+`/opt/drpatch`. An occupied destination, including a symlink or legitimate new
+deployment, is explicitly blocked and never overwritten. Lost/incomplete quarantine,
+missing evidence and races cannot imply readiness. Protected evidence is rehashed
+and namespace facts rechecked after package queries; no journals or directories are
+created by the readiness action.
+
+Exact installed package version/architecture and unique ownership of the selected
+pathname are checked before and after the observation. RPM also binds the epoch and
+uses `--noplugins`; neither query path invokes package verification scripts. Debian
+diversions, multiple owners/providers, diagnostics or changed DB observations block
+readiness. These local package DB facts are compatibility observations, not
+independent vendor authentication or an attestation of compromised root/kernel.
+The publisher/artifact byte authentication occurs independently on the controller.
+
+The initial metadata policy supports original UID/GID 0, no extended attributes,
+and only modes 0600, 0640, 0644, 0700, 0750 or 0755 from the previously reviewed
+quarantine snapshot. Other ownership, permissions, ACLs/capabilities, labels or
+attributes require a different reviewed procedure. **Those original permissions
+are not authenticated vendor permissions.** The preparation shows the proposed
+policy explicitly. It does not reconstruct package ownership metadata, configuration
+semantics, service dependencies, generated files or a complete package installation.
+Same-version authenticated bytes can still be vulnerable; readiness is not a
+malware-free or service-health verdict.
+
+This manually requested read can run through its owning file hold and process holds
+belonging to that same file response. The exemption is limited to this read-only job;
+it does not enable other file/process actions. Unrelated response holds, running
+work and Activity recovery requirements still block it. Deferred automatic retained
+checks cannot deadlock the manual read. All existing file/process holds and their
+receipts remain unchanged after ready, blocked or failed observations. No automatic
+preparations, paid AI calls or policy changes are enabled.
+
+Each request creates a retained `security_repair_preparations` record containing
+actor, pinned host, original plan digest, selected path/bundle, timestamps, package
+provenance and classified facts/gaps. Its terminal receipt is never overwritten;
+refreshing readiness requires a new request. States are queued, ready, blocked,
+unavailable or skipped. Blocked is a completed negative observation, not successful
+repair. Authentication/helper/transport/protocol failures retain only classified
+stage and exception type, not arbitrary diagnostic bodies or file contents. Scope
+changes are checked using fresh MySQL snapshots, and historical target observations
+cannot be promoted to ready after their controller scope changes. Records are
+paginated in Security and included in startup initialization and verified offline
+SQLite/MySQL migration. They are not cryptographically immutable and have no automatic
+retention policy. Back up operator bundles/payloads separately from database metadata.
+
+The existing artifact limits remain: 64 MiB package artifact, 32 MiB selected payload,
+and bounded archive work. Retained preparation provenance is capped at 32,000 bytes.
+Signature/native RPM command deadlines apply independently; package identity/owner
+queries each have ten seconds. Target readiness has a 150-second SSH deadline plus
+independent health verification; each retained hash phase keeps its 30-second budget.
+Kernel-blocked I/O can exceed userspace deadlines. Rebuild app/workers and redeploy
+current helpers with **Finish / verify installation** before using this action.
+
+Tests cover authentic selected bytes, payload/path/trust changes, stale scope,
+protocol contradictions, role/host boundaries, immutable history, related/unrelated
+holds, exact package/owner checks, metadata policy, retained evidence, occupied paths,
+read-time races and read-only filesystem behavior. Native SSH validation uses signed
+Debian/RPM packages with an owned `/srv` file on Debian, Ubuntu, Fedora and AlmaLinux,
+including positive readiness and a legitimate occupied destination, while preserving
+original evidence and holds and checking that no package verification script runs.
+Containers still stub systemd; real-VM/SELinux and broader performance drills remain.
+
+Next: separately approved transfer/staging and atomic no-overwrite publication,
+durable intent/reconciliation and recovery holds, fresh identity/ownership/parent/
+trust revalidation at mutation, and integration with retained-file monitoring and
+process holds. No preparation record is an execution token. Broader trusted repair,
+cloud isolation and rebuild/credential workflows remain unfinished.
