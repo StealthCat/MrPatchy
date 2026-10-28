@@ -70,15 +70,23 @@ PY
 docker build -t mrpatchy:base .
 bash ./gcp-compose.sh build app worker
 if [[ -n "$credentials" ]]; then
-  bash ./gcp-compose.sh run --rm --no-deps app gcloud auth login --cred-file=/gcp/credentials.json --quiet
+  bash ./gcp-compose.sh run --rm --no-deps worker gcloud auth login --cred-file=/gcp/credentials.json --quiet
 fi
+# Use the worker's dynamic management-network address for temporary containers.
+# A one-off app container would inherit the running app's fixed control IP.
+# Both services share the image, runtime UID and /data/gcloud credentials.
 # Token output is discarded, never printed or stored in a deployment file.
-for service in app worker; do
-  bash ./gcp-compose.sh run --rm --no-deps "$service" gcloud version
-  bash ./gcp-compose.sh run --rm --no-deps "$service" gcloud auth print-access-token >/dev/null
-  bash ./gcp-compose.sh run --rm --no-deps "$service" gcloud compute instances describe "$instance" --project="$project" --zone="$zone" --format='value(status)'
-done
+bash ./gcp-compose.sh run --rm --no-deps worker gcloud version
+bash ./gcp-compose.sh run --rm --no-deps worker gcloud auth print-access-token >/dev/null
+bash ./gcp-compose.sh run --rm --no-deps worker gcloud compute instances describe "$instance" --project="$project" --zone="$zone" --format='value(status)'
 bash ./gcp-compose.sh up -d --wait
+# Exec bypasses the entrypoint's gosu: select the service user and home explicitly.
+# Check each real runtime after startup without allocating another fixed IP.
+for service in app worker; do
+  bash ./gcp-compose.sh exec -T --user mrpatchy -e HOME=/home/mrpatchy "$service" gcloud version
+  bash ./gcp-compose.sh exec -T --user mrpatchy -e HOME=/home/mrpatchy "$service" gcloud auth print-access-token >/dev/null
+  bash ./gcp-compose.sh exec -T --user mrpatchy -e HOME=/home/mrpatchy "$service" gcloud compute instances describe "$instance" --project="$project" --zone="$zone" --format='value(status)'
+done
 printf '%s\n' 'Mr Patchy GCP runtime is ready. The initial admin password is in .env.' \
   'Enroll the target using its personalized installer, pin its verified host fingerprint, then select Google Cloud IAP in Server / Connection.' \
   'Use ./gcp-compose.sh for future compose operations. Instance-read success does not prove IAP tunnel or guest SSH access.'
