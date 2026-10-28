@@ -5,7 +5,8 @@ controller acquisition are implemented. Reviewed quarantine and original-file
 restoration now support protected files under `/srv` and `/opt`. Retained-response
 monitoring, manual process-reference observations and separately approved suspension/
 recovery of selected root-owned executable processes are available. Authenticated
-replacement preparation is read-only; approved replacement publication remains next.
+replacement preparation is read-only. Separately approved private replacement staging
+is available; approved live-file publication remains next.
 Broader typed remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
@@ -1096,8 +1097,117 @@ including positive readiness and a legitimate occupied destination, while preser
 original evidence and holds and checking that no package verification script runs.
 Containers still stub systemd; real-VM/SELinux and broader performance drills remain.
 
-Next: separately approved transfer/staging and atomic no-overwrite publication,
-durable intent/reconciliation and recovery holds, fresh identity/ownership/parent/
-trust revalidation at mutation, and integration with retained-file monitoring and
-process holds. No preparation record is an execution token. Broader trusted repair,
-cloud isolation and rebuild/credential workflows remain unfinished.
+Private transfer/staging is described below. Next: separately approved atomic
+no-overwrite live-file publication, publication intent/reconciliation and recovery
+holds, fresh identity/ownership/parent/trust revalidation at publication, and
+integration with retained-file monitoring and process holds. No preparation record
+is an execution token. Broader trusted repair, cloud isolation and rebuild/credential
+workflows remain unfinished.
+
+## Separately approved private replacement staging
+
+On a ready **Trusted replacement preparation**, **Review replacement staging**
+requires a meaningful reason and `STAGE`. The preparation must be no more than
+15 minutes old, bind the current pinned host, quarantine plan and exact displayed
+preparation report, and still describe a quarantined original. Each preparation
+can authorize only one staging operation. The staging approval expires after five
+minutes and is recorded independently from preparation, quarantine and process
+approvals. There is no automatic staging policy or paid AI action.
+
+The worker authenticates the offline artifact, selected payload and publisher
+trust again before target access, after fresh independent current-helper checking,
+before finishing transfer and after the reply. It loads only a SHA-256/size-matching
+selected payload, never an arbitrary user-supplied target path. Changes in artifact,
+keyring, signers, manifest or bytes cannot become a positive staging completion.
+Queued scope, approval expiry and unrelated recovery/response holds are rechecked
+with fresh MySQL snapshots between requests and after final I/O.
+
+The target's existing **4,000,000-byte request ceiling is unchanged**. At most
+32 MiB is sent in chunks of at most **1 MiB decoded** (about 1.4 MB base64 per
+request). Chunks travel through the existing pinned SSH/bridge route, including
+IAP where configured; payload contents never enter HTTP/browser uploads, the
+database, application event records or AI packets. Each RPC has a 180-second SSH
+deadline; the independent approval deadline applies throughout the entire transfer.
+Slow links can exhaust that approval and leave an incomplete private transfer.
+
+The root helper stages under
+`/var/lib/mrpatchy-repair-staging/<operation-id>/`, on the approved filesystem.
+Directories are root-owned mode 0700 and payloads/journals are root-owned mode
+0600 with one link. The helper rejects unsafe ancestors, symlinks, hardlinks,
+changed inode/ownership/permissions/attributes, unexpected root entries, changed
+metadata and byte-hash mismatches. Staging inherits neither executable permission
+nor the live pathname. Current scope continues to require the reviewed original
+root/root ownership, supported original mode and no extended attributes. Original
+permissions are still not authenticated vendor permissions. Concurrent malicious
+root/kernel behavior and kernel-blocked I/O remain outside these guarantees.
+
+A durable, fsynced intent binds the staging ID, full plan, selected manifest,
+authentication digest and approval before a payload is created. Each chunk has a
+separate exclusive intent before its append, requires the expected offset/length,
+and is fsynced. An existing chunk intent is observed instead of appended again.
+Interrupted or conflicting bytes cannot authorize a new append. The initial file
+identity is retained independently so same-byte inode replacement is detected.
+At finish, the helper hashes the whole selected file and freshly checks package
+identity/unique ownership, retained original, protected parents and the empty live
+pathname. An occupied path, including a legitimate deployment or symlink, is never
+changed. A separate finish intent is fsynced before an atomic no-overwrite rename
+from `payload.partial` to the **private** `payload` leaf. This rename does not
+publish the file into the application. Finish intents are never automatically
+replayed, including after a process restart or lost reply.
+
+The controller commits uncertainty before asking for any target write. Lost
+replies, protocol violations, changed scope/trust, expired approval and partial
+transfers remain reviewable; no worker restart resumes the upload. **Verify staged
+replacement** only reads existing journals, chunk progress, inode/metadata and
+hashes. Missing operations create no directories. A lost final completion record
+can be reconciled from a bound finish intent and independently verified final
+payload; a partial file is never renamed by verification. `receiving` target
+observations appear as **incomplete** in the controller because verification does
+not continue a transfer. Use a new preparation and explicit approval after reviewing
+an abandoned attempt; the old approval and events remain retained.
+
+A positive **staged** receipt means the previously approved bytes are retained at
+observation time. It is not permission to publish them, a continuing readiness
+guarantee or a live-file repair result. Read-only status can verify historical
+payloads after the original has been restored or the offline bundle removed. The
+report separately records whether controller scope agreed and vendor authentication
+could still be rechecked at that observation; historical authenticated hashes do
+not establish current publisher trust or key revocations. No publication endpoint,
+service restart, package script, process signal, incident resolution or automatic
+file/process pause release is included in this milestone.
+
+Staging and status can run through their owning file hold and process holds for
+that same file response because they do not change the live file or process. Those
+holds remain active. Other response holds and running/recovery-required Activity
+jobs still block access. The exemption does not extend to quarantine restoration,
+process recovery or other live changes. The staging directory is excluded from
+scanner and custom-inventory traversal alongside existing evidence/response stores.
+
+To bound abandoned storage, a target retains at most **eight staging operation
+directories**, including incomplete ones: up to **256 MiB of payloads**, plus
+bounded journals. Reaching this limit refuses new staging. There is no automatic
+cleanup or browser deletion. Review storage and protected backups through the
+trusted console before any deliberate retention cleanup. Configure broader
+retention/external evidence storage in a subsequent milestone.
+
+**Trusted replacement staging** shows approval actor/reason/deadline, state,
+transfer progress, verified payload metadata and timestamped checks. Its paginated
+history retains approval, start and every observation, including failed historical
+checks, without storing payload bytes. `security_repair_stages` and
+`security_repair_stage_events` participate in startup initialization and verified
+offline SQLite/MySQL migrations. Approval metadata is retained and observation events
+are append-only through the feature APIs, not cryptographically immutable; the latest
+stage state/receipt changes on verification. Target staging directories need
+separate protected backup; database migration moves metadata, not retained files.
+
+Rebuild app/workers and redeploy current helpers with **Finish / verify
+installation** before using staging. Tests cover chunk boundaries/request budgets,
+typed approval/expiry, changed payload/trust/scope, related/unrelated holds,
+interrupted append/finish, lost replies, root metadata and same-byte inode changes,
+quota, read-only reconciliation, role/host boundaries, history and database copy.
+Native SSH validation stages authentic signed Debian/RPM fixture bytes through the
+real worker/bridge on Debian, Ubuntu, Fedora and AlmaLinux, verifies mode 0600,
+tamper refusal, retained original and unchanged holds, and never publishes the live
+file. Browser tests cover the approval and verification/history flows at mobile and
+desktop widths. Containers still stub systemd; live GCP/IAP, real-VM/SELinux,
+low-bandwidth and failure/performance drills require operator validation.

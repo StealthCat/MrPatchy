@@ -373,7 +373,7 @@ print(json.dumps(matches))"""
         native_file_action(executable_qid,True)
         print('Reviewed process response passed: independent evidence, executable match, real stable-pidfd suspension, read-only reconciliation, separate recovery approval and independent file hold')
         # Authenticate a separately supplied replacement, but publish no bytes.
-        from app import repair_preparation,vendor
+        from app import repair_preparation,repair_staging,vendor
         repair_path='/srv/patchy-vendor-fixture/data'
         if rpm:
             repair_bundle='rpm-fixture';bundle=workspace/'vendor-packages'/repair_bundle
@@ -420,17 +420,45 @@ print(json.dumps(matches))"""
                 assert session.get(Job,identifier).state=='complete',session.get(Job,identifier).output
                 record=session.get(repair_preparation.Preparation,preparation_id)
                 assert session.get(quarantine.Quarantine,repair_qid).hold
-                return record.state,record.report
-        state,prepared_report=trusted_preparation()
+                return record.state,record.report,record.id
+        state,prepared_report,trusted_preparation_id=trusted_preparation()
         assert state=='ready' and all(v is True for v in prepared_report['target']['facts'].values()),prepared_report
+        with Session() as session:
+            staged=repair_staging.approve(session,session.get(Host,host.id),trusted_preparation_id,incidents.digest(prepared_report),'native-test','Approved private authenticated replacement staging only.')
+            staging_id=staged.id
+            staging_job=worker.enqueue(session,host.id,'trusted-repair-stage',{'stage_id':staging_id,'quarantine_id':repair_qid,'_actor':'native-test'})
+        worker.execute(staging_job)
+        with Session() as session:
+            assert session.get(Job,staging_job).state=='complete',session.get(Job,staging_job).output
+            staged=session.get(repair_staging.Stage,staging_id)
+            assert staged.state=='staged' and staged.report['trust_current'] and staged.report['target']['facts']['payload_verified'],staged.report
+            assert session.get(quarantine.Quarantine,repair_qid).hold
+            staging_verify=worker.enqueue(session,host.id,'trusted-repair-stage-status',{'stage_id':staging_id,'quarantine_id':repair_qid,'_actor':'native-test'})
+        worker.execute(staging_verify)
+        with Session() as session:
+            assert session.get(Job,staging_verify).state=='complete',session.get(Job,staging_verify).output
+            assert session.get(repair_staging.Stage,staging_id).state=='staged'
+            assert session.query(repair_staging.Event).filter_by(stage_id=staging_id).count()==4
+        staging_path='/var/lib/mrpatchy-repair-staging/'+staging_id+'/payload'
+        assert run('docker','exec',name,'cat',staging_path)=='1'
+        assert run('docker','exec',name,'stat','-c','%a',staging_path)=='600'
         run('docker','exec',name,'test','!','-e',repair_path)
         assert run('docker','exec',name,'cat','/var/lib/mrpatchy-quarantine/'+repair_qid+'/held')=='changed'
         run('docker','exec',name,'sh','-c',"printf deployment > "+repair_path)
-        state,prepared_report=trusted_preparation()
+        state,prepared_report,_=trusted_preparation()
         assert state=='blocked' and 'destination_occupied' in prepared_report['target']['gaps'],prepared_report
         assert run('docker','exec',name,'cat',repair_path)=='deployment'
         assert run('docker','exec',name,'python3','-c',"from pathlib import Path; print(Path('/tmp/patchy-verifyscript-executed').exists())")=='False'
         run('docker','exec',name,'rm',repair_path)
+        run('docker','exec',name,'sh','-c',"printf tampered > "+staging_path)
+        with Session() as session:
+            bad_stage=worker.enqueue(session,host.id,'trusted-repair-stage-status',{'stage_id':staging_id,'quarantine_id':repair_qid,'_actor':'native-test'})
+        worker.execute(bad_stage)
+        with Session() as session:
+            assert session.get(Job,bad_stage).state=='failed'
+            assert session.get(repair_staging.Stage,staging_id).state=='uncertain'
+            assert session.get(quarantine.Quarantine,repair_qid).hold
+        print('Trusted replacement staging passed: signed artifact bytes transferred through real worker/bridge, root-only mode 0600, read-only reconciliation, tamper refusal, retained original and unchanged hold without live-file publication')
         # Existing original-file restoration is a separate fixture cleanup action.
         with Session() as session:
             original_check=worker.enqueue(session,host.id,'quarantine-status',{'quarantine_id':repair_qid,'_actor':'native-test'})

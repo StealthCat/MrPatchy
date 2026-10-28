@@ -332,7 +332,7 @@ def main():
             atomic(ROOT/'collector-error.json', {'error':str(e),'at':time.time()})
         time.sleep(max(0.1, 30-(time.monotonic()-started)))
 
-SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine','/var/lib/mrpatchy-evidence','/var/lib/mrpatchy-process-response')
+SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine','/var/lib/mrpatchy-evidence','/var/lib/mrpatchy-process-response','/var/lib/mrpatchy-repair-staging')
 SCAN_MAX_ENTRIES = 10000
 SCAN_MAX_DEPTH = 32
 SIGNATURE_MAX_AGE = 7*86400
@@ -1501,13 +1501,18 @@ def vendor_owner(manifest,path):
         if code or err or not separator or owned!=path or owner not in (manifest['package'],manifest['package']+':'+manifest['architecture']):raise ValueError('Package ownership is ambiguous or mismatched')
 
 
-def repair_readiness(identifier,plan,manifest):
-    """Read-only preparation. No payload, creation, chmod, move or publication."""
+def repair_manifest(identifier,plan,manifest):
     if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier) or not isinstance(plan,dict) or not isinstance(manifest,dict):raise ValueError('Invalid repair preparation request')
     entries=manifest.get('entries')
     if not isinstance(entries,list) or len(entries)!=1 or not isinstance(entries[0],dict) or set(entries[0])!={'path','sha256','size'}:raise ValueError('One authenticated regular-file entry is required')
     entry=entries[0];path=entry['path']
     if not isinstance(path,str) or not re.fullmatch('/[A-Za-z0-9_./+-]+',path) or str(Path(path))!=path or '..' in Path(path).parts or not path.startswith(RESPONSE_SCOPES) or path.startswith('/opt/drpatch/') or path=='/opt/drpatch' or path!=plan.get('file',{}).get('path') or len(path)>4095 or not isinstance(entry['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',entry['sha256']) or type(entry['size']) is not int or not 0<=entry['size']<=32*1024*1024:raise ValueError('Unsupported repair path or authenticated file metadata')
+    return entry
+
+
+def repair_readiness(identifier,plan,manifest):
+    """Read-only preparation. No payload, creation, chmod, move or publication."""
+    entry=repair_manifest(identifier,plan,manifest);path=entry['path']
     import fcntl
     facts={'retained_verified':False,'quarantine_complete':False,'parents_match':None,'destination_empty':None,
            'metadata_supported':False,'package_matches':False,'owner_matches':False,'rechecked':False}
@@ -1547,6 +1552,194 @@ def repair_readiness(identifier,plan,manifest):
             if all(value is True for value in facts.values()) and not result['gaps']:result['state']='ready'
     except (OSError,ValueError,KeyError,TypeError,IndexError):gap('verification_unavailable')
     return result
+
+
+REPAIR_STAGE_ROOT=Path('/var/lib/mrpatchy-repair-staging')
+REPAIR_CHUNK_SIZE=1024*1024
+
+
+def repair_digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def repair_stage_plan(identifier,plan):
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier) or not isinstance(plan,dict) or set(plan)!={'quarantine_id','quarantine_plan','manifest','authentication_digest','replacement_mode'} or len(json.dumps(plan).encode())>96000:raise ValueError('Invalid staging plan')
+    entry=repair_manifest(plan['quarantine_id'],plan['quarantine_plan'],plan['manifest'])
+    original=plan['quarantine_plan'];identity=original['file']['identity']
+    if not isinstance(plan['authentication_digest'],str) or not re.fullmatch('[a-f0-9]{64}',plan['authentication_digest']) or type(plan['replacement_mode']) is not int or plan['replacement_mode'] not in (0o600,0o640,0o644,0o700,0o750,0o755) or plan['replacement_mode']!=stat.S_IMODE(identity['mode']) or identity['uid']!=0 or identity['gid']!=0 or original['xattrs']:raise ValueError('Unsupported approved staging policy')
+    return entry
+
+
+def repair_stage_receipt(identifier,plan):
+    return {'version':1,'id':identifier,'plan_digest':repair_digest(plan),'state':'incomplete','received':0,'payload':None,
+            'facts':{'intent_verified':False,'payload_verified':False,'completion_recorded':False},'readiness':None}
+
+
+def repair_stage_intent(directory,identifier,plan):
+    intent=response_json(directory,'intent.json')
+    if set(intent)!={'id','plan','approval'} or intent['id']!=identifier or intent['plan']!=plan:raise ValueError('Staging ID binds different approved evidence')
+    return intent
+
+
+def repair_stage_expiry(approval,identifier,plan):
+    if not isinstance(approval,dict) or set(approval)!={'id','action','expires','actor','reason','plan_digest'} or approval['id']!=identifier or approval['action']!='stage' or approval['plan_digest']!=repair_digest(plan) or type(approval['expires']) not in (int,float) or not time.time()<approval['expires']<=time.time()+600 or not isinstance(approval['actor'],str) or not 1<=len(approval['actor'])<=120 or not isinstance(approval['reason'],str) or not 10<=len(approval['reason'])<=4000 or len(approval['reason'].strip())<10:raise ValueError('Staging approval expired or invalid')
+
+
+def repair_payload_identity(info):return {k:v for k,v in evidence_identity(info).items() if k!='ctime_ns'}
+
+
+@contextmanager
+def repair_payload(directory,name,plan):
+    original=response_json(directory,'file.json')
+    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+    try:
+        info=os.fstat(fd);identity=repair_payload_identity(info)
+        if any(identity[k]!=original[k] for k in ('dev','ino','uid','gid','mode','nlink')) or identity['mode']!=0o100600 or identity['uid']!=0 or identity['gid']!=0 or identity['nlink']!=1 or identity['size']>plan['manifest']['entries'][0]['size'] or identity['dev']!=plan['quarantine_plan']['vault_device'] or response_xattrs(fd):raise ValueError('Staging file identity or metadata changed')
+        yield fd,identity
+        if repair_payload_identity(os.fstat(fd))!=identity or repair_payload_identity(os.stat(name,dir_fd=directory,follow_symlinks=False))!=identity:raise ValueError('Staging file changed during verification')
+    finally:os.close(fd)
+
+
+def repair_stage_status_open(directory,identifier,plan):
+    result=repair_stage_receipt(identifier,plan)
+    try:repair_stage_intent(directory,identifier,plan)
+    except FileNotFoundError:return result
+    result['facts']['intent_verified']=True;entry=plan['manifest']['entries'][0]
+    if response_present(directory,'payload'):
+        finish=response_json(directory,'finish-intent.json')
+        if set(finish)!={'id','plan_digest','identity'} or finish['id']!=identifier or finish['plan_digest']!=repair_digest(plan):raise ValueError('Unbound staging finish intent')
+        with repair_payload(directory,'payload',plan) as (fd,identity):
+            digest=hashlib.sha256();deadline=time.monotonic()+30
+            while True:
+                data=os.read(fd,65536)
+                if not data:break
+                if time.monotonic()>deadline:raise TimeoutError('Staging hash budget exceeded')
+                digest.update(data)
+            if identity!=finish['identity'] or identity['size']!=entry['size'] or digest.hexdigest()!=entry['sha256']:raise ValueError('Staged bytes do not match approved artifact')
+            result['payload']={'sha256':digest.hexdigest(),'size':identity['size'],'identity':identity}
+        result.update(state='staged',received=entry['size']);result['facts']['payload_verified']=True
+        if response_present(directory,'staged.json'):
+            if response_json(directory,'staged.json')!={'id':identifier,'plan_digest':repair_digest(plan),'payload':result['payload']}:raise ValueError('Staging completion record changed')
+            result['facts']['completion_recorded']=True
+    elif response_present(directory,'payload.partial'):
+        with repair_payload(directory,'payload.partial',plan) as (fd,identity):
+            result['received']=identity['size'];result['state']='receiving';deadline=time.monotonic()+30
+            # An unfinished chunk intent is never permission to append/retry it.
+            for offset in range(0,entry['size'],REPAIR_CHUNK_SIZE):
+                name='chunk-'+str(offset//REPAIR_CHUNK_SIZE)+'.json'
+                if not response_present(directory,name):
+                    if offset<identity['size']:result['state']='incomplete'
+                    continue
+                chunk=response_json(directory,name);length=min(REPAIR_CHUNK_SIZE,entry['size']-offset)
+                if set(chunk)!={'offset','size','sha256'} or chunk['offset']!=offset or chunk['size']!=length or offset+length>identity['size'] or hashlib.sha256(os.pread(fd,length,offset)).hexdigest()!=chunk['sha256']:result['state']='incomplete'
+                if time.monotonic()>deadline:raise TimeoutError('Staging chunk verification budget exceeded')
+            if response_present(directory,'finish-intent.json'):result['state']='incomplete'
+    return result
+
+
+def repair_stage_status(identifier,plan):
+    repair_stage_plan(identifier,plan)
+    import fcntl
+    try:
+        with evidence_directory(REPAIR_STAGE_ROOT/identifier) as directory:
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            return repair_stage_status_open(directory,identifier,plan)
+    except FileNotFoundError:
+        # A missing child/record inside an existing operation is incomplete.
+        try:
+            with evidence_directory(REPAIR_STAGE_ROOT/identifier):return repair_stage_receipt(identifier,plan)
+        except FileNotFoundError:
+            result=repair_stage_receipt(identifier,plan);result['state']='not_found';return result
+
+
+def repair_stage_begin(identifier,plan,approval):
+    repair_stage_plan(identifier,plan)
+    import fcntl
+    try:
+        with evidence_directory(REPAIR_STAGE_ROOT/identifier):return repair_stage_status(identifier,plan)
+    except FileNotFoundError:pass
+    repair_stage_expiry(approval,identifier,plan)
+    readiness=repair_readiness(plan['quarantine_id'],plan['quarantine_plan'],plan['manifest'])
+    if readiness['state']!='ready':
+        result=repair_stage_receipt(identifier,plan);result.update(state='blocked',readiness=readiness);return result
+    repair_stage_expiry(approval,identifier,plan)
+    with evidence_directory(REPAIR_STAGE_ROOT,create=True) as root:
+        fcntl.flock(root,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        if response_present(root,identifier):return repair_stage_status(identifier,plan)
+        # At most eight durable IDs: <=256 MiB payloads, plus bounded journals.
+        with os.scandir(root) as children:
+            for index,child in enumerate(children):
+                if index>=7:
+                    result=repair_stage_receipt(identifier,plan);result.update(state='capacity_reached',readiness=readiness);return result
+                if not re.fullmatch('[a-f0-9-]{36}',child.name) or not child.is_dir(follow_symlinks=False):raise ValueError('Unexpected staging root entry')
+        if os.fstat(root).st_dev!=plan['quarantine_plan']['vault_device']:raise ValueError('Staging requires the approved filesystem')
+        os.mkdir(identifier,0o700,dir_fd=root);os.fsync(root)
+        with evidence_directory(REPAIR_STAGE_ROOT/identifier) as directory:
+            fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            response_json(directory,'intent.json',{'id':identifier,'plan':plan,'approval':approval})
+            repair_stage_expiry(approval,identifier,plan)
+            fd=os.open('payload.partial',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory)
+            try:os.fsync(fd);identity=repair_payload_identity(os.fstat(fd))
+            finally:os.close(fd)
+            os.fsync(directory);response_json(directory,'file.json',identity)
+            result=repair_stage_status_open(directory,identifier,plan);result['readiness']=readiness;return result
+
+
+def repair_stage_chunk(identifier,plan,offset,encoded):
+    entry=repair_stage_plan(identifier,plan)
+    if type(offset) is not int or offset<0 or offset>=entry['size'] or offset%REPAIR_CHUNK_SIZE or not isinstance(encoded,str) or len(encoded)>4*((REPAIR_CHUNK_SIZE+2)//3):raise ValueError('Invalid staging chunk')
+    data=base64.b64decode(encoded,validate=True);length=min(REPAIR_CHUNK_SIZE,entry['size']-offset)
+    if len(data)!=length or base64.b64encode(data).decode('ascii')!=encoded:raise ValueError('Staging chunk size or encoding invalid')
+    import fcntl
+    with evidence_directory(REPAIR_STAGE_ROOT/identifier) as directory:
+        fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        intent=repair_stage_intent(directory,identifier,plan)
+        if response_present(directory,'payload') or response_present(directory,'finish-intent.json'):return repair_stage_status_open(directory,identifier,plan)
+        name='chunk-'+str(offset//REPAIR_CHUNK_SIZE)+'.json';chunk={'offset':offset,'size':length,'sha256':hashlib.sha256(data).hexdigest()}
+        if response_present(directory,name):
+            if response_json(directory,name)!=chunk:raise ValueError('Chunk ID binds different bytes')
+            return repair_stage_status_open(directory,identifier,plan)
+        repair_stage_expiry(intent['approval'],identifier,plan)
+        with repair_payload(directory,'payload.partial',plan) as (_,identity):
+            if identity['size']!=offset:raise ValueError('Staging offset changed; no append retry')
+        response_json(directory,name,chunk);repair_stage_expiry(intent['approval'],identifier,plan)
+        fd=os.open('payload.partial',os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+        try:
+            if repair_payload_identity(os.fstat(fd))!=identity:raise ValueError('Staging file changed before append')
+            with os.fdopen(os.dup(fd),'wb') as stream:
+                stream.seek(offset);stream.write(data);stream.flush();os.fsync(stream.fileno())
+        finally:os.close(fd)
+        return repair_stage_status_open(directory,identifier,plan)
+
+
+def repair_stage_finish(identifier,plan):
+    entry=repair_stage_plan(identifier,plan)
+    import fcntl
+    with evidence_directory(REPAIR_STAGE_ROOT/identifier) as directory:
+        fcntl.flock(directory,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        intent=repair_stage_intent(directory,identifier,plan)
+        if response_present(directory,'finish-intent.json'):return repair_stage_status_open(directory,identifier,plan)
+        repair_stage_expiry(intent['approval'],identifier,plan)
+        current=repair_stage_status_open(directory,identifier,plan)
+        if current['state']!='receiving' or current['received']!=entry['size']:return current
+        with repair_payload(directory,'payload.partial',plan) as (fd,identity):
+            digest=hashlib.sha256();deadline=time.monotonic()+30
+            while True:
+                data=os.read(fd,65536)
+                if not data:break
+                if time.monotonic()>deadline:raise TimeoutError('Staging hash budget exceeded')
+                digest.update(data)
+            if digest.hexdigest()!=entry['sha256']:raise ValueError('Transferred bytes do not match approved artifact')
+        readiness=repair_readiness(plan['quarantine_id'],plan['quarantine_plan'],plan['manifest'])
+        if readiness['state']!='ready':
+            current.update(state='blocked',readiness=readiness);return current
+        repair_stage_expiry(intent['approval'],identifier,plan)
+        response_json(directory,'finish-intent.json',{'id':identifier,'plan_digest':repair_digest(plan),'identity':identity})
+        repair_stage_expiry(intent['approval'],identifier,plan)
+        response_rename(directory,'payload.partial',directory,'payload');os.fsync(directory)
+        result=repair_stage_status_open(directory,identifier,plan)
+        if result['state']!='staged':raise ValueError('Staging final verification failed')
+        response_json(directory,'staged.json',{'id':identifier,'plan_digest':repair_digest(plan),'payload':result['payload']})
+        result=repair_stage_status_open(directory,identifier,plan);result['readiness']=readiness;return result
 
 
 def response_action(identifier,plan,approval,restore=False):

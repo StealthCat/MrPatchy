@@ -31,7 +31,7 @@ def in_window(windows,now=None):
 
 QUARANTINE_STATES=('running','recovery_required')
 
-def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None,read_only_response_id=None):
+def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None,read_only_response_id=None,staging_response_id=None):
     query=select(Job.id).where(Job.host_id==host_id,Job.state.in_(QUARANTINE_STATES))
     if exclude:query=query.where(Job.id!=exclude)
     if s.scalar(query.limit(1)) is not None:return True
@@ -46,6 +46,9 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     # Only the repair-preparation read uses this scope: related process holds
     # remain active and no mutation/recovery job inherits this exemption.
     if read_only_response_id:processes=processes.where(ProcessResponse.quarantine_id!=read_only_response_id)
+    # Approved staging writes only a private, non-executable payload. Its own
+    # file/process holds stay active; no live-file or signal action inherits this.
+    if staging_response_id:processes=processes.where(ProcessResponse.quarantine_id!=staging_response_id)
     return s.scalar(processes.limit(1)) is not None
 
 def recovery_policy(s,host_id):
