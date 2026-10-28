@@ -289,7 +289,8 @@ def main():
         print('Retained response monitoring passed: real scheduled worker checks, retained hash, occupied source alert, separate pause policy and completed-restoration scope')
         print('Reviewed quarantine passed: verified independent archive, durable hold, root-only move, destination conflict, no overwrite and exact original restoration')
         # A second full evidence/quarantine workflow retains a running executable.
-        executable=custom+'/process-sleep-fixture'
+        # Preserve the applet name on distributions using multicall coreutils.
+        executable=custom+'/sleep'
         run('docker','exec',name,'cp','/usr/bin/sleep',executable)
         run('docker','exec',name,'chmod','755',executable)
         executable_expected=json.loads(run('docker','exec',name,'python3','-c',"import os,json,hashlib; p='"+executable+"'; s=os.stat(p); print(json.dumps({'path':p,'device':s.st_dev,'inode':s.st_ino,'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest()}))"))
@@ -304,6 +305,20 @@ def main():
             evidence_archive.execute(session,host,Job(id=str(uuid.uuid4()),action='evidence-acquire',payload={'archive_id':executable_archive}));session.commit()
             executable_prepare=worker.enqueue(session,host.id,'quarantine-prepare',{'archive_id':executable_archive,'evidence_digest':executable_digest,'_actor':'native-test'})
         run('docker','exec','-d',name,executable,'300')
+        ready_code="""import os,json,sys
+source=os.stat(sys.argv[1]);matches=[]
+for entry in os.scandir('/proc'):
+    if not entry.name.isdecimal():continue
+    try:
+        target=os.stat(entry.path+'/exe')
+        if (target.st_dev,target.st_ino)==(source.st_dev,source.st_ino):matches.append(int(entry.name))
+    except OSError:pass
+print(json.dumps(matches))"""
+        for attempt in range(50):
+            executable_pids=json.loads(run('docker','exec',name,'python3','-c',ready_code,executable))
+            if executable_pids:break
+            time.sleep(.05)
+        else:raise AssertionError('Harmless executable fixture did not become ready')
         worker.execute(executable_prepare)
         with Session() as session:
             assert session.get(Job,executable_prepare).state=='complete',session.get(Job,executable_prepare).output

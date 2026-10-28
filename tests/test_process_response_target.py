@@ -14,7 +14,7 @@ from target import agent
 def process_files(monkeypatch):
     if os.geteuid()!=0:pytest.skip('Real protected root-owned process fixture runs in native SSH containers')
     root=Path('/srv')/('patchy-process-test-'+uuid.uuid4().hex);root.mkdir(mode=0o700)
-    source=root/'sleep-fixture';shutil.copyfile(shutil.which('sleep'),source);source.chmod(0o755)
+    source=root/'sleep';shutil.copyfile(shutil.which('sleep'),source);source.chmod(0o755)
     monkeypatch.setattr(agent,'RESPONSE_ROOT',root/'quarantine');monkeypatch.setattr(agent,'PROCESS_RESPONSE_ROOT',root/'processes')
     try:process=subprocess.Popen([str(source),'120'])
     except PermissionError:
