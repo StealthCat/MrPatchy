@@ -1292,14 +1292,37 @@ def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
 @app.get('/api/hosts/{host_id}/security/quarantines')
 def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
     from .quarantine import Quarantine
-    from . import response_monitor
+    from . import response_monitor,response_processes
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
         rows=list(s.scalars(select(Quarantine).where(Quarantine.host_id==host_id).order_by(Quarantine.created.desc(),Quarantine.id).offset(offset).limit(21)))
         watches,latest,_=response_monitor.context(s,rows[:20])
+        processes=response_processes.latest(s,rows[:20])
         return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt),
+            'process_observation':{'id':processes[r.id].id,'state':processes[r.id].state,'created':processes[r.id].created,'scope_current':processes[r.id].report['scope_current']} if r.id in processes else None,
             'monitor':{'watch':watches[r.id],'eligible':response_monitor.eligible(r),'last_check':object_dict(latest[r.id]) if r.id in latest else None}} for r in rows[:20]],'more':len(rows)>20}
+
+class ResponseProcessRequest(BaseModel):
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/processes')
+def inspect_response_processes(host_id:str,quarantine_id:str,body:ResponseProcessRequest,user=Depends(auth)):
+    from . import response_processes
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
+        response_idle(s,host_id,response_id=row.id)
+        if row.state not in response_processes.STATES or row.fingerprint!=host.fingerprint or incidents.digest(row.plan)!=body.plan_digest:raise HTTPException(409,'Retained response evidence or pinned host changed; refresh before inspecting processes')
+        return {'job_id':worker.enqueue(s,host_id,'quarantine-processes',{'quarantine_id':row.id,'plan_digest':body.plan_digest,'fingerprint':host.fingerprint,'_actor':user['username']})}
+
+@app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/processes')
+def response_process_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+    from .response_processes import Observation
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=response_row(s,host_id,quarantine_id)
+        records=list(s.scalars(select(Observation).where(Observation.host_id==host_id,Observation.quarantine_id==row.id).order_by(Observation.created.desc(),Observation.id).offset(offset).limit(21)))
+        return {'items':[object_dict(r) for r in records[:20]],'more':len(records)>20}
 
 class ResponseMonitorPolicy(BaseModel):
     enabled:bool=False

@@ -2,7 +2,8 @@
 
 Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
-restoration now support protected files under `/srv` and `/opt`. Broader typed
+restoration now support protected files under `/srv` and `/opt`. Retained-response
+monitoring and manual process-reference observations are available. Broader typed
 remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
@@ -811,3 +812,75 @@ retained verification, source-path occupancy, independent pause policy and compl
 restoration on Debian, Ubuntu, Fedora and AlmaLinux; systemd is stubbed. Real-VM,
 SELinux enforcement, performance and broader failure-injection validation remain
 future work, along with trusted vendor repair and process/cloud containment.
+
+## Process references to a retained original
+
+**Security → Reviewed file responses → Inspect process references** queues a manual,
+read-only observation of processes that still reference the captured inode. Moving
+and chmodding a file does not revoke open descriptors or memory mappings. This
+observation is the next prerequisite for reviewed process containment; it never
+signals, stops or resumes processes, changes a file, releases a server pause,
+resolves an incident, or authorizes another response action. No automatic process
+checks or AI requests are enabled.
+
+The restricted helper verifies the protected response journals, ancestors, retained
+inode, hash and metadata, and refuses restored/missing/unverifiable originals or an
+interrupted restoration. The retained inode stays open throughout the observation
+to prevent inode reuse. The helper excludes its own process, including that required
+verification descriptor, and revalidates held bytes afterward. An occupied original
+pathname does not hide references to the separately retained original. A replacement
+with identical bytes but a different inode is not considered a reference.
+
+Only kernel procfs at the helper's `/proc` is used. The helper samples each visible
+process leader's executable link, numbered descriptor links and `map_files` links,
+comparing device/inode metadata without reading linked file bytes, memory, command
+lines or environment variables. Receipts retain PID, start ticks, process PID
+namespace identity, reference kinds/counts, kernel boot ID and the observer PID and
+PID namespace. A second process identity check rejects changed/exited/reused PIDs.
+PIDs are relative to the **mounted procfs view**, which can differ from the helper's
+own PID namespace. Namespace inode numbers and boot IDs are observations, not
+attestation or an authorization to signal the displayed PID.
+
+Work is bounded to 4,096 process leaders, 50,000 directory entries (including procfs
+root entries), 128 matched leaders and a 15-second process-observation budget.
+Budget exhaustion retains already verified partial matches and an explicit gap.
+Each file hash phase keeps its existing 30-second budget; SSH has a 120-second
+limit in addition to independent helper verification. Kernel-blocked I/O can outlast
+userspace deadlines. Results are `references_found`, `none_observed` or `unavailable`;
+permission failures, disappearing links, invalid identities and work limits retain
+classified counts, never raw exception bodies. No gaps recorded still does not
+establish full coverage. Procfs restrictions (including hidepid), unobservable PID
+namespaces, nonleader threads with private descriptors, process churn, references
+closed before inspection, copied bytes, anonymous memory and compromised root/kernel
+remain outside this bounded inode observation. A memory mapping is not necessarily
+executable, and a reference is not proof of malware execution.
+
+Administrators can inspect a retained or uncertain response even while its own
+response hold pauses ordinary work. Another response's hold, a running or recovery
+required Activity job, and pending response work still prevent access. Queue entries
+bind the prepared plan digest and pinned SSH host. The worker performs fresh
+independent current-agent verification and ends MySQL snapshots before rechecking
+scope immediately before SSH and after the reply. Stale queued work is skipped;
+protocol/helper/transport failures are explicitly unavailable. Observations never
+update quarantine state, restoration readiness, monitoring coverage or hold status.
+A report that became historical during I/O is retained with `scope_current: false`;
+that field records scope agreement **at receipt time**, not continuing validity.
+
+**Process reference history** displays paginated append-only application records,
+counts, matches, gaps, actors and timestamps. The card shows the latest observation
+time; results are always historical samples. The new
+`security_response_process_observations` table participates in startup initialization
+and verified offline SQLite/MySQL migration. These records require protected backups
+and are not cryptographically immutable. No file contents or raw `/proc` documents
+are retained. Rebuild app/workers and redeploy current helpers using **Finish /
+verify installation** before using the new action; older helpers refuse it.
+
+Tests include exact-inode matching, same-byte replacements, descriptor and mapping
+metadata, helper-self exclusion, PID changes, symlinked PID directories, denied or
+disappearing references, bounded partial results, unavailable evidence, stale queue
+bindings, independent agent checks, scope changes during I/O, roles, holds, receipt
+validation and paginated history. Native SSH validation retains a harmless process
+descriptor across quarantine and checks the real worker/helper on Debian, Ubuntu,
+Fedora and AlmaLinux. Those containers stub systemd; real-VM/SELinux, performance
+and broader response drills remain future work. Approved process suspension/recovery,
+cloud isolation and authenticated vendor repair remain subsequent milestones.

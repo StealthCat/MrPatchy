@@ -375,12 +375,13 @@ def handle(req):
         if action=='release-restored':return release.restored(req['plan'])
         if action=='release-rollback':return release.rollback(req.get('job_id'))
         raise ValueError('Unsupported release action')
-    if action in ('quarantine-prepare','quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit'):
+    if action in ('quarantine-prepare','quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit','quarantine-processes'):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
-        from agent import response_prepare,response_status,response_action,response_audit
+        from agent import response_prepare,response_status,response_action,response_audit,response_processes
         if action=='quarantine-prepare':return response_prepare(req.get('snapshot'))
         if action=='quarantine-status':return response_status(req.get('id'),req.get('plan'))
         if action=='quarantine-audit':return response_audit(req.get('id'),req.get('plan'))
+        if action=='quarantine-processes':return response_processes(req.get('id'),req.get('plan'))
         return response_action(req.get('id'),req.get('plan'),req.get('approval'),restore=action=='quarantine-restore')
     if action in ('evidence-prepare','evidence-preserve','evidence-status','evidence-export'):
         sys.path.insert(0,'/usr/local/lib/mrpatchy')

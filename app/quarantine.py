@@ -11,8 +11,8 @@ from .db import Base,audit
 from . import incidents,ssh,evidence_archive
 from .evidence_vault import EvidenceCopy,EvidenceArchive,validate_snapshot,incident
 
-ACTIONS=('quarantine-prepare','quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit')
-RECOVERY_ACTIONS=('quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit')
+ACTIONS=('quarantine-prepare','quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit','quarantine-processes')
+RECOVERY_ACTIONS=('quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit','quarantine-processes')
 
 class Quarantine(Base):
     __tablename__='security_quarantines'

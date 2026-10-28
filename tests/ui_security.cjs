@@ -23,6 +23,10 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/evidence-copies/copy-fixture/acquire')){assert.equal(request.postDataJSON().confirmation,'ACQUIRE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));writes.push(url.pathname);return route.fulfill({json:{job_id:'acquire-job'}});}
   if(url.pathname.endsWith('/response-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);const body=request.postDataJSON();assert.equal(body.enabled,true);assert.equal(body.interval_minutes,5);assert.equal(body.pause_on_problem,true);responsePolicy={...body,revision:'policy-version'};return route.fulfill({json:responsePolicy});}return route.fulfill({json:{policy:responsePolicy,watched:1,problem_count:0,overdue_count:0,rotation_minutes:responsePolicy.interval_minutes,scope_limited:false,pending:null}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/watch')){const body=request.postDataJSON();assert.equal(body.enabled,false);assert.equal(body.plan_digest,'f'.repeat(64));watchEnabled=false;writes.push(url.pathname);return route.fulfill({json:{enabled:false,revision:'watch-version'}});}
+  if(url.pathname.endsWith('/quarantines/response-fixture/processes')){
+   if(request.method()==='POST'){assert.deepEqual(request.postDataJSON(),{plan_digest:'f'.repeat(64)});writes.push(url.pathname);return route.fulfill({json:{job_id:'process-job'}});}
+   return route.fulfill({json:{items:[{id:'process-job',state:'references_found',actor:'admin',created:Date.now()/1000,report:{scope_current:true,observation:{processes_examined:12,entries_examined:80,matches:[{pid:41,start_ticks:100,references:{descriptor:1}}],gaps:{memory_map_unavailable:2}}}}],more:false}});
+  }
   if(url.pathname.endsWith('/quarantines/response-fixture/checks'))return route.fulfill({json:{items:[{state:'verified',report:{facts:{held_verified:true}}}],more:false}});
   if(url.pathname.endsWith('/quarantines'))return route.fulfill({json:{items:[{id:'response-fixture',state:responseState,hold:responseHold,created:Date.now()/1000,observed:Date.now()/1000,plan:{file:{path:'/srv/security-fixture'}},plan_digest:'f'.repeat(64),receipt_digest:'a'.repeat(64),receipt:{restore_ready:responseState==='quarantined',restore_attempted:responseState==='restored'},monitor:{watch:{enabled:watchEnabled,revision:watchEnabled?'':'watch-version'},eligible:responseState==='quarantined',last_check:{state:'verified',created:Date.now()/1000}}}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/history'))return route.fulfill({json:{events:[{kind:'quarantine_approved',actor:'admin'}],approvals:[{action:'quarantine',actor:'admin'}],more:false}});
@@ -114,6 +118,15 @@ module.exports=async(page)=>{
   await page.locator('#response-history').filter({hasText:'quarantine_approved'}).waitFor();await page.locator('#close-modal').click();
   await page.getByRole('button',{name:'Verify file response',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Read-only file response verification queued'));
+  await page.getByRole('button',{name:'Inspect process references',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Read-only process reference inspection queued'));
+  assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/processes');
+  await page.getByRole('button',{name:'Process reference history',exact:true}).click();
+  await page.locator('#response-process-history').filter({hasText:'PID 41'}).waitFor();
+  await page.getByText('Inspection gaps: memory map unavailable: 2',{exact:true}).waitFor();
+  assert.equal(await page.locator('#response-process-next').isDisabled(),true);
+  for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'Process observations must fit the viewport');}
+  await page.locator('#close-modal').click();
   await page.getByRole('button',{name:'Review server pause',exact:true}).click();
   await page.locator('#response-release [name=reason]').fill('Verified service health and accepted quarantine impact.');
   await page.locator('#response-release [name=typed]').fill('KEEP QUARANTINED');
