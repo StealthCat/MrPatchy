@@ -12,7 +12,18 @@ def installer(tmp_path):
     for name in ('install-gcp.sh','gcp-compose.sh'):shutil.copy(ROOT/name,tmp_path/name)
     binary=tmp_path/'bin';binary.mkdir()
     docker=binary/'docker'
-    docker.write_text('#!/usr/bin/env python3\nimport json,os,sys\nwith open(os.environ["MOCK_LOG"],"a") as f:f.write(json.dumps(sys.argv[1:])+"\\n")\nif "print-access-token" in sys.argv:print("DISPOSABLE_SECRET")\n')
+    docker.write_text('''#!/usr/bin/env python3
+import json,os,sys
+from pathlib import Path
+args=sys.argv[1:]
+with open(os.environ["MOCK_LOG"],"a") as f:f.write(json.dumps(args)+"\\n")
+running=Path(os.environ["MOCK_LOG"]).with_name("app-running")
+if "run" in args and "app" in args and running.exists():
+    sys.exit("failed to set up container networking: Address already in use")
+if "up" in args:running.touch()
+if "exec" in args and not running.exists():sys.exit("service is not running")
+if "print-access-token" in args:print("DISPOSABLE_SECRET")
+''')
     docker.chmod(0o755)
     env={**os.environ,'PATH':str(binary)+':'+os.environ['PATH'],'MOCK_LOG':str(tmp_path/'commands')}
     def run(*extra):
@@ -30,9 +41,26 @@ def test_fresh_installer_configures_both_runtimes_without_leaking_token(installe
     for service in ('app','worker'):
         assert any(service in row and 'print-access-token' in row for row in commands)
         assert any(service in row and 'describe' in row and '--project=test-project' in row for row in commands)
-    assert commands[-1][-3:]==['up','-d','--wait']
+    startup=next(i for i,row in enumerate(commands) if row[-3:]==['up','-d','--wait'])
+    checks=[(i,row) for i,row in enumerate(commands) if 'gcloud' in row]
+    assert all('worker' in row for i,row in checks if i<startup)
+    for service in ('app','worker'):
+        assert any(i>startup and row[-5:]==['exec','-T',service,'gcloud','version'] for i,row in checks)
+        assert any(i>startup and 'exec' in row and service in row and 'print-access-token' in row for i,row in checks)
+        assert any(i>startup and 'exec' in row and service in row and 'describe' in row for i,row in checks)
     again=run('--public-url','https://ignored.example.test')
     assert again.returncode==0 and (root/'.env').read_text()==config
+
+
+def test_installer_runs_while_app_owns_control_address(installer):
+    root,run=installer
+    (root/'app-running').touch()
+    result=run('--public-url','https://patchy.example.test')
+    assert result.returncode==0,result.stderr
+    assert 'DISPOSABLE_SECRET' not in result.stdout+result.stderr
+    commands=[json.loads(line) for line in (root/'commands').read_text().splitlines()]
+    assert not any('run' in row and 'app' in row for row in commands)
+    assert not any('down' in row or 'stop' in row for row in commands)
 
 
 def test_installer_rejects_environment_injection_before_writing(installer):
@@ -52,4 +80,9 @@ def test_wif_mount_and_credentials_validation(installer):
     assert result.returncode==0,result.stderr
     override=json.loads((root/'compose.gcp-auth.json').read_text())
     assert all(item['volumes'][0]['read_only'] for item in override['services'].values())
+    commands=[json.loads(line) for line in (root/'commands').read_text().splitlines()]
+    login=next(row for row in commands if 'login' in row)
+    assert 'worker' in login and 'app' not in login
+    assert 'compose.gcp-auth.json' in login
+    assert run('--credential-dir',str(credentials)).returncode==0
     assert run().returncode!=0

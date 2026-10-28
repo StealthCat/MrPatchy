@@ -82,8 +82,12 @@ From a trusted checkout on a Linux Docker host with Compose v2 and Python 3:
 The installer preserves an existing `.env`, or creates one with a random initial
 administrator password and mode 0600. It builds the regular image and a derived
 image using Google's signed APT repository for Google Cloud CLI, configures both
-app and worker, checks token acquisition without printing the token, verifies
-instance-read access from each runtime, then starts the stack. Docker itself,
+app and worker, and checks token acquisition and instance-read access in a
+temporary worker container before starting the stack. It then verifies the CLI,
+token acquisition and instance read inside both running services with `exec -T`.
+Token output is discarded in every check. Temporary worker containers use
+dynamically assigned management-network addresses, so rerunning the installer
+does not compete with the running app's fixed control-network address. Docker itself,
 Google APIs, IAM grants and the IAP SSH firewall rule must already be configured
 as described above. No cloud IAM, metadata, firewall or VM mutations are made.
 A successful instance read does not prove IAP tunnel or guest SSH authentication;
@@ -110,7 +114,16 @@ identity arguments so the base and Google CLI images are rebuilt. Using plain
 definitions are ignored by Git. The installer does not grant the Mr Patchy guest
 account OS Login or replace pinned SSH identities.
 
-CI builds the derived image, verifies Google CLI runs as UID 10001 and validates
-the combined Compose configuration. Installer tests use a fake Docker command to
-verify argument handling, identity configuration and token redaction. Live GCP
+If an older installer fails at `mrpatchy-app-run-...` with
+`failed to set up container networking: Address already in use`, update to the
+fixed installer and rerun it with the same arguments. For an older release, run
+`./gcp-compose.sh down` before rerunning the installer; this temporarily stops
+Mr Patchy while preserving its volumes. Do not add `-v`. This error can occur
+when the temporary app container inherits an address held by the running app;
+changing the HTTPS port does not fix that address collision.
+
+CI builds the derived image, verifies Google CLI runs as UID 10001, validates
+the combined Compose configuration and runs temporary worker CLI checks alongside
+the active stack. Installer tests use a fake Docker command to
+verify argument handling, identity configuration, existing-app upgrades and token redaction. Live GCP
 IAM, federation and IAP access still require validation in your project.

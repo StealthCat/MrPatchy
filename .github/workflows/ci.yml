@@ -161,3 +161,24 @@ jobs:
           docker run --rm mrpatchy:gcp gcloud version
           test "$(docker run --rm mrpatchy:gcp id -u)" = 10001
           GCP_PROJECT=ci-project GCP_ZONE=us-central1-a docker compose --env-file .env.example -f compose.yaml -f compose.gcp.yaml config --quiet
+      - name: Verify GCP checks coexist with the running app
+        run: |
+          printf '%s\n' 'ADMIN_PASSWORD=ci-disposable-password-only' 'DOMAIN=localhost' 'PUBLIC_URL=https://localhost' > .env
+          printf '%s\n' 'GCP_PROJECT=ci-project' 'GCP_ZONE=us-central1-a' > .env.gcp
+          bash ./gcp-compose.sh up -d --no-build --wait
+          # Repeat temporary checks while the real app owns its fixed control IP.
+          for attempt in 1 2; do
+            bash ./gcp-compose.sh run --rm --no-deps worker gcloud version
+            test "$(bash ./gcp-compose.sh run --rm --no-deps worker id -u)" = 10001
+          done
+          for service in app worker; do
+            bash ./gcp-compose.sh exec -T "$service" gcloud version
+            test "$(bash ./gcp-compose.sh exec -T "$service" id -u)" = 10001
+          done
+      - name: GCP runtime diagnostics and cleanup
+        if: always()
+        run: |
+          if [ -f .env ] && [ -f .env.gcp ]; then
+            bash ./gcp-compose.sh logs --tail=100
+            bash ./gcp-compose.sh down -v
+          fi
