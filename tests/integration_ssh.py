@@ -486,7 +486,7 @@ print(json.dumps(matches))"""
             published=session.get(repair_publication.Publication,publication_id)
             assert published.state=='published' and published.hold and published.report['trust_current']
         from app import response_health
-        def service_observation(baseline_id=''):
+        def service_observation(baseline_id='',expected_file_hold=True):
             with Session() as session:
                 q=session.get(quarantine.Quarantine,repair_qid);h=session.get(Host,host.id)
                 previous=session.get(response_health.Observation,baseline_id) if baseline_id else None
@@ -498,7 +498,7 @@ print(json.dumps(matches))"""
                 job=session.get(Job,identifier);assert job.state=='complete',job.output
                 observation=session.get(response_health.Observation,identifier)
                 assert observation.report['scope_current']
-                assert session.get(repair_publication.Publication,publication_id).hold and session.get(quarantine.Quarantine,repair_qid).hold
+                assert session.get(repair_publication.Publication,publication_id).hold==expected_file_hold and session.get(quarantine.Quarantine,repair_qid).hold==expected_file_hold
                 return identifier,observation.state,observation.report
         commands_before=run('docker','exec',name,'cat','/opt/drpatch/systemctl-test.log').splitlines()
         service_baseline,service_state,_=service_observation();assert service_state=='healthy'
@@ -510,6 +510,14 @@ print(json.dumps(matches))"""
         assert commands_after and all(command.split()[0] in ('show','is-active','is-enabled') for command in commands_after),commands_after
         run('docker','exec',name,'rm','/opt/drpatch/service-health-failed')
         print('Response service health passed: bounded read-only systemd properties, exact response/publication binding, immutable baseline comparison and unchanged independent holds without service mutation')
+        from app import service_monitor
+        watch_baseline,service_state,watch_report=service_observation();assert service_state=='healthy'
+        with Session() as session:
+            q=session.get(quarantine.Quarantine,repair_qid);h=session.get(Host,host.id)
+            policy=SimpleNamespace(enabled=True,expected_revision='',interval_minutes=5,pause_on_problem=True,baseline_id=watch_baseline,report_digest=incidents.digest(watch_report),reason='Approve automatic checks for the selected native fixture service.')
+            service_monitor.save(session,h,q,policy,'native-test');session.commit()
+        service_monitor.schedule_tick(time.time()+301)
+        with Session() as session:assert not session.query(Job).filter_by(host_id=host.id,action=response_health.ACTION,state='queued').count()
         with Session() as session:
             published=session.get(repair_publication.Publication,publication_id)
             # Explicit native-fixture service-impact review; production uses typed
@@ -520,6 +528,33 @@ print(json.dumps(matches))"""
         assert int(run('docker','exec',name,'stat','-c','%i',repair_path))==published_inode
         assert run('docker','exec',name,'stat','-c','%a',repair_path)=='644'
         assert run('docker','exec',name,'cat','/var/lib/mrpatchy-quarantine/'+repair_qid+'/held')=='changed'
+        def automatic_service_check(advance):
+            service_monitor.schedule_tick(time.time()+advance)
+            with Session() as session:
+                queued=session.query(Job).filter_by(host_id=host.id,action=response_health.ACTION,state='queued').one()
+                assert queued.payload['_service_watch'];identifier=queued.id
+            worker.execute(identifier)
+            with Session() as session:
+                observed=session.get(response_health.Observation,identifier)
+                assert observed.report['scheduled'] and observed.report['policy_current']
+                assert not session.get(quarantine.Quarantine,repair_qid).hold and not session.get(repair_publication.Publication,publication_id).hold
+                return observed.state
+        assert automatic_service_check(301)=='healthy'
+        run('docker','exec',name,'touch','/opt/drpatch/service-health-failed')
+        assert automatic_service_check(601)=='problem'
+        with Session() as session:assert session.get(service_monitor.Watch,repair_qid).hold
+        service_monitor.schedule_tick(time.time()+901)
+        with Session() as session:assert not session.query(Job).filter_by(host_id=host.id,action=response_health.ACTION,state='queued').count()
+        run('docker','exec',name,'rm','/opt/drpatch/service-health-failed')
+        reviewed,service_state,review_report=service_observation(expected_file_hold=False);assert service_state=='healthy'
+        with Session() as session:
+            q=session.get(quarantine.Quarantine,repair_qid);h=session.get(Host,host.id);watch=session.get(service_monitor.Watch,repair_qid)
+            service_monitor.release(session,h,q,SimpleNamespace(expected_revision=watch.revision,confirmation='ACCEPT HEALTHY SERVICES',observation_id=reviewed,report_digest=incidents.digest(review_report),reason='Review a fresh healthy manual check and clear only the fixture service pause.'),'native-test')
+            assert not watch.hold and not q.hold
+            service_monitor.save(session,h,q,SimpleNamespace(enabled=False,expected_revision=watch.revision,interval_minutes=5,pause_on_problem=True,baseline_id='',report_digest='',reason='Disable the disposable native service watch after explicit pause review.'),'native-test');session.commit()
+        service_commands=run('docker','exec',name,'cat','/opt/drpatch/systemctl-test.log').splitlines()[len(commands_before):]
+        assert all(command.split()[0] in ('show','is-active','is-enabled') for command in service_commands),service_commands
+        print('Automatic service watch passed: revision-bound scheduled checks, independent failure pause, manual recovery read, explicit pause review and no service mutations')
         def publication_audit(advance):
             response_monitor.schedule_tick(time.time()+advance)
             with Session() as session:

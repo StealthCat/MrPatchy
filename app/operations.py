@@ -36,6 +36,10 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     if exclude:query=query.where(Job.id!=exclude)
     if s.scalar(query.limit(1)) is not None:return True
     if local_observation:return False
+    from .service_monitor import Watch as ServiceWatch
+    service_holds=select(ServiceWatch.id).where(ServiceWatch.host_id==host_id,ServiceWatch.hold==True)
+    if service_response_id:service_holds=service_holds.where(ServiceWatch.id!=service_response_id)
+    if s.scalar(service_holds.limit(1)) is not None:return True
     from .quarantine import Quarantine
     holds=select(Quarantine.id).where(Quarantine.host_id==host_id,Quarantine.hold==True)
     if response_id:holds=holds.where(Quarantine.id!=response_id)
@@ -95,6 +99,14 @@ def collect_alerts():
         for host in s.scalars(select(Host)):
             from . import response_monitor
             monitored=response_monitor.assessment(s,host.id)
+            from . import service_monitor
+            services=service_monitor.assessment(s,host.id)
+            if services['problem_count']:
+                record(host,'service health',str(services['problem_count'])+' selected service watch(es) have problems or changed scope. Review Security service watches.')
+            if services['overdue_count'] or services['scope_limited']:
+                record(host,'service coverage',str(services['overdue_count'])+' service watch(es) lack timely positive checks. '+('The 500-watch scope limit was reached. ' if services['scope_limited'] else '')+'Review Security, pending jobs and agent health; unavailable coverage is not healthy service proof.')
+            service_hold=s.scalar(select(service_monitor.Watch.id).where(service_monitor.Watch.host_id==host.id,service_monitor.Watch.hold==True).limit(1))
+            if service_hold:record(host,'service hold','Server changes paused for selected services on response '+service_hold+'. Run a manual service check and separately review the service pause in Security.')
             if monitored['problem_count']:
                 record(host,'response integrity',str(monitored['problem_count'])+' retained response(s) have unresolved verification problems. Review Security: '+', '.join(r['id']+' '+r['state'] for r in monitored['problems']))
             if monitored['policy']['enabled'] and (monitored['overdue_count'] or monitored['scope_limited']):

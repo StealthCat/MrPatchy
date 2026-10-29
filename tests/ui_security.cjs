@@ -6,7 +6,7 @@ module.exports=async(page)=>{
  const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false,publicationCreated=false,publicationHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const exportBody='{"record":{"inode":9223372036854775807,"mtime_ns":1793245000123456789}}\n',exportDigest=crypto.createHash('sha256').update(exportBody).digest('hex');
  const exportFilename='mrpatchy-response-12345678-1234-1234-1234-123456789abc.json';
- let exportFailure=false;const serviceChecks=[];
+ let exportFailure=false;const serviceChecks=[];let servicesRecovered=false;let serviceWatch={enabled:false,interval_minutes:15,pause_on_problem:false,revision:'',baseline_id:'',units:[],hold:false,last_state:'not_checked'};
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -49,18 +49,29 @@ module.exports=async(page)=>{
    return route.fulfill({json:{items:[{id:'process-job',state:'references_found',actor:'admin',created:Date.now()/1000,report:{scope_current:true,observation:{processes_examined:12,entries_examined:80,matches:[{pid:41,start_ticks:100,references:{descriptor:1,executable:1}}],gaps:{memory_map_unavailable:2}}}}],more:false}});
   }
   if(url.pathname.endsWith('/quarantines/response-fixture/checks'))return route.fulfill({json:{items:[{state:'verified',report:{facts:{held_verified:true}}}],more:false}});
-  if(url.pathname.endsWith('/quarantines'))return route.fulfill({json:{items:[{id:'response-fixture',state:responseState,hold:responseHold,created:Date.now()/1000,observed:Date.now()/1000,plan:{file:{path:'/srv/security-fixture'}},plan_digest:'f'.repeat(64),receipt_digest:'a'.repeat(64),receipt:{restore_ready:responseState==='quarantined',restore_attempted:responseState==='restored'},monitor:{watch:{enabled:watchEnabled,revision:watchEnabled?'':'watch-version'},eligible:responseState==='quarantined',last_check:{state:'verified',created:Date.now()/1000}}}],more:false}});
+  if(url.pathname.endsWith('/quarantines'))return route.fulfill({json:{items:[{id:'response-fixture',state:responseState,hold:responseHold,service_watch:serviceWatch,created:Date.now()/1000,observed:Date.now()/1000,plan:{file:{path:'/srv/security-fixture'}},plan_digest:'f'.repeat(64),receipt_digest:'a'.repeat(64),receipt:{restore_ready:responseState==='quarantined',restore_attempted:responseState==='restored'},monitor:{watch:{enabled:watchEnabled,revision:watchEnabled?'':'watch-version'},eligible:responseState==='quarantined',last_check:{state:'verified',created:Date.now()/1000}}}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/history'))return route.fulfill({json:{events:[{kind:'quarantine_approved',actor:'admin'}],approvals:[{action:'quarantine',actor:'admin'}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'QUARANTINE');assert.equal(request.postDataJSON().plan_digest,'f'.repeat(64));responseState='quarantined';responseHold=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'quarantine-job'}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/restore')){assert.equal(request.postDataJSON().confirmation,'RESTORE');assert.equal(request.postDataJSON().receipt_digest,'a'.repeat(64));responseState='restored';responseHold=false;writes.push(url.pathname);return route.fulfill({json:{job_id:'restore-job'}});}
+  if(url.pathname===prefix+'/service-monitor')return route.fulfill({json:{watched:serviceWatch.enabled?1:0,problem_count:0,overdue_count:0,rotation_minutes:5,scope_limited:false,pending:null}});
+  if(url.pathname.endsWith('/quarantines/response-fixture/service-watch')){
+   if(request.method()==='GET')return route.fulfill({json:serviceWatch});
+   const body=request.postDataJSON();assert.equal(body.expected_revision,serviceWatch.revision);assert.equal(body.plan_digest,'f'.repeat(64));assert.ok(body.reason.length>=10);
+   if(body.enabled){assert.equal(body.baseline_id,'service-check-0');assert.equal(body.report_digest,'5'.repeat(64));}
+   writes.push(url.pathname);serviceWatch={...serviceWatch,...body,revision:'service-policy-'+writes.length,units:['example.service']};return route.fulfill({json:serviceWatch});
+  }
+  if(url.pathname.endsWith('/quarantines/response-fixture/service-watch/release')){
+   const body=request.postDataJSON();assert.equal(body.confirmation,'ACCEPT HEALTHY SERVICES');assert.equal(body.observation_id,'service-check-2');assert.equal(body.report_digest,'5'.repeat(64));assert.equal(body.expected_revision,serviceWatch.revision);
+   writes.push(url.pathname);serviceWatch.hold=false;return route.fulfill({json:{service_hold:false,server_changes_paused:true}});
+  }
   if(url.pathname.endsWith('/quarantines/response-fixture/service-health')){
    if(request.method()==='GET')return route.fulfill({json:{items:[...serviceChecks].reverse(),more:false}});
    const body=request.postDataJSON();assert.equal(body.plan_digest,'f'.repeat(64));assert.deepEqual(body.units,['example.service']);assert.ok(body.reason.length>=10);
    assert.equal(body.baseline_id,serviceChecks.length?'service-check-0':'');writes.push(url.pathname);
    const before={Id:'example.service',ActiveState:'active',SubState:'running',Result:'success'};
-   const after=serviceChecks.length?{...before,ActiveState:'failed',Result:'exit-code'}:before;
-   serviceChecks.push({id:'service-check-'+serviceChecks.length,state:serviceChecks.length?'problem':'healthy',actor:'admin',reason:body.reason,created:Date.now()/1000,
-    report:{response_state:'quarantined',publication_id:'',scope_current:true,units:body.units,target:{services:[{unit:'example.service',state:serviceChecks.length?'problem':'healthy',before:after,after}],gaps:[]},
+   const after=serviceChecks.length&&!servicesRecovered?{...before,ActiveState:'failed',Result:'exit-code'}:before;
+   serviceChecks.push({id:'service-check-'+serviceChecks.length,report_digest:'5'.repeat(64),state:serviceChecks.length&&!servicesRecovered?'problem':'healthy',actor:'admin',reason:body.reason,created:Date.now()/1000,
+    report:{response_state:'quarantined',publication_id:'',scope_current:true,units:body.units,target:{services:[{unit:'example.service',state:serviceChecks.length&&!servicesRecovered?'problem':'healthy',before:after,after}],gaps:[]},
     comparison:{state:body.baseline_id?'compared':'not_requested',boot_changed:false,changes:body.baseline_id?[{unit:'example.service',fields:{ActiveState:{before:'active',after:'failed'}}}]:[]}}});
    return route.fulfill({json:{job_id:'service-check-job',read_only:true}});
   }
@@ -169,6 +180,35 @@ module.exports=async(page)=>{
   await page.locator('#response-service-history').filter({hasText:'example.service · problem'}).waitFor();
   assert.equal(await page.locator('#response-service-next').isDisabled(),true);
   await page.locator('#close-modal').click();
+  const beforeServicePolicy=writes.length;
+  await page.getByRole('button',{name:'Configure service watch',exact:true}).click();assert.equal(writes.length,beforeServicePolicy);
+  await page.locator('#service-watch-policy [name=enabled]').check();
+  await page.locator('#service-watch-policy [name=baseline_id]').selectOption('service-check-0');
+  await page.locator('#service-watch-policy [name=interval_minutes]').fill('5');
+  await page.locator('#service-watch-policy [name=pause_on_problem]').check();
+  await page.locator('#service-watch-policy [name=reason]').fill('Monitor only the explicitly reviewed services and pause on future failures.');
+  await page.getByRole('button',{name:'Save service watch',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/service-watch');
+  serviceWatch.hold=true;serviceWatch.last_state='problem';
+  await page.getByRole('button',{name:'Refresh file responses',exact:true}).click();
+  await page.getByRole('button',{name:'Configure service watch',exact:true}).click();
+  await page.locator('#service-watch-policy [name=enabled]').uncheck();
+  await page.locator('#service-watch-policy [name=reason]').fill('Disable recurring checks while retaining the independently reviewed pause.');
+  await page.getByRole('button',{name:'Save service watch',exact:true}).click();await page.locator('#modal').waitFor({state:'hidden'});
+  assert.equal(serviceWatch.hold,true,'Disabling must retain the service pause');
+  servicesRecovered=true;
+  await page.getByRole('button',{name:'Check service health',exact:true}).click();
+  await page.locator('#response-service-health [name=baseline_id]').selectOption('service-check-0');
+  await page.locator('#response-service-health [name=reason]').fill('Collect a new healthy manual check after the recorded failure.');
+  await page.getByRole('button',{name:'Queue read-only service check',exact:true}).click();await page.locator('#modal').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Review service pause',exact:true}).click();
+  await page.locator('#service-pause-review [name=confirmation]').selectOption('ACCEPT HEALTHY SERVICES');
+  await page.locator('#service-pause-review [name=observation_id]').selectOption('service-check-2');
+  await page.locator('#service-pause-review [name=reason]').fill('Reviewed current manual service health and independent file response pauses.');
+  await page.locator('#service-pause-review [name=typed]').fill('ACCEPT HEALTHY SERVICES');
+  await page.getByRole('button',{name:'Release reviewed service pause',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(serviceWatch.hold,false);
+  assert.equal(responseHold,true,'Service pause review must retain the file pause');
   const beforeExport=writes.length;
   await page.getByRole('button',{name:'Export response record',exact:true}).click();assert.equal(writes.length,beforeExport);
   await page.locator('#response-record-export [name=reason]').fill('Retain records independently for incident review.');

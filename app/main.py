@@ -1291,7 +1291,7 @@ def response_service_health_history(host_id:str,quarantine_id:str,offset:int=0,u
     with Session() as s:
         row=response_row(s,host_id,quarantine_id)
         rows=list(s.scalars(select(Observation).where(Observation.host_id==host_id,Observation.quarantine_id==row.id).order_by(Observation.created.desc(),Observation.id).offset(offset).limit(21)))
-        return {'items':[object_dict(item) for item in rows[:20]],'more':len(rows)>20}
+        return {'items':[object_dict(item)|{'report_digest':incidents.digest(item.report)} for item in rows[:20]],'more':len(rows)>20}
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-health')
 def observe_response_service_health(host_id:str,quarantine_id:str,body:ResponseServiceHealth,user=Depends(auth)):
@@ -1302,11 +1302,62 @@ def observe_response_service_health(host_id:str,quarantine_id:str,body:ResponseS
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
         if row.fingerprint!=host.fingerprint or incidents.digest(row.plan)!=body.plan_digest or row.state in ('queued','restore_queued'):raise HTTPException(409,'Response scope changed; refresh before checking services')
         if operations.host_quarantined(s,host_id,response_id=row.id,read_only_response_id=row.id,service_response_id=row.id):raise HTTPException(409,'Another operation or response requires reconciliation')
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(quarantine.ACTIONS),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; wait before checking services')
+        deferred=select(Job.id).where(Job.host_id==host_id,Job.action=='response-service-health',Job.state=='queued',Job.payload['_service_watch'].as_boolean()==True)
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(quarantine.ACTIONS),Job.state.in_(['queued','running']),Job.id.not_in(deferred)).limit(1)):raise HTTPException(409,'Response work is pending; wait before checking services')
         previous=response_health.baseline(s,host,row,body.baseline_id,body.units) if body.baseline_id else None
         payload={'quarantine_id':row.id,**response_health.binding(s,host,row),'units':body.units,'reason':reason,'baseline_id':body.baseline_id,
                  'baseline_digest':incidents.digest(previous.report) if previous else '', '_actor':user['username']}
         return {'job_id':worker.enqueue(s,host_id,response_health.ACTION,payload),'read_only':True}
+
+class ServiceWatchInput(BaseModel):
+    expected_revision:str=Field(default='',max_length=36)
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    enabled:bool=False
+    interval_minutes:int=Field(default=15,ge=5,le=1440)
+    pause_on_problem:bool=False
+    baseline_id:str=Field(default='',max_length=36)
+    report_digest:str=Field(default='',max_length=64)
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/service-monitor')
+def service_monitor_status(host_id:str,user=Depends(auth)):
+    from . import service_monitor
+    with Session() as s:
+        host_or_404(s,host_id);status=service_monitor.assessment(s,host_id);status.pop('eligible')
+        pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='response-service-health',Job.payload['_service_watch'].as_boolean()==True,Job.state.in_(['queued','running'])).order_by(Job.created).limit(1))
+        return status|{'pending':{'id':pending.id,'state':pending.state} if pending else None,'server_changes_paused':operations.host_quarantined(s,host_id)}
+
+@app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-watch')
+def get_service_watch(host_id:str,quarantine_id:str,user=Depends(auth)):
+    from . import service_monitor
+    with Session() as s:
+        row=response_row(s,host_id,quarantine_id);host=host_or_404(s,host_id);watch=s.get(service_monitor.Watch,row.id)
+        if watch and watch.host_id!=host_id:raise HTTPException(404,'Service watch not found')
+        return service_monitor.view(watch)|{'scope_current':service_monitor.current(s,host,row,watch)}
+
+@app.put('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-watch')
+def save_service_watch(host_id:str,quarantine_id:str,body:ServiceWatchInput,user=Depends(auth)):
+    from . import service_monitor
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
+        if incidents.digest(row.plan)!=body.plan_digest:raise HTTPException(409,'File response changed; refresh before saving')
+        watch=service_monitor.save(s,host,row,body,user['username']);s.commit()
+        return service_monitor.view(watch)
+
+class ServicePauseReview(BaseModel):
+    expected_revision:str=Field(max_length=36)
+    confirmation:str=Field(max_length=40)
+    observation_id:str=Field(default='',max_length=36)
+    report_digest:str=Field(default='',max_length=64)
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-watch/release')
+def release_service_pause(host_id:str,quarantine_id:str,body:ServicePauseReview,user=Depends(auth)):
+    from . import service_monitor
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
+        service_monitor.release(s,host,row,body,user['username']);s.commit()
+        return {'service_hold':False,'server_changes_paused':operations.host_quarantined(s,host_id),'incident_not_resolved':True}
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/export')
 def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExport,user=Depends(auth)):
@@ -1352,7 +1403,7 @@ def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
 @app.get('/api/hosts/{host_id}/security/quarantines')
 def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
     from .quarantine import Quarantine
-    from . import response_monitor,response_processes,repair_publication,response_health
+    from . import response_monitor,response_processes,repair_publication,response_health,service_monitor
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
@@ -1361,9 +1412,11 @@ def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
         processes=response_processes.latest(s,rows[:20])
         publications=repair_publication.latest(s,rows[:20])
         services=response_health.latest(s,rows[:20])
+        service_watches={item.id:item for item in s.scalars(select(service_monitor.Watch).where(service_monitor.Watch.host_id==host_id,service_monitor.Watch.id.in_([row.id for row in rows[:20]])))}
         return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt),
             'publication_id':publications[r.id].id if r.id in publications else None,
             'service_observation':{'id':services[r.id].id,'state':services[r.id].state,'created':services[r.id].created} if r.id in services else None,
+            'service_watch':service_monitor.view(service_watches.get(r.id)),
             'process_observation':{'id':processes[r.id].id,'state':processes[r.id].state,'created':processes[r.id].created,'scope_current':processes[r.id].report['scope_current']} if r.id in processes else None,
             'monitor':{'watch':watches[r.id],'eligible':response_monitor.eligible(r),'last_check':object_dict(latest[r.id]) if r.id in latest else None}} for r in rows[:20]],'more':len(rows)>20}
 

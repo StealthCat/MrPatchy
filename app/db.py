@@ -94,7 +94,7 @@ def config(s):
     return {**DEFAULTS, **(item.value if item else {})}
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
 def init():
-    from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health
+    from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health,service_monitor
     Base.metadata.create_all(engine)
     columns={c['name'] for c in inspect(engine).get_columns('packages')}
     if 'dpkg_state' not in columns:
