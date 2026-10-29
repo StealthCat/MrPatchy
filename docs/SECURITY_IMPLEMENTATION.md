@@ -41,6 +41,7 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
 
+- General malware protection: known-malware detection, AI-enabled triage of previously unknown malware, and automatic file quarantine plus malicious-process termination; see the planned milestone below.
 - CVE exposure-window exploitation monitoring with automatic quarantine or termination of detected malicious artifacts/processes; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention.
 - Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; AI evidence binding across these sources remains unfinished.
@@ -1928,3 +1929,33 @@ until the corresponding detection and response milestones are completed.
 - Add server and fleet views for affected CVEs, exposure duration, monitoring coverage/gaps, patch availability and expected/actual installation, detection evidence, automatic-response policy and action history. Notify administrators promptly and retain actor/policy, CVE/rule version, timestamps and outcome in auditable incident records; preserve the established Mr Patchy theme and mascot.
 - Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
 - Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
+
+
+## Planned: known and unknown malware detection with automatic response
+
+Requested roadmap expansion (2026-10-29); not yet implemented as an end-to-end
+capability. Existing bounded ClamAV/YARA scanning, evidence pivots and manually
+reviewed response operations are prerequisites. Reuse the CVE automatic-containment
+pipeline above; malware protection must also operate without a known CVE, known
+signature or an active CVE exposure window, and continue after patch installation.
+
+### Detection and AI-enabled triage
+
+- Detect known malware using maintained ClamAV signatures, authenticated YARA rules and trusted hash/indicator intelligence. Reuse the planned engine/signature-maintenance work and report provenance, freshness and coverage. Support scheduled and event-driven inspection, including execution and file-write events as those collectors become available.
+- Add AI-enabled triage to discover and investigate previously unknown malware from correlated execution/process ancestry, suspicious file changes, persistence, package/vendor integrity discrepancies, service activity and available network/log telemetry. Signature-free behavioral evidence must be usable; lack of a known malware hash or CVE must not prevent an investigation.
+- Produce evidence-linked classifications, confidence, explanation, competing benign explanations and recommended actions. Bind the model result to the exact server, observed file/process identities, evidence revision and model version. Separate suspected behavior, confirmed malicious activity and unknown/incomplete results; an unfamiliar binary or model confidence alone does not establish malware.
+- Treat endpoint strings, logs and file-derived content as untrusted model inputs. Use bounded structured analysis and validated output types; model output must not become arbitrary shell commands or widen the authorized response scope. Use configured providers and data-sharing controls with bounded/redacted payloads; respect global and per-server AI pause, quotas and activity logging.
+- Known-malware scanning and deterministic behavioral detection/response continue when AI is paused or unavailable. Show missing AI investigation coverage explicitly and retain unresolved evidence for later eligible triage.
+
+### Automatic quarantine and termination
+
+- Provide configurable server/group automatic-response policies for known malware and evidence-supported unknown-malware classifications, including action scopes, exclusions, confidence/evidence thresholds and monitor-only mode. Once enabled, qualifying detections automatically quarantine malicious artifacts and terminate associated verified malicious processes, performing both when applicable, without requiring approval for each incident.
+- Unknown-malware containment may rely on AI-assisted behavioral classification with corroborating observed evidence and validated policy rules; it must not require a known signature. A bare model verdict alone must not authorize a destructive action. Ambiguous findings remain visible for investigation and escalation.
+- Share the typed, identity-checked executors, policy rechecks, duplicate suppression, evidence preservation, alerts and recovery records from the CVE milestone. File quarantine must not be reported as stopping an already running process. Process termination must not be reported as removing persistence or quarantining a file. Report each action's actual outcome independently.
+- Track related process trees and persistence artifacts within explicit policy scope, detect recurrence, and escalate unsupported/fileless activity or incomplete containment. Preserve quarantine contents for controlled false-positive restoration, maintain an audit trail, and require separate recovery review before restoring artifacts or restarting affected services.
+
+### Delivery and acceptance
+
+- Add server/fleet malware incidents showing known versus AI-discovered findings, evidence/confidence, detection coverage, response policy and quarantine/termination outcomes. Reuse the existing Security workspace, notifications and Mr Patchy visual style rather than creating duplicate incident systems.
+- Deliver maintained known-malware detection, cross-source AI triage, general automatic response and recovery/UI integration as tracked milestones. Update this checkpoint with implemented scope and remaining limitations after each milestone.
+- Validate known-malware fixtures, controlled unknown-behavior simulations and benign administrative lookalikes, false-positive restoration, AI outages/pause and prompt-injection attempts, evidence changes, process reuse, file replacement, concurrent/replayed detections and partial response failures. Include supported-platform real-target response drills; document measured detection limits without claiming universal detection or a clean endpoint.
