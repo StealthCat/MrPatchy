@@ -354,3 +354,10 @@ process, startup/custom-file and package-integrity records on that server. Exact
 hash matches, path-only matches and changed bytes are labeled separately. Searches
 are bounded and paginated; matches do not establish causation or authorize response.
 See [the implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md#cross-source-incident-evidence-pivots).
+
+Each server workspace includes an administrator **AI integration** pause/resume control.
+Pausing blocks new provider calls for that server, including queued security proposals,
+triage follow-ups and shared update scoring. Other servers and non-AI operations
+continue; historical results remain visible. In-flight requests must finish before a
+state change can save (409 means retry; state unchanged). Resume respects global AI
+settings and quotas. Reasons and state changes are audited.

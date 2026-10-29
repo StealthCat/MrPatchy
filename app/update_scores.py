@@ -6,7 +6,7 @@ from sqlalchemy import String, Text, Integer, Double, select, func, tuple_
 from sqlalchemy.orm import Mapped, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
-from . import ai, ai_runs
+from . import ai, ai_runs, ai_policy
 from .coordination import Lock
 from .security import unseal
 from .package_history import versions
@@ -65,7 +65,7 @@ def run_one():
             count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
             if count>=cfg['ai_update_hourly_limit']:return
             batch=[];host_cache={}
-            for package in s.scalars(select(Package).where(Package.candidate!='',Package.host_id.in_(host_lifecycle.active_ids())).order_by(Package.available_since,Package.id)):
+            for package in s.scalars(select(Package).where(Package.candidate!='',Package.host_id.not_in(ai_policy.paused_ids()),Package.host_id.in_(host_lifecycle.active_ids())).order_by(Package.available_since,Package.id)):
                 if package.host_id not in host_cache:host_cache[package.host_id]=s.get(Host,package.host_id)
                 host=host_cache[package.host_id]
                 if not host:continue
@@ -82,6 +82,7 @@ def run_one():
         with Session() as s:
             host_ids=list(s.scalars(select(UpdateScore.host_id).where(UpdateScore.id.in_(ids)).distinct()))
         try:
+            ai_policy.require(host_ids)
             with host_lifecycle.activity(host_ids,'ai'):
                 with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
                     key=unseal(encrypted)

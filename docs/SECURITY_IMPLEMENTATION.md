@@ -41,7 +41,6 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
 
-- Per-server AI integration pause/resume across triage, update importance scoring/recommendations and security response proposals; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention.
 - Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; AI evidence binding across these sources remains unfinished.
 - File-write triggers and coverage beyond fresh verified eBPF executions; unsupported kernels, transient/unverified processes and broader runtime mechanisms still have gaps.
@@ -1870,12 +1869,32 @@ reviewed cross-source AI evidence, retention, engine maintenance and the other m
 work listed above remain unfinished.
 
 
-## Planned: per-server AI integration pause/resume
+## Per-server AI integration pause/resume
 
-Requested roadmap addition (2026-10-29); not yet implemented.
+Implemented: administrators can pause or resume AI independently for each server from
+the persistent AI integration panel on every server tab. The stored setting defaults
+to resumed for existing servers and survives controller restarts and offline database
+migration through the existing settings table. Management-disabled servers can preconfigure the AI state without re-enabling
+management. Deleted servers expose read-only state.
+Changes require a reason, current revision and CSRF protection, and record actor,
+time and reason in audit history. Non-AI inventory, patching, schedules, scanning and
+monitoring remain operational. Historical results and activity remain available.
 
-- Add a persistent administrator-controlled AI pause/resume setting for each server, independent of other servers and subordinate to the global AI configuration.
-- While paused, block new AI provider calls involving that server for both automatic and manual triage, update importance scoring/recommendations, and security response proposals. Queued jobs must recheck the setting immediately before a provider call, including shared fleet requests that could otherwise include paused-server data. Document how requests already in flight are handled.
-- Keep non-AI inventory collection, patching, schedules, security scanning and monitoring operational. Preserve historical AI results and activity; clearly distinguish them from current AI processing.
-- Show the AI state and pause/resume control in the server UI, explain skipped AI work, and audit state changes with actor and timestamp. Resuming must respect the global configuration and existing eligibility/rate limits.
-- Add focused coverage for host isolation, manual/automatic entry points, queued-work revocation, global-setting precedence, persistence, permissions and UI state. Update user documentation and this checkpoint when the milestone is implemented.
+Automatic triage and scoring skip paused servers without starving other servers.
+Scanner auto-proposal scheduling skips paused hosts. Manual and queued proposal
+execution recheck the state. Every host-scoped provider request also rechecks fresh
+state immediately before network I/O, including second triage calls, release
+configuration AI and shared fleet scoring batches. A batch containing a newly paused
+server is rejected in full; no paused-server payload is sent. Existing retry/quota
+limits apply after resuming. Failed/blocked attempts remain visible in AI activity
+and job output, with a controlled pause diagnostic rather than a provider failure.
+
+Cross-process per-server provider locks serialize state changes with outbound requests.
+A pause/resume attempted during a request returns HTTP 409 **without changing state**;
+retry after it finishes. A successful save prevents subsequent requests, but cannot
+retract data already sent or erase provider retention. Already returned results may
+finish local validation/persistence. A resumed server still requires global AI enablement,
+a valid model/key, feature settings, eligibility and quotas. Global diagnostic model
+checks carry no server data and remain available. No target helper or schema upgrade
+is required; rebuild the controller. Broader correlation, retention and other major
+work above remain unfinished.

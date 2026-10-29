@@ -146,6 +146,8 @@ def track(purpose, model, host_id='', subject='', host_ids=None):
         for member in set(host_ids or []) | ({host_id} if host_id else set()):
             s.add(AIRunHost(run_id=row.id,host_id=member))
         s.commit(); identifier = row.id
+    from . import ai_policy
+    policy_token=ai_policy.scope.set(tuple(set(host_ids or []) | ({host_id} if host_id else set())))
     token = active.set(identifier)
     try:
         event('starting', 'Run accepted by the worker.')
@@ -154,7 +156,8 @@ def track(purpose, model, host_id='', subject='', host_ids=None):
         event('failed', safe_error(error), state='error')
         raise
     else: event('complete', 'Structured result validated and processing completed.', state='complete')
-    finally: active.reset(token)
+    finally:
+        active.reset(token);ai_policy.scope.reset(policy_token)
 
 
 def response_received(response):

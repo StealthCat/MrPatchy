@@ -27,9 +27,10 @@ async function serverWorkspace(revision){
  root.innerHTML=`<div class="server-back"><a href="#servers">← All servers</a><label>Server<select id="server-workspace-select" aria-label="Switch server">${hosts.map(item=>`<option value="${esc(item.id)}" ${item.id===id?'selected':''}>${esc(item.name)}</option>`).join('')}</select></label></div>`+
  heading(h.name,`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`,`<span>${badge(h.state)}</span>`+(isAdmin()&&!h.deleted_at?`<button data-host-lifecycle="${esc(h.id)}">${h.enabled===false?'Enable':'Disable'} server</button><button data-host-delete="${esc(h.id)}">Delete server</button>`:''))+
  (inactive?`<div class="notice">${h.deleted_at?'Deleted from the managed fleet. Local SSH credentials were removed; these records are retained for review.':'Management disabled. Polling, queued operations, scheduled work and host AI requests are suspended. Existing remote agents and services continue running.'}</div>`:'')+
- `<nav class="server-tabs" aria-label="Server sections">${tabs.map(t=>`<a href="${serverLink(id,t[0])}" ${t[0]===tab?'class="active" aria-current="page"':''}>${t[1]}</a>`).join('')}</nav><section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
+ `${isAdmin()?'<section id="server-ai-policy" class="card"></section>':''}<nav class="server-tabs" aria-label="Server sections">${tabs.map(t=>`<a href="${serverLink(id,t[0])}" ${t[0]===tab?'class="active" aria-current="page"':''}>${t[1]}</a>`).join('')}</nav><section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
  $('#server-workspace-select').onchange=event=>{location.hash=serverLink(event.target.value,tab);};
  const body=$('#server-tab-body'),context={root:body,hostId:id};
+ if(isAdmin()){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.textContent=error.message;});}
  if(h.deleted_at&&!hosts.some(item=>item.id===id)){const option=document.createElement('option');option.value=id;option.textContent=h.name+' (deleted)';option.selected=true;$('#server-workspace-select').append(option);}
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
@@ -503,4 +504,22 @@ function incidentRelatedEvidence(root,hostId,incidentId){
   finally{if(retry.isConnected&&modalRevision===revision)retry.disabled=false;}
  };
  previous.onclick=()=>{offset=Math.max(0,offset-50);load();};next.onclick=()=>{offset+=50;load();};retry.onclick=load;load();
+}
+
+
+async function renderServerAIPolicy(panel,hostId,deleted=false){
+ const base='/hosts/'+hostId+'/security/ai-policy';let policy=await api(base);
+ const show=()=>{
+  if(!panel.isConnected)return;
+  panel.innerHTML=`<div class="toolbar"><div><h3>AI integration · ${policy.paused?'Paused':policy.global_enabled?'Eligible':'Globally disabled'}</h3><p class="help">Applies only to this server. Inventory, patching, schedules, scanning and monitoring continue. Historical AI results remain available.</p></div>${deleted?'':`<button id="server-ai-toggle">${policy.paused?'Resume AI':'Pause AI'}</button>`}</div><p class="help">${policy.paused?'New provider calls, including queued proposals, are blocked.':policy.global_enabled?'Processing remains subject to global configuration, eligibility and quotas.':'Global AI is off. Resuming here cannot enable it.'} ${policy.updated?'Last changed '+date(policy.updated)+' by '+esc(policy.actor)+'.':''}</p>`;
+  if(deleted)return;
+  panel.querySelector('button').onclick=()=>{
+   modal(policy.paused?'Resume server AI':'Pause server AI',`<p>Change AI processing for this server only? Historical results are retained. A request already in flight must finish before this change can be saved. Resume respects global settings and existing retry limits.</p><form id="server-ai-form"><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Save AI state</button></form>`);
+   const form=$('#server-ai-form'),revision=modalRevision;
+   form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button');button.disabled=true;try{
+    const saved=await api(base,'PUT',{paused:!policy.paused,expected_revision:policy.revision,reason:new FormData(form).get('reason')});
+    if(modalRevision!==revision||!panel.isConnected)return;policy=saved;$('#modal').close();show();toast('Server AI state saved');
+   }catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
+  };
+ };show();
 }

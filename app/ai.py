@@ -91,6 +91,11 @@ def list_models(key):
 
 
 def request(payload,key,timeout=60):
+    from . import ai_policy
+    with ai_policy.provider():return _request(payload,key,timeout)
+
+
+def _request(payload,key,timeout=60):
     key=key.strip()
     if not key or not re.fullmatch(r'[!-~]{1,1000}',key):raise AIError('The saved API key contains invalid characters. Replace it in Settings.')
     payload={**payload,'model':payload['model'].strip()}
