@@ -10,6 +10,22 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 
 [Sign-in preview](docs/screenshots/login.jpg) · [Mobile workspace](docs/screenshots/mobile.jpg) · [Settings](docs/screenshots/settings.jpg) · [AI settings](docs/screenshots/ai-settings.jpg)
 
+## License
+
+**Free for individual, personal, noncommercial use. Commercial and organizational
+use requires a separate paid license before deployment.**
+
+See [LICENSE](LICENSE) for the full Mr Patchy Personal and Commercial License v1.0
+and [COMMERCIAL.md](COMMERCIAL.md) for examples and commercial-license requests.
+A personal homelab or private household is free; employer/client systems, paid
+services and organizational deployments require a paid agreement or a separate
+written exception. Pricing and scope are agreed in writing with Robert Cronin
+through the [official project](https://github.com/StealthCat/MrPatchy/issues).
+
+This is source-available software with commercial-use restrictions. Third-party
+licenses and earlier valid license grants remain unchanged. New contributions
+follow [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Features
 
 | Area | Capabilities |

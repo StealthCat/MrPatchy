@@ -1,6 +1,11 @@
 {
   "name": "mrpatchy-ui-checks",
   "private": true,
-  "scripts": {"test:ui": "node tests/ui.cjs"},
-  "devDependencies": {"playwright": "^1.58.0"}
+  "scripts": {
+    "test:ui": "node tests/ui.cjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.0"
+  },
+  "license": "SEE LICENSE IN LICENSE"
 }
