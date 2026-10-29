@@ -20,6 +20,16 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
+      - name: Source version and changelog consistency
+        env:
+          VERSION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$VERSION_BASE" ] && [ "$VERSION_BASE" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags origin "$VERSION_BASE"
+            python tools/check_version.py --base-ref "$VERSION_BASE"
+          else
+            python tools/check_version.py
+          fi
       - run: python -m compileall -q app target
       - run: bash -n deploy/entrypoint.sh reset-admin-password.sh tests/fixtures/rpm-repository.sh tests/fixtures/deb-package.sh tests/fixtures/systemctl.sh install-gcp.sh gcp-compose.sh
       - run: node --check app/static/app.js && node --check app/static/settings.js && node --check app/static/ui.js && node --check app/static/fleet.js && node --check app/static/schedules.js && node --check app/static/server.js

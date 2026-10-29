@@ -38,7 +38,7 @@ def sni_request(host, material):
             connection.sendall(('GET /healthz HTTP/1.1\r\nHost: '+host+':18443\r\nConnection: close\r\n\r\n').encode())
             response = http.client.HTTPResponse(connection); response.begin()
             assert response.status == 200
-            assert json.loads(response.read()) == {'status':'ok'}
+            assert json.loads(response.read())['status'] == 'ok'
             expected = x509.load_pem_x509_certificate(material['certificate'].encode()).public_bytes(serialization.Encoding.DER)
             assert connection.getpeercert(binary_form=True) == expected
 

@@ -35,6 +35,7 @@ async function render(){
   const [me,list]=await Promise.all([api('/identity'),api('/hosts')]);
   if(revision!==renderRevision)return;
   currentUser=me;document.body.dataset.role=me.role;hosts=list;
+  $('#application-version').textContent=me.version?'v'+me.version:'SELF-HOSTED';
   if(!isAdmin()&&['security','settings','repositories','schedules','users','ai-logs'].includes(requested)){
    requested='overview';history.replaceState(null,'','#overview');
   }
