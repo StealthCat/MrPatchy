@@ -210,6 +210,15 @@ The target's durable spool acknowledges batches only after central commit; overf
 
 ## Reviewed file replacement
 
+**Servers → server → Security → Execution-triggered scans** optionally queues bounded
+ClamAV directory scans when new, fresh, verified eBPF executable identities appear in
+the event spool. The policy is off by default and includes scan directories, debounce,
+cooldown and hourly limits. Trigger history records coalescing, skips, failures and
+capacity drops. This complements recurring scans: it does not scan every execution,
+attest that the original executable bytes were examined, or detect files that are
+never executed. Existing automatic AI incident-plan policy applies to resulting
+detections. See [execution scan behavior and limits](docs/SECURITY_IMPLEMENTATION.md#execution-triggered-scoped-scanning).
+
 Under **Servers → server → Security**, administrators can preserve evidence, review
 quarantine, authenticate an offline vendor replacement, separately approve private
 staging, and then use **Review replacement publication** with `PUBLISH` to make that

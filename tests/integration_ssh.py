@@ -201,9 +201,34 @@ def main():
         from app import quarantine,incidents,worker,operations
         from app.db import Host
         init() # Register worker-owned models before exercising its real job path.
+        from app import execution_scans
+        with Session() as session:
+            managed=Host(id=host.id,name=host.name,address=host.address,port=host.port,fingerprint=host.fingerprint,state='online',baseline=host.baseline,last_seen=time.time())
+            session.add(managed);session.commit()
+            policy=SimpleNamespace(enabled=True,paths=['/usr/share/patchy-fixture'],debounce_seconds=15,cooldown_minutes=5,max_per_hour=4,expected_revision='',reason='Approve scoped scans from injected native execution metadata.')
+            # Use the public validated input model, as real policy requests do.
+            from app.main import ExecutionScanPolicy
+            execution_scans.save(session,managed,ExecutionScanPolicy(**vars(policy)),'native-test');session.commit()
+            event={'id':str(uuid.uuid4()),'observed':time.time(),'processes':[{'capture':'ebpf','identity_verified':True,'executable':fixture_path,'sha256':ssh.hashlib.sha256(b'1\n').hexdigest(),'uid':0,'connections':[],'provenance':[]}]}
+            worker.ingest_events(session,managed,{'events':[event]});session.commit()
+            trigger=session.query(execution_scans.Trigger).one();trigger.created-=31;session.commit();trigger_id=trigger.id
+        execution_scans.schedule_tick()
+        with Session() as session:execution_job=session.get(execution_scans.Trigger,trigger_id).job_id
+        assert execution_job
+        worker.execute(execution_job)
+        with Session() as session:
+            assert session.get(Job,execution_job).state=='complete',session.get(Job,execution_job).output
+            report=session.get(incidents.Scan,execution_job).report
+            assert report['automation']['scope_current'] and report['automation']['binding']=='scheduling_hint_only'
+            assert report['roots']==['/usr/share/patchy-fixture'] and report['engine']=='ClamAV'
+            assert report['state']=='incomplete' and not report['available'] # Fixture deliberately has no ClamAV engine.
+            assert session.get(execution_scans.Trigger,trigger_id).state=='incomplete'
+            cfg=execution_scans.policy(session,host.id)
+            execution_scans.save(session,session.get(Host,host.id),ExecutionScanPolicy(**{**cfg,'enabled':False,'expected_revision':cfg['revision'],'reason':'Disable the disposable native execution scan policy.'}),'native-test');session.commit()
+        assert run('docker','exec',name,'cat',fixture_path)=='1'
+        print('Execution-triggered scan passed: injected verified event metadata, real policy/scheduler/worker/SSH flow, explicit missing-engine coverage and unchanged target fixture')
         evidence_digest=incidents.digest(expected)
         with Session() as session:
-            session.add(Host(id=host.id,name=host.name,address=host.address,port=host.port,fingerprint=host.fingerprint,state='online',baseline=host.baseline))
             session.add(incidents.Incident(id='native-fixture',host_id=host.id,scan_id='native-scan',evidence=expected))
             session.get(EvidenceCopy,operation).evidence_digest=evidence_digest
             response_job=worker.enqueue(session,host.id,'quarantine-prepare',{'archive_id':archive_id,'evidence_digest':evidence_digest,'_actor':'native-test'})

@@ -91,6 +91,8 @@ def cancel_pending(s,host_id,actor):
         count+=1
     for run in s.scalars(select(scheduling.PatchRun).where(scheduling.PatchRun.host_id==host_id,scheduling.PatchRun.state.in_(('waiting','queued')))):
         run.state='cancelled';run.detail='Server management disabled'
+    from . import execution_scans
+    execution_scans.cancel(s,host_id,'Server management disabled; old execution triggers will not resume')
     return count
 
 

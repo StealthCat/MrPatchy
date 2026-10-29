@@ -103,6 +103,10 @@ def collect_alerts():
                 record(host,'server disabled','Server management is intentionally disabled. Polling, scheduled work and host AI requests are suspended.')
                 if host_quarantined(s,host.id):record(host,'disabled server recovery','This disabled server retains response or recovery holds. Re-enable management to review them; deletion is blocked until reconciled.')
                 continue
+            from . import execution_scans
+            execution_policy=execution_scans.policy(s,host.id)
+            if execution_policy['enabled'] and execution_scans.coverage(s,host.id,execution_policy,now)['limited']:
+                record(host,'execution scan coverage','Execution-triggered scan coverage is limited by dropped, expired, skipped or failed work. Review Security → Execution-triggered scans and scan history. No clean-host conclusion is available.')
             from . import response_monitor
             monitored=response_monitor.assessment(s,host.id)
             from . import service_monitor
