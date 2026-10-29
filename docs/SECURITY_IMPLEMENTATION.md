@@ -1791,3 +1791,28 @@ signature efficacy. Unit tests cover ingestion, replay, timing/scope, quotas, ho
 lifecycle/policy revocation, storage failure, helper/remote races, failure history,
 roles/CSRF and offline migration. Browser tests cover opt-in policy and trigger history.
 Real VM/eBPF/ClamAV performance and failure drills remain operator acceptance work.
+
+
+## Fleet security coverage overview
+
+The administrator-only **Security coverage** workspace lists managed servers with
+independent latest ClamAV and YARA receipts, signature validity at viewing time,
+scan-age limits, latest attempts and open/acknowledged scanner incident counts.
+Search is literal by server name; pagination is bounded, with page-scoped totals.
+Disabled servers retain clearly labeled historical results; deleted entries remain
+in the existing Deleted servers workflow. Reads never contact targets.
+
+Latest results are selected independently per engine, so a newer YARA receipt cannot
+hide an older failed ClamAV attempt. Failed and pending attempts are visible even
+without a scan receipt. ClamAV build age and YARA expiry are reassessed at read time.
+The recurring ClamAV interval supplies its age budget when enabled; otherwise the
+view uses 24 hours. YARA uses a separate fixed 24-hour display threshold, not an
+automatically configured YARA schedule. Completed attempts without matching receipts
+are shown as missing coverage rather than allowing older results to hide the gap. Recorded coverage is never a clean-host or
+complete-protection verdict. Scope, gaps and links lead to existing server controls.
+
+This adds fleet-level scanner visibility; cross-source threat correlation, external
+retention and broader runtime coverage remain unfinished. No target helper upgrade
+or database schema change is required. Unit/API checks cover engine separation,
+failures, expiry, disabled/deleted hosts, search, pagination and administrator access;
+browser checks cover the overview and navigation.

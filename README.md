@@ -210,6 +210,8 @@ The target's durable spool acknowledges batches only after central commit; overf
 
 ## Reviewed file replacement
 
+**Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
+
 **Servers → server → Security → Execution-triggered scans** optionally queues bounded
 ClamAV directory scans when new, fresh, verified eBPF executable identities appear in
 the event spool. The policy is off by default and includes scan directories, debounce,
