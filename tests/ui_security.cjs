@@ -6,7 +6,7 @@ module.exports=async(page)=>{
  const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false,publicationCreated=false,publicationHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const exportBody='{"record":{"inode":9223372036854775807,"mtime_ns":1793245000123456789}}\n',exportDigest=crypto.createHash('sha256').update(exportBody).digest('hex');
  const exportFilename='mrpatchy-response-12345678-1234-1234-1234-123456789abc.json';
- let exportFailure=false;
+ let exportFailure=false;const serviceChecks=[];
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -53,6 +53,17 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/quarantines/response-fixture/history'))return route.fulfill({json:{events:[{kind:'quarantine_approved',actor:'admin'}],approvals:[{action:'quarantine',actor:'admin'}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'QUARANTINE');assert.equal(request.postDataJSON().plan_digest,'f'.repeat(64));responseState='quarantined';responseHold=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'quarantine-job'}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/restore')){assert.equal(request.postDataJSON().confirmation,'RESTORE');assert.equal(request.postDataJSON().receipt_digest,'a'.repeat(64));responseState='restored';responseHold=false;writes.push(url.pathname);return route.fulfill({json:{job_id:'restore-job'}});}
+  if(url.pathname.endsWith('/quarantines/response-fixture/service-health')){
+   if(request.method()==='GET')return route.fulfill({json:{items:[...serviceChecks].reverse(),more:false}});
+   const body=request.postDataJSON();assert.equal(body.plan_digest,'f'.repeat(64));assert.deepEqual(body.units,['example.service']);assert.ok(body.reason.length>=10);
+   assert.equal(body.baseline_id,serviceChecks.length?'service-check-0':'');writes.push(url.pathname);
+   const before={Id:'example.service',ActiveState:'active',SubState:'running',Result:'success'};
+   const after=serviceChecks.length?{...before,ActiveState:'failed',Result:'exit-code'}:before;
+   serviceChecks.push({id:'service-check-'+serviceChecks.length,state:serviceChecks.length?'problem':'healthy',actor:'admin',reason:body.reason,created:Date.now()/1000,
+    report:{response_state:'quarantined',publication_id:'',scope_current:true,units:body.units,target:{services:[{unit:'example.service',state:serviceChecks.length?'problem':'healthy',before:after,after}],gaps:[]},
+    comparison:{state:body.baseline_id?'compared':'not_requested',boot_changed:false,changes:body.baseline_id?[{unit:'example.service',fields:{ActiveState:{before:'active',after:'failed'}}}]:[]}}});
+   return route.fulfill({json:{job_id:'service-check-job',read_only:true}});
+  }
   if(url.pathname.endsWith('/quarantines/response-fixture/export')){
    assert.equal(request.postDataJSON().plan_digest,'f'.repeat(64));assert.ok(request.postDataJSON().reason.length>=10);writes.push(url.pathname);
    if(exportFailure==='limit')return route.fulfill({status:413,json:{detail:'Response history exceeds the export row limit; no partial export was created'}});
@@ -140,6 +151,24 @@ module.exports=async(page)=>{
   await page.locator('#response-approval [name=confirmation]').fill('QUARANTINE');
   await page.getByRole('button',{name:'Quarantine approved file',exact:true}).click();
   await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/execute');
+  const beforeService=writes.length;
+  await page.getByRole('button',{name:'Check service health',exact:true}).click();assert.equal(writes.length,beforeService);
+  await page.locator('#response-service-health [name=units]').fill('example.service');
+  await page.locator('#response-service-health [name=reason]').fill('Review selected service state before releasing response pauses.');
+  await page.getByRole('button',{name:'Queue read-only service check',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/service-health');
+  await page.getByRole('button',{name:'Check service health',exact:true}).click();
+  await page.locator('#response-service-health [name=baseline_id]').selectOption('service-check-0');
+  assert.equal(await page.locator('#response-service-health [name=units]').inputValue(),'example.service');
+  assert.equal(await page.locator('#response-service-health [name=units]').evaluate(element=>element.readOnly),true);
+  await page.locator('#response-service-health [name=reason]').fill('Compare selected services with the retained baseline observation.');
+  await page.getByRole('button',{name:'Queue read-only service check',exact:true}).click();
+  await page.locator('#modal').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Service health history',exact:true}).click();
+  await page.locator('#response-service-history').filter({hasText:'Baseline comparison: compared · 1 changed units'}).waitFor();
+  await page.locator('#response-service-history').filter({hasText:'example.service · problem'}).waitFor();
+  assert.equal(await page.locator('#response-service-next').isDisabled(),true);
+  await page.locator('#close-modal').click();
   const beforeExport=writes.length;
   await page.getByRole('button',{name:'Export response record',exact:true}).click();assert.equal(writes.length,beforeExport);
   await page.locator('#response-record-export [name=reason]').fill('Retain records independently for incident review.');

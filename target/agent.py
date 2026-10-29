@@ -17,6 +17,77 @@ import uuid
 import re
 
 ROOT = Path('/opt/drpatch')
+SERVICE_PROPERTIES = ('Id','LoadState','ActiveState','SubState','Result','ExecMainCode','ExecMainStatus','MainPID','NRestarts','InvocationID','FragmentPath','UnitFileState')
+
+def response_service_units(units):
+    if (not isinstance(units,list) or not 1<=len(units)<=16 or
+        any(not isinstance(unit,str) or len(unit)>128 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@:\-]*\.service',unit) for unit in units) or len(set(units))!=len(units)):
+        raise ValueError('Select 1–16 unique explicit .service unit names without paths, patterns or options')
+    return units
+
+def response_service_properties(value):
+    if not isinstance(value,dict) or set(value)!=set(SERVICE_PROPERTIES):raise ValueError('Incomplete service properties')
+    for key,item in value.items():
+        if key in ('ExecMainCode','ExecMainStatus','MainPID','NRestarts'):
+            if type(item) is not int or not 0<=item<=2**64-1:raise ValueError('Invalid service counter')
+        elif not isinstance(item,str) or len(item)>(4096 if key=='FragmentPath' else 128) or any(ord(c)<32 or ord(c)==127 for c in item):raise ValueError('Invalid service property')
+    response_service_units([value['Id']])
+    if value['InvocationID'] and not re.fullmatch('[a-f0-9]{32}',value['InvocationID']):raise ValueError('Invalid service invocation identity')
+    return value
+
+def response_service_state(value):
+    return 'healthy' if (value['LoadState']=='loaded' and value['ActiveState']=='active' and value['SubState'] in ('running','exited') and value['Result']=='success' and value['ExecMainCode'] in (0,1) and value['ExecMainStatus']==0 and (value['SubState']!='running' or value['MainPID']>0)) else 'problem'
+
+def response_service_boot():
+    value=Path('/proc/sys/kernel/random/boot_id').read_text()[:100].strip()
+    if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value):raise ValueError('Boot identity unavailable')
+    return value
+
+def response_service_query(unit,timeout):
+    try:from bridge import bounded
+    except ImportError:from target.bridge import bounded
+    output,errors,status=bounded(['/usr/bin/systemctl','show','--no-pager','--no-ask-password','--property='+','.join(SERVICE_PROPERTIES),'--',unit],timeout=timeout,limit=8192,allowed_codes=tuple(range(256)),return_status=True,
+        env={'PATH':'/usr/bin:/bin','LC_ALL':'C','TZ':'UTC','SYSTEMD_COLORS':'0'})
+    if status!=0 or errors.strip():raise RuntimeError('Service query failed')
+    values={}
+    for line in output.splitlines():
+        key,separator,value=line.partition('=')
+        if not separator or key not in SERVICE_PROPERTIES or key in values:raise ValueError('Unexpected service properties')
+        if key in ('ExecMainCode','ExecMainStatus','MainPID','NRestarts'):
+            if not re.fullmatch(r'[0-9]{1,20}',value):raise ValueError('Invalid service counter')
+            value=int(value)
+        values[key]=value
+    return response_service_properties(values)
+
+def response_service_health(identifier,plan_digest,units):
+    # Read-only D-Bus properties only. Never ask systemd to start/reload/restart,
+    # reset failures, execute unit commands or signal the observed services.
+    if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid response ID')
+    if not isinstance(plan_digest,str) or not re.fullmatch('[a-f0-9]{64}',plan_digest):raise ValueError('Invalid response plan digest')
+    response_service_units(units);deadline=time.monotonic()+90
+    gaps=[];boot=None;rechecked=False;services=[]
+    try:boot=response_service_boot()
+    except (OSError,ValueError):gaps.append('boot_unavailable')
+    for unit in units:
+        observations=[];failure=None
+        for _ in range(2):
+            remaining=deadline-time.monotonic()
+            if remaining<=0:failure='time_limit';gaps.append('time_limit');break
+            try:observations.append(response_service_query(unit,min(3,remaining)))
+            except ValueError:failure='invalid_properties';break
+            except Exception:failure='query_failed';break
+        before=observations[0] if observations else None;after=observations[1] if len(observations)==2 else None
+        state='unavailable' if failure else ('changing' if before!=after else response_service_state(after))
+        if state=='unavailable':gaps.append('unit_unavailable')
+        if state=='changing':gaps.append('unit_changing')
+        services.append({'unit':unit,'before':before,'after':after,'state':state,'failure':failure})
+    try:
+        current=response_service_boot();rechecked=bool(boot and current==boot)
+        if boot and not rechecked:gaps.append('boot_changed')
+    except (OSError,ValueError):gaps.append('boot_unavailable')
+    state='unavailable' if gaps or not rechecked else ('problem' if any(row['state']=='problem' for row in services) else 'healthy')
+    return {'version':1,'id':identifier,'plan_digest':plan_digest,'units':units,'boot_id':boot,'boot_rechecked':rechecked,'services':services,'gaps':sorted(set(gaps)),'state':state}
+
 MANAGED = ['/usr/local/lib/mrpatchy/rpm_support.py', '/usr/local/lib/mrpatchy/release.py', '/usr/local/lib/mrpatchy/agent.py', '/usr/local/lib/mrpatchy/bridge.py', '/etc/systemd/system/mrpatchy-agent.service', '/etc/sudoers.d/mrpatchy', '/opt/drpatch/.ssh/authorized_keys']
 def digest(path):
     return hash_artifact(path,{})

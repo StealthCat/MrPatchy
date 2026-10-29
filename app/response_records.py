@@ -5,7 +5,7 @@ import time
 import uuid
 from sqlalchemy import select
 from . import incidents, quarantine, response_monitor, response_processes
-from . import process_response, repair_preparation, repair_staging, repair_publication
+from . import process_response, repair_preparation, repair_staging, repair_publication, response_health
 from .evidence_vault import EvidenceCopy, EvidenceArchive, ArchiveObservation
 
 MAX_ROWS = 5000
@@ -34,6 +34,7 @@ FIELDS = {
     'stage_events': 'id stage_id host_id created actor kind report',
     'repair_publications': 'id host_id quarantine_id stage_id created expires actor reason fingerprint stage_report_digest plan state hold before_state before_hold observed receipt report',
     'publication_events': 'id publication_id host_id created actor kind details',
+    'service_observations': 'id host_id quarantine_id created actor reason state report',
 }
 
 
@@ -117,7 +118,8 @@ def build(s, host, response, actor, reason):
     for name, model in (('file_approvals', quarantine.Approval), ('file_events', quarantine.Event),
                         ('monitor_checks', response_monitor.Check), ('process_observations', response_processes.Observation),
                         ('process_responses', process_response.ProcessResponse), ('repair_preparations', repair_preparation.Preparation),
-                        ('repair_stages', repair_staging.Stage), ('repair_publications', repair_publication.Publication)):
+                        ('repair_stages', repair_staging.Stage), ('repair_publications', repair_publication.Publication),
+                        ('service_observations', response_health.Observation)):
         conditions = [model.quarantine_id == response.id]
         if hasattr(model, 'host_id'):
             conditions.append(model.host_id == host.id)
@@ -137,7 +139,7 @@ def build(s, host, response, actor, reason):
     policy = response_monitor.policy(s, host.id)
     watch = response_monitor.watch(s, response)
     record = {
-        'format': 'mrpatchy-response-record', 'version': 1,
+        'format': 'mrpatchy-response-record', 'version': 2,
         'export': {'id': str(uuid.uuid4()), 'created': time.time(), 'actor': actor, 'reason': reason},
         'host': {'id': host.id, 'name': host.name, 'fingerprint': host.fingerprint},
         'scope': {'quarantine_id': response.id, 'plan_digest': incidents.digest(response.plan),

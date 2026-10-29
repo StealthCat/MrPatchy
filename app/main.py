@@ -1278,6 +1278,36 @@ class ResponseRecordExport(BaseModel):
     plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
     reason:str=Field(min_length=10,max_length=4000)
 
+class ResponseServiceHealth(BaseModel):
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    units:list[str]=Field(min_length=1,max_length=16)
+    reason:str=Field(min_length=10,max_length=4000)
+    baseline_id:str=Field(default='',max_length=36)
+
+@app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-health')
+def response_service_health_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+    from .response_health import Observation
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        row=response_row(s,host_id,quarantine_id)
+        rows=list(s.scalars(select(Observation).where(Observation.host_id==host_id,Observation.quarantine_id==row.id).order_by(Observation.created.desc(),Observation.id).offset(offset).limit(21)))
+        return {'items':[object_dict(item) for item in rows[:20]],'more':len(rows)>20}
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-health')
+def observe_response_service_health(host_id:str,quarantine_id:str,body:ResponseServiceHealth,user=Depends(auth)):
+    from . import response_health,quarantine
+    response_health.response_service_units(body.units);reason=body.reason.strip()
+    if len(reason)<10:raise ValueError('Provide a meaningful service review reason')
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
+        if row.fingerprint!=host.fingerprint or incidents.digest(row.plan)!=body.plan_digest or row.state in ('queued','restore_queued'):raise HTTPException(409,'Response scope changed; refresh before checking services')
+        if operations.host_quarantined(s,host_id,response_id=row.id,read_only_response_id=row.id,service_response_id=row.id):raise HTTPException(409,'Another operation or response requires reconciliation')
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(quarantine.ACTIONS),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; wait before checking services')
+        previous=response_health.baseline(s,host,row,body.baseline_id,body.units) if body.baseline_id else None
+        payload={'quarantine_id':row.id,**response_health.binding(s,host,row),'units':body.units,'reason':reason,'baseline_id':body.baseline_id,
+                 'baseline_digest':incidents.digest(previous.report) if previous else '', '_actor':user['username']}
+        return {'job_id':worker.enqueue(s,host_id,response_health.ACTION,payload),'read_only':True}
+
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/export')
 def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExport,user=Depends(auth)):
     from . import response_records
@@ -1322,7 +1352,7 @@ def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
 @app.get('/api/hosts/{host_id}/security/quarantines')
 def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
     from .quarantine import Quarantine
-    from . import response_monitor,response_processes,repair_publication
+    from . import response_monitor,response_processes,repair_publication,response_health
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
@@ -1330,8 +1360,10 @@ def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
         watches,latest,_=response_monitor.context(s,rows[:20])
         processes=response_processes.latest(s,rows[:20])
         publications=repair_publication.latest(s,rows[:20])
+        services=response_health.latest(s,rows[:20])
         return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt),
             'publication_id':publications[r.id].id if r.id in publications else None,
+            'service_observation':{'id':services[r.id].id,'state':services[r.id].state,'created':services[r.id].created} if r.id in services else None,
             'process_observation':{'id':processes[r.id].id,'state':processes[r.id].state,'created':processes[r.id].created,'scope_current':processes[r.id].report['scope_current']} if r.id in processes else None,
             'monitor':{'watch':watches[r.id],'eligible':response_monitor.eligible(r),'last_check':object_dict(latest[r.id]) if r.id in latest else None}} for r in rows[:20]],'more':len(rows)>20}
 

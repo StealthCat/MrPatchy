@@ -485,6 +485,33 @@ print(json.dumps(matches))"""
             assert session.get(Job,publication_verify).state=='complete',session.get(Job,publication_verify).output
             published=session.get(repair_publication.Publication,publication_id)
             assert published.state=='published' and published.hold and published.report['trust_current']
+        from app import response_health
+        def service_observation(baseline_id=''):
+            with Session() as session:
+                q=session.get(quarantine.Quarantine,repair_qid);h=session.get(Host,host.id)
+                previous=session.get(response_health.Observation,baseline_id) if baseline_id else None
+                payload={'quarantine_id':q.id,**response_health.binding(session,h,q),'units':['patchy-fixture.service'],'reason':'Review native fixture service properties without restarting anything.',
+                         'baseline_id':baseline_id,'baseline_digest':incidents.digest(previous.report) if previous else '', '_actor':'native-test'}
+                identifier=worker.enqueue(session,h.id,response_health.ACTION,payload)
+            worker.execute(identifier)
+            with Session() as session:
+                job=session.get(Job,identifier);assert job.state=='complete',job.output
+                observation=session.get(response_health.Observation,identifier)
+                assert observation.report['scope_current']
+                assert session.get(repair_publication.Publication,publication_id).hold and session.get(quarantine.Quarantine,repair_qid).hold
+                return identifier,observation.state,observation.report
+        commands_before=run('docker','exec',name,'cat','/opt/drpatch/systemctl-test.log').splitlines()
+        service_baseline,service_state,_=service_observation();assert service_state=='healthy'
+        run('docker','exec',name,'touch','/opt/drpatch/service-health-failed')
+        _,service_state,service_report=service_observation(service_baseline)
+        assert service_state=='problem' and service_report['comparison']['state']=='compared'
+        assert service_report['comparison']['changes'][0]['fields']['ActiveState']=={'before':'active','after':'failed'}
+        commands_after=run('docker','exec',name,'cat','/opt/drpatch/systemctl-test.log').splitlines()[len(commands_before):]
+        assert commands_after and all(command.split()[0] in ('show','is-active','is-enabled') for command in commands_after),commands_after
+        run('docker','exec',name,'rm','/opt/drpatch/service-health-failed')
+        print('Response service health passed: bounded read-only systemd properties, exact response/publication binding, immutable baseline comparison and unchanged independent holds without service mutation')
+        with Session() as session:
+            published=session.get(repair_publication.Publication,publication_id)
             # Explicit native-fixture service-impact review; production uses typed
             # KEEP REPLACEMENT through the API, covered by controller tests.
             published.hold=False;session.get(quarantine.Quarantine,repair_qid).hold=False

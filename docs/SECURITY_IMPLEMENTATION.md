@@ -9,6 +9,8 @@ replacement preparation is read-only. Separately approved private replacement st
 is available, along with separately approved no-overwrite live-file publication,
 independent publication pauses and verification of the published file plus retained
 original. Service restart/rollback, broader repair and cloud isolation remain future work.
+Read-only service-health observations and explicit baseline comparisons are available
+to support the separate review of affected services.
 Portable metadata-only response records with offline integrity verification are
 available for independent retention. External immutable storage and automatic
 retention remain future work.
@@ -1383,7 +1385,7 @@ and recording the export. No target connection, artifact authentication, preserv
 read, service action, process signal or AI call runs. Export changes no response state,
 pause or incident assessment.
 
-The nineteen explicit sections contain the selected file response; its current
+Version 1's nineteen explicit sections contain the selected file response; its current
 incident, incident events and advisory plans; linked preservation/acquisition metadata
 and acquisition observations; all stored file approvals/events; response-monitor checks;
 process-reference observations and process responses/approvals/events; trusted repair
@@ -1452,3 +1454,89 @@ missing references, response pauses, active-operation conflicts, exact integers,
 complete history, refusal limits, audit digests and offline tamper verification.
 Browser coverage verifies reason entry, exact-byte download, checksum download and
 an oversized-export error without a partial success.
+
+## Response service health observations
+
+**Reviewed file responses → Check service health** lets an administrator select
+**1–16 explicit systemd `.service` unit names** and supply a meaningful reason. Names
+must start with an ASCII letter/digit, be at most 128 characters, and contain only
+letters, digits, underscores, dots, `@`, colons and hyphens before the `.service`
+suffix. Paths, glob patterns, leading options, duplicate names and other unit types
+are refused. The operator chooses the expected services: no automatic file-to-service
+mapping or discovery of every affected dependency is claimed. Each selected service
+is expected to be loaded, active and successful; intentionally inactive services are
+reported as problems rather than silently ignored.
+
+The target uses only bounded `/usr/bin/systemctl show` requests, with an explicit
+property allowlist: canonical ID, load/active/substate, result, main exit code/status,
+main PID, restart count, invocation ID, unit fragment path and unit-file state. It
+does not read `ExecStart`, environment, service logs or file contents. Every unit is
+sampled twice. Matching samples are **healthy** only when loaded, active, running or
+successfully exited, with a successful result, zero exit status, normal/no exit code,
+and a nonzero main PID for running services. An active exited oneshot can be healthy
+with PID zero. Disabled but already-active services are not failed solely for being
+disabled. Canonical IDs can reveal aliases; changed identity, invocation, PID, restart
+count or any other selected property between samples produces **changing**, not a
+positive result. Missing/malformed properties, command diagnostics, nonzero command
+exit, timeouts and unsupported systemd behavior produce unavailable coverage. No
+arbitrary command output/diagnostics are retained.
+
+Boot identity is checked before and after sampling. A missing or changed boot identity
+prevents a positive aggregate result. Any unavailable/changing unit makes the aggregate
+**unavailable**, while individual known problems remain visible. With complete stable
+coverage, any unhealthy selected unit makes the aggregate **problem**; otherwise it is
+**healthy**. These are point-in-time manager properties, not application endpoint,
+network, database, dependency, workload or sustained-health tests. A running malicious
+service can meet them. Unit file paths are reported, not authenticated, and compensated
+changes between samples or compromised root/kernel/systemd remain outside this trust
+boundary. Healthy never means that the file is trusted, containment succeeded, or the
+server is clean.
+
+Requests bind the original response plan, response state, pinned host and current
+publication ID/plan. Those bindings are rechecked at execution, after mandatory fresh
+independent agent verification, and after remote I/O using new database snapshots.
+Changed scope produces a historical **skipped** observation and cannot become current
+positive evidence. A single sample query has a three-second/8 KiB output budget; the
+target has a 90-second userspace budget and SSH has a 120-second deadline. Failure
+cleanup may terminate the check's own systemctl subprocess; it never signals an
+observed service. Kernel-blocked I/O can exceed userspace deadlines.
+
+An operator can explicitly select an earlier complete observation as a baseline. Its
+host, response plan, exact ordered unit selection and report digest must still agree
+before/after I/O. A baseline can precede quarantine/publication; the new observation
+captures its own current response/publication binding. Comparison records every
+changed allowlisted property and whether boot identity differs. It does not decide
+whether a change was intentional, attribute it to file remediation, reject a reboot,
+restart anything or automatically release a pause. Incomplete observations cannot be
+baselines. Historical observations are never rewritten by later checks or comparisons.
+
+Checks run through only their own file/publication and related process pauses, which
+remain active. Other response holds, active jobs and recovery-required jobs still block
+them. Pending response work must finish before a new service check is queued. The
+worker/scheduler use this narrowly scoped exemption only for `response-service-health`;
+mutation, restoration and process actions inherit no exemption. Service results do not
+change file receipts, readiness, incident state or the existing `KEEP REPLACEMENT`
+requirements. Review services and application-specific health independently before
+using that separate pause review. No service start/stop/reload/restart, reset-failed,
+process recovery, automatic rollback or automatic service monitoring is introduced.
+
+**Service health history** provides paginated actor/reason, controller start/finish
+times, exact samples, gaps, scope and baseline changes. File cards show the last
+recorded observation, explicitly as historical metadata. The new
+`security_response_service_observations` table is append-only through feature APIs
+and is included in startup initialization and verified offline SQLite/MySQL migration.
+Response-record exports now use **version 2**, adding a twentieth
+`service_observations` section under the existing size/row budgets. The offline
+verifier continues to accept original nineteen-section version 1 exports. These are
+mutable application records with the same independent-retention/integrity limits
+described above.
+
+Rebuild app/workers and redeploy current helpers using the reviewed installation
+workflow before use. Tests cover healthy/failed/inactive/oneshot/changing states,
+bounded exact arguments, malformed properties, diagnostics, boot changes, sanitization,
+queued/late pin/plan/state/publication changes, baseline changes, own/unrelated pauses,
+roles, pagination, migration and versioned exports. Native SSH fixtures exercise real
+worker/bridge dispatch on Ubuntu, Debian, Fedora and AlmaLinux with a recorded systemctl
+stub; browser tests cover explicit units, baseline selection and history. Real service
+managers, service-specific endpoints, live GCP/IAP and real-VM/SELinux acceptance remain
+operator validation. Separately approved service orchestration remains a later milestone.

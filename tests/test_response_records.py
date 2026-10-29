@@ -57,7 +57,7 @@ def test_export_published_lineage_integrity_and_independent_audit(admin, staged,
     assert record['host']=={'id':'response-host','name':'Response','fingerprint':'pin'}
     assert set(sections)==set(records.FIELDS)
     for name, rows in sections.items():
-        assert rows, name
+        assert rows or name=='service_observations', name
         assert all(set(r)==set(records.FIELDS[name].split()) for r in rows)
     assert sections['repair_publications'][0]['id']==published['id']
     assert sections['response'][0]['state']=='replaced' and sections['response'][0]['hold']
@@ -174,5 +174,15 @@ def test_offline_verifier_rejects_tampering_and_malformed_records(admin,scenario
         del value['record']['sections']['file_events'];del value['integrity']['sections']['file_events']
         value['integrity']['record_sha256']=records.sha256(value['record'])
     data=json.dumps(value).encode()
-    if fault=='duplicate':data=data.replace(b'"version": 1',b'"version": 1, "version": 1')
+    if fault=='duplicate':data=data.replace(b'"version": 2',b'"version": 2, "version": 2')
     with pytest.raises(ValueError):verify(data,expected)
+
+
+def test_offline_verifier_retains_compatibility_with_original_nineteen_section_records(admin,scenario):
+    result=export(admin);value=result.json()
+    value['record']['version']=1
+    del value['record']['sections']['service_observations']
+    del value['integrity']['sections']['service_observations']
+    value['integrity']['record_sha256']=records.sha256(value['record'])
+    data=records.canonical(value)+b'\n'
+    assert verify(data,hashlib.sha256(data).hexdigest())==hashlib.sha256(data).hexdigest()
