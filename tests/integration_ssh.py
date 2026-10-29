@@ -511,7 +511,6 @@ print(json.dumps(matches))"""
         run('docker','exec',name,'rm','/opt/drpatch/service-health-failed')
         print('Response service health passed: bounded read-only systemd properties, exact response/publication binding, immutable baseline comparison and unchanged independent holds without service mutation')
         from app import service_monitor
-        from types import SimpleNamespace
         watch_baseline,service_state,watch_report=service_observation();assert service_state=='healthy'
         with Session() as session:
             q=session.get(quarantine.Quarantine,repair_qid);h=session.get(Host,host.id)
