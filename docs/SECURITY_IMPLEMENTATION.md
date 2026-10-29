@@ -2041,6 +2041,10 @@ signature or an active CVE exposure window, and continue after patch installatio
 
 ## v0.3.0 — opt-in cross-source advisory AI evidence
 
+Delivery: [PR #55](https://github.com/StealthCat/MrPatchy/pull/55); initial implementation
+commit [fbf4c149](https://github.com/StealthCat/MrPatchy/commit/fbf4c14996c57ef1f138840c1caa98747d1d385d).
+The PR records final validation and its actual merged main commit. No Git tags are created.
+
 The completion gate identified cross-source AI evidence binding as unfinished after
 [PR #54](https://github.com/StealthCat/MrPatchy/pull/54), merged as
 `a3b0ff9e8e2bc01ca4ac2bf72c0133cf2762e822`. This update adds explicit per-request
