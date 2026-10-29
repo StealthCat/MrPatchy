@@ -17,6 +17,22 @@ This gate takes precedence over instructions to always continue development or
 produce another PR. Judge completion from the current repository and latest merged
 work rather than stale milestone numbers or repeated historical requests.
 
+## Development-cycle work budget
+
+When the completion gate identifies remaining work, select a coherent batch of
+actionable roadmap items aimed at about **40–50 minutes of productive work within
+the allocated hour**, including implementation, relevant UI work, review,
+validation and PR completion. A large milestone may fill the batch; combine
+several small related items when appropriate.
+
+- State the selected items and intended outcome before implementation, respecting dependency order and unfinished work from earlier runs.
+- Reserve roughly the final 10–15 minutes for review, applicable tests/checks, version/changelog consistency, PR/merge handling and the checkpoint.
+- If a small item finishes early and roadmap work remains, take the next coherent item only when it can reasonably be completed and validated within the remaining budget. Do not stop merely because one small milestone is finished.
+- Preserve reviewable scope and passing checks on the exact final commit. Avoid risky late additions or overlapping development runs; leave a precise checkpoint and unfinished PR state if safe completion is not possible.
+- This is a sizing target, not a mandatory minimum. Stop early for roadmap completion or a genuine blocker. Do not invent work, wait, repeat successful checks or change completed code simply to fill time.
+
+The completion gate takes priority, and the development schedule is unchanged.
+
 ## Current implementation status
 
 Current response milestone: approved target preservation and separately approved
