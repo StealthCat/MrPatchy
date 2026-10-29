@@ -60,3 +60,18 @@ async function users(revision=renderRevision){
  };
  $('#new-user').onclick=()=>edit();document.querySelectorAll('[data-edit-user]').forEach(b=>b.onclick=()=>edit(rows.find(u=>u.username===b.dataset.editUser)));
 }
+
+
+async function fleetSecurityCoverage(revision){
+ const root=$('#content');let offset=0,query='',ticket=0;
+ root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section>';
+ const current=()=>currentView(revision,'security')&&root.isConnected;
+ const load=async()=>{const turn=++ticket;try{
+  const data=await api('/security/coverage?offset='+offset+'&q='+encodeURIComponent(query));if(!current()||turn!==ticket)return;
+  const labels={never_scanned:'No durable receipt',recorded:'Coverage recorded',attempt_failed:'Latest attempt failed',receipt_missing:'Receipt missing',pending:'Scan pending',overdue:'Scan overdue',incomplete:'Incomplete coverage',findings:'Findings recorded'};
+  const engine=(name,r)=>'<section class="card"><h3>'+name+' · <span class="badge '+esc(r.state)+'">'+esc(labels[r.state]||r.state)+'</span>'+'</h3><p>'+date(r.created)+' · Signatures: '+esc(r.signatures)+(r.overdue?' · Coverage is overdue or absent':'')+'</p><p>'+r.scanned+' files scanned · '+r.findings+' findings in latest receipt</p><details><summary>Scope, gaps and latest attempt</summary><pre>'+esc(JSON.stringify({roots:r.roots,gaps:r.gaps,last_attempt:r.last_attempt,scan_id:r.scan_id},null,2))+'</pre></details></section>';
+  root.querySelector('#coverage-results').innerHTML='<p>'+data.summary.servers+' servers on this page · '+data.summary.disabled+' disabled · '+data.summary.open_incidents+' open or acknowledged scanner incidents</p>'+data.items.map(h=>'<article class="card"><div class="card-head"><h2>'+esc(h.name)+'</h2><a class="button" href="'+serverLink(h.id,'security')+'">Review server security</a></div><p>'+badge(h.enabled?'enabled':'disabled')+' · Last contact '+date(h.last_seen)+' · '+h.open_incidents+' open incidents · ClamAV age limit '+h.expected_hours+' hours · YARA age limit 24 hours</p>'+(!h.enabled?'<p class="notice">Management is disabled. These results are historical; collection is suspended.</p>':'')+'<div class="server-grid">'+engine('ClamAV',h.engines.ClamAV)+engine('YARA',h.engines.YARA)+'</div></article>').join('')+(data.items.length?'':'<p>No matching managed servers.</p>');
+  root.querySelector('#coverage-prev').disabled=!offset;root.querySelector('#coverage-next').disabled=!data.more;
+ }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').textContent=error.message;}};
+ root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await load();
+}

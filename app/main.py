@@ -1174,6 +1174,12 @@ def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user
         return {'items':[object_dict(r)|{'assessment':update_scores.historical(s,r.host_id,r.name,r.after,r.before,r.observed,cache=saved) if r.action=='version_changed' else None} for r in rows[:limit]],'more':len(rows)>limit}
 
 
+@app.get('/api/security/coverage')
+def fleet_security_coverage(offset:int=0,limit:int=50,q:str='',user=Depends(auth)):
+    from . import security_coverage
+    if offset<0 or not 1<=limit<=100 or len(q)>200:raise HTTPException(400,'Invalid coverage pagination or search')
+    with Session() as s:return security_coverage.page(s,offset,limit,q)
+
 class SecurityScanInput(BaseModel):
     paths:list[str]=Field(min_length=1,max_length=16)
 
