@@ -21,7 +21,8 @@ of each earlier milestone; later sections describe the features added since then
 
 Opt-in execution-triggered scoped ClamAV scans now complement recurring scanning.
 They use verified event metadata as scheduling hints and retain explicit coverage
-limits; see the latest milestone below.
+limits. Fleet scanner coverage and read-only cross-source incident evidence pivots
+are also available; see the latest milestones below.
 
 The endpoint protection expansion remains incomplete. It must not be represented as complete malware protection or unrestricted automated incident response.
 
@@ -42,7 +43,7 @@ the bounded features already implemented):
 
 - Per-server AI integration pause/resume across triage, update importance scoring/recommendations and security response proposals; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention.
-- Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence.
+- Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; AI evidence binding across these sources remains unfinished.
 - File-write triggers and coverage beyond fresh verified eBPF executions; unsupported kernels, transient/unverified processes and broader runtime mechanisms still have gaps.
 - Reviewed engine/signature installation and maintenance; existing scanners/rules require separately prepared trusted prerequisites.
 - Separately approved service restart/rollback and broader typed remediation, credential-rotation tasks, rebuild escalation and cloud isolation with validated recovery paths.
@@ -1822,6 +1823,51 @@ The “No durable receipt” label means no engine-specific receipt exists in du
 scan history. It does not assert that a legacy installation or external scanner
 has never scanned that server. Unbound legacy latest-report settings are not
 promoted into current engine coverage.
+
+
+## Cross-source incident evidence pivots
+
+The server Security tab now offers **Related evidence** on each scanner incident.
+This administrator-only read searches stored records on the same server: immutable
+ClamAV/YARA findings, retained process observations, startup/custom-file inventories,
+local package-database discrepancies and authenticated vendor comparison findings.
+It distinguishes same path/hash, same hash at another path, same path with a different
+hash, and path-only records without an observed hash. A vendor artifact's expected
+hash is never treated as the observed target hash. Execution identity verification
+and capture method remain visible; unverified records are not promoted to proof.
+
+The responsive dialog provides receipt IDs, controller receipt times, separate target
+observation times, source labels, coverage gaps and links to existing source histories.
+It preserves the existing raccoon dialog and visual theme. Only whitelisted metadata
+is returned; command arguments, environments, raw scanner output and file contents
+are not added to this view. No target contact, AI upload, authorization changes or
+remediation occurs. Existing advisory plans retain their original evidence scope.
+
+Each page examines up to 50 receipts **per source**, independently of how many match.
+Use Older records even after an empty page when older receipts remain. Per receipt,
+search bounds are 100 scanner findings, 256 process/inventory entries, 200 vendor
+findings and 16 package groups of at most 200 discrepancies each. Omitted entries or
+package groups are counted. At most five matching entries and five coverage gaps
+are shown per matching receipt, with omission counts and source-history links.
+Coverage-limited receipt counts include nonmatching receipts. These are bounded search
+summaries, not an exhaustive forensic timeline or a complete coverage assessment.
+
+Paging fixes a controller receipt-time upper boundary and binds the incident's scan
+and evidence digest; changed evidence requires reopening the dialog. Ordering is
+deterministic, but this is not an immutable cross-source snapshot: normal process
+observation retention can remove rows while paging. Historical collection gaps,
+backdated imports, unknown metadata and a compromised root/kernel remain limitations.
+No match is not proof that a file never ran, was absent or was harmless. A shared
+hash/path does not establish causation, persistence execution or malicious intent.
+
+No schema or remote helper upgrade is required; rebuild the controller app. Tests
+cover exact matching, cross-host isolation, expected/observed hash separation,
+malformed historical receipts, independent pagination, time/digest guards, explicit
+bounds, administrator access, deleted-server history, safe output and absence of
+remote/provider calls. Browser tests cover the dialog, older/empty pages, escaping
+and mobile width. Broader behavior/threat intelligence correlation, independently
+reviewed cross-source AI evidence, retention, engine maintenance and the other major
+work listed above remain unfinished.
 
 
 ## Planned: per-server AI integration pause/resume
