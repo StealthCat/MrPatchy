@@ -13,8 +13,8 @@ Read-only service-health observations and explicit baseline comparisons are avai
 to support the separate review of affected services.
 Opt-in recurring service watches now provide coverage alerts and independently
 reviewed service pauses. Service orchestration remains future work.
-Portable metadata-only response records with offline integrity verification are
-available for independent retention. External immutable storage and automatic
+Portable metadata-only response records and per-server scanner records with offline
+integrity verification are available for independent retention. External immutable storage and automatic
 retention remain future work.
 Broader typed remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
@@ -41,7 +41,7 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
 
-- Configurable evidence retention, external immutable storage and independent audit retention.
+- Configurable evidence retention, external immutable storage and independent audit retention. Bounded per-server scanner record exports now complement file-response exports; automatic deletion and external storage are not implemented.
 - Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; AI evidence binding across these sources remains unfinished.
 - File-write triggers and coverage beyond fresh verified eBPF executions; unsupported kernels, transient/unverified processes and broader runtime mechanisms still have gaps.
 - Reviewed engine/signature installation and maintenance; existing scanners/rules require separately prepared trusted prerequisites.
@@ -1898,3 +1898,60 @@ a valid model/key, feature settings, eligibility and quotas. Global diagnostic m
 checks carry no server data and remain available. No target helper or schema upgrade
 is required; rebuild the controller. Broader correlation, retention and other major
 work above remain unfinished.
+
+
+## Portable per-server scanner records
+
+Administrators can use **Security → Export scanner record** without preparing a file
+response. The same control is available in retained Security history for disabled or
+deleted servers. It exports four host-scoped sections: durable ClamAV/YARA scan
+receipts, scanner incidents, incident/review events and advisory AI plans. Rows are
+ordered deterministically. It does not contact a target, call AI, read acquired file
+bytes, change incident/plan/response state, upload evidence or delete records.
+
+The export uses explicit field projections. Finding paths, hashes, large integer file
+identities, scanner scope/state, signature/rule provenance, coverage gaps, review
+reasons and advisory text remain sensitive investigation metadata. Raw scanner output
+and unrecognized fields are excluded. It does not include startup/package inspections,
+execution observations/triggers, file-response custody, AI usage records, job payloads,
+credential/connection configuration or unbound legacy latest-report settings. Use the
+existing response-record exports separately for individual file-response custody and
+monitoring. Events without an attributable incident parent are excluded. Missing scan
+and advisory evidence references are reported; none are fabricated. These flags do
+not prove that all historical records were ever collected or remain in the database.
+
+The controller holds the cooperating host operation lock while building the record,
+so workers and manual scanner reviews cannot change that host's scanner evidence
+between sections. This is not protection against direct database edits, compromised
+controllers or unsupported writers. The export is refused as a whole at 1,000 rows
+per section, 5,000 total rows, 16 MiB or a cooperative 30-second build budget checked
+between rows. This budget is not a database statement timeout. Oversized histories
+need a future segmented export workflow; partial success and silent row truncation
+are not allowed. Unknown fields are projected out by design, not preserved as a full
+raw database backup.
+
+A successful export records its export ID, whole-file SHA-256 and actor in the audit
+log, after the snapshot is built; its timestamp and reason are in the record. This
+records creation, not proof the browser retained the download. The UI preserves raw
+bytes, checks SHA-256 when Web Crypto is available, and offers a separate checksum
+download. Protect both artifacts and retain the checksum through an independently
+trusted channel. `tools/verify_response_record.py` verifies this scanner format (v1)
+and existing response formats (v1–v3), offline using the Python standard library:
+
+```
+python tools/verify_response_record.py mrpatchy-scanner-EXPORT_ID.json --sha256 TRUSTED_DIGEST
+```
+
+The verifier checks the envelope, canonical record hash, section counts/byte sizes,
+section hashes, row bounds and optional whole-file trusted digest; duplicate JSON
+keys and changed content fail. Self-consistent hashes alone do not authenticate the
+controller, establish historical completeness, certify current file/host state or
+provide immutable storage. This milestone adds a bounded independent-retention path
+for scanner metadata. Retention policies, automatic deletion, other-source exports,
+external immutable storage and independent audit retention remain unfinished.
+
+No schema or target-helper upgrade is needed; rebuild the controller. Unit/API and
+offline verifier tests cover host isolation, safe projection, raw integer fidelity,
+missing references, inactive/deleted history, roles/CSRF, audit, host-lock contention,
+limits and tampering. Browser tests exercise downloads, separate checksums and
+responsive review while retaining the established raccoon dialog and visual style.

@@ -361,3 +361,13 @@ triage follow-ups and shared update scoring. Other servers and non-AI operations
 continue; historical results remain visible. In-flight requests must finish before a
 state change can save (409 means retry; state unchanged). Resume respects global AI
 settings and quotas. Reasons and state changes are audited.
+
+**Server → Security → Export scanner record** downloads bounded scanner receipts,
+incidents, reviews and advisory plans without requiring quarantine. It also works in
+retained server history. The record excludes raw scanner output, file payloads,
+startup/package inspections and file-response custody. Protect the sensitive JSON and
+retain its checksum independently; verify it offline with
+`python tools/verify_response_record.py FILE.json --sha256 TRUSTED_DIGEST`.
+Exports refuse oversized histories (1,000 rows/section, 16 MiB); this does not enable
+automatic retention, deletion or external immutable storage. See the
+[scanner-record scope](docs/SECURITY_IMPLEMENTATION.md#portable-per-server-scanner-records).
