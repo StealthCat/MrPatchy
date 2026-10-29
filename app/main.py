@@ -199,6 +199,27 @@ def delete_host(host_id:str,body:HostDeletionInput,user=Depends(auth)):
                 return {'deleted':True,'history_retained':True,'remote_agent_removed':False,'deleted_at':host.deleted_at}
         except host_lifecycle.Busy as error:raise HTTPException(409,str(error)) from None
 
+class ServerAIInput(BaseModel):
+    paused:bool
+    expected_revision:str=Field(default='',max_length=36)
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/ai-policy')
+def server_ai_policy(host_id:str,user=Depends(auth)):
+    from . import ai_policy
+    with Session() as s:
+        host_or_404(s,host_id);return ai_policy.status(s,host_id)
+
+@app.put('/api/hosts/{host_id}/security/ai-policy')
+def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(auth)):
+    from . import ai_policy
+    with worker.Lock('ai-policy-change:'+host_id):
+        lock=worker.Lock('ai-provider:'+host_id)
+        if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
+        try:
+            with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,body.expected_revision,body.reason,user['username'])
+        finally:lock.release()
+
 @app.get('/api/hosts/{host_id}/summary')
 def host_summary(host_id:str,user=Depends(auth)):
     with Session() as s:

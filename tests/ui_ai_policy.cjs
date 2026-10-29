@@ -1,0 +1,20 @@
+const assert=require('assert/strict');
+module.exports=async(page,capture)=>{
+ const hosts=await(await page.request.get(new URL('/api/hosts',page.url()).href)).json(),host=hosts[0];
+ await page.goto(new URL('/#servers/'+host.id+'/overview',page.url()).href);
+ await page.getByRole('heading',{name:'AI integration · Globally disabled',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Pause AI',exact:true}).click();
+ await page.locator('#server-ai-form textarea').fill('Pause this server AI for an operator review.');
+ await page.getByRole('button',{name:'Save AI state',exact:true}).click();
+ await page.getByRole('heading',{name:'AI integration · Paused',exact:true}).waitFor();
+ await page.reload();await page.getByRole('heading',{name:'AI integration · Paused',exact:true}).waitFor();
+ if(capture)await capture('server-ai-paused');
+ await page.setViewportSize({width:390,height:844});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+ if(capture)await capture('server-ai-paused-mobile');
+ await page.getByRole('button',{name:'Resume AI',exact:true}).click();
+ await page.locator('#server-ai-form textarea').fill('Resume this server under global AI settings.');
+ await page.getByRole('button',{name:'Save AI state',exact:true}).click();
+ await page.getByRole('heading',{name:'AI integration · Globally disabled',exact:true}).waitFor();
+ await page.setViewportSize({width:1440,height:1000});
+};

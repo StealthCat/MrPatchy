@@ -50,6 +50,8 @@ def evidence(s,row):
 
 
 def generate(s,row,expected_updated):
+    from . import ai_policy
+    if row:ai_policy.require([row.host_id])
     if not row or row.updated!=expected_updated:raise ValueError('Startup incident changed; no AI call sent')
     cfg=config(s);key=s.get(Setting,'openai_key')
     if not cfg['ai_enabled'] or not cfg['ai_model'] or not key:raise ValueError('Configure and enable AI before requesting a startup plan')

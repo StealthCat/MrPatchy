@@ -145,6 +145,8 @@ def vendor_files(root,cfg,package,version,names):
 
 SECRET=re.compile(r'(?im)^(?!\s*[#;]).*(?:password|passwd|secret|token|authorization|api[_-]?key)[\w-]*[\"\']?\s*[:=\s]\s*\S+.*$|[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|-----BEGIN [^-]*PRIVATE KEY-----')
 def ai_review(s,target,path,current,vendor,news,host_id='',plan_id=''):
+    from . import ai_policy
+    ai_policy.require([host_id] if host_id else [])
     settings=config(s);key=s.get(Setting,'openai_key')
     if not settings['ai_enabled'] or not settings['ai_model'] or not key:raise ValueError('Enable the OpenAI API integration to generate release configuration plans')
     if SECRET.search(current) or SECRET.search(vendor):raise ValueError('Potential secret in '+path+'; automatic AI review is blocked for this file')

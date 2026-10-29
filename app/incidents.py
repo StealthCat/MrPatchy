@@ -111,6 +111,8 @@ SCHEMA={'type':'object','additionalProperties':False,'properties':{
 
 
 def generate(s,incident):
+    from . import ai_policy
+    ai_policy.require([incident.host_id])
     from . import ai,ai_runs
     from .db import config
     from .security import unseal
@@ -205,7 +207,8 @@ def auto_plan_tick(now=None):
             remaining=10-len(recent)
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
-            enabled=[host for host,p in policies.items() if p.get('auto_ai_plan')]
+            from . import ai_policy
+            enabled=[host for host,p in policies.items() if p.get('auto_ai_plan') and not ai_policy.status(s,host)['paused']]
             if not enabled:return
             # Completed plans are excluded in SQL so old incidents cannot starve new ones.
             planned=select(Plan.id).where(Plan.incident_id==Incident.id,Plan.state!='superseded').exists()
