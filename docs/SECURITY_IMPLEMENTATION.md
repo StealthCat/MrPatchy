@@ -11,6 +11,8 @@ independent publication pauses and verification of the published file plus retai
 original. Service restart/rollback, broader repair and cloud isolation remain future work.
 Read-only service-health observations and explicit baseline comparisons are available
 to support the separate review of affected services.
+Opt-in recurring service watches now provide coverage alerts and independently
+reviewed service pauses. Service orchestration remains future work.
 Portable metadata-only response records with offline integrity verification are
 available for independent retention. External immutable storage and automatic
 retention remain future work.
@@ -1540,3 +1542,105 @@ worker/bridge dispatch on Ubuntu, Debian, Fedora and AlmaLinux with a recorded s
 stub; browser tests cover explicit units, baseline selection and history. Real service
 managers, service-specific endpoints, live GCP/IAP and real-VM/SELinux acceptance remain
 operator validation. Separately approved service orchestration remains a later milestone.
+
+## Automatic service watches
+
+**Reviewed file responses → Configure service watch** is off until an administrator
+explicitly enables it. Enabling or reapproving a watch selects a **healthy manual
+service observation no more than five minutes old**, its displayed report digest,
+an interval of **5–1,440 minutes**, an independent **pause on problem** checkbox and a
+meaningful reason. Automatic observations cannot authorize a watch. The exact ordered
+service selection, pinned host, file-response plan/state, current publication ID/plan
+and baseline report digest are retained. A new revision binds every policy edit;
+stale edits are refused. A recent healthy baseline is a reviewed selection, not a
+claim that a newer negative observation can be ignored: newer matching negative
+observations still appear as problems.
+
+One watch belongs to one file response. At most **500 watches per server** can be
+enabled. The leader considers watches every thirty seconds, serializes queueing with
+a dedicated queue lock and the server operation lock, and queues **at most one service
+watch per server every five minutes**. Each watch's configured interval is a minimum;
+due watches are ordered by oldest attempt to prevent an always-due watch monopolizing
+the server. The UI shows the nominal minimum server rotation (`enabled watches × five
+minutes`). Ordinary queued work takes precedence. Long intervals, busy queues, slow
+checks, unavailable workers and pauses can extend actual coverage well beyond that
+minimum. Coverage assessment uses the larger of the watch interval and nominal
+rotation, plus five minutes' grace. Missing, future-dated, negative or older positive
+observations are overdue. This is coverage accounting, not a real-time availability
+guarantee. No service-check history is automatically deleted.
+
+Scheduled work reuses the existing bounded read-only service protocol; it does not
+install/restart/reload services, signal them or verify application endpoints. The
+watch's revision, enabled flag, exact units, baseline digest and response/publication
+scope are checked at queueing, before/after independent helper verification, and after
+remote I/O using fresh database snapshots. A disabled/revised policy, changed baseline,
+new publication, file-response state/plan change or host-key change prevents old work
+from becoming current proof or creating a new pause. Scope changes stop that watch's
+automatic reads and raise coverage/problem alerts until explicitly reapproved; the
+watch never silently follows a new host or replacement. Historical observations and
+policy events remain available. There is no instantaneous revocation of a read already
+in progress; its stale result is retained as skipped history.
+
+Automatic service reads have **no response-hold exemption**. File, publication,
+process, service and recovery-required pauses defer them. Manual service reads retain
+their narrowly scoped exemptions for their own response, including its service pause,
+so an operator can collect a fresh observation before review. Unrelated pauses and
+unreconciled running jobs still block manual work. A queued, deferred automatic read
+does not block a manual service request; ordinary manual/mutating response work still
+serializes. Scheduling and execution both enforce these distinctions.
+
+A stable negative service result, missing/changed manager properties, helper failure,
+SSH failure, invalid protocol or unavailable coverage appears as a problem. Only an
+**enabled, unchanged watch whose pause-on-problem choice remains enabled after I/O**
+may add a service pause. Overdue scheduling alone raises a coverage alert and does not
+add a pause. A scope/policy mismatch is a skipped observation rather than authorization
+to pause a changed response. The independent pause is stored on the service watch;
+it does not change original-file, publication or process receipts, states or holds.
+Server work gates and alerts include it even after monitoring is disabled.
+
+Neither a healthy automatic/manual observation, disabling monitoring, changing its
+interval nor unchecking pause-on-problem releases an existing pause. A paused watch
+also cannot be rebound to different services or response/publication scope before
+that pause is separately reviewed. A fresh manual healthy result can supersede an
+older problem alert while leaving the independent pause active. Automatic checks
+continue to defer while it is active.
+
+**Review service pause** requires the current policy revision, a meaningful reason
+and the selected typed phrase. **ACCEPT HEALTHY SERVICES** additionally binds a healthy
+manual check no more than five minutes old, its exact report digest, the watch's exact
+units and current file/publication/host scope. A stale, automatic, foreign or negative
+observation cannot release it. **CONSOLE REVIEWED** records the administrator's explicit
+trusted-console assessment without asserting verified service health. Either choice
+clears **only that service pause**, reports whether any server pause remains, and
+leaves file/publication/process/other-watch pauses and incident state unchanged. If a
+watch remains enabled and the problem persists, a later authorized check can add a
+new pause. Disabling it and separately reviewing the existing pause are distinct steps.
+
+Service-health history records manual versus scheduled origin, watch revision, policy
+agreement and whether an automatic result added a pause. File-response history retains
+policy snapshots, actors/reasons, automatic observations and pause reviews as events.
+Host alerts separately report service problems, overdue/limited coverage and active
+service pauses. **Recurring service coverage** and per-response watch controls expose
+these states in Security. Alerts use the existing configured notification system;
+no new external account or notification credentials are introduced.
+
+`security_service_watches` is registered at startup and included in verified offline
+SQLite/MySQL migration. Response-record **version 3** adds a twenty-first `service_watch`
+section for current policy/pause metadata; service observation and file-event sections
+retain their associated history. The offline verifier accepts versions 1, 2 and 3.
+The existing 1,000-section-row, 5,000-total-row and 16 MiB export budgets apply. These
+records remain mutable application data with the independent-retention/integrity
+limitations described above, not cryptographically immutable evidence.
+
+Rebuild the controller app/workers. This feature reuses the service-health helper
+introduced in the preceding milestone; targets must already have that verified helper.
+Tests cover opt-in selection, fresh manual authorization, stale policies/baselines,
+queued/helper/remote scope changes, pauses, disabling without release, manual recovery
+past deferred reads, typed reviews, unrelated holds, fair rotation/cadence, coverage
+alerts, role/CSRF/host boundaries, enabled-watch limits, versioned exports and offline
+migration. Native Ubuntu, Debian, Fedora and AlmaLinux SSH fixtures check actual
+worker/scheduler/bridge flow, failed-service pause, manual recovery, separate review
+and unchanged file/publication holds using recorded systemctl stubs. Browser checks
+cover enabling, disabling with a pause retained and independent typed pause review.
+Real service managers, real workload health, live GCP/IAP and real-VM/SELinux acceptance
+remain operator validation. Full service orchestration remains future work.

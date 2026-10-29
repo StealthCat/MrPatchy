@@ -283,9 +283,9 @@ def execute_locked(job_id):
         resuming=job.action=='release-upgrade' and job.state=='running'
         if job.state!='queued' and not resuming:return
         from . import quarantine,process_response
-        response_id=job.payload.get('quarantine_id') if job.action in quarantine.RECOVERY_ACTIONS else None
+        response_id=job.payload.get('quarantine_id') if job.action in quarantine.RECOVERY_ACTIONS and not (job.action=='response-service-health' and job.payload.get('_service_watch') is True) else None
         process_id=job.payload.get('process_id') if job.action in process_response.RECOVERY_ACTIONS else None
-        read_only_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-prepare','response-service-health') else None
+        read_only_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-prepare','response-service-health') and not (job.action=='response-service-health' and job.payload.get('_service_watch') is True) else None
         staging_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
         publication_id=job.payload.get('publication_id') if job.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
         if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=job.action=='evidence-archive-status',service_response_id=response_id if job.action=='response-service-health' else None):return
@@ -599,7 +599,8 @@ def loop():
                     scheduling.tick(now); incidents.schedule_tick(now);
                     from .persistence import schedule_tick as persistence_tick
                     from .response_monitor import schedule_tick as response_tick
-                    persistence_tick(now); incidents.auto_plan_tick(now);response_tick(now); last_schedule=now
+                    from .service_monitor import schedule_tick as service_tick
+                    persistence_tick(now); incidents.auto_plan_tick(now);response_tick(now);service_tick(now); last_schedule=now
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:
@@ -620,9 +621,9 @@ def loop():
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts)).order_by(Job.created)):
                         if len(active_jobs)>=2: break
                         from . import quarantine,process_response
-                        response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS else None
+                        response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
                         process_id=j.payload.get('process_id') if j.action in process_response.RECOVERY_ACTIONS else None
-                        read_only_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-prepare','response-service-health') else None
+                        read_only_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-prepare','response-service-health') and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
                         staging_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
                         publication_id=j.payload.get('publication_id') if j.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
                         if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None):continue

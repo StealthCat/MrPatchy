@@ -222,6 +222,12 @@ them. Capture a baseline, compare a later check, and review **Service health his
 before deciding whether to release a response pause. Checks never restart services or
 release pauses. See [service observation scope](docs/SECURITY_IMPLEMENTATION.md#response-service-health-observations).
 
+**Configure service watch** enables recurring checks for the exact services from a
+fresh healthy manual observation. Failed, unavailable and overdue checks raise alerts;
+an optional **pause on problem** adds a separate service pause. Disabling monitoring
+keeps that pause until **Review service pause** records a separate decision. File,
+publication and process pauses remain independent. See [automatic service watches](docs/SECURITY_IMPLEMENTATION.md#automatic-service-watches).
+
 Use **Export response record** on a reviewed file response to download its stored
 investigation, custody, approvals, process actions, replacement receipts and monitoring
 history as JSON. Download the checksum and retain both independently in protected

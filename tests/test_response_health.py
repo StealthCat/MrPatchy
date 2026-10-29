@@ -210,7 +210,7 @@ def test_new_health_records_are_exported_and_survive_verified_offline_migration(
     first=observe(admin);file=row(admin)
     result=admin.post(BASE+'/quarantines/'+file['id']+'/export',json={'plan_digest':file['plan_digest'],'reason':'Independently retain service observations.'})
     assert result.status_code==200,result.text
-    assert result.json()['record']['version']==2 and result.json()['record']['sections']['service_observations'][0]['id']==first['id']
+    assert result.json()['record']['version']==3 and result.json()['record']['sections']['service_observations'][0]['id']==first['id']
     destination='sqlite:///'+str(tmp_path/'services.db')
     copied=database_migrate.migrate(engine.url.render_as_string(hide_password=False),destination)
     assert copied['security_response_service_observations']['rows']==1

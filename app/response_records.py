@@ -5,7 +5,7 @@ import time
 import uuid
 from sqlalchemy import select
 from . import incidents, quarantine, response_monitor, response_processes
-from . import process_response, repair_preparation, repair_staging, repair_publication, response_health
+from . import process_response, repair_preparation, repair_staging, repair_publication, response_health, service_monitor
 from .evidence_vault import EvidenceCopy, EvidenceArchive, ArchiveObservation
 
 MAX_ROWS = 5000
@@ -35,6 +35,7 @@ FIELDS = {
     'repair_publications': 'id host_id quarantine_id stage_id created expires actor reason fingerprint stage_report_digest plan state hold before_state before_hold observed receipt report',
     'publication_events': 'id publication_id host_id created actor kind details',
     'service_observations': 'id host_id quarantine_id created actor reason state report',
+    'service_watch': 'id host_id created updated actor reason revision enabled interval_minutes pause_on_problem baseline_id baseline_digest units binding hold last_attempt last_observation_id last_state last_observed',
 }
 
 
@@ -93,6 +94,8 @@ def build(s, host, response, actor, reason):
     b = Builder()
     missing = []
     b.add('response', [response])
+    watch=s.get(service_monitor.Watch,response.id)
+    b.add('service_watch',[watch] if watch and watch.host_id==host.id else [])
     incident = s.get(incidents.Incident, response.incident_id)
     if not incident or incident.host_id != host.id:
         incident = None
@@ -139,7 +142,7 @@ def build(s, host, response, actor, reason):
     policy = response_monitor.policy(s, host.id)
     watch = response_monitor.watch(s, response)
     record = {
-        'format': 'mrpatchy-response-record', 'version': 2,
+        'format': 'mrpatchy-response-record', 'version': 3,
         'export': {'id': str(uuid.uuid4()), 'created': time.time(), 'actor': actor, 'reason': reason},
         'host': {'id': host.id, 'name': host.name, 'fingerprint': host.fingerprint},
         'scope': {'quarantine_id': response.id, 'plan_digest': incidents.digest(response.plan),

@@ -105,16 +105,20 @@ def execute(s,host,job):
     existing=s.get(Observation,job.id)
     if existing:return {'observation_id':existing.id,'state':existing.state,'replayed':False}
     payload=job.payload;host_id=host.id;response_id=payload['quarantine_id'];target=None;failure=None;previous=None;phase='scope';started=time.time()
+    scheduled=payload.get('_service_watch') is True
+    from . import service_monitor
     try:
         response_service_units(payload['units'])
         row=s.get(quarantine.Quarantine,response_id)
         if not valid(s,host,row,payload):raise ValueError('Service observation scope changed')
+        if scheduled and not service_monitor.valid(s,host,row,payload):raise ValueError('Scheduled service policy changed')
         if payload.get('baseline_id'):
             previous=baseline(s,host,row,payload['baseline_id'],payload['units'])
             if incidents.digest(previous.report)!=payload.get('baseline_digest'):raise ValueError('Selected baseline changed')
         phase='helper';quarantine.healthy(s,host)
         s.rollback();s.expire_all();host=s.get(Host,host_id);row=s.get(quarantine.Quarantine,response_id);phase='scope'
         if not valid(s,host,row,payload):raise ValueError('Service observation scope changed during helper verification')
+        if scheduled and not service_monitor.valid(s,host,row,payload):raise ValueError('Scheduled service policy changed during helper verification')
         if payload.get('baseline_id'):
             previous=baseline(s,host,row,payload['baseline_id'],payload['units'])
             if incidents.digest(previous.report)!=payload.get('baseline_digest'):raise ValueError('Selected baseline changed during helper verification')
@@ -124,7 +128,8 @@ def execute(s,host,job):
         target=None;failure={'stage':phase,'type':type(error).__name__}
     s.rollback();s.expire_all();host=s.get(Host,host_id);row=s.get(quarantine.Quarantine,response_id)
     if not row or row.host_id!=host_id:raise ValueError('Response removed during service observation')
-    current=valid(s,host,row,payload)
+    policy_current=not scheduled or service_monitor.valid(s,host,row,payload)
+    current=valid(s,host,row,payload) and policy_current
     # Recheck the baseline after I/O as well. A historical association must not
     # follow changed controller records into a new positive comparison.
     if payload.get('baseline_id'):
@@ -136,8 +141,11 @@ def execute(s,host,job):
     compared=comparison(previous,target) if current else {'state':'unavailable','baseline_id':payload.get('baseline_id',''),'boot_changed':None,'changes':[]}
     report={'version':1,**{key:payload.get(key,'') for key in ('plan_digest','fingerprint','response_state','publication_id','publication_plan_digest')},
             'units':payload['units'],'scope_current':current,'target':target,'failure':failure,'comparison':compared,
-            'started':started,'finished':time.time(),'baseline_digest':payload.get('baseline_digest','')}
+            'started':started,'finished':time.time(),'baseline_digest':payload.get('baseline_digest',''),
+            'scheduled':scheduled,'service_watch_revision':payload.get('service_watch_revision',''),'policy_current':policy_current}
     actor=payload.get('_actor','system')
-    s.add(Observation(id=job.id,host_id=host_id,quarantine_id=row.id,actor=actor,reason=payload['reason'],state=state,report=report))
+    observation=Observation(id=job.id,host_id=host_id,quarantine_id=row.id,actor=actor,reason=payload['reason'],state=state,report=report)
+    s.add(observation)
+    if scheduled and current:observation.report={**report,'service_pause_added':service_monitor.applied(s,host,row,job,observation)}
     quarantine.event(s,row,'service_health_observed',actor,{'observation_id':job.id,'state':state,'scope_current':current,'reason':payload['reason']})
     return {'observation_id':job.id,'state':state,'outcome':'response_incomplete' if state=='unavailable' else 'observed'}
