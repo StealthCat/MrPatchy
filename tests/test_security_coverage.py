@@ -29,13 +29,21 @@ def test_engine_separation_latest_failure_and_disabled_history(admin):
 
 @pytest.mark.parametrize('changes,expected',[
     ({'signatures':{'state':'recent','built_at':0}},'incomplete'),
-    ({'signatures':{'state':'recent','built_at':time.time()+1000}},'incomplete'),
     ({'available':False},'incomplete'),({'gaps':['limit']},'incomplete'),
     ({'state':'completed_with_findings','findings':[{'path':'/srv/file'}]},'findings'),
     ({'state':'completed_with_findings'},'incomplete')])
 def test_conservative_coverage(changes,expected):
     scan=SimpleNamespace(id='scan',created=time.time(),report=report(**changes))
     assert coverage.assessment(scan,None,time.time(),86400)['state']==expected
+
+
+def test_future_signatures_are_incomplete_at_assessment_time():
+    # Construct relative timestamps at execution, not collection: MySQL suites can
+    # take long enough for collection-time future dates to enter the skew budget.
+    now=time.time()
+    scan=SimpleNamespace(id='scan',created=now,report=report(signatures={'state':'recent','built_at':now+1000}))
+    result=coverage.assessment(scan,None,now,86400)
+    assert result['state']=='incomplete' and result['signatures']=='future'
 
 
 def test_expiry_and_scan_age_are_recomputed():
