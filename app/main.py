@@ -1971,6 +1971,16 @@ def security_incident_review(host_id:str,incident_id:str,body:IncidentReview,use
             incidents.review(s,row,body.state,body.reason,user['username'],body.expected_updated)
             s.commit();return object_dict(row)
 
+@app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/related')
+def security_related_evidence(host_id:str,incident_id:str,offset:int=0,as_of:float|None=None,expected_digest:str='',user=Depends(auth)):
+    from . import security_correlation
+    if offset<0 or offset>1_000_000 or len(expected_digest)>64:raise ValueError('Invalid evidence page')
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.get(incidents.Incident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+        return security_correlation.page(s,row,offset,as_of,expected_digest)
+
 @app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/timeline')
 def security_incident_timeline(host_id:str,incident_id:str,offset:int=0,user=Depends(auth)):
     if offset<0:raise ValueError('Invalid offset')

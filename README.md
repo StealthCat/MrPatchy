@@ -348,3 +348,9 @@ service-account/federation prerequisites and IAP enrollment. Each server's
 **Agent health** tab exposes version/drift checks and opt-in automatic helper
 maintenance; [Agent maintenance](docs/AGENT_MAINTENANCE.md) documents verification,
 retry limits and cases requiring trusted-console recovery.
+
+Scanner incidents now offer **Related evidence** to pivot across stored scanner,
+process, startup/custom-file and package-integrity records on that server. Exact
+hash matches, path-only matches and changed bytes are labeled separately. Searches
+are bounded and paginated; matches do not establish causation or authorize response.
+See [the implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md#cross-source-incident-evidence-pivots).

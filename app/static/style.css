@@ -293,3 +293,11 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .server-pagination{margin:16px 0}
 #server-tab-content,#server-tab-body,#server-snapshot{min-width:0;overflow-wrap:anywhere}
 @media(max-width:760px){.server-grid{grid-template-columns:1fr}.server-back{align-items:flex-start;flex-direction:column}.server-back label{max-width:100%;width:100%}.server-back select{max-width:100%;flex:1}.server-tabs{gap:4px}.server-tabs a{font-size:.85rem;padding:9px 10px}.server-timeline article{grid-template-columns:1fr;gap:8px}}
+
+.related-identity, .related-record { overflow-wrap:anywhere; min-width:0; }
+.related-identity code { display:block; margin-top:10px; font-size:11px; }
+.related-sources { display:grid; gap:8px; margin:16px 0; padding:14px; background:#548e7c15; border:1px solid var(--line); border-radius:12px; font-size:12px; }
+.related-record section { padding:12px 0; border-top:1px solid var(--line); }
+.related-record code { font-size:11px; }
+
+.related-navigation { position:sticky; top:0; z-index:1; background:var(--glass-strong); padding:10px 0; }
