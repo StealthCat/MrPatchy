@@ -41,6 +41,7 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
 
+- Per-server AI integration pause/resume across triage, update importance scoring/recommendations and security response proposals; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention.
 - Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; AI evidence binding across these sources remains unfinished.
 - File-write triggers and coverage beyond fresh verified eBPF executions; unsupported kernels, transient/unverified processes and broader runtime mechanisms still have gaps.
@@ -1867,3 +1868,14 @@ remote/provider calls. Browser tests cover the dialog, older/empty pages, escapi
 and mobile width. Broader behavior/threat intelligence correlation, independently
 reviewed cross-source AI evidence, retention, engine maintenance and the other major
 work listed above remain unfinished.
+
+
+## Planned: per-server AI integration pause/resume
+
+Requested roadmap addition (2026-10-29); not yet implemented.
+
+- Add a persistent administrator-controlled AI pause/resume setting for each server, independent of other servers and subordinate to the global AI configuration.
+- While paused, block new AI provider calls involving that server for both automatic and manual triage, update importance scoring/recommendations, and security response proposals. Queued jobs must recheck the setting immediately before a provider call, including shared fleet requests that could otherwise include paused-server data. Document how requests already in flight are handled.
+- Keep non-AI inventory collection, patching, schedules, security scanning and monitoring operational. Preserve historical AI results and activity; clearly distinguish them from current AI processing.
+- Show the AI state and pause/resume control in the server UI, explain skipped AI work, and audit state changes with actor and timestamp. Resuming must respect the global configuration and existing eligibility/rate limits.
+- Add focused coverage for host isolation, manual/automatic entry points, queued-work revocation, global-setting precedence, persistence, permissions and UI state. Update user documentation and this checkpoint when the milestone is implemented.
