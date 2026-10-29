@@ -24,6 +24,7 @@
       <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
       <button class="primary">Open your workspace →</button><small id="login-error" role="alert"></small>
       <div class="login-footnote"><span data-icon="shield"></span> Your infrastructure. Your control.</div>
+      <small><a href="/static/license.html">Free personal use · Paid commercial license</a></small>
     </form>
   </div>
   <div id="shell" class="hidden">
@@ -52,7 +53,7 @@
     <main id="workspace-main">
       <header class="topbar"><div class="breadcrumb-wrap"><span data-icon="overview"></span><span id="breadcrumb">Workspace / Overview</span></div><div id="header-actions"><span class="control-status"><span class="live-dot"></span> Central control</span><button id="refresh-page" class="quiet"><span data-icon="refresh"></span> Refresh</button></div></header>
       <div id="content"></div>
-      <footer><span class="footer-brand"><span data-mascot-portrait></span> Mr Patchy <span class="muted">· Patched with care.</span></span><span>SSH secured · Central repository discovery · Your infrastructure</span></footer>
+      <footer><span class="footer-brand"><span data-mascot-portrait></span> Mr Patchy <span class="muted">· Patched with care.</span></span><span><a href="/static/license.html">Free personal use · Paid commercial license</a></span></footer>
     </main>
   </div>
   <dialog id="modal" aria-labelledby="modal-title"><div class="modal-head"><span data-mascot-portrait></span><h2 id="modal-title"></h2><button id="close-modal" aria-label="Close">×</button></div><div id="modal-message" class="notice hidden" role="alert"></div><div id="modal-body"></div></dialog>
@@ -60,3 +61,4 @@
   <script src="/static/ui.js"></script><script src="/static/schedules.js"></script><script src="/static/fleet.js"></script><script src="/static/settings.js"></script><script src="/static/server.js"></script><script src="/static/app.js"></script>
 </body>
 </html>
+
