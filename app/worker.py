@@ -101,6 +101,8 @@ def record_behavior(s,h,p,observed):
         s.flush()
 
 def ingest_events(s,h,snapshot):
+    from . import execution_scans
+    execution_policy=execution_scans.policy(s,h.id)
     ids=[]
     events=snapshot.get('events',[])
     if not isinstance(events,list) or len(events)>8: raise ValueError('Invalid event batch')
@@ -111,6 +113,7 @@ def ingest_events(s,h,snapshot):
         if not s.get(Observation,key):
             for process in event.get('processes',[]): record_behavior(s,h,process,observed)
             s.add(Observation(id=key,host_id=h.id,observed=observed,evidence=event))
+            execution_scans.observe(s,h,key,event.get('processes',[]),observed,execution_policy)
             s.flush()
         ids.append(eid)
     return ids
@@ -433,6 +436,9 @@ def execute_locked(job_id):
                     raise ValueError('YARA receipt does not bind authenticated rules; update target helpers')
                 incidents.record(s,h.id,job.id,result,rules_provenance=proof)
                 job.output=json.dumps({'state':result.get('state'),'findings':len(result.get('findings',[])),'bundle_id':job.payload['bundle_id']})
+            elif job.action=='execution-scan':
+                from . import execution_scans
+                job.output=json.dumps(execution_scans.execute(s,h,job))
             elif job.action=='security-scan':
                 result=ssh.call(h,{'action':'security-scan','paths':job.payload['paths']},timeout=300)
                 from . import incidents
@@ -506,6 +512,9 @@ def execute_locked(job_id):
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
                     response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
                     quarantine.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+            if job.action=='execution-scan':
+                from . import execution_scans
+                execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
             if job.action=='evidence-acquire':
                 from . import evidence_archive
                 from .evidence_vault import EvidenceArchive
@@ -624,7 +633,8 @@ def loop():
                     from .persistence import schedule_tick as persistence_tick
                     from .response_monitor import schedule_tick as response_tick
                     from .service_monitor import schedule_tick as service_tick
-                    persistence_tick(now); incidents.auto_plan_tick(now);response_tick(now);service_tick(now); last_schedule=now
+                    from .execution_scans import schedule_tick as execution_tick
+                    persistence_tick(now); incidents.auto_plan_tick(now);response_tick(now);service_tick(now);execution_tick(now); last_schedule=now
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:

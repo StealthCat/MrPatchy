@@ -1193,7 +1193,7 @@ def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(auth)):
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id)
-            pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan']),Job.state.in_(['queued','running'])))
+            pending=s.scalar(select(Job).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan','execution-scan']),Job.state.in_(['queued','running'])))
             if pending:raise HTTPException(409,'A security scan is already queued or running')
             return {'job_id':worker.enqueue(s,host_id,'security-scan',body.model_dump())}
 
@@ -1206,9 +1206,33 @@ def yara_scan_queue(host_id:str,body:YaraScanInput,user=Depends(auth)):
         if not path.startswith('/') or path.startswith('//') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
     with worker.Lock('security-scan-queue'),Session() as s:
         host_or_404(s,host_id)
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan']),Job.state.in_(['queued','running'])).limit(1)):
+        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan','execution-scan']),Job.state.in_(['queued','running'])).limit(1)):
             raise HTTPException(409,'A security scan is already queued or running')
         return {'job_id':worker.enqueue(s,host_id,'yara-scan',body.model_dump())}
+
+class ExecutionScanPolicy(SecurityScanInput):
+    enabled:bool=False
+    debounce_seconds:int=Field(default=30,ge=15,le=300)
+    cooldown_minutes:int=Field(default=15,ge=5,le=60)
+    max_per_hour:int=Field(default=4,ge=1,le=12)
+    expected_revision:str=Field(default='',max_length=36)
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/execution-scans')
+def execution_scan_status(host_id:str,offset:int=0,user=Depends(auth)):
+    from . import execution_scans
+    if offset<0:raise ValueError('Invalid offset')
+    with Session() as s:
+        host_or_404(s,host_id)
+        rows=list(s.scalars(select(execution_scans.Trigger).where(execution_scans.Trigger.host_id==host_id).order_by(execution_scans.Trigger.created.desc(),execution_scans.Trigger.id).offset(offset).limit(21)))
+        return execution_scans.status(s,host_id)|{'items':[object_dict(row) for row in rows[:20]],'more':len(rows)>20}
+
+@app.put('/api/hosts/{host_id}/security/execution-scans')
+def execution_scan_policy_save(host_id:str,body:ExecutionScanPolicy,user=Depends(auth)):
+    from . import execution_scans
+    with host_change(host_id,allow_quarantined=True),worker.Lock('security-scan-queue'),Session() as s:
+        host=host_or_404(s,host_id);value=execution_scans.save(s,host,body,user['username']);s.commit()
+        return value
 
 @app.get('/api/hosts/{host_id}/security/history')
 def security_history(host_id:str,offset:int=0,user=Depends(auth)):

@@ -59,6 +59,7 @@ def coverage_context(report):
     if not isinstance(gaps,list):gaps=['Invalid coverage gap metadata']
     result['gaps']=[str(gap)[:500] for gap in gaps[:20]]
     result['gaps_truncated']=len(gaps)>20
+    if isinstance(report.get('automation'),dict) and report['automation'].get('kind')=='verified_execution':result['origin']='Scoped scan prompted by execution metadata; executable-specific coverage is not attested'
     signatures=report.get('signatures',{})
     if not isinstance(signatures,dict):signatures={}
     state=signatures.get('state','unknown')
@@ -157,7 +158,7 @@ def schedule_tick(now=None):
                 if not policy.get('enabled') or not host_lifecycle.active(s.get(Host,host_id)):continue
                 from .operations import host_quarantined
                 if host_quarantined(s,host_id):continue
-                if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action=='yara-scan',Job.state.in_(['queued','running'])).limit(1)):continue
+                if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(('yara-scan','execution-scan')),Job.state.in_(['queued','running'])).limit(1)):continue
                 latest=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='security-scan').order_by(Job.created.desc()).limit(1))
                 if latest and (latest.state in ('queued','running') or now-latest.created<policy['interval_hours']*3600):continue
                 if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state=='recovery_required').limit(1)):continue

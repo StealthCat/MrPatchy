@@ -19,7 +19,11 @@ retention remain future work.
 Broader typed remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
-This branch is an incomplete first stage of the proposed endpoint protection expansion. It must not be represented as complete malware protection or automated incident response.
+Opt-in execution-triggered scoped ClamAV scans now complement recurring scanning.
+They use verified event metadata as scheduling hints and retain explicit coverage
+limits; see the latest milestone below.
+
+The endpoint protection expansion remains incomplete. It must not be represented as complete malware protection or unrestricted automated incident response.
 
 Implemented: administrator-only, on-demand and interval-scheduled read-only ClamAV scan jobs; a server Security tab with scan policy, coverage, paginated scan history, incidents and response plans. Scan receipts are stored in dedicated tables and are never overwritten by a later scan. Repeated path/hash detections on the same host update an incident while retaining each scan receipt. Historical reports from the first draft remain readable as a legacy latest report; new scans use durable history.
 
@@ -33,18 +37,18 @@ Prerequisites: install ClamAV and current signatures on the managed target and r
 
 Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, four-minute overall work budget and 30-second per-file scanner timeout. Symlinks are not followed during traversal. Virtual filesystem directories and the reserved quarantine directory are excluded. Exclusions and failures are reported as incomplete coverage. Scanning uses an opened descriptor and checks metadata before accepting the result. A compromised root/kernel remains outside this trust boundary. Reports never claim the server is clean.
 
-Still required before the requested system is complete:
+Remaining major work before the requested system is complete (later sections define
+the bounded features already implemented):
 
-- Configurable retention and external immutable evidence storage; broader behavioral and threat-intelligence correlation.
-- Event-triggered scans, YARA integration, authenticated rule distribution, trusted vendor package verification and approved custom baselines.
-- Runtime detection integration, persistence inventory, fleet correlation and agent tamper monitoring.
-- Follow-up AI evidence collection tools; approved typed execution of response plans. Current AI plans use scanner evidence only.
-- Execution-time identity revalidation, race-resistant quarantine, restore workflows, external host isolation and recovery-path testing.
-- Typed remediation executors, trusted restoration, credential rotation tasks, rebuild escalation and post-action verification.
-- Coverage dashboards, incident/plan/quarantine views, policy settings, offline delivery and independently retained audit evidence.
-- Browser coverage and real scanner/OS integration tests, performance tests and failure-injection response drills.
+- Configurable evidence retention, external immutable storage and independent audit retention.
+- Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence.
+- File-write triggers and coverage beyond fresh verified eBPF executions; unsupported kernels, transient/unverified processes and broader runtime mechanisms still have gaps.
+- Reviewed engine/signature installation and maintenance; existing scanners/rules require separately prepared trusted prerequisites.
+- Separately approved service restart/rollback and broader typed remediation, credential-rotation tasks, rebuild escalation and cloud isolation with validated recovery paths.
+- Real-VM/eBPF/ClamAV/YARA acceptance, performance tests, platform expansion and failure-injection response drills beyond the existing bounded CI fixtures.
 
-No destructive security response is enabled in this checkpoint.
+Only the explicitly reviewed, bounded response operations described below are enabled.
+No detector or AI plan automatically authorizes destructive response.
 
 
 ## Incident review and fleet hash correlation
@@ -1691,3 +1695,99 @@ holds, failure/retry cleanup, stale host objects, schema upgrades and offline co
 Native SSH fixtures additionally disable/re-enable a live connection, delete its
 local management identity and verify that another identity still reaches the same
 remote agent. Browser tests cover list/workspace controls and retained security data.
+
+
+## Execution-triggered scoped scanning
+
+Security now offers an independent **Execution-triggered scans** policy. It is off
+by default. Administrators select 1–16 canonical, non-overlapping directories,
+15–300 seconds of debounce, a 5–60 minute minimum interval and 1–12 scans per rolling
+hour (defaults: 30 seconds, 15 minutes and four scans/hour). Saving requires the
+current policy revision, a reason and the server operation lock. It never installs
+ClamAV, updates signatures, enables AI, approves a response or starts remediation.
+The existing opt-in automatic scanner incident-plan setting still applies to any
+new detections, using its existing quota, evidence binding and AI cost logging.
+
+Only **newly persisted spool events** can introduce triggers: no existing observations
+or process snapshots are backfilled. A candidate must report eBPF capture and verified
+identity, a canonical executable path strictly below the configured directories, a
+SHA-256 digest and a UID. Target observation time must be after policy activation,
+no more than 120 seconds old and no more than five seconds ahead. This requires
+reasonably synchronized clocks. Samples, unverified short-lived executions, hashes
+that could not be captured and out-of-scope paths are not eligible. These checks do
+not independently attest a compromised root/kernel or guarantee lossless eBPF capture.
+
+Triggers bind host identity, lifecycle revision, policy revision, path/hash, source
+observation, UID, observation time and controller receipt time. Identical path/hash
+pairs receive at most one trigger per policy revision, irrespective of repeated
+executions, network changes or replayed spool batches. A policy save establishes a
+new revision and activation time, invalidates pending triggers and cancels unstarted
+jobs. Running work must finish before policy changes. Disabling server management
+also cancels pending/queued triggers; re-enabling never resumes them. Histories remain
+available, including under Deleted servers. Changing the policy can allow a later,
+newly observed execution of the same identity to prompt a new scan.
+
+Intake examines at most 128 process records per event, accepts at most 128 distinct
+identities per server per rolling hour and retains at most 128 outstanding triggers.
+Overflow and unexamined tails increment explicit coverage counters; these are counts
+of omitted observations, not necessarily distinct executables. History has no automatic
+purge policy, consistent with existing security evidence. Plan database storage and
+independent retention accordingly.
+
+The leader batches up to 32 debounced triggers into a single scoped scan. Jobs and
+trigger bindings commit atomically. It waits for a fresh server contact (within two
+minutes), completed enrollment, an enrolled baseline and host pin, and an idle queue.
+Every file, process, publication, service and recovery hold defers automatic scans;
+there are no response-hold exemptions. Manual/scheduled ClamAV and YARA queue checks
+include execution scans to avoid overlapping automatic requests. All execution-scan
+attempts, including failures and cancellations, consume the configured rolling-hour
+and cooldown budgets across policy revisions. Triggers expire after 15 minutes even
+if queue pressure, holds or a longer cooldown prevents timely use; they are not
+silently replayed later. A known failed/interrupted operation is reconciled as history,
+not retried automatically. Queue a manual scan or review/re-save the policy when an
+additional attempt is appropriate.
+
+Before any helper contact, execution rechecks the current policy, exact directories,
+host pin/lifecycle revision, trigger/job binding and expiry. A fresh independent agent
+health check is mandatory; changed access paths or helpers are not accepted. The scope
+is checked again after that verification and after remote scanning, using fresh
+sessions. Invalidated approvals do not send a scanner request. Results received after
+a scope change are retained as incomplete coverage, including their findings, rather
+than promoted to current proof. Transport/helper/protocol failures remain visible in
+operation and trigger history. A changed pin cannot even initiate helper verification.
+
+The scanner uses the existing read-only directory protocol and budgets: at most 2,000
+files/10,000 traversal entries, 32 MiB per file, bounded engine time and explicit
+signature/coverage gaps. Roots and reported engine must match the requested ClamAV
+scope. An execution is **only a scheduling hint**. This scans configured live directories;
+it does not capture a historical executable descriptor, establish that a particular
+triggering file was reached within the budget, or prove that its bytes still match the
+earlier event hash. Findings retain the actual scanner-observed path/hash and coverage,
+not an inferred match to the triggering executable. Trigger metadata and this limitation
+are attached to the immutable scan receipt; incident/AI coverage context identifies
+that origin. Missing/stale signatures, exclusions, limits and a missing engine remain
+incomplete coverage and never establish a clean server.
+
+The policy/status panel exposes trigger history, queue/job IDs, aggregate states,
+coverage drops and collector issues. Recent failed, incomplete, skipped or expired
+work and recent intake drops produce an execution-scan coverage alert through the
+existing notification system. A later positive scan does not erase an earlier coverage
+gap. Counters are retained, while recent-gap alerts age out after an hour; unresolved
+queued expiry remains a coverage limit. eBPF capture failures and lost spool data also
+retain their existing collector integrity/coverage alerts. No eligible events is not
+proof of a clean host or complete coverage. Files never executed, file-write events,
+unsupported kernels, scripts interpreted by other executables and broader runtime
+mechanisms still require other detection approaches.
+
+The trigger table and policy settings are initialized at startup and copied by verified
+offline SQLite/MySQL migration. Relevant scan receipts, including their automation
+metadata, remain part of existing portable response exports. Rebuild/restart controller
+app/workers; this milestone requires no new target helper. Targets must already have
+verified existing scanner/eBPF support and separately installed ClamAV/signatures.
+Native CI exercises the real policy/scheduler/worker/SSH path using **injected verified
+execution metadata** and an intentionally absent scanner, proving incomplete coverage
+and unchanged fixture bytes. It does not certify real eBPF capture or live ClamAV
+signature efficacy. Unit tests cover ingestion, replay, timing/scope, quotas, holds,
+lifecycle/policy revocation, storage failure, helper/remote races, failure history,
+roles/CSRF and offline migration. Browser tests cover opt-in policy and trigger history.
+Real VM/eBPF/ClamAV performance and failure drills remain operator acceptance work.
