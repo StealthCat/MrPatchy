@@ -52,7 +52,8 @@ def sha256(value):
 
 
 class Builder:
-    def __init__(self):
+    def __init__(self, fields=None):
+        self.fields = FIELDS if fields is None else fields
         self.sections = {}
         self.rows = 0
         self.bytes = 0
@@ -63,7 +64,7 @@ class Builder:
             raise ExportLimit('Response record exceeded its time budget; no partial export was created')
 
     def add(self, name, rows):
-        fields = FIELDS[name].split()
+        fields = self.fields[name].split()
         values = []
         for row in rows:
             self.check()

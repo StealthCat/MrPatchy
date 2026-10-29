@@ -90,7 +90,7 @@ def auth(request:Request):
             host=s.get(Host,host_path.group(1))
             if host and host.deleted_at and identity.role!='admin':raise HTTPException(403,'Deleted server records require administrator access')
             lifecycle_action=path=='/api/hosts/'+host_path.group(1) or path=='/api/hosts/'+host_path.group(1)+'/lifecycle'
-            metadata_export=bool(re.fullmatch(r'/api/hosts/[^/]+/security/quarantines/[^/]+/export',path))
+            metadata_export=bool(re.fullmatch(r'/api/hosts/[^/]+/security/(?:quarantines/[^/]+/export|export)',path))
             installer_read=path.endswith('/installer')
             local_connection=bool(host and not host.deleted_at and request.method=='PUT' and path in ('/api/hosts/'+host.id+'/connection','/api/hosts/'+host.id+'/fingerprint','/api/hosts/'+host.id+'/security/ai-policy'))
             if host and not host_lifecycle.active(host) and (request.method not in ('GET','HEAD') or installer_read) and not lifecycle_action and not metadata_export and not local_connection:
@@ -1260,6 +1260,23 @@ def execution_scan_policy_save(host_id:str,body:ExecutionScanPolicy,user=Depends
     with host_change(host_id,allow_quarantined=True),worker.Lock('security-scan-queue'),Session() as s:
         host=host_or_404(s,host_id);value=execution_scans.save(s,host,body,user['username']);s.commit()
         return value
+
+class ScannerRecordExport(BaseModel):
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.post('/api/hosts/{host_id}/security/export')
+def export_scanner_record(host_id:str,body:ScannerRecordExport,user=Depends(auth)):
+    from . import scanner_records,response_records
+    reason=body.reason.strip()
+    if len(reason)<10:raise ValueError('Provide a meaningful export reason')
+    with host_change(host_id,allow_quarantined=True,allow_inactive=True),Session() as s:
+        host=host_or_404(s,host_id)
+        try:identifier,data,digest=scanner_records.build(s,host,user['username'],reason)
+        except response_records.ExportLimit as error:raise HTTPException(413,str(error).replace('Response','Scanner')) from None
+        audit(s,'scanner record exported',host_id+' '+identifier+' '+digest+' '+user['username']);s.commit()
+        return Response(data,media_type='application/json',headers={
+            'Content-Disposition':'attachment; filename="mrpatchy-scanner-'+identifier+'.json"',
+            'X-Scanner-Record-SHA256':digest,'Cache-Control':'no-store'})
 
 @app.get('/api/hosts/{host_id}/security/history')
 def security_history(host_id:str,offset:int=0,user=Depends(auth)):

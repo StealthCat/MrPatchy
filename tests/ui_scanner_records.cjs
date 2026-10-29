@@ -1,0 +1,20 @@
+const assert=require('assert/strict'),fs=require('fs');
+module.exports=async(page,capture)=>{
+ const hosts=await(await page.request.get(new URL('/api/hosts',page.url()).href)).json(),host=hosts[0];
+ await page.goto(new URL('/#servers/'+host.id+'/security',page.url()).href);
+ await page.getByRole('button',{name:'Export scanner record',exact:true}).click();
+ await page.getByRole('heading',{name:'Export scanner record',exact:true}).waitFor();
+ await page.locator('#response-record-export textarea').fill('Retain stored scanner evidence independently for review.');
+ if(capture)await capture('scanner-export-review',false);
+ await page.setViewportSize({width:390,height:844});
+ assert.ok(await page.locator('#modal').evaluate(e=>e.scrollWidth<=e.clientWidth+1));
+ if(capture)await capture('scanner-export-review-mobile',false);
+ const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Download scanner record',exact:true}).click();
+ const download=await pending;assert.match(download.suggestedFilename(),/^mrpatchy-scanner-[a-f0-9-]{36}\.json$/);
+ const data=fs.readFileSync(await download.path());assert.equal(JSON.parse(data).record.format,'mrpatchy-scanner-record');
+ await page.getByRole('heading',{name:'Scanner record exported',exact:true}).waitFor();
+ const digest=require('crypto').createHash('sha256').update(data).digest('hex');assert.ok((await page.locator('#response-record-checksum').textContent()).includes(digest));
+ const next=page.waitForEvent('download');await page.getByRole('button',{name:'Download checksum',exact:true}).click();
+ assert.equal(fs.readFileSync(await(await next).path(),'utf8'),digest+'  '+download.suggestedFilename()+'\n');
+ await page.locator('#close-modal').click();await page.setViewportSize({width:1440,height:1000});
+};

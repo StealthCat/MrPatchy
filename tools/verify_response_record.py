@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a Mr Patchy response record offline using only the standard library."""
+"""Verify a Mr Patchy response or scanner record offline using only the standard library."""
 import argparse
 import hashlib
 import json
@@ -40,8 +40,9 @@ def verify(data, expected=None):
     if not isinstance(value, dict) or set(value) != {'record', 'integrity'}:
         raise ValueError('Unsupported response record envelope')
     record, integrity = value['record'], value['integrity']
+    scanner=isinstance(record,dict) and record.get('format')=='mrpatchy-scanner-record' and type(record.get('version')) is int and record['version']==1
     if (not isinstance(record, dict) or set(record) != {'format', 'version', 'export', 'host', 'scope', 'monitoring', 'sections'}
-            or record.get('format') != 'mrpatchy-response-record' or type(record.get('version')) is not int or record['version'] not in (1, 2, 3)):
+            or (not scanner and (record.get('format') != 'mrpatchy-response-record' or type(record.get('version')) is not int or record['version'] not in (1, 2, 3)))):
         raise ValueError('Unsupported response record version')
     if (not isinstance(integrity, dict) or set(integrity) != {'algorithm', 'canonicalization', 'record_sha256', 'sections', 'meaning'}
             or integrity.get('algorithm') != 'sha256' or integrity.get('canonicalization') != 'python-json-sort-keys-ascii-compact-v1'):
@@ -49,7 +50,7 @@ def verify(data, expected=None):
     if hashlib.sha256(canonical(record)).hexdigest() != integrity.get('record_sha256'):
         raise ValueError('Record content hash mismatch')
     sections, manifests = record.get('sections'), integrity.get('sections')
-    expected_sections = SECTIONS | ({'service_observations'} if record['version']>=2 else set()) | ({'service_watch'} if record['version']>=3 else set())
+    expected_sections = {'scans','incidents','incident_events','advisory_plans'} if scanner else SECTIONS | ({'service_observations'} if record['version']>=2 else set()) | ({'service_watch'} if record['version']>=3 else set())
     if not isinstance(sections, dict) or not isinstance(manifests, dict) or set(sections) != set(manifests) or set(sections) != expected_sections:
         raise ValueError('Section manifest mismatch')
     total = 0
