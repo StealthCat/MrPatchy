@@ -31,7 +31,7 @@ def in_window(windows,now=None):
 
 QUARANTINE_STATES=('running','recovery_required')
 
-def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None,read_only_response_id=None,staging_response_id=None,publication_id=None,publication_response_id=None):
+def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None,read_only_response_id=None,staging_response_id=None,publication_id=None,publication_response_id=None,service_response_id=None):
     query=select(Job.id).where(Job.host_id==host_id,Job.state.in_(QUARANTINE_STATES))
     if exclude:query=query.where(Job.id!=exclude)
     if s.scalar(query.limit(1)) is not None:return True
@@ -43,11 +43,14 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     from .repair_publication import Publication
     publications=select(Publication.id).where(Publication.host_id==host_id,Publication.hold==True)
     if publication_id:publications=publications.where(Publication.id!=publication_id)
+    # Explicit read-only service observations can inspect their own response
+    # through its publication pause; no live or process action inherits this.
+    if service_response_id:publications=publications.where(Publication.quarantine_id!=service_response_id)
     if s.scalar(publications.limit(1)) is not None:return True
     from .process_response import ProcessResponse
     processes=select(ProcessResponse.id).where(ProcessResponse.host_id==host_id,ProcessResponse.hold==True)
     if process_id:processes=processes.where(ProcessResponse.id!=process_id)
-    # Only the repair-preparation read uses this scope: related process holds
+    # Only repair-preparation and service-health reads use this scope: related process holds
     # remain active and no mutation/recovery job inherits this exemption.
     if read_only_response_id:processes=processes.where(ProcessResponse.quarantine_id!=read_only_response_id)
     # Approved staging writes only a private, non-executable payload. Its own

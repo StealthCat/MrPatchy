@@ -285,10 +285,10 @@ def execute_locked(job_id):
         from . import quarantine,process_response
         response_id=job.payload.get('quarantine_id') if job.action in quarantine.RECOVERY_ACTIONS else None
         process_id=job.payload.get('process_id') if job.action in process_response.RECOVERY_ACTIONS else None
-        read_only_response_id=job.payload.get('quarantine_id') if job.action=='trusted-repair-prepare' else None
+        read_only_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-prepare','response-service-health') else None
         staging_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
         publication_id=job.payload.get('publication_id') if job.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=job.action=='evidence-archive-status'):return
+        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=job.action=='evidence-archive-status',service_response_id=response_id if job.action=='response-service-health' else None):return
         if not resuming and not operations.eligible(s,job): return
         claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
         s.commit()
@@ -379,6 +379,9 @@ def execute_locked(job_id):
                                        'persistence_entries':len((result.get('persistence') or {}).get('entries',[]))})
             elif job.action in process_response.ACTIONS:
                 result=process_response.execute(s,h,job);job.output=json.dumps(result)
+            elif job.action=='response-service-health':
+                from . import response_health
+                result=response_health.execute(s,h,job);job.output=json.dumps(result)
             elif job.action=='quarantine-processes':
                 from . import response_processes
                 result=response_processes.execute(s,h,job);job.output=json.dumps(result)
@@ -619,10 +622,10 @@ def loop():
                         from . import quarantine,process_response
                         response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS else None
                         process_id=j.payload.get('process_id') if j.action in process_response.RECOVERY_ACTIONS else None
-                        read_only_response_id=j.payload.get('quarantine_id') if j.action=='trusted-repair-prepare' else None
+                        read_only_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-prepare','response-service-health') else None
                         staging_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
                         publication_id=j.payload.get('publication_id') if j.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status'):continue
+                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None):continue
                         if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
                             submit_job(jobs,j,active_jobs,busy_hosts)
                 if is_leader and now-last_cleanup>3600:

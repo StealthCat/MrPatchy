@@ -217,6 +217,11 @@ and review service impact before using `KEEP REPLACEMENT`. Process pauses remain
 independent. Existing opt-in retained-response monitoring verifies both the live
 replacement and original evidence. See [scope, approvals, recovery and limits](docs/SECURITY_IMPLEMENTATION.md#separately-approved-live-replacement-publication).
 
+**Check service health** reads explicitly selected systemd services without changing
+them. Capture a baseline, compare a later check, and review **Service health history**
+before deciding whether to release a response pause. Checks never restart services or
+release pauses. See [service observation scope](docs/SECURITY_IMPLEMENTATION.md#response-service-health-observations).
+
 Use **Export response record** on a reviewed file response to download its stored
 investigation, custody, approvals, process actions, replacement receipts and monitoring
 history as JSON. Download the checksum and retain both independently in protected
