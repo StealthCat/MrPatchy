@@ -41,6 +41,7 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
 
+- CVE exposure-window exploitation monitoring with automatic quarantine or termination of detected malicious artifacts/processes; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention. Bounded per-server scanner record exports now complement file-response exports; automatic deletion and external storage are not implemented.
 - Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; AI evidence binding across these sources remains unfinished.
 - File-write triggers and coverage beyond fresh verified eBPF executions; unsupported kernels, transient/unverified processes and broader runtime mechanisms still have gaps.
@@ -1957,3 +1958,32 @@ offline verifier tests cover host isolation, safe projection, raw integer fideli
 missing references, inactive/deleted history, roles/CSRF, audit, host-lock contention,
 limits and tampering. Browser tests exercise downloads, separate checksums and
 responsive review while retaining the established raccoon dialog and visual style.
+
+
+## Planned: CVE exposure-window exploitation monitoring and automatic containment
+
+Requested roadmap addition (2026-10-29); not yet implemented. This milestone expands
+the current manually reviewed response model with policy-authorized automatic
+containment. Existing implementations and their documented limits remain unchanged
+until the corresponding detection and response milestones are completed.
+
+### Exposure tracking and monitoring
+
+- Correlate published CVEs and trusted vendor/distribution advisories with each endpoint's installed packages, versions, services and relevant configuration. Account for distribution backports and version semantics; distinguish confirmed applicability, uncertain applicability and unaffected endpoints.
+- Record an exposure timeline from the CVE publication/release date through verified installation of the appropriate fix. Start active CVE-specific monitoring as soon as applicability is established, including when a patch is not yet available. Review retained telemetry back to publication when available; explicitly show late enrollment, ingestion delays, offline periods and other historical gaps rather than implying retroactive monitoring.
+- Correlate CVE-specific exploitation indicators and behavior with available execution/eBPF, process, file, integrity, service, application-log and network evidence. Record detection-rule provenance/version, freshness, confidence, affected CVE and supporting events. Vulnerable-package presence, CVSS severity or an AI assertion alone is not proof of exploitation.
+- Keep the exposure window open until the fixed package/version is verified and any required service restart or reboot activates the fix. A failed install, partial update, stale inventory or still-running vulnerable code must not close it. Reopen exposure on rollback or reintroduction of an affected version. Preserve the publication, detection, patch-install and effective-fix timestamps.
+
+### Automatic quarantine or termination
+
+- Provide an administrator-configurable automatic-response policy per server/CVE or applicable policy group. Once enabled, confirmed exploitation meeting the policy's evidence/confidence threshold automatically quarantines the identified malicious file/artifact and/or terminates the identified malicious process, as appropriate, without requiring approval for each incident. Include a monitor-only mode and explicit action scope/exclusions.
+- Implement bounded typed quarantine and process-termination executors with fresh host, process start-time and file-identity checks immediately before action, least-privilege helpers, duplicate suppression and recovery records. Distinguish file quarantine from endpoint network isolation; add endpoint isolation only through a supported, separately scoped policy with a recovery path.
+- Preserve sufficient evidence before action when feasible without delaying urgent containment, record attempted and completed actions separately, and alert on detections, response failures and uncertain outcomes. Unsupported or ambiguous targets produce an actionable incident/coverage gap rather than an invented successful containment.
+- Keep deterministic detection and policy-authorized containment operational when AI is unavailable or paused for a server. Optional AI enrichment must honor the global and per-server AI controls; AI output alone must not authorize termination or quarantine.
+- Installing the patch closes the verified exposure window but does not resolve an existing exploitation incident or automatically release quarantined artifacts. Continue incident investigation and recovery tracking independently.
+
+### Visibility, delivery and acceptance
+
+- Add server and fleet views for affected CVEs, exposure duration, monitoring coverage/gaps, patch availability and expected/actual installation, detection evidence, automatic-response policy and action history. Notify administrators promptly and retain actor/policy, CVE/rule version, timestamps and outcome in auditable incident records; preserve the established Mr Patchy theme and mascot.
+- Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
+- Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
