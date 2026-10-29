@@ -1,4 +1,5 @@
 """Opt-in service observations with revision-bound policy and independent pauses."""
+from . import host_lifecycle
 import time
 import uuid
 from sqlalchemy import String,Double,JSON,Text,Boolean,Integer,select,func
@@ -171,7 +172,7 @@ def schedule_tick(now=None):
             if not lock.acquire(False):continue
             try:
                 s.rollback();host=s.get(Host,host_id)
-                if not host or host.state=='enrolling' or not host.fingerprint or operations.host_quarantined(s,host_id):continue
+                if not host_lifecycle.active(host) or host.state=='enrolling' or not host.fingerprint or operations.host_quarantined(s,host_id):continue
                 # Other queued work takes precedence. Automatic reads never get
                 # the manual response-hold exemptions used for console review.
                 if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state=='queued').limit(1)):continue

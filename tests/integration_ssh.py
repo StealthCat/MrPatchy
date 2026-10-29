@@ -665,6 +665,33 @@ print(json.dumps(matches))"""
             assert 'SSH authentication rejected' in str(error),error
         else:raise AssertionError('Old identity still authorized after rotation')
         assert ssh.public_key(host.id) in ssh.bootstrap(host)
+        from app import host_lifecycle
+        lifecycle_id=str(uuid.uuid4())
+        ssh.key_path(lifecycle_id).write_bytes(ssh.key_path(host.id).read_bytes());ssh.key_path(lifecycle_id).chmod(0o600)
+        with Session() as session:
+            managed=Host(id=lifecycle_id,name='Lifecycle native fixture',address=host.address,port=host.port,fingerprint=host.fingerprint,state='online',baseline=host.baseline)
+            session.add(managed);session.commit();session.expunge(managed)
+        assert ssh.call(managed,{'action':'snapshot'})['telemetry']
+        with Session() as session:cancelled_job=worker.enqueue(session,lifecycle_id,'agent-check')
+        with worker.host_lock(lifecycle_id),host_lifecycle.changing(lifecycle_id),Session() as session:
+            current=session.get(Host,lifecycle_id)
+            host_lifecycle.set_enabled(session,current,False,current.lifecycle_revision,'native-test','Suspend management without modifying the remote collector.');session.commit()
+        worker.poll_host(lifecycle_id);worker.execute(cancelled_job)
+        try:ssh.call(managed,{'action':'snapshot'})
+        except host_lifecycle.Inactive:pass
+        else:raise AssertionError('Disabled server contacted its target through a stale host object')
+        with worker.host_lock(lifecycle_id),host_lifecycle.changing(lifecycle_id),Session() as session:
+            current=session.get(Host,lifecycle_id)
+            assert session.get(Job,cancelled_job).state=='cancelled'
+            host_lifecycle.set_enabled(session,current,True,current.lifecycle_revision,'native-test','Resume future management after an explicit lifecycle review.');session.commit()
+        assert ssh.call(managed,{'action':'snapshot'})['telemetry']
+        with worker.host_lock(lifecycle_id),host_lifecycle.changing(lifecycle_id),Session() as session:
+            current=session.get(Host,lifecycle_id)
+            host_lifecycle.remove(session,current,current.lifecycle_revision,current.name,'native-test','Remove only the disposable managed entry and its local credentials.')
+            assert current.deleted_at and not current.enabled and session.get(Job,cancelled_job).state=='cancelled'
+        assert not ssh.key_path(lifecycle_id).exists() and ssh.key_path(host.id).exists()
+        assert ssh.call(host,{'action':'snapshot'})['telemetry']
+        print('Server lifecycle passed: disable blocks real SSH through stale objects, queued work stays cancelled after enable, deletion removes only local credentials and preserves history and the remote agent')
         host.fingerprint='SHA256:'+'a'*43
         try: ssh.call(host,{'action':'snapshot'},timeout=3)
         except ssh.paramiko.SSHException: pass

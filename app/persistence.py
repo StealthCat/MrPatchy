@@ -1,4 +1,5 @@
 """Compare bounded, immutable startup inventories; differences are not malware verdicts."""
+from . import host_lifecycle
 import re
 from pathlib import PurePosixPath
 
@@ -135,7 +136,7 @@ def schedule_tick(now=None):
     with Lock('security-inspection-queue'),Session() as s:
         for setting in s.scalars(select(Setting).where(Setting.key.like('persistence-monitor:%'))):
             policy=setting.value;host_id=setting.key.split(':',1)[1];host=s.get(Host,host_id)
-            if not policy.get('enabled') or not host or host.state=='enrolling' or not host.fingerprint:continue
+            if not policy.get('enabled') or not host_lifecycle.active(host) or host.state=='enrolling' or not host.fingerprint:continue
             from .operations import host_quarantined
             if host_quarantined(s,host_id):continue
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running','recovery_required'])).limit(1)):continue

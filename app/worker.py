@@ -9,6 +9,7 @@ import math
 import re
 import subprocess
 from sqlalchemy import select, delete, update, func
+from . import host_lifecycle
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, package_history, update_scores, packages as package_backend
 from target.agent import MANAGED
@@ -21,6 +22,14 @@ host_locks={}; locks_guard=threading.Lock()
 def host_lock(host_id):
     with locks_guard: return host_locks.setdefault(host_id,Lock("host:"+host_id))
 def enqueue(s,host_id,action,payload=None):
+    with host_lifecycle.activity([host_id],'queue') as revisions:
+        body=dict(payload or {})
+        if host_id in revisions:body['_host_revision']=revisions[host_id]
+        return _enqueue_active(s,host_id,action,body)
+
+def _enqueue_active(s,host_id,action,payload=None):
+    host=s.get(Host,host_id)
+    if host and not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
     if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise ValueError('Server queue is full (50 operations)')
     job=Job(id=str(uuid.uuid4()),host_id=host_id,action=action,payload=payload or {})
     s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
@@ -165,12 +174,17 @@ def drain_events(s,h,snapshot,max_batches=32,budget=10):
 
 
 def poll_host(host_id):
+    try:
+        with host_lifecycle.activity([host_id],'polling'):return _poll_active_host(host_id)
+    except host_lifecycle.Inactive:return
+
+def _poll_active_host(host_id):
     lock=host_lock(host_id)
     locked=lock.acquire(False)
     try:
         with Session() as s:
             h=s.get(Host,host_id)
-            if not h or h.state=='enrolling': return
+            if not host_lifecycle.active(h) or h.state=='enrolling': return
             # Snapshot/events may import the collector. Check independently first,
             # and never consume it after a known failed health/trust assessment.
             if h.baseline:
@@ -189,7 +203,7 @@ def poll_host(host_id):
             except Exception as e:
                 s.rollback()
                 h=s.get(Host,host_id)
-                if h: h.state='offline'; h.error=str(e)[:4000]; s.commit()
+                if host_lifecycle.active(h): h.state='offline'; h.error=str(e)[:4000]; s.commit()
             if locked and h and not h.baseline and not operations.host_quarantined(s,host_id):
                 from . import agent_maintenance
                 status=s.get(Setting,'agent-status:'+host_id)
@@ -280,6 +294,12 @@ def execute_locked(job_id):
         # End a pre-lock MySQL REPEATABLE READ snapshot before quarantine checks.
         s.rollback()
         s.refresh(job)
+        lifecycle_host=s.get(Host,job.host_id)
+        if lifecycle_host and not host_lifecycle.active(lifecycle_host):
+            if job.state=='queued':job.state='cancelled';job.output='Server management is disabled or deleted';s.commit()
+            return
+        if lifecycle_host and job.state=='queued' and job.payload.get('_host_revision','')!=lifecycle_host.lifecycle_revision:
+            job.state='cancelled';job.output='Server lifecycle changed; review and queue new work';s.commit();return
         resuming=job.action=='release-upgrade' and job.state=='running'
         if job.state!='queued' and not resuming:return
         from . import quarantine,process_response
@@ -530,7 +550,7 @@ def _investigate_one():
         recent=list(s.scalars(select(Behavior).where(Behavior.attempted>now-3600)))
         count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
         if max(len(recent),count)>=cfg['ai_hourly_limit']: return
-        row=s.scalar(select(Behavior).where(Behavior.approved==False,Behavior.verdict.in_(['pending','error']),Behavior.attempted<now-3600).order_by(Behavior.first_seen).limit(1))
+        row=s.scalar(select(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.verdict.in_(['pending','error']),Behavior.attempted<now-3600).order_by(Behavior.first_seen).limit(1))
         if not row: return
         row.attempted=now; s.commit()
         try:
@@ -543,6 +563,10 @@ def _investigate_one():
         s.commit()
 
 def _assess_behavior(s,row,cfg,secret):
+    with host_lifecycle.activity([row.host_id],'ai'):
+        return _assess_active_behavior(s,row,cfg,secret)
+
+def _assess_active_behavior(s,row,cfg,secret):
     def assess(evidence):return ai.investigate(evidence,cfg['ai_model'],unseal(secret.value['encrypted']))
     result=assess(row.evidence)
     checks=result.get('requested_checks',[])
@@ -604,7 +628,7 @@ def loop():
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:
-                        for h in s.scalars(select(Host)):
+                        for h in s.scalars(select(Host).where(Host.enabled==True,Host.deleted_at==0)):
                             if h.id not in active_polls or active_polls[h.id].done(): active_polls[h.id]=polls.submit(poll_host,h.id)
                             if h.state!='enrolling' and bool(h.inventory) and now-h.last_repo>config(s)['repo_minutes']*60:
                                 existing=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh',Job.state.in_(['queued','running'])))
@@ -615,10 +639,10 @@ def loop():
                         operations.collect_alerts()
                     # Resume observation, never the package transaction, after worker loss.
                     resume_busy={host_id for _,host_id in active_jobs.values()}
-                    for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade')):
+                    for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
                         if len(active_jobs)>=2:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
-                    for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts)).order_by(Job.created)):
+                    for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=2: break
                         from . import quarantine,process_response
                         response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None

@@ -1,4 +1,5 @@
 """Bounded maintenance of enrolled helpers; never repair a changed trust path."""
+from . import host_lifecycle
 import hashlib
 import json
 import time
@@ -85,7 +86,7 @@ def allowed(policy,status):
     return status.get('repairable') and (status.get('outdated') or status.get('drifted')) and (not status.get('outdated') or policy['auto_upgrade']) and (not status.get('drifted') or policy['auto_repair'])
 
 def maybe_queue(s,host,status):
-    if not allowed(policy(s,host.id),status) or operations.host_quarantined(s,host.id):return
+    if not host_lifecycle.active(host) or not allowed(policy(s,host.id),status) or operations.host_quarantined(s,host.id):return
     if s.scalar(select(Job.id).where(Job.host_id==host.id,Job.state.in_(['queued','running'])).limit(1)):return
     now=time.time()
     recent=list(s.scalars(select(Job).where(Job.host_id==host.id,Job.action=='agent-update',Job.created>now-86400)))

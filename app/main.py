@@ -19,7 +19,7 @@ from .db import Session, Host, Package, Behavior, Job, Setting, Audit, Inventory
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections
+from . import operations, incidents, connections,host_lifecycle
 from .identity import User,actor,consume_otp,new_secret
 from .security import unseal
 
@@ -85,14 +85,27 @@ def auth(request:Request):
             if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
             if request.method not in ('GET','HEAD') and identity.role!='admin':
                 if identity.role!='operator' or not operator_action: raise HTTPException(403,'This role cannot perform that operation')
+        host_path=re.match(r'^/api/(?:hosts|operations)/([^/]+)',path)
+        if host_path:
+            host=s.get(Host,host_path.group(1))
+            if host and host.deleted_at and identity.role!='admin':raise HTTPException(403,'Deleted server records require administrator access')
+            lifecycle_action=path=='/api/hosts/'+host_path.group(1) or path=='/api/hosts/'+host_path.group(1)+'/lifecycle'
+            metadata_export=bool(re.fullmatch(r'/api/hosts/[^/]+/security/quarantines/[^/]+/export',path))
+            installer_read=path.endswith('/installer')
+            local_connection=bool(host and not host.deleted_at and request.method=='PUT' and path in ('/api/hosts/'+host.id+'/connection','/api/hosts/'+host.id+'/fingerprint'))
+            if host and not host_lifecycle.active(host) and (request.method not in ('GET','HEAD') or installer_read) and not lifecycle_action and not metadata_export and not local_connection:
+                raise HTTPException(409,'Server management is disabled or deleted')
         request.state.actor=identity.username
         return {**row.value,'username':identity.username,'role':identity.role,'mfa':bool(identity.otp_secret)}
 
 @contextmanager
-def host_change(host_id,allow_quarantined=False):
+def host_change(host_id,allow_quarantined=False,allow_inactive=False):
     lock=worker.host_lock(host_id)
     if not lock.acquire(False): raise HTTPException(409,'Server has an active operation. Retry this configuration change when it finishes.')
     try:
+        with Session() as s:
+            host=s.get(Host,host_id)
+            if host and not allow_inactive and not host_lifecycle.active(host):raise HTTPException(409,'Server management is disabled or deleted')
         if not allow_quarantined:
             with Session() as s:
                 if operations.host_quarantined(s,host_id):raise HTTPException(409,'Reconcile the host operation before making further changes')
@@ -148,12 +161,43 @@ def logout(request:Request,response:Response,user=Depends(auth)):
 @app.get('/api/dashboard')
 def dashboard(user=Depends(auth)):
     with Session() as s:
-        cfg=config(s); hosts=list(s.scalars(select(Host))); packages=list(s.scalars(select(Package))); now=time.time()
+        cfg=config(s); hosts=list(s.scalars(select(Host).where(Host.enabled==True,Host.deleted_at==0))); packages=list(s.scalars(select(Package).where(Package.host_id.in_(host_lifecycle.active_ids())))); now=time.time()
         updates=[p for p in packages if p.candidate]
-        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False)),'repo_minutes':cfg['repo_minutes']}
+        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
 @app.get('/api/hosts')
-def hosts(user=Depends(auth)):
-    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).order_by(Host.name))]
+def hosts(deleted:bool=False,user=Depends(auth)):
+    if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
+    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name))]
+
+class HostLifecycleInput(BaseModel):
+    enabled:bool
+    expected_revision:str=Field(default='',max_length=36)
+    reason:str=Field(min_length=10,max_length=4000)
+
+class HostDeletionInput(BaseModel):
+    expected_revision:str=Field(default='',max_length=36)
+    confirmation:str=Field(max_length=120)
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.put('/api/hosts/{host_id}/lifecycle')
+def change_host_lifecycle(host_id:str,body:HostLifecycleInput,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True,allow_inactive=True):
+        try:
+            with host_lifecycle.changing(host_id),Session() as s:
+                host=host_or_404(s,host_id)
+                cancelled=host_lifecycle.set_enabled(s,host,body.enabled,body.expected_revision,user['username'],body.reason);s.commit()
+                return {'host':object_dict(host,('inventory','telemetry','baseline')),'cancelled_jobs':cancelled}
+        except host_lifecycle.Busy as error:raise HTTPException(409,str(error)) from None
+
+@app.delete('/api/hosts/{host_id}')
+def delete_host(host_id:str,body:HostDeletionInput,user=Depends(auth)):
+    with host_change(host_id,allow_quarantined=True,allow_inactive=True):
+        try:
+            with host_lifecycle.changing(host_id),Session() as s:
+                host=host_or_404(s,host_id)
+                host_lifecycle.remove(s,host,body.expected_revision,body.confirmation,user['username'],body.reason)
+                return {'deleted':True,'history_retained':True,'remote_agent_removed':False,'deleted_at':host.deleted_at}
+        except host_lifecycle.Busy as error:raise HTTPException(409,str(error)) from None
 
 @app.get('/api/hosts/{host_id}/summary')
 def host_summary(host_id:str,user=Depends(auth)):
@@ -214,13 +258,14 @@ def get_connection(host_id:str,user=Depends(auth)):
 
 @app.put('/api/hosts/{host_id}/connection')
 def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(auth)):
-    with host_change(host_id,allow_quarantined=True), Session() as s:
+    with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
+        if h.deleted_at:raise HTTPException(409,'Deleted server connection is read-only')
         if connections.saved(s,h)!=body.expected:
             raise HTTPException(409,'Connection changed since this page loaded. Reload before saving.')
         h.address=body.connection.address; h.port=body.connection.port
         s.merge(Setting(key='connection:'+host_id,value=body.connection.model_dump(exclude={'address','port'})))
-        if h.state!='enrolling':
+        if host_lifecycle.active(h) and h.state!='enrolling':
             h.state='offline'; h.error='Connection updated; awaiting a successful check'
         audit(s,'update server connection',host_id+' '+body.connection.transport)
         s.commit()
@@ -238,11 +283,13 @@ def test_connection(host_id:str,user=Depends(auth)):
 class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(auth)):
-    with host_change(host_id,allow_quarantined=True), Session() as s:
-        h=host_or_404(s,host_id); h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
+    with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
+        h=host_or_404(s,host_id)
+        if h.deleted_at:raise HTTPException(409,'Deleted server identity is read-only')
+        h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(auth)):
-    with Session() as s:
+    with host_change(host_id,allow_quarantined=True),Session() as s:
         h=host_or_404(s,host_id)
         return PlainTextResponse(ssh.bootstrap(h),headers={'Content-Disposition':'attachment; filename="mrpatchy-enroll.sh"'})
 def enrollment_endpoints(request:Request):
@@ -267,7 +314,7 @@ class EnrollmentLinkInput(BaseModel):
 
 @app.post('/api/hosts/{host_id}/enrollment-link')
 def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=None,user=Depends(auth)):
-    with Session() as s:
+    with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
         endpoint=body.endpoint if body else 'default'
         selected=next((item for item in enrollment_endpoints(request) if item['id']==endpoint),None)
@@ -284,7 +331,8 @@ def enroll(token:str):
         row=s.get(Setting,'enroll:'+token_hash(token))
         if not row or row.value['expires']<time.time(): raise HTTPException(404,'Enrollment link expired')
         h=host_or_404(s,row.value['host_id'])
-        return PlainTextResponse(ssh.bootstrap(h))
+        if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
+        with host_lifecycle.activity([h.id],'control'):return PlainTextResponse(ssh.bootstrap(h))
 @app.post('/api/hosts/{host_id}/actions/{action}')
 def host_action(host_id:str,action:str,user=Depends(auth)):
     if action not in ['deploy','refresh','repair','rotate-key']: raise HTTPException(404,'Unknown action')
@@ -384,6 +432,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(auth))
     with Session() as s:
         stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
         if host_id: host_or_404(s,host_id);stmt=stmt.where(Behavior.host_id==host_id)
+        else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
         return [object_dict(x) for x in s.scalars(stmt)]
 class ApproveInput(BaseModel): approved:bool
 @app.put('/api/investigations/{behavior_id}')
@@ -391,7 +440,8 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(auth)):
     with Session() as s:
         row=s.get(Behavior,behavior_id)
         if not row: raise HTTPException(404,'Behavior not found')
-        row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
+        with host_lifecycle.activity([row.host_id],'queue'):
+            row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 @app.get('/api/jobs')
 def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):
     if offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid operation pagination')
@@ -865,21 +915,22 @@ class RolloutInput(BaseModel):
 def rollout(body:RolloutInput,user=Depends(auth)):
     if len(set(body.hosts))!=len(body.hosts):raise HTTPException(400,'Duplicate servers')
     if body.expected_recovery_policies is not None and set(body.expected_recovery_policies)!=set(body.hosts):raise HTTPException(400,'Review recovery policies for every server')
-    with Session() as s:
+    with host_lifecycle.activity(body.hosts,'queue'),Session() as s:
         prepared=[]
         for host_id in body.hosts:
             h=host_or_404(s,host_id);specs=[]
+            if not host_lifecycle.active(h):raise HTTPException(409,'A selected server is disabled or deleted')
             policy=reviewed_policy(s,host_id,(body.expected_recovery_policies or {}).get(host_id))
             if s.scalar(select(func.count()).select_from(Job).where(Job.host_id==host_id,Job.state.in_(['queued','running'])))>=50:raise HTTPException(429,'Server queue is full')
             for name in body.packages:
                 p=s.get(Package,host_id+':'+name)
                 if not p or not p.candidate:raise HTTPException(400,'Missing candidate on '+h.name+': '+name)
                 specs.append(name+'='+p.candidate)
-            worker.validate_patch(s,h,specs);prepared.append((h.id,specs,policy))
+            worker.validate_patch(s,h,specs);prepared.append((h.id,specs,policy,h.lifecycle_revision))
         # One transaction: no partial rollout submission. The first server is the canary.
         ids=[]
-        for host_id,specs,policy in prepared:
-            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']})
+        for host_id,specs,policy,revision in prepared:
+            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_host_revision':revision,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']})
             s.add(job);ids.append(job.id)
         audit(s,'create staged rollout',user['username']+' '+','.join(ids));s.commit()
         return {'jobs':ids,'canary':ids[0]}
@@ -1000,7 +1051,7 @@ def plan_release(host_id:str,user=Depends(auth)):
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running'])).limit(1)):
             raise HTTPException(409,'Wait for existing host operations before preparing a release plan')
         row=releases.ReleasePlan(id=str(uuid.uuid4()),host_id=host_id)
-        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-plan',payload={'plan_id':row.id})
+        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-plan',payload={'plan_id':row.id,'_host_revision':h.lifecycle_revision})
         row.job_id=job.id;s.add_all([row,job]);audit(s,'plan distribution upgrade',user['username']+' '+host_id);s.commit()
         return {'plan_id':row.id,'job_id':job.id}
 
@@ -1033,7 +1084,7 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(aut
         if row.state!='ready' or plan.get('blockers'):raise HTTPException(409,'Resolve every blocker and regenerate the plan before GO')
         if plan['expires']<time.time():raise HTTPException(409,'Plan expired; regenerate it')
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Wait for existing host operations before GO')
-        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-upgrade',payload={'plan_id':row.id,'digest':row.digest,'_actor':user['username']})
+        job=Job(id=str(uuid.uuid4()),host_id=host_id,action='release-upgrade',payload={'_host_revision':s.get(Host,host_id).lifecycle_revision,'plan_id':row.id,'digest':row.digest,'_actor':user['username']})
         row.job_id=job.id;row.state='approved';s.add(job);audit(s,'approve distribution upgrade',user['username']+' '+row.id+' '+row.digest);s.commit()
         return {'state':row.state,'job_id':job.id}
 
@@ -1041,7 +1092,7 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(aut
 @app.get('/api/schedules')
 def patch_schedules(user=Depends(auth)):
     with Session() as s:
-        return {'host_policies':{h.id:operations.recovery_policy(s,h.id) for h in s.scalars(select(Host))},
+        return {'host_policies':{h.id:operations.recovery_policy(s,h.id) for h in s.scalars(select(Host).where(Host.deleted_at==0))},
                 'schedules':[scheduling.serialize(row) for row in s.scalars(select(scheduling.PatchSchedule).order_by(scheduling.PatchSchedule.updated.desc()))],
                 'runs':[object_dict(row) for row in s.scalars(select(scheduling.PatchRun).order_by(scheduling.PatchRun.due.desc()).limit(100))]}
 
@@ -1105,8 +1156,9 @@ def retry_investigation(behavior_id:str,user=Depends(auth)):
         with Session() as s:
             row=s.get(Behavior,behavior_id)
             if not row or row.approved or row.verdict not in ('error','pending'):raise HTTPException(409,'Only unapproved failed/pending investigations can be retried')
-            row.attempted=0;row.verdict='pending';row.analysis='Retry requested by an administrator; hourly limits still apply.'
-            audit(s,'retry AI investigation',user['username']+' '+row.id);s.commit()
+            with host_lifecycle.activity([row.host_id],'queue'):
+                row.attempted=0;row.verdict='pending';row.analysis='Retry requested by an administrator; hourly limits still apply.'
+                audit(s,'retry AI investigation',user['username']+' '+row.id);s.commit()
         return {'ok':True,'detail':'Investigation queued. AI must be enabled and a worker available; hourly limits still apply.'}
     finally:lock.release()
 
@@ -1366,7 +1418,7 @@ def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExpo
     if len(reason)<10:raise ValueError('Provide a meaningful export reason')
     # Export is available through response holds, including uncertain/recovered
     # states, but cannot race a cooperating worker changing this host's records.
-    with host_change(host_id,allow_quarantined=True),Session() as s:
+    with host_change(host_id,allow_quarantined=True,allow_inactive=True),Session() as s:
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
         if incidents.digest(row.plan)!=body.plan_digest:raise HTTPException(409,'Response plan changed; refresh before exporting')
         try:identifier,data,digest=response_records.build(s,host,row,user['username'],reason)
