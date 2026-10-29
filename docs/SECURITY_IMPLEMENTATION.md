@@ -1928,7 +1928,9 @@ per section, 5,000 total rows, 16 MiB or a cooperative 30-second build budget ch
 between rows. This budget is not a database statement timeout. Oversized histories
 need a future segmented export workflow; partial success and silent row truncation
 are not allowed. Unknown fields are projected out by design, not preserved as a full
-raw database backup.
+raw database backup. Original evidence digests remain opaque source references;
+the reduced projection does not reproduce every input needed to recompute them.
+Bundle integrity verification is separate from original plan approval binding.
 
 A successful export records its export ID, whole-file SHA-256 and actor in the audit
 log, after the snapshot is built; its timestamp and reason are in the record. This

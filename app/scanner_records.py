@@ -58,7 +58,7 @@ def build(s,host,actor,reason):
                 value={field:getattr(row,field) for field in FIELDS[name].split()}
                 if name=='scans':value['report']=scan_report(row.report)
                 elif name=='incidents':value['evidence']=finding(row.evidence)
-                elif name=='incident_events':value['details']=project(row.details,'scan_id plan_id run_id previous_state state from to reason verification')
+                elif name=='incident_events':value['details']=project(row.details,'scan_id plan_id run_id previous_state state from to reason verification expires execution')
                 else:
                     if isinstance(row.content,dict) and isinstance(row.content.get('steps'),list) and len(row.content['steps'])>16:raise records.ExportLimit('Advisory step count exceeds its validated bound; no partial export was created')
                     value['content']=project(row.content,'summary severity uncertainty')
@@ -78,6 +78,7 @@ def build(s,host,actor,reason):
         'scope':{'source':'controller_database_under_host_operation_lock','history_truncated':False,
             'missing_scan_references':missing,'primary_references_complete':not missing and not unresolved,'missing_evidence_references':unresolved,
             'projection':'allowlisted scanner receipt, finding, review and advisory metadata only',
+            'source_digests':'Opaque retained references; projected metadata does not reproduce all original evidence digest inputs',
             'excludes':['raw_scanner_output','file_bytes','credentials_and_connection_configuration','job_payloads_and_outputs',
                 'execution_observations_and_triggers','startup_and_package_integrity_records','file_responses_and_custody','AI_usage_records','legacy_latest_settings','unattributed_orphan_events','live_host_verification'],
             'limits':{'section_rows':records.MAX_SECTION_ROWS,'total_rows':records.MAX_ROWS,'bytes':records.MAX_BYTES}},
