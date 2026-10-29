@@ -104,3 +104,18 @@ def test_pause_can_be_preconfigured_while_management_disabled(managed):
     with Session() as s:s.get(Host,'one').enabled=False;s.commit()
     assert pause(managed).status_code==200
     with Session() as s:assert s.get(Host,'one').enabled is False
+
+
+def test_queued_security_plan_rechecks_pause_at_worker_execution(managed,monkeypatch):
+    from app import incidents,worker
+    with Session() as s:
+        s.add(incidents.Incident(id='queued-incident',host_id='one',scan_id='scan',evidence={'path':'/srv/test','sha256':'a'*64}));s.commit()
+        job_id=worker.enqueue(s,'one','security-plan',{'incident_id':'queued-incident'})
+    assert pause(managed).status_code==200
+    monkeypatch.setattr(ai,'request',lambda *a,**k:pytest.fail('Paused queued work reached provider'))
+    worker.execute(job_id)
+    with Session() as s:
+        job=s.get(Job,job_id)
+        assert job.state=='failed',job.output
+        assert 'paused' in job.output
+        assert not list(s.scalars(select(incidents.Plan)))
