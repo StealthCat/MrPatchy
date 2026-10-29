@@ -60,6 +60,7 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
 
+- Comprehensive startup and scheduled-task awareness, package-default versus custom provenance, and explained AI triage of custom/modified entries; see the planned milestone below.
 - General malware protection: known-malware detection, AI-enabled triage of previously unknown malware, and automatic file quarantine plus malicious-process termination; see the planned milestone below.
 - CVE exposure-window exploitation monitoring with automatic quarantine or termination of detected malicious artifacts/processes; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention. Bounded per-server scanner record exports now complement file-response exports; automatic deletion and external storage are not implemented.
@@ -2037,3 +2038,39 @@ signature or an active CVE exposure window, and continue after patch installatio
 - Add server/fleet malware incidents showing known versus AI-discovered findings, evidence/confidence, detection coverage, response policy and quarantine/termination outcomes. Reuse the existing Security workspace, notifications and Mr Patchy visual style rather than creating duplicate incident systems.
 - Deliver maintained known-malware detection, cross-source AI triage, general automatic response and recovery/UI integration as tracked milestones. Update this checkpoint with implemented scope and remaining limitations after each milestone.
 - Validate known-malware fixtures, controlled unknown-behavior simulations and benign administrative lookalikes, false-positive restoration, AI outages/pause and prompt-injection attempts, evidence changes, process reuse, file replacement, concurrent/replayed detections and partial response failures. Include supported-platform real-target response drills; document measured detection limits without claiming universal detection or a clean endpoint.
+
+
+## Planned: comprehensive startup and scheduled-task awareness
+
+Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse
+existing File integrity inventories, approved baselines, scheduled inspections,
+startup incidents, vendor comparisons and AI activity logging. The existing bounded,
+metadata-only startup inventory and advisory plans do not satisfy this broader
+requirement.
+
+### Discovery and change tracking
+
+- Automatically discover system-wide and per-user cron jobs, including root/user crontabs, system crontabs, cron directories, anacron and queued at jobs. Inventory individual jobs with their source file/entry, schedule, execution account and referenced command/script, rather than only hashing the containing file.
+- Discover vendor, administrator and per-user systemd units, services, timers, drop-ins, overrides, enablement links, generated and transient units. Resolve the effective configuration and precedence; show enabled, disabled, masked, active and inactive entries and timer/service relationships. Include applicable SysV init scripts/runlevel links, rc.local and other supported init systems.
+- Extend discovery to comparable boot, login and event-triggered execution mechanisms: system/user shell startup files, XDG autostart, SSH rc hooks, udev rules, loader/preload configuration and module-load/modprobe configuration, as applicable to supported platforms. Maintain a documented extensible mechanism catalog with distribution-specific locations and an administrator-configurable additional scope.
+- Record file/entry identity, owner, permissions, timestamps, hashes, symlink targets, trigger, effective command and relevant referenced executables/scripts. Read configuration as data without sourcing scripts or executing jobs. Safely inspect supported runtime mechanisms through read-only interfaces; do not silently treat currently excluded runtime paths or symlink targets as covered.
+- Run initial discovery and recurring reconciliation, with change-triggered collection where supported. Retain additions, modifications, deletions and baseline history and link meaningful changes to incidents. Paginate/segment large inventories so current 256-entry and time budgets do not silently become a claim of complete coverage. Report unsupported mechanisms, inaccessible accounts/paths, remote homes, races and omissions explicitly.
+
+### Package-default versus custom provenance
+
+- Attribute each file and effective entry to its installed package/version where possible using distribution-native ownership metadata. Compare against authenticated exact-version vendor artifacts/defaults when available; package ownership alone must not mean an entry is an unchanged package default.
+- Distinguish verified unchanged package defaults, package-owned but modified configuration, package/installer-generated entries whose default cannot be verified, custom/unmanaged entries and unknown origin. Track administrator overrides/drop-ins separately from the vendor unit they modify; distinguish individual custom jobs within otherwise package-owned files.
+- Retain provenance sources and verification strength. Legitimate conffile edits, generated configuration, local packages and configuration-management output require context; custom or modified does not by itself mean malicious, and package-provided does not by itself mean benign. Administrator-approved baselines record acceptance without fabricating vendor authenticity.
+
+### Explained AI triage
+
+- When AI triage is enabled, assess custom and modified entries at initial discovery and after meaningful changes, with configurable scheduling and an explicit data-sharing policy. Provide an evidence-linked assessment of likely benign, suspicious or unknown, confidence, and a plain-language explanation of why. Include apparent purpose, trigger/schedule, execution user/privilege, effective commands and referenced scripts, relevant changes, provenance and supporting/contradicting observations.
+- Inspect bounded relevant configuration/script content where authorized; metadata alone may not explain behavior. Redact credentials and sensitive values, record omissions, treat file text as untrusted input, and never execute submitted content or follow model instructions as commands. Bind results to exact entry/file hashes and evidence revisions; changed evidence makes older assessments stale.
+- Explain concrete factors such as expected backup/update work, administrator-approved automation, unusual privilege or writable execution paths, obfuscation, download-and-execute behavior, suspicious destinations and persistence changes. Distinguish observed facts from hypotheses; insufficient evidence produces unknown rather than a forced benign/malicious verdict.
+- Respect global and per-server AI pause, quotas, retries and AI activity/cost logging. Inventory, provenance and deterministic change alerts remain operational without AI; show paused, pending, failed and stale assessment states. Existing manual advisory plans remain distinct from this new classification workflow.
+
+### Visibility and acceptance
+
+- Add searchable server/fleet views for mechanism, job/unit, schedule/trigger, account, enabled state, package/custom origin, current versus baseline changes, AI assessment, explanation and linked incidents. Allow reviewed benign/false-positive decisions bound to the observed version; future changes require reassessment and retain audit history.
+- Feed evidence-supported suspicious findings into the planned malware investigation/response policy. A custom entry or AI suspicion alone does not authorize quarantine, termination or deletion; reuse the established evidence and response-policy checks.
+- Validate native Debian/RPM and supported init/cron layouts, per-user/root jobs, unit precedence/drop-ins, transient/generated entries, package defaults versus legitimate edits, malicious and benign lookalikes, prompt injection/redaction, referenced-file changes, large inventories, offline/permission gaps and AI pause. Include real-target acceptance and migration/helper documentation. Do not mark this requirement complete solely because the existing metadata inventory or manual AI plan exists.
