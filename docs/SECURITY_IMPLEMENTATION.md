@@ -1874,7 +1874,8 @@ work listed above remain unfinished.
 Implemented: administrators can pause or resume AI independently for each server from
 the persistent AI integration panel on every server tab. The stored setting defaults
 to resumed for existing servers and survives controller restarts and offline database
-migration through the existing settings table. Deleted servers expose read-only state.
+migration through the existing settings table. Management-disabled servers can preconfigure the AI state without re-enabling
+management. Deleted servers expose read-only state.
 Changes require a reason, current revision and CSRF protection, and record actor,
 time and reason in audit history. Non-AI inventory, patching, schedules, scanning and
 monitoring remain operational. Historical results and activity remain available.

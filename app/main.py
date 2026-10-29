@@ -92,7 +92,7 @@ def auth(request:Request):
             lifecycle_action=path=='/api/hosts/'+host_path.group(1) or path=='/api/hosts/'+host_path.group(1)+'/lifecycle'
             metadata_export=bool(re.fullmatch(r'/api/hosts/[^/]+/security/quarantines/[^/]+/export',path))
             installer_read=path.endswith('/installer')
-            local_connection=bool(host and not host.deleted_at and request.method=='PUT' and path in ('/api/hosts/'+host.id+'/connection','/api/hosts/'+host.id+'/fingerprint'))
+            local_connection=bool(host and not host.deleted_at and request.method=='PUT' and path in ('/api/hosts/'+host.id+'/connection','/api/hosts/'+host.id+'/fingerprint','/api/hosts/'+host.id+'/security/ai-policy'))
             if host and not host_lifecycle.active(host) and (request.method not in ('GET','HEAD') or installer_read) and not lifecycle_action and not metadata_export and not local_connection:
                 raise HTTPException(409,'Server management is disabled or deleted')
         request.state.actor=identity.username

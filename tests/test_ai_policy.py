@@ -98,3 +98,9 @@ def test_deleted_state_is_read_only(managed):
     with Session() as s:s.get(Host,'one').deleted_at=time.time();s.commit()
     assert managed.get(BASE).status_code==200
     assert pause(managed).status_code==409
+
+
+def test_pause_can_be_preconfigured_while_management_disabled(managed):
+    with Session() as s:s.get(Host,'one').enabled=False;s.commit()
+    assert pause(managed).status_code==200
+    with Session() as s:assert s.get(Host,'one').enabled is False
