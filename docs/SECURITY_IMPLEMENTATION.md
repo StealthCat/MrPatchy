@@ -1,5 +1,24 @@
 # Security implementation checkpoint
 
+## Scheduled development completion gate
+
+Before each scheduled development cycle, assess the current roadmap against current
+`main`, the latest merged PR's actual changes and recorded validation, the
+implementation checkpoint and any unfinished related PR. This is a read-only
+assessment before any implementation, UI polishing, versioning or repository write.
+
+- If the explicitly requested roadmap is feature complete and no unfinished in-scope implementation remains, stop that cycle without working on the code. Do not invent additional features, refactor, polish the UI or begin speculative bug hunts to fill the cycle.
+- A completed cycle with no work must not change source, tests, documentation or the checkpoint; it must not bump a version or create commits, tags or PRs merely to record that nothing needs doing.
+- Report briefly that no development is needed, citing this roadmap and the latest merged PR/commit used for the assessment. Keep the development schedule enabled; later cycles may resume when a new roadmap requirement or unfinished in-scope milestone is present.
+- Proceed only when the assessment identifies a concrete outstanding roadmap requirement or unfinished related implementation. State the remaining work before starting it. Review/polish, versioning, testing, PR/merge and checkpoint requirements apply when there is actual work to deliver.
+- Missing, contradictory or blocked evidence is not proof of completion. Report the uncertainty or blocker and stop without speculative code changes; retain honest outstanding requirements and limitations.
+
+This gate takes precedence over instructions to always continue development or
+produce another PR. Judge completion from the current repository and latest merged
+work rather than stale milestone numbers or repeated historical requests.
+
+## Current implementation status
+
 Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
 restoration now support protected files under `/srv` and `/opt`. Retained-response
