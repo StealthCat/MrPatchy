@@ -1816,3 +1816,8 @@ retention and broader runtime coverage remain unfinished. No target helper upgra
 or database schema change is required. Unit/API checks cover engine separation,
 failures, expiry, disabled/deleted hosts, search, pagination and administrator access;
 browser checks cover the overview and navigation.
+
+The “No durable receipt” label means no engine-specific receipt exists in durable
+scan history. It does not assert that a legacy installation or external scanner
+has never scanned that server. Unbound legacy latest-report settings are not
+promoted into current engine coverage.

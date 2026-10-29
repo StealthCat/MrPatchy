@@ -10,8 +10,8 @@ module.exports=async(page,capture)=>{
  try{
   await page.goto(new URL('/#security',page.url()).href);
   await page.getByRole('heading',{name:'Coverage fixture',exact:true}).waitFor();
-  await page.getByRole('heading',{name:'ClamAV · incomplete',exact:true}).waitFor();
-  await page.getByRole('heading',{name:'YARA · never_scanned',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'ClamAV · Incomplete coverage',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'YARA · No durable receipt',exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'Review server security'}).getAttribute('href'),'#servers/coverage-host/security');
   await page.locator('#coverage-search input').fill('fixture');await Promise.all([page.waitForResponse(r=>r.url().includes('/security/coverage?')&&r.url().includes('q=fixture')),page.getByRole('button',{name:'Find servers',exact:true}).click()]);
   assert.equal(handlers.at(-1),'fixture');
