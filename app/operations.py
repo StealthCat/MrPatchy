@@ -7,6 +7,7 @@ import uuid
 import httpx
 from sqlalchemy import String,Text,Double,JSON,select,func
 from sqlalchemy.orm import Mapped,mapped_column
+from . import host_lifecycle
 from .db import Base,Session,Setting,Host,Package,Job,Audit,config
 from .security import unseal
 
@@ -97,6 +98,11 @@ def collect_alerts():
                 if alert.state=='resolved':alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
         from .scheduling import PatchRun
         for host in s.scalars(select(Host)):
+            if host.deleted_at:continue
+            if not host_lifecycle.active(host):
+                record(host,'server disabled','Server management is intentionally disabled. Polling, scheduled work and host AI requests are suspended.')
+                if host_quarantined(s,host.id):record(host,'disabled server recovery','This disabled server retains response or recovery holds. Re-enable management to review them; deletion is blocked until reconciled.')
+                continue
             from . import response_monitor
             monitored=response_monitor.assessment(s,host.id)
             from . import service_monitor

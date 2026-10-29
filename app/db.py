@@ -28,6 +28,9 @@ class Host(Base):
     port: Mapped[int] = mapped_column(Integer, default=22)
     fingerprint: Mapped[str] = mapped_column(String(100))
     state: Mapped[str] = mapped_column(String(40), default='enrolling')
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default='1')
+    deleted_at: Mapped[float] = mapped_column(Double, default=0, server_default='0')
+    lifecycle_revision: Mapped[str] = mapped_column(String(36), default='', server_default='')
     error: Mapped[str] = mapped_column(Text, default='')
     repo_error: Mapped[str] = mapped_column(Text, default='')
     last_seen: Mapped[float] = mapped_column(Double, default=0)
@@ -96,6 +99,10 @@ def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
 def init():
     from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health,service_monitor
     Base.metadata.create_all(engine)
+    host_columns={column['name'] for column in inspect(engine).get_columns('hosts')}
+    for name,definition in (('enabled','BOOLEAN NOT NULL DEFAULT 1'),('deleted_at','DOUBLE NOT NULL DEFAULT 0'),('lifecycle_revision',"VARCHAR(36) NOT NULL DEFAULT ''")):
+        if name not in host_columns:
+            with engine.begin() as connection:connection.execute(text('ALTER TABLE hosts ADD COLUMN '+name+' '+definition))
     columns={c['name'] for c in inspect(engine).get_columns('packages')}
     if 'dpkg_state' not in columns:
         with engine.begin() as connection:

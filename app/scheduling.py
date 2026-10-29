@@ -1,4 +1,5 @@
 """Opt-in recurring and urgency-driven patching, using the existing job executor."""
+from . import host_lifecycle
 import datetime as dt
 import hashlib
 import json
@@ -104,7 +105,7 @@ def occurrences(policy, start, end):
 
 
 def hosts_for(s, policy):
-    query = select(Host).order_by(Host.name, Host.id)
+    query = select(Host).where(Host.enabled==True,Host.deleted_at==0).order_by(Host.name, Host.id)
     if not policy['all_hosts']: query = query.where(Host.id.in_(policy['host_ids']))
     return list(s.scalars(query))
 
@@ -118,7 +119,7 @@ def save(s, body, schedule_id, username):
     if schedule_id and not row: raise ValueError('Schedule no longer exists')
     if row and body.revision != row.revision: raise ValueError('Schedule changed; reload before saving')
     if not row and s.scalar(select(func.count()).select_from(PatchSchedule)) >= 100: raise ValueError('Limit of 100 schedules reached')
-    if not body.all_hosts and len(list(s.scalars(select(Host.id).where(Host.id.in_(body.host_ids))))) != len(body.host_ids):
+    if not body.all_hosts and len(list(s.scalars(select(Host.id).where(Host.id.in_(body.host_ids),Host.deleted_at==0)))) != len(body.host_ids):
         raise ValueError('Selected server no longer exists')
     policy = body.model_dump(exclude={'approved', 'revision'})
     if policy['all_hosts']: policy['host_ids'] = []
@@ -175,7 +176,7 @@ def job_guard(s, job, now=None):
             run.host_id != job.host_id or now >= run.expires):
         job.state = 'cancelled'; job.output = 'Scheduled authorization changed or start window expired'; s.commit(); return False
     host = s.get(Host, job.host_id)
-    if not host or host.state != 'online' or now-host.last_seen > 120 or host.integrity:
+    if not host_lifecycle.active(host) or host.state != 'online' or now-host.last_seen > 120 or host.integrity:
         return False
     return allow_window(s, job.host_id, schedule.policy, run.trigger, now)
 
@@ -200,8 +201,8 @@ def advance(s, run, now):
             s.execute(update(Job).where(Job.id == run.refresh_id, Job.state == 'queued').values(state='cancelled', output='Patch start window expired'))
         run.state = 'skipped'; run.detail = 'Start window expired: '+run.detail; return
     host = s.get(Host, run.host_id)
-    if not host:
-        run.state = 'skipped'; run.detail = 'Server removed'; return
+    if not host_lifecycle.active(host):
+        run.state = 'cancelled'; run.detail = 'Server management disabled or deleted'; return
     if operations.host_quarantined(s,host.id):
         run.detail='Waiting for operation or file response reconciliation';return
     if host.state != 'online' or now-host.last_seen > 120 or host.integrity or not host.fingerprint or not host.inventory:
@@ -217,7 +218,7 @@ def advance(s, run, now):
     if not run.refresh_id:
         existing = s.scalar(select(Job.id).where(Job.host_id == host.id, Job.action == 'refresh', Job.state.in_(('queued', 'running'))).limit(1))
         if existing: run.detail = 'Waiting for the existing repository check'; return
-        job = Job(id=str(uuid.uuid4()), host_id=host.id, action='refresh', payload={'_schedule': {'run_id':run.id}})
+        job = Job(id=str(uuid.uuid4()), host_id=host.id, action='refresh', payload={'_schedule': {'run_id':run.id},'_host_revision':host.lifecycle_revision})
         s.add(job); run.refresh_id = job.id; run.state = 'refreshing'; run.detail = 'Refreshing signed repository metadata'; return
     refresh = s.get(Job, run.refresh_id)
     if not refresh or refresh.state in ('failed', 'blocked', 'cancelled', 'interrupted', 'recovery_required'):
@@ -233,7 +234,7 @@ def advance(s, run, now):
     except ValueError as error:
         run.state = 'failed'; run.detail = str(error)[:1000]; return
     job = Job(id=str(uuid.uuid4()), host_id=host.id, action='patch', payload={
-        'packages':specs, '_actor':'schedule:'+schedule.id, '_recovery_policy':policy['recovery'], '_schedule':{'run_id':run.id}, '_schedule_policy':policy, '_depends_on':[]})
+        'packages':specs, '_host_revision':host.lifecycle_revision, '_actor':'schedule:'+schedule.id, '_recovery_policy':policy['recovery'], '_schedule':{'run_id':run.id}, '_schedule_policy':policy, '_depends_on':[]})
     s.add(job); run.job_id = job.id; run.state = 'queued'; run.detail = f'{len(specs)} exact-version updates queued'
     audit(s, 'queue scheduled patch', run.id+' '+host.id+' '+run.trigger)
 

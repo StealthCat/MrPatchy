@@ -98,6 +98,13 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
     return result
 
 def call(host, payload, timeout=60, key_file=None):
+    from . import host_lifecycle
+    if not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
+    kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
+    with host_lifecycle.activity([host.id],kind):
+        return _call(host,payload,timeout,key_file)
+
+def _call(host, payload, timeout=60, key_file=None):
     deadline=time.monotonic()+timeout
     from . import connections
     route=connections.for_host(host)

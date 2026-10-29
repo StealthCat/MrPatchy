@@ -13,22 +13,28 @@ function serverPagination(root,offset,more,load,size=50){
 async function serverWorkspace(revision){
  const parts=location.hash.slice(1).split('/');let id;
  try{id=decodeURIComponent(parts[1]||'');}catch{id='';}
- const h=hosts.find(item=>item.id===id),root=$('#content');
+ let h=hosts.find(item=>item.id===id);const root=$('#content');
+ if(!h&&isAdmin()){try{const data=await api('/hosts/'+encodeURIComponent(id)+'/summary');if(!currentView(revision,'servers'))return;h={...data.host,architecture:data.system.architecture,package_manager:data.system.package_manager};}catch(error){if(!currentView(revision,'servers'))return;}}
  if(!h){root.innerHTML=heading('Server not found.','This server may have been removed, or the link is invalid.')+'<a class="button" href="#servers">← All servers</a>';return;}
  selected=id;
  let tab=parts[2]||'overview';if(!SERVER_TABS.some(t=>t[0]===tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
+ const inactive=h.enabled===false||Boolean(h.deleted_at);
+ const allowed=inactive?['overview','history','ai','patching','security',...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
+ if(!allowed.includes(tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const entry=SERVER_TABS.find(t=>t[0]===tab);
- const tabs=SERVER_TABS.filter(t=>!t[2]||isAdmin());
+ const tabs=SERVER_TABS.filter(t=>(!t[2]||isAdmin())&&allowed.includes(t[0]));
  $('#breadcrumb').textContent='Workspace / Servers / '+h.name+' / '+entry[1];document.title=h.name+' · '+entry[1]+' · Mr Patchy';
  root.innerHTML=`<div class="server-back"><a href="#servers">← All servers</a><label>Server<select id="server-workspace-select" aria-label="Switch server">${hosts.map(item=>`<option value="${esc(item.id)}" ${item.id===id?'selected':''}>${esc(item.name)}</option>`).join('')}</select></label></div>`+
- heading(h.name,`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`,`<span>${badge(h.state)}</span>`)+
+ heading(h.name,`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`,`<span>${badge(h.state)}</span>`+(isAdmin()&&!h.deleted_at?`<button data-host-lifecycle="${esc(h.id)}">${h.enabled===false?'Enable':'Disable'} server</button><button data-host-delete="${esc(h.id)}">Delete server</button>`:''))+
+ (inactive?`<div class="notice">${h.deleted_at?'Deleted from the managed fleet. Local SSH credentials were removed; these records are retained for review.':'Management disabled. Polling, queued operations, scheduled work and host AI requests are suspended. Existing remote agents and services continue running.'}</div>`:'')+
  `<nav class="server-tabs" aria-label="Server sections">${tabs.map(t=>`<a href="${serverLink(id,t[0])}" ${t[0]===tab?'class="active" aria-current="page"':''}>${t[1]}</a>`).join('')}</nav><section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
  $('#server-workspace-select').onchange=event=>{location.hash=serverLink(event.target.value,tab);};
  const body=$('#server-tab-body'),context={root:body,hostId:id};
+ if(h.deleted_at&&!hosts.some(item=>item.id===id)){const option=document.createElement('option');option.value=id;option.textContent=h.name+' (deleted)';option.selected=true;$('#server-workspace-select').append(option);}
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
   const views={overview:serverOverview,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity};
-  await views[tab](revision,context);
+  if(inactive&&tab==='security')await retainedSecurity(revision,context);else await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
 
@@ -170,7 +176,8 @@ async function serverConnection(revision,{root,hostId}){
  const form=root.querySelector('form'),mode=form.elements.transport,fields=root.querySelector('#iap-fields'),result=root.querySelector('#connection-result');
  mode.value=saved.transport;
  mode.onchange=()=>{fields.classList.toggle('hidden',mode.value!=='gcp_iap');for(const name of ['project','zone','instance'])form.elements[name].required=mode.value==='gcp_iap';};mode.onchange();
- const busy=value=>{for(const button of form.querySelectorAll('button'))button.disabled=value;};
+ const inactive=hosts.find(item=>item.id===hostId)?.enabled===false;
+ const busy=value=>{for(const button of form.querySelectorAll('button'))button.disabled=value||(inactive&&button.id==='server-connection-test');};busy(false);
  form.onsubmit=async event=>{event.preventDefault();busy(true);const connection=Object.fromEntries(new FormData(form));connection.port=+connection.port;
   try{const updated=await api('/hosts/'+hostId+'/connection','PUT',{connection,expected:saved});if(current()){saved=updated;result.textContent='Connection saved. Test it below or wait for normal polling.';}}
   catch(error){if(current())result.textContent=error.message;}finally{if(current())busy(false);}
@@ -344,32 +351,7 @@ async function renderQuarantines(root,hostId,current){
   }catch(error){if(current()&&revision===modalRevision)toast(error.message);}};
   $('#response-service-prev').onclick=()=>{page=Math.max(0,page-20);history();};$('#response-service-next').onclick=()=>{page+=20;history();};history();
  });
- panel.querySelectorAll('[data-response-export]').forEach(button=>button.onclick=()=>{
-  const row=result.items.find(r=>r.id===button.dataset.responseExport);
-  modal('Export response record','<p>Download this file response’s stored approvals, custody, receipts, process actions, replacement history and monitoring checks. The JSON contains sensitive paths and investigation metadata. It excludes preserved file bytes and credentials, and does not verify current server state. Keep the file and its checksum in protected independent storage.</p><form id="response-record-export"><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Download response record</button></form>');
-  const revision=modalRevision,session=sessionRevision,form=$('#response-record-export');
-  form.onsubmit=async event=>{event.preventDefault();const save=form.querySelector('button');save.disabled=true;
-   try{
-    const response=await fetch('/api'+base+'/'+row.id+'/export',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({plan_digest:row.plan_digest,reason:form.elements.reason.value})});
-    if(session!==sessionRevision||!current()||revision!==modalRevision)return;
-    if(!response.ok){const error=await response.json();if(response.status===401)showLogin();throw Error(typeof error.detail==='string'?error.detail:'Response export failed');}
-    const digest=response.headers.get('X-Response-Record-SHA256')||'',disposition=response.headers.get('Content-Disposition')||'';
-    const filename=disposition.match(/filename="(mrpatchy-response-[a-f0-9-]{36}\.json)"/)?.[1];
-    if(!/^[a-f0-9]{64}$/.test(digest)||!filename)throw Error('Response export integrity headers are missing');
-    const bytes=await response.arrayBuffer();
-    if(bytes.byteLength>16*1024*1024)throw Error('Response export exceeds 16 MiB');
-    if(globalThis.crypto?.subtle){const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');if(hash!==digest)throw Error('Response export checksum mismatch');}
-    if(session!==sessionRevision||!current()||revision!==modalRevision)return;
-    const download=(blob,name)=>{const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};
-    // Preserve raw bytes: parsing through JS would round 64-bit inode/timestamp values.
-    download(new Blob([bytes],{type:'application/json'}),filename);
-    modal('Response record exported','<p>Response record downloaded. Retain its checksum independently. Hashes detect changes against a trusted digest; they do not authenticate the controller or establish a clean host.</p><pre id="response-record-checksum"></pre><button id="response-record-checksum-download">Download checksum</button>');
-    const checksum=digest+'  '+filename+'\n';$('#response-record-checksum').textContent=checksum;
-    $('#response-record-checksum-download').onclick=()=>download(new Blob([checksum],{type:'text/plain'}),filename+'.sha256');
-   }catch(error){if(session===sessionRevision&&current()&&revision===modalRevision)toast(error.message);}
-   finally{if(save.isConnected)save.disabled=false;}
-  };
- });
+ panel.querySelectorAll('[data-response-export]').forEach(button=>button.onclick=()=>exportResponseRecord(hostId,result.items.find(row=>row.id===button.dataset.responseExport),current));
  panel.querySelectorAll('[data-response-history]').forEach(button=>button.onclick=()=>{modal('File response history','<pre id="response-history"></pre><button id="response-history-prev">Previous response records</button><button id="response-history-next">Next response records</button>');const revision=modalRevision;let page=0,token=0;const history=async()=>{const request=++token;try{const data=await api(base+'/'+button.dataset.responseHistory+'/history?offset='+page);if(!current()||revision!==modalRevision||request!==token)return;$('#response-history').textContent=JSON.stringify(data,null,2);$('#response-history-prev').disabled=page===0;$('#response-history-next').disabled=!data.more;}catch(e){if(current()&&revision===modalRevision)toast(e.message);}};$('#response-history-prev').onclick=()=>{page=Math.max(0,page-20);history();};$('#response-history-next').onclick=()=>{page+=20;history();};history();});
  };await load();
 }
@@ -420,4 +402,62 @@ async function renderRepairPublications(root,hostId,current){
  panel.querySelectorAll('[data-publication-release]').forEach(button=>button.onclick=()=>{const row=data.items.find(r=>r.id===button.dataset.publicationRelease);modal('Review replacement publication pause','<p>Verify the file and affected services before allowing deferred work. KEEP REPLACEMENT requires a fresh verified publication and approved vendor trust; it releases this publication pause and its owning file pause, while process and unrelated pauses remain active. CONSOLE RECOVERED records your trusted-console assessment and releases only this publication pause. Any remaining file pause requires its separate review. No process is resumed and no incident resolved.</p><form id="publication-release"><label>Review<select name="confirmation">'+(row.state==='published'&&row.report.scope_current&&row.report.trust_current?'<option>KEEP REPLACEMENT</option>':'')+'<option>CONSOLE RECOVERED</option></select></label><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><label>Type the selected phrase<input name="typed" required></label><button>Release reviewed publication pause</button></form>');const revision=modalRevision;const form=$('#publication-release');form.onsubmit=async e=>{e.preventDefault();if(form.elements.typed.value!==form.elements.confirmation.value){toast('Type the selected review phrase exactly.');return;}const save=form.querySelector('button');save.disabled=true;try{await api(base+'/'+row.id+'/release','POST',{plan_digest:row.plan_digest,receipt_digest:row.receipt_digest,reason:form.elements.reason.value,confirmation:form.elements.typed.value});if(current()&&revision===modalRevision){$('#modal').close();await load();if(current())root.querySelector('#response-refresh')?.click();}}catch(error){if(current()&&revision===modalRevision)toast(error.message);}finally{if(save.isConnected)save.disabled=false;}};});
  panel.querySelectorAll('[data-publication-history]').forEach(button=>button.onclick=()=>{modal('Replacement publication history','<pre id="publication-history"></pre><button id="publication-event-prev">Previous publication events</button><button id="publication-event-next">Next publication events</button>');const revision=modalRevision;let page=0,token=0;const history=async()=>{const request=++token;try{const result=await api(base+'/'+button.dataset.publicationHistory+'/history?offset='+page);if(!current()||revision!==modalRevision||request!==token)return;$('#publication-history').textContent=JSON.stringify(result,null,2);$('#publication-event-prev').disabled=page===0;$('#publication-event-next').disabled=!result.more;}catch(error){if(current()&&revision===modalRevision)toast(error.message);}};$('#publication-event-prev').onclick=()=>{page=Math.max(0,page-20);history();};$('#publication-event-next').onclick=()=>{page+=20;history();};history();});
  };await load();
+}
+
+async function editHostLifecycle(host,deleting=false){
+ if(!isAdmin())return;
+ const action=deleting?'Delete':(host.enabled===false?'Enable':'Disable');
+ modal(action+' server · '+host.name,(deleting?'<p>Remove this server from the managed fleet and remove its local SSH keys, saved repository credentials and enrollment links. Read-only inventory, audit and security records remain under Deleted servers. The remote agent/account is left installed; remove it separately from a trusted console if required. Re-enrollment creates a new server identity. Active work and unresolved response/recovery holds block deletion.</p>':host.enabled===false?'<p>Resume polling and approved future automation. Cancelled jobs are retained in history and will not resume.</p>':'<p>Stop polling, queued operations, scheduled work and host-specific AI requests. Queued work is cancelled and pending enrollment links are revoked. Remote agents, services and already-started target processes are not stopped. Active operations must finish before disabling.</p>')+'<form id="host-lifecycle-form"><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label>'+(deleting?'<label>Type the server name exactly<input name="confirmation" required autocomplete="off"></label>':'')+'<button>'+action+' this server</button></form>');
+ const revision=modalRevision,form=$('#host-lifecycle-form');form.onsubmit=async event=>{event.preventDefault();if(deleting&&form.elements.confirmation.value!==host.name){toast('Type the server name exactly.');return;}const save=form.querySelector('button');save.disabled=true;try{
+  const body={expected_revision:host.lifecycle_revision||'',reason:form.elements.reason.value};if(deleting)body.confirmation=form.elements.confirmation.value;else body.enabled=host.enabled===false;
+  const data=await api('/hosts/'+host.id+(deleting?'':'/lifecycle'),deleting?'DELETE':'PUT',body);
+  if(revision!==modalRevision)return;$('#modal').close();if(deleting){location.hash='#servers';await render();toast('Server deleted from management. Retained history is available under Deleted servers.');}else{await render();toast(action==='Disable'?'Server disabled. '+data.cancelled_jobs+' queued job(s) cancelled.':'Server enabled. Fresh polling will resume.');}
+ }catch(error){if(revision===modalRevision)toast(error.message);}finally{if(save.isConnected)save.disabled=false;}};
+}
+
+document.addEventListener('click',event=>{
+ const control=event.target.closest('[data-host-lifecycle],[data-host-delete]');if(!control||!isAdmin())return;
+ const id=control.dataset.hostLifecycle||control.dataset.hostDelete,host=hosts.find(item=>item.id===id);
+ if(host)editHostLifecycle(host,Boolean(control.dataset.hostDelete));
+});
+
+async function deletedServers(revision){
+ const root=$('#content');if(!isAdmin()){root.innerHTML=empty('Administrator access required','Deleted server records are retained for administrator review.');return;}
+ const rows=await api('/hosts?deleted=true');if(!currentView(revision,'servers'))return;
+ root.innerHTML=heading('Deleted servers','Management and local credentials have been removed. Historical records are retained.','<a class="button" href="#servers">← Managed servers</a>')+'<section class="card">'+(rows.length?'<div class="table-wrap"><table><thead><tr><th>Server</th><th>Deleted</th><th></th></tr></thead><tbody>'+rows.map(host=>'<tr><td>'+esc(host.name)+'<small>'+esc(host.address)+'</small></td><td>'+date(host.deleted_at)+'</td><td><a class="button" href="'+serverLink(host.id)+'">View retained records</a></td></tr>').join('')+'</tbody></table></div>':'<p>No deleted servers.</p>')+'</section>';
+}
+
+async function retainedSecurity(revision,{root,hostId}){
+ const collections=[['history','Scan history'],['incidents','Incidents and plans'],['evidence-copies','Preserved evidence metadata'],['evidence-archives','Controller evidence metadata'],['quarantines','File responses'],['repair-preparations','Replacement preparations'],['repair-stages','Staging history'],['repair-publications','Published replacements'],['process-responses','Process responses']];
+ root.innerHTML='<section class="card"><h3>Retained security records</h3><p>Management is inactive. These are stored records; no target connection or new action runs.</p><label>Records<select id="retained-security-kind">'+collections.map(([key,label])=>'<option value="'+key+'">'+label+'</option>').join('')+'</select></label><div id="retained-security-data"></div><button id="retained-security-prev">Previous records</button><button id="retained-security-next">Next records</button></section>';
+ let offset=0,ticket=0;const current=()=>currentView(revision,'servers')&&root.isConnected;
+ const load=async()=>{const turn=++ticket,kind=root.querySelector('select').value;try{const data=await api('/hosts/'+hostId+'/security/'+kind+'?offset='+offset);if(!current()||turn!==ticket)return;root.querySelector('#retained-security-data').innerHTML=(data.items||[]).map(item=>'<details><summary>'+esc(item.id||'Record')+' · '+esc(item.state||'')+'</summary><pre>'+esc(JSON.stringify(item,null,2))+'</pre></details>'+(kind==='quarantines'?'<button data-retained-export="'+esc(item.id)+'">Export response record</button>':'')).join('')||'<p>No stored records in this category.</p>';root.querySelectorAll('[data-retained-export]').forEach(button=>button.onclick=()=>exportResponseRecord(hostId,data.items.find(item=>item.id===button.dataset.retainedExport),current));root.querySelector('#retained-security-prev').disabled=!offset;root.querySelector('#retained-security-next').disabled=!data.more;}catch(error){if(current())toast(error.message);}};
+ root.querySelector('select').onchange=()=>{offset=0;load();};root.querySelector('#retained-security-prev').onclick=()=>{offset=Math.max(0,offset-20);load();};root.querySelector('#retained-security-next').onclick=()=>{offset+=20;load();};await load();
+}
+
+function exportResponseRecord(hostId,row,current){
+ const base='/hosts/'+hostId+'/security/quarantines';
+  modal('Export response record','<p>Download this file response’s stored approvals, custody, receipts, process actions, replacement history and monitoring checks. The JSON contains sensitive paths and investigation metadata. It excludes preserved file bytes and credentials, and does not verify current server state. Keep the file and its checksum in protected independent storage.</p><form id="response-record-export"><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Download response record</button></form>');
+  const revision=modalRevision,session=sessionRevision,form=$('#response-record-export');
+  form.onsubmit=async event=>{event.preventDefault();const save=form.querySelector('button');save.disabled=true;
+   try{
+    const response=await fetch('/api'+base+'/'+row.id+'/export',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({plan_digest:row.plan_digest,reason:form.elements.reason.value})});
+    if(session!==sessionRevision||!current()||revision!==modalRevision)return;
+    if(!response.ok){const error=await response.json();if(response.status===401)showLogin();throw Error(typeof error.detail==='string'?error.detail:'Response export failed');}
+    const digest=response.headers.get('X-Response-Record-SHA256')||'',disposition=response.headers.get('Content-Disposition')||'';
+    const filename=disposition.match(/filename="(mrpatchy-response-[a-f0-9-]{36}\.json)"/)?.[1];
+    if(!/^[a-f0-9]{64}$/.test(digest)||!filename)throw Error('Response export integrity headers are missing');
+    const bytes=await response.arrayBuffer();
+    if(bytes.byteLength>16*1024*1024)throw Error('Response export exceeds 16 MiB');
+    if(globalThis.crypto?.subtle){const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');if(hash!==digest)throw Error('Response export checksum mismatch');}
+    if(session!==sessionRevision||!current()||revision!==modalRevision)return;
+    const download=(blob,name)=>{const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+    // Preserve raw bytes: parsing through JS would round 64-bit inode/timestamp values.
+    download(new Blob([bytes],{type:'application/json'}),filename);
+    modal('Response record exported','<p>Response record downloaded. Retain its checksum independently. Hashes detect changes against a trusted digest; they do not authenticate the controller or establish a clean host.</p><pre id="response-record-checksum"></pre><button id="response-record-checksum-download">Download checksum</button>');
+    const checksum=digest+'  '+filename+'\n';$('#response-record-checksum').textContent=checksum;
+    $('#response-record-checksum-download').onclick=()=>download(new Blob([checksum],{type:'text/plain'}),filename+'.sha256');
+   }catch(error){if(session===sessionRevision&&current()&&revision===modalRevision)toast(error.message);}
+   finally{if(save.isConnected)save.disabled=false;}
+  };
 }

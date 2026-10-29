@@ -1,4 +1,5 @@
 """Opt-in, read-only verification of retained quarantine material."""
+from . import host_lifecycle
 import time
 from sqlalchemy import String,Double,JSON,Index,select,func
 from sqlalchemy.orm import Mapped,mapped_column
@@ -195,7 +196,7 @@ def schedule_tick(now=None):
     with Lock('response-monitor-queue'),Session() as s:
         for setting in s.scalars(select(Setting).where(Setting.key.like('response-monitor:%'))):
             cfg={**DEFAULT,**setting.value};host_id=setting.key.split(':',1)[1];host=s.get(Host,host_id)
-            if not cfg['enabled'] or not host or host.state=='enrolling' or not host.fingerprint:continue
+            if not cfg['enabled'] or not host_lifecycle.active(host) or host.state=='enrolling' or not host.fingerprint:continue
             if s.scalar(select(ProcessResponse.id).where(ProcessResponse.host_id==host_id,ProcessResponse.hold==True).limit(1)):continue
             if s.scalar(select(repair_publication.Publication.id).where(repair_publication.Publication.host_id==host_id,repair_publication.Publication.hold==True).limit(1)):continue
             if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['running','recovery_required'])).limit(1)):continue

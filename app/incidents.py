@@ -1,4 +1,5 @@
 """Durable security evidence and advisory, versioned incident response plans."""
+from . import host_lifecycle
 import hashlib
 import json
 import math
@@ -153,7 +154,7 @@ def schedule_tick(now=None):
         with Session() as s:
             for setting in s.scalars(select(Setting).where(Setting.key.like('security-policy:%'))):
                 policy=setting.value;host_id=setting.key.split(':',1)[1]
-                if not policy.get('enabled') or not s.get(Host,host_id):continue
+                if not policy.get('enabled') or not host_lifecycle.active(s.get(Host,host_id)):continue
                 from .operations import host_quarantined
                 if host_quarantined(s,host_id):continue
                 if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action=='yara-scan',Job.state.in_(['queued','running'])).limit(1)):continue
@@ -209,7 +210,7 @@ def auto_plan_tick(now=None):
             planned=select(Plan.id).where(Plan.incident_id==Incident.id,Plan.state!='superseded').exists()
             attempted=select(Job.id).where(Job.action=='security-plan',Job.host_id==Incident.host_id,
                 Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id).exists()
-            rows=list(s.scalars(select(Incident).where(Incident.host_id.in_(enabled),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id).limit(100)))
+            rows=list(s.scalars(select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id).limit(100)))
             for row in rows:
                 from .operations import host_quarantined
                 if host_quarantined(s,row.host_id):continue

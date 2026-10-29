@@ -1644,3 +1644,50 @@ and unchanged file/publication holds using recorded systemctl stubs. Browser che
 cover enabling, disabling with a pause retained and independent typed pause review.
 Real service managers, real workload health, live GCP/IAP and real-VM/SELinux acceptance
 remain operator validation. Full service orchestration remains future work.
+
+
+## Server management lifecycle
+
+Administrators can disable, enable or delete a server from Servers or its overview.
+Each change requires a meaningful reason and the lifecycle revision loaded by the
+page. Delete also requires the exact server name. Role and CSRF checks apply. The
+host executor lock and separate cross-process queue, poll, telemetry, control and AI
+locks refuse transitions while cooperating work is active (HTTP 409). Running jobs
+must finish or be reconciled; transitions do not kill remote work.
+
+Disable suspends management and AI requests, cancels queued jobs and unstarted
+schedule runs, records unstarted response rejection, and revokes enrollment links.
+The local key, policy and history remain. Existing response/recovery holds remain.
+Enable creates a new lifecycle revision and resumes future approved automation,
+including security monitors and schedules. Old jobs cannot cross the revision and
+cancelled jobs never restart. Reconcile existing holds after re-enabling. Disabled
+connection and host-key settings may be edited locally; testing still requires
+management to be enabled. Previously downloaded installer files cannot be revoked.
+
+Delete is permanent removal from management with retained history. It is blocked by
+running/recovery jobs and file, process, publication or service holds. It commits
+disabled management and revoked links before local credential cleanup. Failed cleanup
+leaves a disabled server for review and retry, rather than an active entry with a
+partially removed key. Cleanup unlinks only this server's SSH keys/rotation files and
+cached APT authentication through anchored, no-follow directories, and removes its
+saved repository credentials and connection configuration. These are logical removals;
+backups, old installer scripts, filesystem snapshots and crash leftovers are not
+securely erased. It does not remove the remote agent, remote account, authorized key,
+files or services. Use a trusted console for any separate remote decommissioning.
+
+A deleted row is retained as a tombstone with its immutable identity and timestamps.
+It cannot be enabled again. New enrollment creates a new identity. Deleted entries
+are absent from the managed fleet and configuration selectors. The administrator's
+Deleted servers view exposes read-only recorded inventory, patching, AI, operation and
+security history, including response metadata exports. Deletion does not assert that
+evidence is immutable or that a target is clean. Existing retention policies and
+backup/integrity limits still apply; history is not purged by this action.
+
+Startup upgrades existing SQLite/MySQL host tables idempotently; legacy servers
+remain enabled. Verified offline migration carries lifecycle fields. Rebuild the
+controller app and workers; no new remote helper is required. Tests cover role/CSRF,
+stale revisions, queued work and enrollment revocation, in-flight locks, retained
+holds, failure/retry cleanup, stale host objects, schema upgrades and offline copy.
+Native SSH fixtures additionally disable/re-enable a live connection, delete its
+local management identity and verify that another identity still reaches the same
+remote agent. Browser tests cover list/workspace controls and retained security data.

@@ -32,6 +32,8 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 
 Open **Servers → a server name** (or **Open server**) to see everything recorded for that server in one place. Separate tabs cover its overview, packages, patching timeline, investigations, AI activity with estimated costs, history, repositories and maintenance. Switch servers while keeping the same tab, or bookmark a server tab directly. Sensitive tabs and actions retain the existing role permissions.
 
+Administrators can **Disable server** or **Delete server** from the server list or server overview. Disable suspends polling, scheduled work and host AI requests, cancels queued operations and revokes enrollment links. Enable resumes future management; cancelled jobs do not restart. Delete requires the exact server name and a reason, removes local SSH/repository credentials and removes the entry from the managed fleet. **Servers → Deleted servers** retains read-only inventory, patching, AI, security and audit history. Running work and unresolved response/recovery holds must be reconciled before deletion. These controls leave the remote agent, account and services running; uninstall them separately through a trusted console if required. See [server lifecycle safeguards](docs/SECURITY_IMPLEMENTATION.md#server-management-lifecycle).
+
 ![Individual server overview with illustrative data](docs/screenshots/server-overview.jpg)
 
 [Server tabs and permissions](docs/SERVER_WORKSPACES.md) · [Patching timeline preview](docs/screenshots/server-patching.jpg)
@@ -97,7 +99,7 @@ Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed alrea
 2. **Prepare:** download the personalized Bash script, transfer it to the target and run `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, its public SSH key, the root-owned bridge and restricted sudo permissions. The script performs no downloads, APT queries or callbacks. Click **I ran the script · Proceed to step 3**. Curl and ordinary-download delivery use the same bootstrap; curl links expire after one hour. In curl mode, select **Fetch from HTTPS endpoint**: the default `PUBLIC_URL`, **Internal HTTPS**, or **External HTTPS**. Enabled profiles use their configured hostname and browser-facing port. Choose an address reachable from the target; for a private CA, use curl’s `--cacert /path/to/ca.pem` with a trusted bundle for the site certificate.
 3. **Connect and verify:** verify the printed ED25519 SHA256 host fingerprint through a trusted console, enter it, and click **Finish and verify installation**. Mr Patchy installs its collector/service over SSH and verifies file hashes, ownership, modes and service state.
 
-**Servers → Manage → Download Bash installer** remains available for every configured server. A fresh download contains the server's current SSH identity; download again after key rotation. Re-running an old saved script can reinstall its old public key.
+**Servers → Manage → Download Bash installer** is available for enabled servers. A fresh download contains the server's current SSH identity; download again after key rotation. Re-running an old saved script can reinstall its old public key.
 
 ![Offline enrollment wizard](docs/screenshots/enrollment.jpg)
 

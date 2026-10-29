@@ -5,7 +5,7 @@ import json
 import time
 from sqlalchemy import select
 from .db import Job, Setting, Package, config
-from . import operations, scheduling
+from . import operations, scheduling,host_lifecycle
 
 
 def next_window(windows,start,end):
@@ -35,6 +35,7 @@ class Planner:
     def result(self,state,reason,at=None,**extra):return {'state':state,'at':at,'reason':reason,'estimated':True,**extra}
     def for_package(self,p):
         if not p.candidate:return None
+        if not host_lifecycle.active(self.host):return self.result('blocked','Server management is disabled or deleted.')
         now=self.now
         if p.held:return self.result('blocked','Held or version-locked by target policy.')
         if not p.dpkg_state.endswith(' installed'):return self.result('blocked','Repair the package state before installation.')

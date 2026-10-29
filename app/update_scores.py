@@ -4,6 +4,7 @@ import json
 import time
 from sqlalchemy import String, Text, Integer, Double, select, func, tuple_
 from sqlalchemy.orm import Mapped, mapped_column
+from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs
 from .coordination import Lock
@@ -64,7 +65,7 @@ def run_one():
             count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
             if count>=cfg['ai_update_hourly_limit']:return
             batch=[];host_cache={}
-            for package in s.scalars(select(Package).where(Package.candidate!='').order_by(Package.available_since,Package.id)):
+            for package in s.scalars(select(Package).where(Package.candidate!='',Package.host_id.in_(host_lifecycle.active_ids())).order_by(Package.available_since,Package.id)):
                 if package.host_id not in host_cache:host_cache[package.host_id]=s.get(Host,package.host_id)
                 host=host_cache[package.host_id]
                 if not host:continue
@@ -81,27 +82,28 @@ def run_one():
         with Session() as s:
             host_ids=list(s.scalars(select(UpdateScore.host_id).where(UpdateScore.id.in_(ids)).distinct()))
         try:
-            with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
-                key=unseal(encrypted)
-                with Session() as s:
-                    for identifier in ids:s.get(UpdateScore,identifier).run_id=run_id
-                    s.commit()
-                result=ai.request({'model':cfg['ai_model'],'store':False,'max_output_tokens':4000,'instructions':INSTRUCTIONS,
-                    'input':json.dumps(batch),'text':{'format':{'type':'json_schema','name':'update_importance','strict':True,'schema':SCHEMA}}},key)
-                rows=result.get('assessments')
-                if not isinstance(rows,list) or len(rows)!=len(ids) or any(not isinstance(row,dict) for row in rows):raise ai.AIError('Update scoring returned an incomplete assessment batch.')
-                if any(not isinstance(row.get('id'),str) for row in rows) or sorted(row['id'] for row in rows)!=sorted(ids):raise ai.AIError('Update scoring returned mismatched or duplicate package identities.')
-                for row in rows:
-                    if (type(row.get('score')) is not int or not 0<=row['score']<=100 or row.get('confidence') not in ('low','medium','high') or
-                        any(not isinstance(row.get(k),str) or not 1<=len(row[k])<=4000 for k in ('explanation','limitations'))):
-                        raise ai.AIError('Update scoring returned invalid scores or explanations; no assessment accepted.')
-                with Session() as s:
-                    for item in rows:
-                        row=s.get(UpdateScore,item['id']);package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
-                        if not package or not host or not package.candidate or identity(host,package)!=row.id:
-                            row.state='superseded';row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
-                        row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.completed=time.time()
-                    s.commit()
+            with host_lifecycle.activity(host_ids,'ai'):
+                with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
+                    key=unseal(encrypted)
+                    with Session() as s:
+                        for identifier in ids:s.get(UpdateScore,identifier).run_id=run_id
+                        s.commit()
+                    result=ai.request({'model':cfg['ai_model'],'store':False,'max_output_tokens':4000,'instructions':INSTRUCTIONS,
+                        'input':json.dumps(batch),'text':{'format':{'type':'json_schema','name':'update_importance','strict':True,'schema':SCHEMA}}},key)
+                    rows=result.get('assessments')
+                    if not isinstance(rows,list) or len(rows)!=len(ids) or any(not isinstance(row,dict) for row in rows):raise ai.AIError('Update scoring returned an incomplete assessment batch.')
+                    if any(not isinstance(row.get('id'),str) for row in rows) or sorted(row['id'] for row in rows)!=sorted(ids):raise ai.AIError('Update scoring returned mismatched or duplicate package identities.')
+                    for row in rows:
+                        if (type(row.get('score')) is not int or not 0<=row['score']<=100 or row.get('confidence') not in ('low','medium','high') or
+                            any(not isinstance(row.get(k),str) or not 1<=len(row[k])<=4000 for k in ('explanation','limitations'))):
+                            raise ai.AIError('Update scoring returned invalid scores or explanations; no assessment accepted.')
+                    with Session() as s:
+                        for item in rows:
+                            row=s.get(UpdateScore,item['id']);package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
+                            if not package or not host or not package.candidate or identity(host,package)!=row.id:
+                                row.state='superseded';row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
+                            row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.completed=time.time()
+                        s.commit()
         except Exception as error:
             with Session() as s:
                 for identifier in ids:

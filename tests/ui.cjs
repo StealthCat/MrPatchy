@@ -183,6 +183,7 @@ const assert=require('assert/strict');
     await require('./ui_ai_costs.cjs')(page,capture);
     await require('./ui_servers.cjs')(page,capture);
     await require('./ui_security.cjs')(page);
+    await require('./ui_host_lifecycle.cjs')(page);
     await require('./ui_design.cjs')(page,capture);
     assert.deepEqual(errors,[]);
     console.log('Desktop/mobile UI smoke checks passed');
