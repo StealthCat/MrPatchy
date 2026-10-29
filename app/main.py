@@ -1274,6 +1274,32 @@ def response_row(s,host_id,quarantine_id):
     if not row or row.host_id!=host_id:raise HTTPException(404,'File response not found')
     return row
 
+class ResponseRecordExport(BaseModel):
+    plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
+    reason:str=Field(min_length=10,max_length=4000)
+
+@app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/export')
+def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExport,user=Depends(auth)):
+    from . import response_records
+    reason=body.reason.strip()
+    if len(reason)<10:raise ValueError('Provide a meaningful export reason')
+    # Export is available through response holds, including uncertain/recovered
+    # states, but cannot race a cooperating worker changing this host's records.
+    with host_change(host_id,allow_quarantined=True),Session() as s:
+        host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
+        if incidents.digest(row.plan)!=body.plan_digest:raise HTTPException(409,'Response plan changed; refresh before exporting')
+        try:identifier,data,digest=response_records.build(s,host,row,user['username'],reason)
+        except response_records.ExportLimit as error:raise HTTPException(413,str(error)) from None
+        # The current export event is outside its snapshot to avoid a self hash.
+        # Retain its whole-file digest independently in both custody and audit.
+        from . import quarantine
+        quarantine.event(s,row,'record_exported',user['username'],{'export_id':identifier,'sha256':digest,'bytes':len(data),'reason':reason})
+        audit(s,'response record exported',host_id+' '+row.id+' '+identifier+' '+digest+' '+user['username'])
+        s.commit()
+        return Response(data,media_type='application/json',headers={
+            'Content-Disposition':'attachment; filename="mrpatchy-response-'+identifier+'.json"',
+            'X-Response-Record-SHA256':digest,'Cache-Control':'no-store'})
+
 def response_idle(s,host_id,response_id=None):
     from .quarantine import ACTIONS
     if operations.host_quarantined(s,host_id,response_id=response_id):raise HTTPException(409,'Another operation or file response requires reconciliation')
