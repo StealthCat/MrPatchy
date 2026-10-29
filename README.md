@@ -217,6 +217,20 @@ and review service impact before using `KEEP REPLACEMENT`. Process pauses remain
 independent. Existing opt-in retained-response monitoring verifies both the live
 replacement and original evidence. See [scope, approvals, recovery and limits](docs/SECURITY_IMPLEMENTATION.md#separately-approved-live-replacement-publication).
 
+Use **Export response record** on a reviewed file response to download its stored
+investigation, custody, approvals, process actions, replacement receipts and monitoring
+history as JSON. Download the checksum and retain both independently in protected
+storage. File bytes, target journal files and credential configuration require their
+separate backup workflows. Verify an export offline with Python 3 and no dependencies:
+
+```bash
+python3 tools/verify_response_record.py response.json --sha256 <independently-retained-sha256>
+```
+
+Hashes detect changes against a trusted digest; they do not authenticate the controller,
+prove historical completeness or verify current target state. Oversized histories are
+refused as a whole. See [response-record scope and limits](docs/SECURITY_IMPLEMENTATION.md#portable-response-records).
+
 ## Accounts, SSO, notifications and keys
 
 **Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring.

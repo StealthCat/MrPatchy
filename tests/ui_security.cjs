@@ -1,7 +1,12 @@
 const assert=require('assert/strict');
+const fs=require('fs');
+const crypto=require('crypto');
 module.exports=async(page)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
  const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false,publicationCreated=false,publicationHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
+ const exportBody='{"record":{"inode":9223372036854775807,"mtime_ns":1793245000123456789}}\n',exportDigest=crypto.createHash('sha256').update(exportBody).digest('hex');
+ const exportFilename='mrpatchy-response-12345678-1234-1234-1234-123456789abc.json';
+ let exportFailure=false;
  const report={state:'incomplete',scanned:2,skipped:1,findings:[],gaps:['Encrypted content'],signatures:{state:'stale',built_at:Date.now()/1000-10*86400}};
  const plan={id:'plan-fixture',state:'draft',created:Date.now()/1000,evidence_digest:'a'.repeat(64),content:{summary:'Review fixture detection',uncertainty:'Signature alone does not establish compromise',steps:[{action:'preserve_evidence',reason:'Preserve fixture',impact:'Storage',verification:'Digest matches',evidence_ids:['incident-fixture','scan-fixture']}]}};
  const startupPlan={id:'startup-plan',state:'draft',evidence_digest:'d'.repeat(64),content:{summary:'Investigate startup change',uncertainty:'Administrative change remains possible',steps:[]}};
@@ -48,6 +53,11 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/quarantines/response-fixture/history'))return route.fulfill({json:{events:[{kind:'quarantine_approved',actor:'admin'}],approvals:[{action:'quarantine',actor:'admin'}],more:false}});
   if(url.pathname.endsWith('/quarantines/response-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'QUARANTINE');assert.equal(request.postDataJSON().plan_digest,'f'.repeat(64));responseState='quarantined';responseHold=true;writes.push(url.pathname);return route.fulfill({json:{job_id:'quarantine-job'}});}
   if(url.pathname.endsWith('/quarantines/response-fixture/restore')){assert.equal(request.postDataJSON().confirmation,'RESTORE');assert.equal(request.postDataJSON().receipt_digest,'a'.repeat(64));responseState='restored';responseHold=false;writes.push(url.pathname);return route.fulfill({json:{job_id:'restore-job'}});}
+  if(url.pathname.endsWith('/quarantines/response-fixture/export')){
+   assert.equal(request.postDataJSON().plan_digest,'f'.repeat(64));assert.ok(request.postDataJSON().reason.length>=10);writes.push(url.pathname);
+   if(exportFailure==='limit')return route.fulfill({status:413,json:{detail:'Response history exceeds the export row limit; no partial export was created'}});
+   return route.fulfill({body:exportBody,contentType:'application/json',headers:{'Content-Disposition':'attachment; filename="'+exportFilename+'"','X-Response-Record-SHA256':exportFailure==='checksum'?'0'.repeat(64):exportDigest}});
+  }
   if(url.pathname.endsWith('/quarantines/response-fixture/release')){assert.equal(request.postDataJSON().confirmation,'KEEP QUARANTINED');responseHold=false;writes.push(url.pathname);return route.fulfill({json:{state:'quarantined',server_changes_paused:false}});}
   if(url.pathname.endsWith('/evidence-archives'))return route.fulfill({json:{items:[{id:'archive-fixture',state:'verified',created:Date.now()/1000,snapshot:{path:'/tmp/security-fixture',sha256:'b'.repeat(64)},actor:'admin',reason:'Retain independent evidence.'}],more:false}});
   if(url.pathname.endsWith('/evidence-archives/archive-fixture/history'))return route.fulfill({json:{items:[{state:'approved',actor:'admin'},{state:'verified',actor:'admin'}],more:false}});
@@ -130,6 +140,30 @@ module.exports=async(page)=>{
   await page.locator('#response-approval [name=confirmation]').fill('QUARANTINE');
   await page.getByRole('button',{name:'Quarantine approved file',exact:true}).click();
   await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/execute');
+  const beforeExport=writes.length;
+  await page.getByRole('button',{name:'Export response record',exact:true}).click();assert.equal(writes.length,beforeExport);
+  await page.locator('#response-record-export [name=reason]').fill('Retain records independently for incident review.');
+  const pendingDownload=page.waitForEvent('download');
+  await page.getByRole('button',{name:'Download response record',exact:true}).click();
+  const downloaded=await pendingDownload;assert.equal(downloaded.suggestedFilename(),exportFilename);
+  assert.equal(fs.readFileSync(await downloaded.path(),'utf8'),exportBody,'Download must preserve 64-bit integers exactly');
+  await page.locator('#response-record-checksum').filter({hasText:exportDigest}).waitFor();
+  const pendingChecksum=page.waitForEvent('download');await page.getByRole('button',{name:'Download checksum',exact:true}).click();
+  const checksum=await pendingChecksum;assert.equal(fs.readFileSync(await checksum.path(),'utf8'),exportDigest+'  '+exportFilename+'\n');
+  await page.locator('#close-modal').click();
+  exportFailure='limit';
+  await page.getByRole('button',{name:'Export response record',exact:true}).click();
+  await page.locator('#response-record-export [name=reason]').fill('Retain records independently for incident review.');
+  await page.getByRole('button',{name:'Download response record',exact:true}).click();
+  await page.locator('#modal-message').filter({hasText:'no partial export was created'}).waitFor();
+  assert.equal(await page.locator('#modal-title').textContent(),'Export response record');
+  await page.locator('#close-modal').click();
+  exportFailure='checksum';assert.ok(await page.evaluate(()=>Boolean(globalThis.crypto?.subtle)));
+  await page.getByRole('button',{name:'Export response record',exact:true}).click();
+  await page.locator('#response-record-export [name=reason]').fill('Retain records independently for incident review.');
+  await page.getByRole('button',{name:'Download response record',exact:true}).click();
+  await page.locator('#modal-message').filter({hasText:'Response export checksum mismatch'}).waitFor();
+  await page.locator('#close-modal').click();exportFailure=false;
   await page.getByRole('button',{name:'File response history',exact:true}).click();
   await page.locator('#response-history').filter({hasText:'quarantine_approved'}).waitFor();await page.locator('#close-modal').click();
   await page.getByRole('button',{name:'Verify file response',exact:true}).click();

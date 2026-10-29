@@ -9,6 +9,9 @@ replacement preparation is read-only. Separately approved private replacement st
 is available, along with separately approved no-overwrite live-file publication,
 independent publication pauses and verification of the published file plus retained
 original. Service restart/rollback, broader repair and cloud isolation remain future work.
+Portable metadata-only response records with offline integrity verification are
+available for independent retention. External immutable storage and automatic
+retention remain future work.
 Broader typed remediation and process/cloud containment remain unfinished. The sections below retain the scope and limitations
 of each earlier milestone; later sections describe the features added since then.
 
@@ -1367,3 +1370,85 @@ exercise PUBLISH, verification, separate pause review and paginated history at m
 and desktop widths. Containers stub systemd; real-VM/SELinux, live GCP/IAP and broader
 service, power-loss, filesystem, performance and recovery drills remain operator
 acceptance work.
+
+## Portable response records
+
+**Servers → server → Security → Reviewed file responses → Export response record**
+downloads the selected response's stored metadata as a versioned JSON attachment.
+An administrator provides a meaningful reason, and the displayed plan digest must
+still agree. Exports remain available for uncertain, restored and console-reviewed
+responses, including through file/process/publication pauses. An active host worker
+causes a conflict; export holds the same host operation lock while gathering records
+and recording the export. No target connection, artifact authentication, preserved-byte
+read, service action, process signal or AI call runs. Export changes no response state,
+pause or incident assessment.
+
+The nineteen explicit sections contain the selected file response; its current
+incident, incident events and advisory plans; linked preservation/acquisition metadata
+and acquisition observations; all stored file approvals/events; response-monitor checks;
+process-reference observations and process responses/approvals/events; trusted repair
+preparations; staging approvals and events; publication approvals and events. Records
+are ordered by creation time then ID. This includes existing history beyond the UI's
+twenty-row pages, including rejected or superseded operations. Current incident evidence
+can represent a later detection than the original response; evidence digests and exact
+stored snapshots remain in the record. Missing or cross-host primary incident,
+acquisition or preservation links are listed explicitly and their records are omitted.
+Child records require same-host parents bound to this response. Unrelated responses,
+full scan reports, generic Activity payloads/outputs and global audit/settings are
+excluded. Only host ID/name/pinned fingerprint and allowlisted monitoring policy/watch
+fields are included; host inventory, telemetry and credential configuration are not.
+Adding a database column does not automatically add it to an export.
+
+The export is a controller metadata snapshot under the cooperating host lock, not a
+fresh host assessment or a forensic snapshot of the whole database. It does not check
+the current existence/hash of retained bytes, target journals, live replacements or
+vendor artifacts. Preserve those separately with the existing controlled forensic and
+backup workflows. Reasons, paths, AI advisory text and receipts can contain sensitive
+investigation information; protect the JSON and checksum accordingly. No automatic
+upload, deletion, retention cleanup, object-lock/WORM guarantee or cloud credentials
+are introduced.
+
+Every section has its record count, canonical byte length and SHA-256. A separate
+digest covers the canonical record including export actor, reason, timestamp, unique ID,
+scope and monitoring policy. Canonicalization is Python JSON with sorted keys, compact
+separators, ASCII escaping and finite numbers only. The exact attachment, including
+its trailing newline, has a whole-file SHA-256 returned in
+`X-Response-Record-SHA256`. The browser preserves raw bytes rather than parsing and
+reserializing 64-bit inode/timestamp integers. HTTPS browsers also compare the downloaded
+bytes through Web Crypto before saving. A separate **Download checksum** produces a
+standard SHA-256 sidecar. An export event records its ID, whole-file digest, size,
+actor and reason in file-response history, and the generic audit separately records
+ID/digest/actor. That event is committed before returning bytes and is outside the
+current snapshot to avoid a self-referential hash. A later export includes it. Successful
+generation records delivery intent, not proof that a browser saved the file.
+
+`tools/verify_response_record.py` runs offline with Python 3's standard library:
+
+```bash
+python3 tools/verify_response_record.py response.json --sha256 <trusted-whole-file-sha256>
+# Or compare the raw file with its retained sidecar:
+sha256sum -c mrpatchy-response-<export-id>.json.sha256
+```
+
+The verifier rejects duplicate keys, unsupported schemas, missing section manifests,
+changed record/section hashes, contradictory byte/row counts and a mismatched supplied
+whole-file digest. Without `--sha256`, it checks internal consistency only. Retain the
+whole-file digest through an independently trusted channel: an attacker able to rewrite
+both the JSON and its hashes can forge a self-consistent export. Neither embedded nor
+sidecar hashes authenticate the controller, prove past records were never deleted,
+provide a trusted timestamp, establish current target trust or certify a clean host.
+The application database remains mutable; this feature enables independent retention
+but does not itself make evidence immutable.
+
+Limits are **1,000 rows per section**, **5,000 total rows**, **16 MiB for the complete
+attachment**, and a **30-second userspace work budget**. Histories are queried in bounded
+streams. Exceeding a limit refuses the entire export with HTTP 413; no partial export,
+success custody event or misleading completeness flag is returned. Database/kernel
+blocking can exceed userspace deadlines. Large histories need an operator-managed,
+protected offline database backup/export; automatic partitioning is not implemented.
+No schema migration or target-helper update is needed for this feature. Rebuild the
+controller app/workers. SQLite/MySQL tests cover lineage, host/role/CSRF boundaries,
+missing references, response pauses, active-operation conflicts, exact integers,
+complete history, refusal limits, audit digests and offline tamper verification.
+Browser coverage verifies reason entry, exact-byte download, checksum download and
+an oversized-export error without a partial success.
