@@ -3737,3 +3737,12 @@ withdrawal, stale-form feedback, duplicate submission, Back/reload, server scope
 roles, phone/tablet/desktop and late-lookup dialog isolation. Full local regression,
 complete browser suite and exact-final-head CI/merge results are recorded in the
 delivery PR. No source changes are added after its final-head checks.
+
+
+Delivery: [PR #78](https://github.com/StealthCat/MrPatchy/pull/78), initial source
+[51a28362](https://github.com/StealthCat/MrPatchy/commit/51a28362e41e347c5baa76b05d37be2bb30e7fae).
+Full local regression completed **1,403 passed / 7 skipped**, plus nine version-policy
+subtests. The delivery PR records the final published head/tree, complete browser
+and all nine applicable SQLite/MySQL/native CI results, and actual merge SHA or
+precise unfinished state. Finish this PR before new cache/threading work. Do not
+infer a successful merge from this source reference or earlier-head checks.
