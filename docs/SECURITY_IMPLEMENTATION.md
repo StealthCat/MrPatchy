@@ -2482,3 +2482,183 @@ health and dedicated GCP node, remaining UI migrations, comprehensive startup
 provenance/classification, CVE and general-malware automatic containment,
 retention/immutable storage and native/real-target recovery acceptance. Fresh loop
 reports or a YAML role flag do not complete those requirements.
+
+
+## v0.9.0 — cooperative worker drain and configured concurrency
+
+Delivery: [PR #64](https://github.com/StealthCat/MrPatchy/pull/64), initial implementation
+[f4d19d05](https://github.com/StealthCat/MrPatchy/commit/f4d19d057ef5495dc8d35103353791a8330c841c).
+The PR records exact final-head checks and the actual merged main commit.
+
+Completion-gate base: main `076ea6cf` ([PR #63](https://github.com/StealthCat/MrPatchy/pull/63)),
+source 0.8.0. Its actual registry/worker/entrypoint/UI/test diff, checkpoint,
+recorded validation and all nine successful exact-head checks were inspected;
+no PR was open and no Git tags existed. Worker drain and configurable concurrency
+were concrete unfinished items in the deployment roadmap. The selected batch
+implements these together with operational UI and focused acceptance. The full
+roadmap is not complete.
+
+Administrator-only controls persist a desired drain/resume revision in existing
+settings rows, keyed by exact worker identity hash and bound to the displayed boot.
+Requests require a reason, current revision, fresh compatible report, role and CSRF.
+A cross-process control lock serializes competing requests. Changed/stopped/stale/
+unknown boots and mismatched versions reject control. A new boot does not inherit
+the previous boot's request, including for stable identities. Requests are audit
+records, not job cancellation, process shutdown or maintenance certification.
+
+Before each admission tick, the worker reads current control state; uncertainty
+blocks that tick. A tick already in progress can finish. Observed drain releases
+the coordinator role and prevents new scheduling, job/release-observation claims,
+polls, AI cycles, notifications and cleanup. Already assigned work finishes under
+existing locks, including queued executor polls, notifications and a whole assigned
+AI cycle. Draining/drained state includes all assigned work rather than only running
+threads. Fresh drained means this boot self-reports no assigned work; it is not
+independent readiness, a fleet-wide maintenance lock or proof of successful target
+operations. Stop/loss and interrupted mutations retain existing honest recovery
+semantics. Resume respects existing global/per-server AI and lifecycle/response gates.
+All-worker drain pauses background work, though controller queue submissions remain
+available. Requests, observed control revisions, drained transitions and stops are
+audited. Failed acknowledgement writes retry without admitting work or inventing
+acknowledgement. No destructive response action is authorized by these controls.
+
+`MRPATCHY_JOB_CONCURRENCY` supports 1–8 (default 2),
+`MRPATCHY_POLL_CONCURRENCY` 1–32 (default 8), read at runtime startup. Invalid
+values refuse startup. Executors and both new-job and release-observation admission
+use the same configured limits; AI remains one task. The complete Compose worker
+forwards the settings. The UI reports these actual limits, running and queued polls,
+notification assignment, requested and observed revisions. Controls stay with the
+identity before horizontal scrolling; glass/mascot styling and explained stale/
+unknown/compatibility states remain. Rebuild/recreate controller and workers together;
+no schema or agent upgrade is needed. Settings and audit records already participate
+in offline database migration. Git tags remain omitted by user instruction.
+
+Validation includes real local process drain/resume/SIGTERM, exclusive identities,
+concurrent stale-revision rejection, restart isolation, role/CSRF/input checks,
+unreadable/invalid control, failed acknowledgement retry, coordinator handoff while
+assigned work finishes, no claims while drained, resume with one-job admission,
+capacity bounds, audit and no target/provider contact from control requests.
+Browser checks cover exact identity/boot/revision requests, double submission,
+pending acknowledgement, stale conflict, resume, unauthorized controls and actual
+320/768/1440 layouts plus confirmations. Final validation and delivery references
+are recorded below and in the resulting versioned PR.
+
+Remaining deployment work: separate deployment files and complete/controller/join
+installer modes; secure remote keys/profiles/trust/artifacts/evidence/shared state;
+readiness and schema/protocol compatibility admission gates; expected/controller/
+endpoint/GCP health and dedicated GCP node; cross-host migration, storage and drain/
+interrupted-mutation acceptance. Local cooperative drain/configurable pools do not
+complete remote deployment or the unified dashboard. Remaining security work includes
+comprehensive startup discovery/provenance/AI classification, CVE monitoring and
+evidence-qualified automatic containment, known/unknown malware protection,
+retention/immutable storage and native/real-target recovery. The finite full-UI
+migration inventory remains unfinished in UI_DESIGN.md.
+
+Local validation: full Python suite **1,267 passed / 7 skipped**; focused registry/
+control suite **33 passed**. Full browser suite and focused worker control flows
+passed, and five reviewed renders are linked in UI_DESIGN.md. Python compilation,
+JS/shell syntax, whitespace and source-version consistency passed. All applicable
+GitHub checks must pass on the exact final PR head before merge; the PR records
+those checks and the actual merged commit.
+
+
+### Unfinished PR #64 — validation gate and next-cycle handoff
+
+**Not merged; main remains v0.8.0 / `076ea6cf`.** Continue/reconcile PR #64 before
+another milestone or PR. Target v0.9.0 remains unpublished/unmerged; keep that
+version for completion of this coherent update. No Git tags were created.
+
+Implementation/test head `b8e90229485185f680e751d11297ef7b6e66fd80`, tree
+`e20403a7d059e72fd0f03ff4f29f4ea5943669b2`, passed eight of nine jobs in
+[run 41010603882](https://github.com/StealthCat/MrPatchy/actions/runs/41010603882).
+MySQL failed `tests/test_plan_evidence.py::test_newer_receipts_are_outside_snapshot`:
+related-evidence plan approval returned 409, expected 200 (1 failed / 1,146 passed /
+127 skipped). Earlier [run 41009205410](https://github.com/StealthCat/MrPatchy/actions/runs/41009205410)
+failed the related `test_opt_in_projection_binding_review_and_legacy` with the
+same status mismatch. Worker registry/control tests passed in both MySQL runs.
+The final local full suite passed 1,267 / 7 skipped and the focused related-plan
+suite passed 10 tests, so local SQLite has not reproduced the approval failure.
+The root cause is **unconfirmed**; do not label it fixed, relax approval/evidence
+checks, skip the test or blindly rerun until green. No plan authorization code
+was changed in this cycle. A separate collection-time future-heartbeat fixture
+was corrected and validated; that does not fix/explain the approval failure.
+
+Next validation work: obtain the failing approval response detail and compare the
+captured versus persisted/reconstructed evidence digest, snapshot time boundary,
+numeric types and retained rows under actual MySQL. Investigate storage/transaction/
+serialization or timing differences using fixture data; those are hypotheses,
+not established causes. No Docker/MySQL server is available in this local runtime;
+the CI MySQL service is available for targeted reproduction/diagnostics. Preserve
+all stale/change/deletion/foreign-evidence and authorization rejection tests.
+
+Review also identified an unfinished worker-control edge case: the existing valid
+configured identities `.` and `..` are normalized by URL processing. The UI builds
+an identity path using encodeURIComponent, which leaves these dot segments intact;
+controls reach the wrong route (404). Before merging, move the exact identity into
+a validated request body or another normalization-safe contract, preserve all valid
+existing identities, and add backend/browser regression coverage for dot identities
+and ordinary case-sensitive IDs. Do not silently break their registration contract.
+No late speculative implementation was added for this finding.
+
+This checkpoint-only revision records the blocked handoff; it does not turn prior
+checks into passes. Any eventual final implementation/metadata commit must run all
+applicable checks and pass on that exact head before merge. The PR records current
+head/check links and remains unfinished. The broader remaining roadmap above is
+unchanged, and the existing schedule stays enabled.
+
+
+### PR #64 reconciliation — exact evidence boundary and identity-safe controls
+
+This supersedes the two unresolved findings in the preceding handoff. Completion
+gate rechecked main `076ea6cf` / PR #63 (v0.8.0), its actual changes/recorded checks,
+repository instructions and the only unfinished related PR #64. The broader roadmap
+remains incomplete. This cycle reconciles that existing update, keeps target
+v0.9.0 and does not start another PR or create Git tags.
+
+The approval failure was reproduced against a disposable native MySQL 8.0.46.
+The captured cutoff `1793340981.9435813` persisted in a JSON scope as
+`1793340981.943581`, changing the reconstructed evidence digest even though no
+receipt changed. The failed HTTP response was the existing stale-plan rejection.
+The only scope difference observed at that reproduction was the numeric cutoff.
+The issue is confirmed, rather than merely inferred from the previous CI failures.
+
+New related-evidence plans use scope version 2 with a controller-generated
+`as_of_hex` string holding the exact binary floating-point cutoff. Reconstructing
+evidence parses that canonical bounded text and uses the original cutoff for the
+same receipt queries/digest. Stored numeric snapshot timestamps remain historical
+presentation metadata and can be rounded by MySQL. No digest comparison, stale/
+deleted/changed evidence check, scope-host boundary, approval expiry, advisory-only
+restriction or provider-output validation is relaxed. A one-bit change to the exact
+cutoff still changes the digest and rejects approval. Missing/malformed/nonfinite/
+overflowed exact cutoffs reject safely. Legacy version 1 scopes and scanner-only
+plans remain readable/reviewable when their original digest still matches; old v1
+plans with already-rounded boundaries may require regeneration. No historic plan,
+evidence or digest is rewritten to force approval.
+
+Worker control now uses `POST /api/operations/workers/control` with validated exact
+`worker_id` in its JSON body, preserving the previously accepted `.`/`..` and case-
+sensitive identities. The unreleased draft path-based route is removed. Boot/
+revision/role/CSRF/freshness/version checks and audit are preserved. Backend tests
+exercise drain/resume for dot and case identities plus invalid paths; browser
+requests assert exact identity/boot/revision and exercise these names without URL
+normalization. The established glass/mascot presentation is unchanged and reviewed
+again at phone/tablet/desktop sizes.
+
+Focused local validation: 55 tests passed on SQLite and 55 passed on native MySQL
+8.0.46, including original approval failures, deterministic JSON-rounding simulation,
+exact-boundary tampering, malformed/nonfinite/overflowed values, legacy approval,
+retention/foreign-evidence rejection and all worker controls. MySQL was extracted
+into disposable local storage and run with the tests; it changes no user database
+or application deployment. Final full regression/browser results and exact-final-
+head GitHub checks are recorded in the PR before any merge. CI's MySQL 8.4 check
+remains mandatory. This resolution does not complete remote worker/state/readiness/
+migration acceptance, the full health/GCP dashboard or the security/UI roadmap.
+
+Reconciliation local validation completed: full Python suite **1,279 passed / 7
+skipped**, focused SQLite/native-MySQL suites **55 passed each**, full browser suite
+passed (including dot/case identity requests) and actual 320/768/1440 renders were
+re-reviewed. UI markup/style and the committed v0.9 screenshots remain representative;
+only control transport changed. Python compilation, JS syntax, whitespace and
+source/README/changelog version consistency passed. No outstanding finding from
+the prior handoff remains locally; all nine exact-final-commit CI jobs, including
+MySQL 8.4, must pass and mergeability/base/head must be rechecked before merging.
+The PR records those results and the actual merged commit when delivered.

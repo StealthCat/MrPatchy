@@ -42,7 +42,7 @@ async def lifespan(app):
         finally:
             worker.stop.set()
             if background: background.join()
-APP_VERSION='0.8.0'
+APP_VERSION='0.9.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -468,6 +468,18 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(auth)):
 def registered_workers(offset:int=0,user=Depends(auth)):
     from .worker_registry import page
     return page(offset)
+
+class WorkerControlInput(BaseModel):
+    worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
+    boot_id:str=Field(pattern=r'^[0-9a-f]{32}$')
+    revision:int=Field(ge=0,le=1_000_000_000,strict=True)
+    action:str=Field(pattern=r'^(drain|resume)$')
+    reason:str=Field(min_length=10,max_length=1000)
+
+@app.post('/api/operations/workers/control')
+def control_worker(body:WorkerControlInput,user=Depends(auth)):
+    from .worker_registry import request_control
+    return request_control(body.worker_id,body.boot_id,body.revision,body.action,body.reason,user['username'])
 
 @app.get('/api/jobs')
 def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):

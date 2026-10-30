@@ -15,8 +15,15 @@ def capture(s,incident,as_of=None):
 def evidence(s,incident,scope=None):
     result={'incident_id':incident.id,'scan_id':incident.scan_id,'finding':incident.evidence}
     if scope is not None:
-        if scope.get('version')!=1 or scope.get('host_id')!=incident.host_id:
+        if scope.get('version') not in (1,2) or scope.get('host_id')!=incident.host_id:
             raise ValueError('Unsupported related AI evidence scope')
+        boundary=scope['snapshot']['as_of']
+        if scope['version']==2:
+            exact=scope.get('as_of_hex')
+            if not isinstance(exact,str) or len(exact)>64:raise ValueError('Missing or invalid exact evidence boundary')
+            try:boundary=float.fromhex(exact)
+            except OverflowError:raise ValueError('Invalid exact evidence boundary') from None
+            if boundary.hex()!=exact:raise ValueError('Invalid exact evidence boundary')
         result.update(host_id=incident.host_id,incident_updated=incident.updated,incident_state=incident.state,
-            related=capture(s,incident,scope['snapshot']['as_of']))
+            related=capture(s,incident,boundary))
     return result

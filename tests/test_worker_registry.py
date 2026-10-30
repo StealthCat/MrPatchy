@@ -132,6 +132,18 @@ def test_real_worker_process_registration_duplicate_identity_and_stop(tmp_path):
             duplicate=subprocess.run([sys.executable,'-m','app.worker'],env=env,capture_output=True,text=True,timeout=15)
             assert duplicate.returncode!=0 and 'already in use' in duplicate.stderr
             assert process.poll() is None
+            def command(action,revision):
+                with sqlite3.connect(database,timeout=2) as db:
+                    db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(registry.control_key('process-fixture'),json.dumps({'boot_id':report['boot_id'],'revision':revision,'action':action})))
+                expected='drained' if action=='drain' else 'reporting'
+                for _ in range(100):
+                    with sqlite3.connect(database,timeout=2) as db:current=json.loads(db.execute('SELECT value FROM settings WHERE key=?',(registry.record_key('process-fixture'),)).fetchone()[0])
+                    if current.get('control_revision')==revision and current['state']==expected:return
+                    time.sleep(.1)
+                pytest.fail('Real worker did not acknowledge '+action+': '+str(current))
+            command('drain',1)
+            assert process.poll() is None, 'Drain keeps the worker process alive'
+            command('resume',2)
             process.send_signal(signal.SIGTERM);assert process.wait(timeout=15)==0
             with sqlite3.connect(database) as db:stopped=json.loads(db.execute('SELECT value FROM settings WHERE key=?',(registry.record_key('process-fixture'),)).fetchone()[0])
             assert stopped['state']=='stopped' and stopped['boot_id']==report['boot_id']
