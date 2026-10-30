@@ -1,4 +1,5 @@
 """Durable, redacted AI run diagnostics. Provider bodies and input evidence stay out."""
+import math
 import logging
 import re
 import time
@@ -13,6 +14,7 @@ from . import ai_pricing
 
 log = logging.getLogger('uvicorn.error')
 active = ContextVar('ai_run', default=None)
+pending_timings = ContextVar('ai_timings', default=None)
 
 class AIRun(Base):
     __tablename__ = 'ai_runs'
@@ -69,6 +71,47 @@ def run_hosts(s, run_ids):
         for run_id, host_id in s.execute(select(model.run_id, model.host_id).where(model.run_id.in_(grouped))):
             grouped[run_id].add(host_id)
     return grouped
+
+
+# These diagnostic timings share ordinary run-history retention, not a budget or
+# cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
+TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
+                 'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age'}
+
+
+def timing(stage, seconds, outcome='complete'):
+    run_id = active.get()
+    if not run_id or stage not in TIMING_STAGES or outcome not in ('complete','error'):return
+    if not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or seconds<0:return
+    buffer=pending_timings.get()
+    if buffer is None:return
+    message=f'{stage.replace("_"," ")}: {seconds*1000:.3f} ms; outcome={outcome}'
+    buffer.append((stage,message,time.time()))
+    if len(buffer)>=32:flush_timings()
+
+
+def flush_timings():
+    buffer=pending_timings.get();run_id=active.get()
+    if not buffer or not run_id:return
+    try:
+        with Session() as s:
+            if not s.get(AIRun,run_id):return
+            s.add_all(AIEvent(run_id=run_id,stage='timing_'+stage,message=message,created=created) for stage,message,created in buffer)
+            s.commit()
+    except Exception:
+        # Diagnostics never convert a validated result into a retry or mask the
+        # original error. Bounded batches can be missing after a crash/failure.
+        log.warning('AI timing could not be persisted; performance coverage is incomplete')
+    finally:buffer.clear()
+
+
+@contextmanager
+def measure(stage):
+    started=time.perf_counter();outcome='error'
+    try:
+        yield
+        outcome='complete'
+    finally:timing(stage,time.perf_counter()-started,outcome)
 
 
 def request_started(model):
@@ -149,15 +192,20 @@ def track(purpose, model, host_id='', subject='', host_ids=None):
     from . import ai_policy
     policy_token=ai_policy.scope.set(tuple(set(host_ids or []) | ({host_id} if host_id else set())))
     token = active.set(identifier)
+    timing_token=pending_timings.set([])
+    started=time.perf_counter();outcome='error'
     try:
         event('starting', 'Run accepted by the worker.')
         yield identifier
     except Exception as error:
         event('failed', safe_error(error), state='error')
         raise
-    else: event('complete', 'Structured result validated and processing completed.', state='complete')
+    else:
+        event('complete', 'Structured result validated and processing completed.', state='complete');outcome='complete'
     finally:
-        active.reset(token);ai_policy.scope.reset(policy_token)
+        timing('run',time.perf_counter()-started,outcome)
+        flush_timings()
+        pending_timings.reset(timing_token);active.reset(token);ai_policy.scope.reset(policy_token)
 
 
 def response_received(response):

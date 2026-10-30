@@ -8,7 +8,7 @@ from app.security import unseal
 def no_provider(monkeypatch):
     def unexpected(*a,**kw):pytest.fail('Saving must not contact the provider')
     monkeypatch.setattr(ai.httpx,'get',unexpected)
-    monkeypatch.setattr(ai.httpx,'post',unexpected)
+    monkeypatch.setattr(ai.transport,'post',unexpected)
 
 
 def test_key_can_be_saved_with_no_model_even_if_ai_configuration_is_broken(admin,monkeypatch):
@@ -34,7 +34,7 @@ def test_model_save_independent_of_discovery_and_provider_404(admin,monkeypatch)
     def reject(url,**kw):
         calls.append(kw)
         return httpx.Response(404,json={'error':{'code':'model_not_found','message':'fixture-key private body'}},headers={'x-request-id':'req_current_test'},request=httpx.Request('POST',url))
-    monkeypatch.setattr(ai.httpx,'post',reject)
+    monkeypatch.setattr(ai.transport,'post',reject)
     test=admin.post('/api/settings/ai-test',json={'expected_model':'selected-model','expected_key_revision':r.json()['api_key_revision']})
     assert test.status_code==502 and test.json()['model']=='selected-model' and test.json()['run_id']
     assert 'req_current_test' in test.text and 'fixture-key' not in test.text and 'private body' not in test.text

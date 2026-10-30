@@ -1962,7 +1962,9 @@ work above remain unfinished.
 
 ## Planned: faster parallel AI triage and configurable spending controls
 
-Requested 2026-10-30; **planned, not implemented by this roadmap update**.
+Requested 2026-10-30; **the program remains unfinished**. v1.18.0 delivers only
+the baseline/transport/timing foundation described in its checkpoint below; fleet
+known-good reuse, threaded execution and shared controls remain planned.
 Inspection baseline: main `8bee5b64`, source v0.16.0, latest merged PR #71.
 No live deployment timing or provider benchmark was available; the following are
 verified code constraints rather than a measured diagnosis of one deployment.
@@ -1971,7 +1973,8 @@ verified code constraints rather than a measured diagnosis of one deployment.
 
 - `worker_registry.POOL_CAPACITY['ai']` is fixed at one. The scheduler retains one `ai_task`, and `ai_cycle` runs one process investigation and then one update-scoring batch sequentially. Raising a pool size alone does not enable parallel triage.
 - `worker.investigate_one` holds the fleet-wide `ai-triage` lock for the entire investigation. Per-server provider locks also serialize outbound calls for a server. The current reconciliation routine assumes exclusive execution and would interrupt valid concurrent runs if reused unchanged.
-- An investigation can require two sequential model calls with allowlisted SSH evidence collection between them. `ai._request` uses top-level `httpx.post` without a reusable client. Most failed/interrupted investigations wait one hour before retry.
+- An investigation can require two sequential model calls with allowlisted SSH evidence collection between them. `ai._request` used top-level `httpx.post` at this baseline; v1.18.0 adds the
+  bounded reusable transport and stage diagnostics described below. Most failed/interrupted investigations wait one hour before retry.
 - Process investigations and score batches have independent rolling-hour hard allowances, defaulting to 20 each. Incident/startup plans additionally share a fixed ten-per-hour allowance. Cost receipts are retrospective estimates; they do not implement daily budget admission.
 - Existing behavior IDs include the server ID, so retained assessments/approvals do not provide a fleet-wide exact-match known-good cache. The current Retry action only accepts unapproved pending/error items; it cannot explicitly re-triage a completed safe/cache result.
 
@@ -3346,3 +3349,134 @@ The new parallel-triage, exact known-good cache and AI spending-control program
 remains planned, not implemented by Activity review. Runtime/UI/test files are
 unchanged by this reconciliation; version consistency is checked against the new
 base and all nine checks must rerun on the reconciled final head before merge.
+
+
+## v1.18.0 — AI timing baseline and bounded reusable transport
+
+Issue-first completion gate inspected current main `76fb0686` (v0.17.0), repository
+instructions/checkpoint, latest merged PR #72 actual changes and recorded validation,
+including all nine successful exact-final-head checks. Open issues returned an empty
+100-item first page; open PRs were empty. No issue fix, deferral or closure is claimed.
+The faster-triage roadmap is explicitly unfinished. Selected coherent milestone:
+measure the current serial pipeline; add reusable provider transport, bounded stage
+diagnostics, capability/transport acceptance and readable existing timeline display.
+
+Billable requests now reuse one lazily initialized HTTP client per process, with
+16 maximum connections/keepalives and 30-second idle expiry. This transport bound
+is not AI execution concurrency: runtime AI capacity remains one. Credentials are
+supplied only on a newly built request; only the ordinary negotiation/user-agent
+header defaults are allowlisted. Credentials and prior response cookies are not
+merged from client state. Response cookies are discarded. Redirects and automatic
+retries remain disabled; each future retry must re-enter policy and have a receipt.
+Existing HTTPS certificate/proxy configuration remains in use. Pool/connect waits
+are bounded to five/ten seconds (or a smaller existing request budget); read/write
+budgets remain. An idle pool closes during cooperative worker drain. Shutdown waits
+for borrowed sends before close; later use can create a fresh pool. No client opens
+at module import. Model discovery remains its separate, nonbillable GET path.
+
+Existing AI run events now carry allowlisted monotonic elapsed timings: provider
+policy admission, request transport, attempted-call/usage persistence, total tracked
+run; process triage additionally records observed queue age, scheduler admission,
+allowlisted SSH follow-up evidence and evidence/result persistence. Queue age uses
+the observation wall-clock timestamp, includes paused/backoff/ineligible time, and
+is omitted when invalid/future. Timings overlap; they must not be summed. Provider
+completion means transport returned, not an accepted verdict: HTTP/provider errors
+and structured validation retain their separate existing diagnostics. Tracked-run
+time excludes initial run creation/admission and final timing-flush overhead; the
+benchmark's outer run duration includes the entire invocation.
+
+Timing events preserve measurement-end timestamps while buffering at most 32 rows
+for one diagnostic transaction at completion or the batch bound. Context variables
+isolate independently tracked threads/nested runs. Timing flush failures emit only
+a controlled coverage warning, never a provider body, evidence, credential, fabricated
+usage or result retry. Crashes/diagnostic failures can lose a buffered batch; existing
+history pruning removes these metrics. This diagnostic history is not the future
+independent spend ledger or trusted-assessment cache. Run state/last diagnostic,
+usage uncertainty, model/schema/token budgets, full evidence and optional second
+call, per-server/global pause/lifecycle locks and response authorization remain.
+
+The same disposable harness ran against archived main and the candidate: 20 queued
+investigations, ten one-stage and ten two-stage, fixed synthetic evidence, 20ms
+loopback provider and 10ms SSH waits, identical model/schema/token budget assertions.
+Both completed all 30 calls and requested evidence, 3,000 input/600 output fixture
+tokens, zero errors, no implicit approvals and no paid/external calls. Cost is
+unavailable for the synthetic model, never represented as zero. Raw stage p50/p95,
+backlog-age, tokens and throughput are in
+[the paired fixture report](benchmarks/ai-transport-v1180.json).
+
+| Metric | v0.17.0 serial baseline | Pooled + batched timings |
+| --- | --- | --- |
+| Connections / provider calls | 30 / 30 | 1 / 30 |
+| Outer-run p50 / p95 | 99.143 / 127.634 ms | 95.806 / 128.597 ms |
+| Fixture throughput | 11.879 runs/s | 10.288 runs/s |
+| Provider + receipt p50 / p95 | 33.544 / 59.166 ms | 34.396 / 60.517 ms |
+| Receipt-persistence p50 / p95 | 2.700 / 4.301 ms | 3.029 / 10.959 ms |
+| Usage-persistence p50 / p95 | 2.194 / 5.060 ms | 3.280 / 11.772 ms |
+
+The final pair was slower overall (1.684s baseline / 1.944s candidate); an earlier
+20-run pair was faster (2.255s / 1.812s). Both samples are retained in the report.
+Connection reuse is established; consistent throughput improvement is not.
+These are small paired loopback samples under shared local load, including
+startup and diagnostic costs, not a TLS/live-provider benchmark, production speed
+promise or proof of threaded throughput. Initial eight-run pooled samples were
+slower. The harness removes ambient proxy configuration only for its loopback
+fixture and disables delayed-ACK artifacts; runtime timing writes were batched to
+remove avoidable per-stage transactions. No model/evidence capability was reduced.
+
+Validation covers actual socket reuse, request-local parallel credentials, no cookie
+forwarding/redirect/retry, finite timeouts, in-flight close ordering, idle reopen,
+full one/two-stage result/evidence equivalence, redaction, unknown-cost timeout
+receipts, independent thread contexts and diagnostic-failure isolation. Existing
+provider mocks now patch the new billable transport seam; the first full local run
+was interrupted after stale mocks missed that boundary. A subsequent full run
+exposed a legacy SQLite DDL fixture failure after the new four-thread test expanded
+the connection pool. A standalone reproduction on unchanged archived main confirmed
+stale per-connection schema metadata (duplicate dpkg_state ADD COLUMN). The new
+thread test now disposes its expanded pool in finally before later destructive DDL
+fixtures; production migration code/assertions are unchanged. Broader cross-host
+migration fencing remains planned. Corrected focused/full
+results and final exact-head CI are recorded in the delivery PR; all nine checks
+must pass before merge. Timeline workflow/phone/tablet/desktop renders reuse the
+existing glass theme/mascot and are linked in UI_DESIGN.md.
+
+Next priority (still planned): conservative versioned canonical evidence/context
+fingerprints and persistent fleet exact-known-good reuse with provenance, audited
+revocation and explicit completed-item Re-triage; then threaded claims/renewable
+leases, fair independent scoring, pause-safe concurrent provider admission and
+recovery, shared throttling/daily reservation/spend/unthrottled controls, migration
+and complete SQLite/MySQL acceptance. The first finite program milestone is only
+partially complete: evidence/cache reuse and end-to-end capability/performance
+acceptance remain. Classified Retry-After/jitter handling is not implemented here;
+legacy hourly allowances and one-hour retry behavior remain. Broader deployment,
+startup awareness, CVE/malware protection, health and full UI work remain tracked.
+Rebuild controller before matched workers; no endpoint-agent/schema upgrade.
+Source/README/changelog version is v1.18.0. No Git tags; schedule unchanged.
+
+
+Local validation before concurrent-main reconciliation: corrected Python regression
+**1,347 passed / 7 skipped**; subsequent final transport/timing checks **10 passed**
+(including preserved negotiation headers and a real response timeout without retry).
+Full browser suite passed; actual 320/768/1440 timing timelines were inspected.
+Existing focused AI/model/settings/release coverage **161 passed**, and legacy
+completion/security/two-stage coverage **53 passed**. Final exact-head CI and
+integration/version-policy validation are recorded in the delivery PR.
+
+
+Concurrent-main reconciliation: publication was held while independent PR #74
+validated and merged as v1.17.0 / `493f374c`. Fresh instructions, actual PR changes,
+all nine successful exact-head checks and empty open issue/PR lists were inspected.
+The major-1 pin/checker and full planned live-notification roadmap are retained.
+This compatible feature batch is now v1.18.0. Historical baseline AI runtime is
+unchanged by the v1.17.0 metadata/policy update. All nine checks must run on this
+integrated final head; earlier-head checks do not authorize its merge. If its PR
+remains open, reconcile/finish that PR before starting cache or other roadmap work.
+
+Delivery: [PR #75](https://github.com/StealthCat/MrPatchy/pull/75), initial source
+[e7fa6a64](https://github.com/StealthCat/MrPatchy/commit/e7fa6a6493fa6ef7ecf278698f16fcb79c1937c2).
+The PR records the final integrated head, all CI results and actual merged commit
+(or the precise pending state). Integrated version/worker/preflight checks: **75
+passed**; final focused timeline workflow and recaptured major-1 phone/tablet/
+desktop renders passed. Both paired benchmark samples are retained: connection
+reuse is established, while consistent throughput improvement remains unproven.
+Resume an open delivery PR before new cache work; do not infer completion or merge
+without all nine applicable exact-final-head checks and unchanged base/mergeability.

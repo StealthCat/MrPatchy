@@ -147,7 +147,7 @@ def test_two_stage_investigation_uses_only_allowlisted_checks(admin,monkeypatch)
         return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(result)}]}]})
     def call(host,payload,**kwargs):
         ssh_calls.append(payload);return {'identity_verified':False,'reason':'exited'}
-    monkeypatch.setattr(worker.httpx,'post',post);monkeypatch.setattr(worker.ssh,'call',call)
+    monkeypatch.setattr(worker.ai.transport,'post',post);monkeypatch.setattr(worker.ssh,'call',call)
     worker.investigate_one()
     assert len(requests)==2 and ssh_calls[0]['action']=='evidence'
     assert ssh_calls[0]['checks']==['executable']

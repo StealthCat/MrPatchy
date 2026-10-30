@@ -47,7 +47,7 @@ def test_ai_request_minimization_and_no_auto_trust(admin,monkeypatch):
     class Result:
         def raise_for_status(self): pass
         def json(self): return {'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps({'risk':'low','explanation':'Needs verification','recommended_checks':'Review package provenance'})}]}]}
-    monkeypatch.setattr(worker.httpx,'post',lambda *a,**kw:calls.append(kw) or Result())
+    monkeypatch.setattr(worker.ai.transport,'post',lambda *a,**kw:calls.append(kw) or Result())
     worker.investigate_one()
     assert calls[0]['json']['store'] is False
     assert 'tools' not in calls[0]['json']
@@ -62,7 +62,7 @@ def test_unknown_behavior_retries_use_backoff(admin,monkeypatch):
         s.add(Behavior(id='c'*64,host_id='test-host',evidence={'executable':'test'}));s.commit()
     calls=[]
     def fail(*a,**kw): calls.append(1);raise TimeoutError('secret must not leak')
-    monkeypatch.setattr(worker.httpx,'post',fail)
+    monkeypatch.setattr(worker.ai.transport,'post',fail)
     worker.investigate_one();worker.investigate_one()
     assert len(calls)==1
     with Session() as s:

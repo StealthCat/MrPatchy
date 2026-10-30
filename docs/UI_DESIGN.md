@@ -380,6 +380,18 @@ Reviewed renders: [operation desktop](screenshots/operation-detail-v0170-desktop
 [audit phone](screenshots/audit-entry-v0170-mobile.jpg).
 
 
+### v1.18.0 — AI timing diagnostics
+
+The existing administrator Run → Timeline page now labels timing stages readably
+and explains overlap, queue-age and incomplete coverage. No retry or approval is
+triggered by reading the timeline. Existing glass/solid reading surfaces, mascot,
+role/scope restrictions and Back/reload routes remain. Actual renders inspected:
+[phone](screenshots/ai-run-timing-v1180-320.jpg),
+[tablet](screenshots/ai-run-timing-v1180-768.jpg),
+[desktop](screenshots/ai-run-timing-v1180-1440.jpg).
+The shared queue/concurrency/rate/spend controls and full AI workspace acceptance
+remain planned under the faster-triage program; timing labels do not complete them.
+
 ## Planned live notification center
 
 Implement the [live notification roadmap](SECURITY_IMPLEMENTATION.md#planned-live-in-app-notifications-and-human-attention-alerts) as part of the shared application shell. Keep a persistent Notifications icon with an accessible unread badge, a compact recent panel and a dedicated paginated/filterable notification center. Apply the existing glass/status palette and Mr Patchy artwork while keeping event text readable.
