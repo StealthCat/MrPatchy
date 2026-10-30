@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 — 2026-10-29
+
+1. Make server deletion discoverable in a dedicated per-server Settings tab and in the Manage dialog, with a shared administrator-only management section.
+2. Keep exact-name/reason confirmation, active-work/recovery safeguards and retained history unchanged; provide read-only settings for deleted servers and responsive destructive-action styling.
+
 ## 0.4.0 — 2026-10-29
 
 1. Add an administrator-only searchable startup-file review workspace with deterministic paging, receipt/baseline revision guards and baseline-change labels.

@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.4.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.4.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -50,7 +50,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Open **Servers → a server name** (or **Open server**) to see everything recorded for that server in one place. Separate tabs cover its overview, packages, patching timeline, investigations, AI activity with estimated costs, history, repositories and maintenance. Switch servers while keeping the same tab, or bookmark a server tab directly. Sensitive tabs and actions retain the existing role permissions.
 
-Administrators can **Disable server** or **Delete server** from the server list or server overview. Disable suspends polling, scheduled work and host AI requests, cancels queued operations and revokes enrollment links. Enable resumes future management; cancelled jobs do not restart. Delete requires the exact server name and a reason, removes local SSH/repository credentials and removes the entry from the managed fleet. **Servers → Deleted servers** retains read-only inventory, patching, AI, security and audit history. Running work and unresolved response/recovery holds must be reconciled before deletion. These controls leave the remote agent, account and services running; uninstall them separately through a trusted console if required. See [server lifecycle safeguards](docs/SECURITY_IMPLEMENTATION.md#server-management-lifecycle).
+Administrators can **Disable server** or **Delete server** from **Servers → Open server → Settings → Server management**, the server list, or the **Manage** dialog. These controls require an administrator account. If they are missing, update/rebuild the controller and verify its displayed source version is **0.4.1** or later. Disable suspends polling, scheduled work and host AI requests, cancels queued operations and revokes enrollment links. Enable resumes future management; cancelled jobs do not restart. Delete requires the exact server name and a reason, removes local SSH/repository credentials and removes the entry from the managed fleet. **Servers → Deleted servers** retains read-only inventory, patching, AI, security and audit history. Running work and unresolved response/recovery holds must be reconciled before deletion. These controls leave the remote agent, account and services running; uninstall them separately through a trusted console if required. See [server lifecycle safeguards](docs/SECURITY_IMPLEMENTATION.md#server-management-lifecycle).
 
 ![Individual server overview with illustrative data](docs/screenshots/server-overview.jpg)
 

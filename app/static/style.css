@@ -304,3 +304,12 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 /* Startup paths, receipt IDs and hashes remain readable on narrow dialogs. */
 #startup-file-items, #startup-file-status, #startup-file-coverage { min-width: 0; overflow-wrap: anywhere; }
+
+
+/* Server lifecycle controls stay visible in both Settings and the Manage dialog. */
+.server-management { overflow-wrap: anywhere; }
+.server-management-option { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
+.server-management-option h4 { margin: 0 0 8px; font-size: 14px; }
+.server-delete-option { border-top-color: #ed99a54d; }
+.server-delete-button { border-color: #ed99a570; color: var(--red); background: #52313b80; }
+.server-delete-button:hover { border-color: var(--red); background: #52313b; }

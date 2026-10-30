@@ -87,8 +87,8 @@ module.exports=async(page,capture)=>{
   await page.locator('#server-snapshot summary').first().click();await page.locator('#server-snapshot pre').filter({hasText:'Atlas-current'}).waitFor();
   for(const width of [320,390,1440]){
    await page.setViewportSize({width,height:1000});
-   for(const name of ['Overview','Connection','Packages','Patching timeline','Investigations','AI activity','History','Repositories','Maintenance']){
-    await open(name);const marker={'Overview':'.server-facts','Connection':'#server-connection-form','Packages':'.pkg-check','Patching timeline':'#server-calendar .server-timeline','Investigations':'.investigation','AI activity':'#ai-log-table tbody tr','History':'#package-history-table tbody tr','Repositories':'#source-files','Maintenance':'#server-recovery-form'}[name];await page.locator(marker).first().waitFor();
+   for(const name of ['Overview','Settings','Connection','Packages','Patching timeline','Investigations','AI activity','History','Repositories','Maintenance']){
+    await open(name);const marker={'Overview':'.server-facts','Settings':'#server-tab-body [data-server-management]','Connection':'#server-connection-form','Packages':'.pkg-check','Patching timeline':'#server-calendar .server-timeline','Investigations':'.investigation','AI activity':'#ai-log-table tbody tr','History':'#package-history-table tbody tr','Repositories':'#source-files','Maintenance':'#server-recovery-form'}[name];await page.locator(marker).first().waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,name+' overflows at '+width);
     assert.equal(await page.locator('#retry-server-tab').count(),0);
    }
@@ -100,6 +100,10 @@ module.exports=async(page,capture)=>{
   lateRelease();await page.waitForTimeout(100);assert.equal(await page.getByText('Atlas-machine',{exact:true}).count(),0);
   for(const nextRole of ['viewer','operator']){
    role=nextRole;await page.goto(new URL('/?server-role='+nextRole+'#servers/'+beta+'/overview',page.url()).href);await page.getByText('Borealis-machine',{exact:true}).waitFor();
+   assert.equal(await tabs.getByRole('link',{name:'Settings',exact:true}).count(),0);
+   assert.equal(await page.locator('[data-host-delete],[data-host-lifecycle]').count(),0);
+   await page.evaluate(id=>location.hash='#servers/'+id+'/settings',beta);await page.getByRole('heading',{name:'Administrator access required',exact:true}).waitFor();
+   assert.equal(await page.locator('[data-server-management]').count(),0);
    assert.equal(await tabs.getByRole('link',{name:'File integrity',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'Connection',exact:true}).count(),0);
    assert.equal(await tabs.getByRole('link',{name:'Agent health',exact:true}).count(),0);

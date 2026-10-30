@@ -1,5 +1,5 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true]];
+const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true]];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
 
 function serverPagination(root,offset,more,load,size=50){
@@ -19,24 +19,38 @@ async function serverWorkspace(revision){
  selected=id;
  let tab=parts[2]||'overview';if(!SERVER_TABS.some(t=>t[0]===tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const inactive=h.enabled===false||Boolean(h.deleted_at);
- const allowed=inactive?['overview','history','ai','patching','security',...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
+ const allowed=inactive?['overview','settings','history','ai','patching','security',...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
  if(!allowed.includes(tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const entry=SERVER_TABS.find(t=>t[0]===tab);
  const tabs=SERVER_TABS.filter(t=>(!t[2]||isAdmin())&&allowed.includes(t[0]));
  $('#breadcrumb').textContent='Workspace / Servers / '+h.name+' / '+entry[1];document.title=h.name+' · '+entry[1]+' · Mr Patchy';
  root.innerHTML=`<div class="server-back"><a href="#servers">← All servers</a><label>Server<select id="server-workspace-select" aria-label="Switch server">${hosts.map(item=>`<option value="${esc(item.id)}" ${item.id===id?'selected':''}>${esc(item.name)}</option>`).join('')}</select></label></div>`+
- heading(h.name,`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`,`<span>${badge(h.state)}</span>`+(isAdmin()&&!h.deleted_at?`<button data-host-lifecycle="${esc(h.id)}">${h.enabled===false?'Enable':'Disable'} server</button><button data-host-delete="${esc(h.id)}">Delete server</button>`:''))+
+ heading(h.name,`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`,`<span>${badge(h.state)}</span>`+(isAdmin()&&!h.deleted_at&&tab!=='settings'?`<a class="button" href="${serverLink(id,'settings')}">Server settings</a><button data-host-lifecycle="${esc(h.id)}">${h.enabled===false?'Enable':'Disable'} server</button><button data-host-delete="${esc(h.id)}">Delete server</button>`:''))+
  (inactive?`<div class="notice">${h.deleted_at?'Deleted from the managed fleet. Local SSH credentials were removed; these records are retained for review.':'Management disabled. Polling, queued operations, scheduled work and host AI requests are suspended. Existing remote agents and services continue running.'}</div>`:'')+
  `${isAdmin()?'<section id="server-ai-policy" class="card"></section>':''}<nav class="server-tabs" aria-label="Server sections">${tabs.map(t=>`<a href="${serverLink(id,t[0])}" ${t[0]===tab?'class="active" aria-current="page"':''}>${t[1]}</a>`).join('')}</nav><section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
  $('#server-workspace-select').onchange=event=>{location.hash=serverLink(event.target.value,tab);};
- const body=$('#server-tab-body'),context={root:body,hostId:id};
+ const body=$('#server-tab-body'),context={root:body,hostId:id,host:h};
  if(isAdmin()){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.textContent=error.message;});}
  if(h.deleted_at&&!hosts.some(item=>item.id===id)){const option=document.createElement('option');option.value=id;option.textContent=h.name+' (deleted)';option.selected=true;$('#server-workspace-select').append(option);}
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity};
+  const views={overview:serverOverview,settings:serverSettings,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity};
   if(inactive&&tab==='security')await retainedSecurity(revision,context);else await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
+}
+
+function serverManagementPanel(host){
+ if(!isAdmin())return '';
+ if(host.deleted_at)return '<section class="card server-management" data-server-management><h3>Server management</h3><p>This server has been deleted from management. Its retained records are read-only; enroll a new server to manage it again.</p><a class="button" href="'+serverLink(host.id,'history')+'">View retained history</a></section>';
+ const enabled=host.enabled!==false;
+ return `<section class="card server-management" data-server-management><h3>Server management</h3><p>Manage <strong>${esc(host.name)}</strong>. Changes require administrator review and a reason.</p>
+ <div class="server-management-option"><h4>${enabled?'Disable':'Enable'} management</h4><p class="help">${enabled?'Pause polling, queued operations, schedules and AI requests for this server. The remote agent and services keep running.':'Resume polling and approved future automation. Previously cancelled work will not restart.'}</p><button data-host-lifecycle="${esc(host.id)}">${enabled?'Disable':'Enable'} server</button></div>
+ <div class="server-management-option server-delete-option"><h4>Remove from the managed fleet</h4><p class="help">Delete this server and remove its saved local credentials. Inventory, patching, AI and security history remain under Deleted servers. The remote agent stays installed. Running operations and unresolved recovery holds must be reconciled first.</p><button class="server-delete-button" data-host-delete="${esc(host.id)}">Delete server</button></div></section>`;
+}
+
+async function serverSettings(revision,{root,hostId,host}){
+ if(!currentView(revision,'servers')||!root.isConnected)return;
+ root.innerHTML=serverManagementPanel(host)+(!host.deleted_at?`<section class="card"><h3>More server settings</h3><div class="actions"><a class="button" href="${serverLink(hostId,'connection')}">Connection settings</a>${host.enabled===false?'':`<a class="button" href="${serverLink(hostId,'maintenance')}">Maintenance &amp; recovery</a><a class="button" href="${serverLink(hostId,'agent')}">Agent health</a>`}</div></section>`:'');
 }
 
 async function serverOverview(revision,{root,hostId}){
