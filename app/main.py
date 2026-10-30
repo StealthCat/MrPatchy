@@ -42,7 +42,7 @@ async def lifespan(app):
         finally:
             worker.stop.set()
             if background: background.join()
-APP_VERSION='0.7.0'
+APP_VERSION='0.8.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -464,6 +464,11 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(auth)):
         if not row: raise HTTPException(404,'Behavior not found')
         with host_lifecycle.activity([row.host_id],'queue'):
             row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
+@app.get('/api/operations/workers')
+def registered_workers(offset:int=0,user=Depends(auth)):
+    from .worker_registry import page
+    return page(offset)
+
 @app.get('/api/jobs')
 def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):
     if offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid operation pagination')

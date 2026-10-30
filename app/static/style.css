@@ -375,3 +375,11 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 .server-directory { background:var(--panel);backdrop-filter:none;-webkit-backdrop-filter:none; }
 @media(max-width:480px) { .server-card-title>div { flex:1 0 calc(100% - 36px); } }
+
+/* Worker registrations are observations, never a readiness certification. */
+.worker-registry-table { min-width:850px; }
+.worker-registry-table td { max-width:260px;overflow-wrap:anywhere; }
+.worker-registry-table td small { white-space:normal; }
+.badge.reporting { color:var(--mint);background:#9ee8d114; }
+.badge.stale,.badge.unknown,.badge.version_mismatch { color:var(--amber);background:#f7cf8a14; }
+.badge.stopped { color:var(--muted);background:#a7bdc714; }

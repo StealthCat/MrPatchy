@@ -2428,3 +2428,53 @@ checks passed at 320/768/1440, including roles, malicious text, pagination/conte
 future timestamps and recovery warnings. The 21 lifecycle/version tests, JS syntax,
 whitespace and version consistency passed. Reviewed responsive renders are linked
 in UI_DESIGN.md. Versioned PR records final CI and actual merge; Git tags are omitted.
+
+
+## v0.8.0 — worker registration and role-specific startup foundation
+
+Completion-gate base: main `bc613af2` ([PR #62](https://github.com/StealthCat/MrPatchy/pull/62)),
+source 0.7.0. The actual directory/Overview diff, recorded validation/renders and
+nine successful exact-head checks were inspected; no PR was open. Worker identity,
+heartbeat and role-specific startup are concrete unfinished deployment/dashboard
+requirements. This milestone delivers their foundation, not supported remote workers.
+
+Every scheduler runtime registers a generated or configured identity, boot ID,
+static source version and reported Docker/process type. A dedicated cross-process
+identity lock rejects collisions and exits scheduling after ownership loss. Hashed
+setting keys avoid SQL collation aliasing between distinct case-sensitive IDs. Bounded
+15-second self-reports include actual default pool capacities, current futures,
+coordinator flag and uptime. Graceful pool shutdown records stopped; abrupt loss
+becomes stale after 120 seconds. Invalid/future clocks (five-second tolerance),
+old versions and unknown readiness are distinguished. Default generated boot rows
+are retained; stable per-instance IDs reuse their row and retain audit events.
+No automatic retention/deletion or readiness certification is introduced.
+
+Administrator-only Activity → Workers exposes read-only 50-record pages with
+coverage limits, role/deep-link/pagination/empty/error-safe presentation and the
+established glass/mascot style. Records live in existing settings/audit tables,
+already included in offline migration; no new schema/helper upgrade is needed.
+The complete Compose worker explicitly selects worker startup, prepares only data
+ownership and skips controller TLS initialization. App/Caddy bootstrap is unchanged.
+Source version comes from the single static authority without importing the web app.
+Rebuild/restart controller and workers; old workers remain unregistered.
+
+Validation covers exclusive identity, heartbeat/stop, stale/future/version projection,
+secret-field exclusion, roles, lost-lock admission blocking and leader release,
+role startup and static metadata. A real disposable local worker process registers,
+rejects a duplicate identity in a second process and stops under SIGTERM. This is
+local/SQLite process acceptance, not separate-host/MySQL storage or target recovery
+acceptance. Existing claims, per-host/recovery locks, coordinator election and
+fixed concurrency remain unchanged. The full local regression suite passed (1,245 passed / 7 skipped before final
+collation/lock-uncertainty refinements); the final focused registry/version/GCP
+suite passed 20 tests, and full plus focused browser checks passed. JS/Python/shell
+syntax, whitespace and version consistency passed. Final PR records exact-head CI.
+Git tags are omitted by user instruction.
+
+Still planned: complete/controller/worker deployment files and installer modes,
+remote shared keys/database profiles/artifacts/evidence/state preflight, schema/
+protocol compatibility gating, configurable concurrency, drain, cross-host migration
+and failure acceptance. Also unfinished: expected nodes, controller/endpoint/GCP
+health and dedicated GCP node, remaining UI migrations, comprehensive startup
+provenance/classification, CVE and general-malware automatic containment,
+retention/immutable storage and native/real-target recovery acceptance. Fresh loop
+reports or a YAML role flag do not complete those requirements.

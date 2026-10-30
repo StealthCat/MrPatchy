@@ -123,7 +123,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 | Security, integrity, startup and response | Existing scanner/baseline/vendor/file/process workflows | Split crowded workspaces and long dialogs; migrate review/recovery/export states |
 | Activity, audit and inventory/package history | Existing global/server pages | Dedicated detail views, shared pagination/filter/long-output components |
 | Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
-| Deployment, worker and GCP health | Planned backend features | Migrate when implemented, without fabricating component health |
+| Deployment, worker and GCP health | Worker registration/liveness page v0.8.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
 | Whole-application acceptance | Not complete | All rows migrated; cross-role workflows, state/asset/readability consistency and actual mobile/tablet/desktop review |
 
 No additional mascot artwork is required for this bounded route milestone; it
@@ -167,3 +167,18 @@ This milestone does not migrate the fleet dashboard, enrollment content, securit
 workspaces or future deployment-health screens. Their finite inventory remains above.
 
 Reviewed fixture renders: [directory desktop](screenshots/server-directory-v070-desktop.jpg), [directory phone](screenshots/server-directory-v070-mobile.jpg), [Overview Summary](screenshots/server-overview-v070-summary.jpg), [System/collector tablet](screenshots/server-overview-v070-system.jpg), [Patching status phone](screenshots/server-overview-v070-patching.jpg). The browser suite also exercises empty results/fleet, malicious text, role restrictions, stale/future observations and recovery warnings.
+
+
+## Worker registrations (v0.8.0)
+
+Activity now has route-linked Operations & audit / Workers pages for administrators.
+The Workers page keeps the shared glass navigation, local mascot introduction,
+readable coverage panel, bounded paginated table and explained liveness states.
+Readiness is always explicitly not assessed. The table scrolls locally on phones,
+with a visible hint; no operational control is introduced. Deep links, Back/reload,
+role restrictions, empty state and untrusted identity escaping are browser tested.
+This is a worker-only self-report foundation, not migration/completion of the
+planned all-component deployment-health dashboard. Existing operations/recovery
+controls stay on their original page, and no Docker-daemon access is added.
+
+Reviewed fixture renders: [desktop](screenshots/worker-registrations-v080-desktop.jpg), [tablet](screenshots/worker-registrations-v080-tablet.jpg), [phone](screenshots/worker-registrations-v080-mobile.jpg). Readiness/coverage text stays visible above the table; horizontal scrolling exposes remaining columns on narrow screens.
