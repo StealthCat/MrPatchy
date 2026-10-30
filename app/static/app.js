@@ -149,11 +149,11 @@ function finishServer(id){
    const active=rows.filter(j=>j.action==='deploy'&&['queued','running'].includes(j.state));
    if(active.length>1)throw Error('Multiple active installations. Review Activity before proceeding.');
    if(!active.length){await api(`/hosts/${id}/fingerprint`,'PUT',{fingerprint:new FormData(form).get('fingerprint')});if(!current())return;}
-   progress={hostId:id,jobId:active[0]?.id||'',previous:rows.map(j=>j.id)};
+   progress={hostId:id,jobId:active[0]?.id||'',previous:rows.map(j=>j.id),requestId:crypto.randomUUID()};
    // Persist before the POST: a lost response must never cause a blind replay.
    enrollmentProgress(progress);stopTracking.hidden=false;
    sessionStorage.removeItem('mrpatchy-enrollment-success:'+currentUser.username);
-   if(!progress.jobId){const job=await api(`/hosts/${id}/actions/deploy`,'POST');progress.jobId=job.job_id;enrollmentProgress(progress);}
+   if(!progress.jobId){const job=await api(`/hosts/${id}/actions/deploy`,'POST');if(enrollmentProgress()?.requestId!==progress.requestId)return;progress.jobId=job.job_id;enrollmentProgress(progress);}
    if(!current())return;
    result.textContent='Installation queued. Waiting for backend verification…';
   }catch(error){if(current()){result.textContent=error.message;if(progress)check.hidden=false;else button.disabled=false;}}

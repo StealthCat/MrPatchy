@@ -61,6 +61,17 @@ module.exports=async function finishEnrollmentUI(page,apiPath,capture){
  state='queued';await page.evaluate(id=>finishServer(id),id);
  await page.getByRole('button',{name:'Stop tracking (job continues)',exact:true}).click();
  assert.equal(await page.locator('#modal').evaluate(e=>e.open),false);
+ // A stopped tracker must not reappear when a delayed submit response arrives.
+ await page.unroute(deploy);await page.unroute(jobs);
+ await page.route(jobs,route=>route.fulfill({json:[]}));
+ let releaseSubmit,markSubmit;
+ const delayedSubmit=new Promise(r=>releaseSubmit=r),submitted=new Promise(r=>markSubmit=r);
+ await page.route(deploy,async route=>{markSubmit();await delayedSubmit;await route.fulfill({json:{job_id:'enrollment-fixture'}});});
+ await page.evaluate(id=>finishServer(id),id);
+ await page.getByRole('button',{name:'Finish and verify installation',exact:true}).click();await submitted;
+ await page.getByRole('button',{name:'Stop tracking (job continues)',exact:true}).click();
+ releaseSubmit();await page.waitForTimeout(200);
+ assert.equal(await page.evaluate(()=>sessionStorage.getItem('mrpatchy-enrollment:admin')),null);
  await page.unroute(jobs);await page.unroute(detail);await page.unroute(deploy);
  await page.locator('[data-nav=servers]').click();
 };

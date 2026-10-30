@@ -2276,6 +2276,10 @@ Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint b
 
 ## v0.5.0 — verified enrollment completion and resumable progress
 
+Delivery: [PR #59](https://github.com/StealthCat/MrPatchy/pull/59), initial implementation
+[d929c96e](https://github.com/StealthCat/MrPatchy/commit/d929c96ecaa2f1a7824bf245144227132e53a1f0).
+The PR records final-head check results and the actual merged main commit.
+
 Completion-gate base: main `c9e152e` ([PR #58](https://github.com/StealthCat/MrPatchy/pull/58)),
 source 0.4.2. Its four-file roadmap/version diff and nine successful exact-head
 checks were inspected; no unfinished PR was open. The broader roadmap is not
@@ -2299,7 +2303,8 @@ Session/modal guards prevent late responses from navigating another dialog/accou
 
 Browser fixtures validate pending→reload→failure→explicit retry, lost response,
 wrong-server rejection, correct Overview routing and retained success after reload,
-with desktop/mobile screenshots. Existing backend deployment verification and
+with desktop/mobile screenshots. The full local UI suite and 21 lifecycle/version
+tests passed; JS syntax, whitespace and version consistency passed. Existing backend deployment verification and
 recovery gates are reused unchanged. No schema or helper upgrade is required;
 rebuild the controller. Versioned PR records final validation and merged commit.
 Git tags remain omitted by user instruction.
