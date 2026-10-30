@@ -3526,3 +3526,11 @@ daily reservations/spend/unthrottled controls. Preserve full capability and comp
 SQLite/MySQL acceptance before declaring those features implemented. Notification,
 remote deployment, protection/startup discovery and full UI milestones remain planned.
 If this delivery PR is open, finish/reconcile it before starting further work.
+
+Delivery: [PR #76](https://github.com/StealthCat/MrPatchy/pull/76), initial source
+[8b19311d](https://github.com/StealthCat/MrPatchy/commit/8b19311d39b663daec490d1c8acc6a2877400f7f).
+Expanded local initialization, settings, timing and preflight coverage: **82 passed /
+1 skipped**. The delivery PR records full local regression, all nine final-head
+checks, the actual merge commit or precise unfinished state. Finish an open PR
+before new cache work. No UI change or new schema definition; existing browser,
+MySQL and native startup checks remain mandatory on the exact final commit.
