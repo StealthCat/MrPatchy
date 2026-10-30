@@ -1,5 +1,7 @@
 # Mr Patchy
 
+Current source version: **0.3.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
 Mr Patchy is a self-hosted, Dockerized control center for Ubuntu, Debian, Raspberry Pi OS, Fedora and modern DNF/Yum-based RPM systems. Manage packages and repositories over SSH, plan AI-assisted release upgrades with one go/no-go approval, monitor system integrity and process behavior, and coordinate patching, alerts and recovery across your fleet.
@@ -387,3 +389,10 @@ retain its checksum independently; verify it offline with
 Exports refuse oversized histories (1,000 rows/section, 16 MiB); this does not enable
 automatic retention, deletion or external immutable storage. See the
 [scanner-record scope](docs/SECURITY_IMPLEMENTATION.md#portable-per-server-scanner-records).
+
+
+Manual scanner AI response plans offer an opt-in **Include related execution and
+integrity evidence** review. This shares bounded historical identity matches and
+coverage gaps, retains an inspectable evidence snapshot and rejects changed evidence
+at generation/approval. Automatic plans remain scanner-only; no AI plan executes a
+response. See the [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md).

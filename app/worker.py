@@ -370,7 +370,7 @@ def execute_locked(job_id):
                     policy=s.get(Setting,'security-policy:'+h.id)
                     if not policy or not policy.value.get('auto_ai_plan'):raise ValueError('Automatic AI planning is disabled; no AI call sent')
                     if incident.state!='open' or incident.scan_id!=job.payload.get('scan_id'):raise ValueError('Automatic incident evidence changed; no AI call sent')
-                plan=incidents.generate(s,incident)
+                plan=incidents.generate(s,incident,include_related=job.payload.get('include_related') is True and not job.payload.get('automatic'))
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='vendor-inspect':
                 from . import vendor,incidents

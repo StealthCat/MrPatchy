@@ -80,7 +80,7 @@ the bounded features already implemented):
 - General malware protection: known-malware detection, AI-enabled triage of previously unknown malware, and automatic file quarantine plus malicious-process termination; see the planned milestone below.
 - CVE exposure-window exploitation monitoring with automatic quarantine or termination of detected malicious artifacts/processes; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention. Bounded per-server scanner record exports now complement file-response exports; automatic deletion and external storage are not implemented.
-- Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; AI evidence binding across these sources remains unfinished.
+- Broader behavioral/threat-intelligence correlation and cross-source AI investigation evidence. Read-only exact file identity pivots now connect scanner, execution and integrity receipts; Opt-in manual scanner plans now bind a bounded related-evidence snapshot; broader signature-free AI investigations remain unfinished.
 - File-write triggers and coverage beyond fresh verified eBPF executions; unsupported kernels, transient/unverified processes and broader runtime mechanisms still have gaps.
 - Reviewed engine/signature installation and maintenance; existing scanners/rules require separately prepared trusted prerequisites.
 - Separately approved service restart/rollback and broader typed remediation, credential-rotation tasks, rebuild escalation and cloud isolation with validated recovery paths.
@@ -2090,3 +2090,53 @@ requirement.
 - Add searchable server/fleet views for mechanism, job/unit, schedule/trigger, account, enabled state, package/custom origin, current versus baseline changes, AI assessment, explanation and linked incidents. Allow reviewed benign/false-positive decisions bound to the observed version; future changes require reassessment and retain audit history.
 - Feed evidence-supported suspicious findings into the planned malware investigation/response policy. A custom entry or AI suspicion alone does not authorize quarantine, termination or deletion; reuse the established evidence and response-policy checks.
 - Validate native Debian/RPM and supported init/cron layouts, per-user/root jobs, unit precedence/drop-ins, transient/generated entries, package defaults versus legitimate edits, malicious and benign lookalikes, prompt injection/redaction, referenced-file changes, large inventories, offline/permission gaps and AI pause. Include real-target acceptance and migration/helper documentation. Do not mark this requirement complete solely because the existing metadata inventory or manual AI plan exists.
+
+
+## v0.3.0 — opt-in cross-source advisory AI evidence
+
+Delivery: [PR #55](https://github.com/StealthCat/MrPatchy/pull/55); initial implementation
+commit [fbf4c149](https://github.com/StealthCat/MrPatchy/commit/fbf4c14996c57ef1f138840c1caa98747d1d385d).
+The PR records final validation and its actual merged main commit. No Git tags are created.
+
+The completion gate identified cross-source AI evidence binding as unfinished after
+[PR #54](https://github.com/StealthCat/MrPatchy/pull/54), merged as
+`a3b0ff9e8e2bc01ca4ac2bf72c0133cf2762e822`. This update adds explicit per-request
+sharing consent to manual scanner incident plans. The existing Related evidence
+projection supplies matching scanner, execution, startup/custom inventory and package
+integrity metadata from the newest 50 receipts per source at capture time. Existing
+five-match/receipt, source entry and gap bounds remain visible. Snapshots above
+64 KiB are refused before provider I/O; use scanner-only planning or manual review.
+No arguments, environments, raw logs or file contents are added by this feature.
+Existing scanner finding payloads and their sharing controls remain unchanged.
+
+Related references are source-qualified; exact/path-only/different-hash matches,
+unverified executions, missing sources and truncation counts remain distinct.
+Endpoint strings are untrusted inputs, not instructions. Typed advisory output may
+reference only supplied evidence IDs and never authorizes shell commands or response
+actions. The controller retains the bounded shared snapshot, host, model and digest
+inside the plan for inspection. Changes/deletion of contributing projected receipts,
+incident evidence or review state during generation or before approval reject the
+plan. Approval rechecks the same historical time boundary; newer receipts lie outside
+that snapshot and do not establish its present-day completeness. Backdated additions
+within its bounded search can invalidate it. This is not a live process identity check.
+
+The manual opt-in is stored in the queued job, with actor/scope audit. Global and
+per-server AI checks, activity/model/usage records, quotas and the final provider
+boundary still apply at execution. Automatic plans remain scanner-only. Historical
+plans keep their former binding and approvals execute no target action. No schema
+or target helper upgrade is needed; rebuild the controller and restart workers.
+Scanner exports retain their existing reduced plan projection; related snapshot
+contents are not added to that format, and its original digest remains opaque.
+
+Source versioning starts at 0.3.0 after former API metadata 0.2.0: APP_VERSION drives
+FastAPI, health and authenticated UI metadata; README and numbered CHANGELOG entries
+are checked against source and the PR base in CI. Versioned commit/PR subjects are
+required. Git tags are skipped by explicit user instruction; source versioning does
+not announce a Docker image. This section is the continuation checkpoint for this
+version; the resulting versioned PR and merged commit in GitHub identify delivery.
+
+Still unfinished: signature-free correlated investigations, behavioral/network/log
+collectors, CVE applicability/effective-fix exposure tracking, validated detectors,
+policy-authorized automatic quarantine/termination, maintained signatures/engines,
+retention/immutable storage and real-target response acceptance. This bounded
+scanner-led advisory enrichment does not complete general malware protection.

@@ -42,7 +42,8 @@ async def lifespan(app):
         finally:
             worker.stop.set()
             if background: background.join()
-app=FastAPI(title='Mr Patchy',version='0.2.0',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+APP_VERSION='0.3.0'
+app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
 from .security import cipher
@@ -121,7 +122,7 @@ def object_dict(obj,exclude=()): return {c.name:getattr(obj,c.name) for c in obj
 @app.get('/')
 def index(): return FileResponse(static/'index.html')
 @app.get('/healthz')
-def health(): return {'status':'ok'}
+def health(): return {'status':'ok','version':APP_VERSION}
 class Login(BaseModel):
     username:str=Field(default='admin',pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     password:str=Field(max_length=1024)
@@ -726,7 +727,7 @@ def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(a
         return object_dict(record)
 
 @app.get('/api/identity')
-def identity_info(user=Depends(auth)): return {k:user[k] for k in ('username','role','mfa')}
+def identity_info(user=Depends(auth)): return {**{k:user[k] for k in ('username','role','mfa')},'version':APP_VERSION}
 
 class UserInput(BaseModel):
     username:str=Field(pattern=r'^[A-Za-z0-9_.-]{1,64}$')
@@ -1941,8 +1942,11 @@ def release_quarantine_hold(host_id:str,quarantine_id:str,body:ResponseApproval,
         row.hold=False;quarantine.event(s,row,'hold_released',user['username'],{'reason':body.reason.strip(),'confirmation':body.confirmation,'receipt':row.receipt});s.commit()
         return {'state':row.state,'server_changes_paused':False,'incident_not_resolved':True}
 
+class SecurityPlanInput(BaseModel):
+    include_related:bool=False
+
 @app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/plan')
-def security_plan_queue(host_id:str,incident_id:str,user=Depends(auth)):
+def security_plan_queue(host_id:str,incident_id:str,body:SecurityPlanInput|None=None,user=Depends(auth)):
     with worker.Lock('security-plan-queue'):
         with Session() as s:
             host_or_404(s,host_id);row=s.get(incidents.Incident,incident_id)
@@ -1952,7 +1956,11 @@ def security_plan_queue(host_id:str,incident_id:str,user=Depends(auth)):
             # Bound paid work independently of process triage.
             recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
             if recent>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
-            return {'job_id':worker.enqueue(s,host_id,'security-plan',{'incident_id':row.id})}
+            payload={'incident_id':row.id}
+            if body and body.include_related:payload['include_related']=True
+            job_id=worker.enqueue(s,host_id,'security-plan',payload)
+            audit(s,'security AI evidence scope selected',host_id+' '+row.id+' '+user['username']+' related='+str(bool(payload.get('include_related'))));s.commit()
+            return {'job_id':job_id}
 
 class SecurityPlanApproval(BaseModel):
     evidence_digest:str
@@ -1964,7 +1972,9 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
             plan=s.get(incidents.Plan,plan_id)
             row=s.get(incidents.Incident,plan.incident_id) if plan else None
             if not row or row.host_id!=host_id:raise HTTPException(404,'Plan not found')
-            current=incidents.digest({'incident_id':row.id,'scan_id':row.scan_id,'finding':row.evidence})
+            from . import plan_evidence
+            try:current=incidents.digest(plan_evidence.evidence(s,row,plan.content.get('evidence_scope')))
+            except (ValueError,KeyError,TypeError):raise HTTPException(409,'Related evidence is unavailable or changed; generate a new plan')
             if plan.state!='draft' or current!=plan.evidence_digest or body.evidence_digest!=current or time.time()-plan.created>86400:
                 raise HTTPException(409,'Plan is stale or already reviewed; generate a new plan')
             plan.state='approved';plan.approved_by=user['username'];plan.expires=time.time()+3600

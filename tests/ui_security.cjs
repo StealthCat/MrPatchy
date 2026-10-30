@@ -1,7 +1,7 @@
 const assert=require('assert/strict');
 const fs=require('fs');
 const crypto=require('crypto');
-module.exports=async(page)=>{
+module.exports=async(page,capture)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
  const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false,publicationCreated=false,publicationHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const exportBody='{"record":{"inode":9223372036854775807,"mtime_ns":1793245000123456789}}\n',exportDigest=crypto.createHash('sha256').update(exportBody).digest('hex');
@@ -89,7 +89,7 @@ module.exports=async(page)=>{
    if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true,custom_paths:['/srv/myapp/config.json']});return route.fulfill({json:{job_id:'inspection-job'}});}
    return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}},{id:'rpm-vendor-job',created:Date.now()/1000,report:{state:'collected',trust_basis:'controller_authenticated_rpm_artifact',packages:[],persistence:null,vendor_verification:{state:'matches_artifact_bytes',package:'Patchy_test',version:'2:1.0-1',architecture:'x86_64',examined:1,findings:[],gaps:[]},vendor_authentication:{signature_key_ids:['0123456789abcdef']}}}],more:false}});
   }
-  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
+  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname===prefix+'/incidents/incident-fixture/plan'){assert.equal(request.postDataJSON().include_related,true);plan.content.evidence_scope={version:1,model:'fixture<script>bad()</script>',snapshot:{items:[],sources:{executions:{examined:0,more:false}},as_of:1000}};}if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
   if(url.pathname.endsWith('/policy'))return route.fulfill({json:{enabled:false,interval_hours:24,paths:['/tmp']}});
   if(url.pathname===prefix)return route.fulfill({json:report});
   if(url.pathname.endsWith('/timeline'))return route.fulfill({json:{items:[{kind:'review',actor:'admin',created:Date.now()/1000,details:{reason:'Fixture reviewed'}}],more:false}});
@@ -114,7 +114,19 @@ module.exports=async(page)=>{
   await page.locator('#security-incidents .badge').filter({hasText:'approved'}).waitFor();
   assert.equal(writes.at(-1),prefix+'/plans/plan-fixture/approve');
   await page.getByRole('button',{name:'Generate AI response plan',exact:true}).click();
+  assert.equal(await page.locator('#security-ai-scope [name=include_related]').isChecked(),false);
+  if(capture)await capture('ai-evidence-review',false);
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.locator('#modal').evaluate(e=>e.scrollWidth<=e.clientWidth+1));
+  if(capture)await capture('ai-evidence-review-mobile',false);
+  await page.setViewportSize({width:1440,height:1000});
+  await page.locator('#security-ai-scope [name=include_related]').check();
+  await page.getByRole('button',{name:'Queue advisory AI plan',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('AI plan queued'));
+  await page.locator('#security-refresh').click();
+  await page.getByText('Shared related evidence snapshot',{exact:true}).click();
+  assert.equal(await page.locator('#security-incidents script').count(),0);
+  await page.getByText('Historical metadata shared with fixture<script>bad()</script>. Newer records are outside this snapshot. Review coverage gaps and source identities.',{exact:true}).waitFor();
   assert.equal(writes.at(-1),prefix+'/incidents/incident-fixture/plan');
   await page.getByRole('button',{name:'Incident timeline',exact:true}).click();
   await page.locator('#incident-records pre').filter({hasText:'Fixture reviewed'}).waitFor();await page.locator('#close-modal').click();
