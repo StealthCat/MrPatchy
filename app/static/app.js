@@ -1,6 +1,7 @@
 'use strict';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const packageViewContext=new Map();
+const aiListContext=new Map();
 const serverListContext={q:"",state:"all",offset:0};
 let csrf='',hosts=[],selected='',page='overview',cfg={},toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
@@ -13,7 +14,7 @@ function toast(message){
 }
 function showLogin(){
  sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
- packageViewContext.clear();Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';cfg={};currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
+ packageViewContext.clear();aiListContext.clear();Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';cfg={};currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
  $('#toast').style.display='none';clearTimeout(toastTimer);
  $('#login').classList.remove('hidden');$('#shell').classList.add('hidden');
@@ -30,6 +31,7 @@ function modal(title,html){modalRevision++;$('#modal-message').classList.add('hi
 async function render(){
  const revision=++renderRevision;
  let requested=location.hash.slice(1)||'overview';
+ if(requested.startsWith('ai-logs/'))requested='ai-logs';
  if(requested.startsWith('activity/'))requested='activity';
  if(requested.startsWith('settings/'))requested='settings';
  if(requested.startsWith('servers/'))requested='servers';

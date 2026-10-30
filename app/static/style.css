@@ -389,3 +389,11 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .worker-registry-table .worker-control { margin-top:10px; }
 .badge.draining { color:var(--amber);background:#f7cf8a14; }
 .badge.drained { color:var(--mint);background:#9ee8d114; }
+
+.ai-run-title { display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:24px; }
+.ai-run-facts { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px; }
+.ai-run-facts dt { color:var(--muted);font-size:12px; }
+.ai-run-facts dd { margin:6px 0 0;overflow-wrap:anywhere; }
+.ai-run-message { white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word; }
+@media(max-width:800px){.ai-run-facts{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:480px){.ai-run-facts{grid-template-columns:minmax(0,1fr);}}

@@ -42,7 +42,7 @@ async def lifespan(app):
         finally:
             worker.stop.set()
             if background: background.join()
-APP_VERSION='0.9.0'
+APP_VERSION='0.10.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1179,12 +1179,16 @@ def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Dep
             'shared_batch':len(members[r.id])>1} for r in rows[:limit]],'more':len(rows)>limit}
 
 @app.get('/api/ai/runs/{run_id}')
-def ai_run_detail(run_id:str,user=Depends(auth)):
+def ai_run_detail(run_id:str,host_id:str='',user=Depends(auth)):
     with Session() as s:
         row=s.get(ai_runs.AIRun,run_id)
+        if host_id:
+            host_or_404(s,host_id)
+            linked=row and (row.host_id==host_id or s.scalar(select(ai_runs.AIRunHost.run_id).where(ai_runs.AIRunHost.run_id==run_id,ai_runs.AIRunHost.host_id==host_id)) or s.scalar(select(update_scores.UpdateScore.id).where(update_scores.UpdateScore.run_id==run_id,update_scores.UpdateScore.host_id==host_id)))
+            if not linked:raise HTTPException(404,'AI run not linked to this server')
         if not row:raise HTTPException(404,'AI run not found')
         receipts=ai_runs.call_receipts(s,[row.id])[row.id]
-        return object_dict(row)|{'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
+        return object_dict(row)|{'shared_batch':len(ai_runs.run_hosts(s,[row.id])[row.id])>1,'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
             'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
 
 @app.post('/api/investigations/{behavior_id}/retry')

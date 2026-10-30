@@ -2662,3 +2662,57 @@ source/README/changelog version consistency passed. No outstanding finding from
 the prior handoff remains locally; all nine exact-final-commit CI jobs, including
 MySQL 8.4, must pass and mergeability/base/head must be rechecked before merging.
 The PR records those results and the actual merged commit when delivered.
+
+
+## v0.10.0 — AI activity detail pages and scoped navigation
+
+Completion gate: inspected main `b62c4ce2` / [PR #64](https://github.com/StealthCat/MrPatchy/pull/64),
+its actual worker/evidence/UI diff, recorded exact-head nine-check success, current
+instructions/checkpoint and open PRs (none). The roadmap is unfinished. This batch
+advances the finite Investigations/AI activity UI family: saved run detail pages,
+scoped list context and honest cost/timeline states, rather than additional remote
+worker deployment work. Version 0.10.0 is a compatible navigation feature update.
+
+Fleet links use `#ai-logs/run/ID/summary` (or `/cost`, `/timeline`); server links use
+`#servers/HOST/ai/run/ID/summary`. List Inspect run links now open pages instead of
+a long modal. Native links support direct navigation, Back/Forward and reload.
+Purpose and pagination are remembered separately for fleet and each server during
+navigation/refresh; reload/sign-out clears memory. Switching servers returns to
+that server's AI list rather than carrying an unrelated run ID. Summary shows
+saved diagnostics and missing timestamps honestly; Cost retains usage/rate details
+and partial/unavailable limitations; Timeline shows saved stages without claiming
+current health, response execution or successful remediation. Shared-batch amounts
+remain whole-run estimates, not per-server charges. Empty/missing/failed details
+keep actionable list/retry links, and delayed responses cannot overwrite a newer
+view. No browsing operation retries AI or changes trust/response policies.
+
+Optional host_id on the existing administrator detail endpoint now verifies the
+same direct, durable shared-batch or legacy score membership used by the list.
+Unrelated/missing host/run contexts return 404; global administrator access remains
+available. Disabled/deleted history remains governed by existing role/history
+rules. The browser sends host_id for server details. All text remains escaped and
+raw prompts/provider credentials are not newly exposed. The malformed Process
+triage option in the existing list filter was fixed while exercising real filtering.
+
+Backend acceptance covers direct/shared/legacy membership, unrelated/missing
+contexts, roles and absence of target/provider calls. Browser acceptance covers
+cost uncertainty/legacy receipts, routes/reload/Back, scoped and paginated context,
+server query/routing, unauthorized detail navigation, literal untrusted diagnostics,
+missing records and delayed-response races, plus actual 320/768/1440 renders.
+Shared glass navigation, readable responsive facts and existing mascot illustrations
+are reused. No new artwork or operational/approval controls are introduced.
+
+This is a partial screen-family migration. Investigation evidence/details, other
+AI control/loading states, the remaining finite UI inventory, full remote worker
+provisioning/state/readiness/migration acceptance, deployment/GCP dashboard/node,
+startup provenance/classification, CVE/known/unknown malware automatic protection,
+retention and native real-target acceptance remain unfinished. Rebuild controller;
+no agent/schema upgrade is needed. No Git tags by user instruction. The versioned
+PR records exact final-head checks, delivery and actual merged commit.
+
+Local validation: full Python suite **1,282 passed / 7 skipped**; focused AI
+cost/scope tests **42 passed**; full browser suite and expanded focused run-page
+checks passed. Five reviewed desktop/tablet/phone and cost/timeline renders are
+linked in UI_DESIGN.md. Python/JS compilation, whitespace and version consistency
+passed. Final PR must pass all nine applicable checks on its exact final head
+before merge; its delivery record retains the actual merge and validation links.
