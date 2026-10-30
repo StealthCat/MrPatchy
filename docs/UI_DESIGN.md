@@ -418,3 +418,33 @@ horizontal overflow and actual [phone](screenshots/ai-retry-v1190-320.jpg),
 [desktop](screenshots/ai-retry-v1190-1440.jpg) renders. These screens are fixtures,
 not live fleet evidence. They do not complete the queue/concurrency/spend workspace,
 full UI rework or planned asynchronous notification program.
+
+
+### v1.20.0 — Retained process assessment review
+
+Fleet and server Investigations link to paginated Assessment history and individual
+assessment pages. Deep links support Back/reload, scoped server identity checks and
+retained list offsets; sign-out clears offsets. Current behavior approval is shown
+separately from the selected saved advisory assessment. Legacy snapshots explicitly
+state that original model, inputs and assessment timestamp are unavailable.
+
+Re-triage uses the shared mascot dialog, a required reason and explicit withdrawal
+of an existing approval. Stale submissions keep the dialog/reason visible and do
+not queue work; double submission is guarded. Pending refreshes link to retained
+prior results. Existing Retry handles failures; inactive-server history hides
+mutating controls. Provider/evidence/policy details are escaped, bounded reading
+surfaces, with long digests wrapping inside optional provenance details. History
+is read-only for AI/target operations, and viewers/operators cannot open it.
+
+Actual 320/768/1440 history and confirmation renders are reviewed with the existing
+glass palette, responsive facts and mascot assets. This is a finite AI workspace
+migration and explicit refresh flow. Fleet cache controls, shared admission/spend
+views, asynchronous notifications and full application acceptance remain planned.
+
+
+Reviewed fixtures: assessment detail [phone](screenshots/assessment-history-v1200-320.jpg),
+[tablet](screenshots/assessment-history-v1200-768.jpg),
+[desktop](screenshots/assessment-history-v1200-1440.jpg); Re-triage confirmation
+[phone](screenshots/retriage-confirm-v1200-320.jpg),
+[tablet](screenshots/retriage-confirm-v1200-768.jpg),
+[desktop](screenshots/retriage-confirm-v1200-1440.jpg).

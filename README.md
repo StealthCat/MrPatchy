@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.19.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.20.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -693,3 +693,32 @@ This is process-triage scheduling only, not shared provider-wide rate admission,
 daily spend controls or faster-triage program completion. Other AI purposes retain
 their existing retry/allowance behavior. Rebuild controller first to create the new
 retry table, then restart matched workers; no endpoint-agent upgrade is needed.
+
+
+### Retained assessments and Re-triage (v1.20.0)
+
+Investigations now have administrator **Assessment history** list/detail pages,
+including server-scoped deep links, pagination, Back and reload. New completed
+process assessments retain their evidence snapshot, actual supplied inputs for
+each stage, requested model, policy digest and original run ID independently of
+normal AI diagnostic pruning. Existing results are not retrospectively assigned
+a model or original timestamp: when preserved for refresh they are labelled
+legacy with unverified original input/model provenance. Retained AI results are
+advisory and never confer administrator approval or a clean-host guarantee.
+
+Administrators can **Re-triage** a completed observation with a reason. A revision
+check rejects stale results or approval changes. Approved behavior requires an
+explicit confirmation withdrawing that approval; fresh AI output does not restore
+it. The previous result is retained, and the refresh request survives a failed
+attempt. Existing Retry handles failed/pending work. Re-triage does not send AI
+requests from the web handler or bypass pause, saved model, data-sharing, lifecycle,
+provider delay or hourly controls. If a later manual approval holds queued work,
+revoke that approval to resume it. Inactive/deleted servers offer read-only history.
+
+These are prerequisites for the planned exact-match fleet known-good cache, not
+cross-server verdict reuse. Each current investigation still contacts the provider
+under existing policy. Canonical verified context, cache lookup/publication,
+fleet revocation and linked review, threaded execution and shared rate/spend modes
+remain planned. New assessment/refresh tables require controller-first startup,
+then matched workers. No target-helper upgrade is required. Retained evidence is
+sensitive; history has no automatic deletion or immutable external storage yet.

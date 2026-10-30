@@ -1,4 +1,54 @@
 'use strict';
+const assessmentOffsets=new Map();
+
+async function requestInvestigationRetriage(id){
+ const view=renderRevision,session=sessionRevision,startedModal=modalRevision;
+ try{
+  const data=await api('/investigations/'+encodeURIComponent(id)+'/history');
+  if(view!==renderRevision||session!==sessionRevision||startedModal!==modalRevision)return;
+  const current=data.current;
+  if(!current.can_retriage)return toast('Only completed assessments on active servers can be re-triaged. Pending or failed work uses Retry.');
+  modal('Request fresh AI triage',`<p>Investigate <strong class="assessment-artifact">${esc(current.executable)}</strong> again on ${esc(hostName(current.host_id))}? The saved ${esc(current.verdict)} result stays in Assessment history. This queues a new investigation, may incur provider charges, and does not approve any response.</p><p class="help">This requests fresh work for this observation only. AI pause, data sharing, saved model and admission limits still apply. No fleet trust is changed.</p><form id="retriage-form"><label>Reason<textarea name="reason" minlength="10" maxlength="4000" required></textarea></label>${current.approved?'<label class="check"><input name="withdraw" type="checkbox" required>I withdraw this behavior’s current approval until it is reviewed again.</label>':''}<button class="primary">Queue fresh triage</button></form>`);
+  const form=$('#retriage-form'),dialog=modalRevision;
+  const active=()=>form.isConnected&&dialog===modalRevision&&view===renderRevision&&session===sessionRevision;
+  form.onsubmit=async event=>{
+   event.preventDefault();const button=form.querySelector('button');if(button.disabled)return;button.disabled=true;
+   try{
+    const values=new FormData(form);
+    const result=await api('/investigations/'+encodeURIComponent(id)+'/retriage','POST',{expected_revision:current.revision,reason:values.get('reason'),withdraw_approval:values.has('withdraw')});
+    if(!active())return;$('#modal').close();toast(result.detail);await render();
+   }catch(error){if(active())toast(error.message);}finally{if(active())button.disabled=false;}
+  };
+ }catch(error){if(view===renderRevision&&session===sessionRevision)toast(error.message);}
+}
+
+async function investigationAssessmentPage(revision,context,base){
+ const root=context?.root||$('#content'),view=context?'servers':'investigations';
+ if(!isAdmin()){root.innerHTML=empty('Administrator access required','Assessment history contains retained evidence.');return;}
+ const raw=location.hash.slice((base+'/item/').length).split('/');let id,record;
+ try{id=decodeURIComponent(raw[0]||'');record=decodeURIComponent(raw[2]||'');}catch{id='';}
+ const back=`<a class="button" href="${base}">← Investigations</a>`;
+ if(!id||id.length>64||id.includes('/')||raw[1]!=='history'||record.length>36){root.innerHTML=empty('Invalid assessment link','Return to investigations and select a saved assessment.',back);return;}
+ const historyBase=base+'/item/'+encodeURIComponent(id)+'/history';
+ const scope=context?'&host_id='+encodeURIComponent(context.hostId):'';
+ const key=(context?.hostId||'fleet')+':'+id,offset=assessmentOffsets.get(key)||0;
+ let data,item;
+ try{
+  data=await api('/investigations/'+encodeURIComponent(id)+'/history?offset='+offset+scope);
+  if(record)item=await api('/investigations/'+encodeURIComponent(id)+'/history/'+encodeURIComponent(record)+'?'+scope.slice(1));
+ }catch(error){if(currentView(revision,view)&&root.isConnected)root.innerHTML=empty('Unable to open assessment history',esc(error.message),back+'<button id="retry-assessment-view">Retry</button>');const retry=root.querySelector('#retry-assessment-view');if(retry)retry.onclick=render;return;}
+ if(!currentView(revision,view)||!root.isConnected)return;
+ const current=data.current;
+ document.title='Assessment history · Mr Patchy';$('#breadcrumb').textContent+=' / Assessment history';
+ const intro=(context?'':heading('A record of every second look.','Retained process assessments and explicit refresh requests.'))+back+`<section class="card assessment-summary"><h2>Assessment history</h2><p><code>${esc(current.executable)}</code></p><p>Current behavior on ${esc(hostName(current.host_id))} · ${badge(current.approved?'approved':current.verdict)}</p><p class="help">Saved assessments are advisory. History never approves a behavior, certifies safety or changes fleet trust. Older results captured before retained history have no verified model/input binding.</p>${current.refresh?.id?`<p class="notice">Fresh triage requested by ${esc(current.refresh.actor)} · ${date(current.refresh.created)}. Previous result retained; failed attempts use the existing retry workflow.${current.approved?' A subsequent approval holds this refresh; revoke that approval to resume.':''}</p>`:''}${current.can_retriage?`<button data-action="retriage-investigation" data-id="${esc(id)}">Re-triage</button>`:''}</section>`;
+ if(item){
+  const explanation=item.source==='legacy'?item.result.saved_analysis:item.result.explanation;
+  root.innerHTML=intro+`<a class="button" href="${historyBase}">← Assessment list</a><section class="card"><h2>${item.source==='legacy'?'Preserved legacy result':'Recorded AI assessment'}</h2><dl class="ai-run-facts"><div><dt>Recorded</dt><dd>${date(item.created)}</dd></div><div><dt>Risk</dt><dd>${esc(item.result.risk)}</dd></div><div><dt>Requested model</dt><dd>${esc(item.model||'Not recorded')}</dd></div><div><dt>Assessment ID</dt><dd><code>${esc(item.id)}</code></dd></div></dl><pre class="ai-run-message">${esc(explanation||'No explanation saved.')}</pre>${item.source==='ai'?`<h3>Recommended checks</h3><pre class="ai-run-message">${esc(item.result.recommended_checks)}</pre>`:'<p class="notice">Preserved at refresh request time, not a reconstructed original assessment timestamp. Original model, run and exact inputs are unavailable.</p>'}${item.refresh?.id?`<p class="help">Refresh requested by ${esc(item.refresh.actor)} · ${date(item.refresh.created)}${item.refresh.withdrew_approval?' · Prior approval explicitly withdrawn':''}</p><pre class="ai-run-message">${esc(item.refresh.reason)}</pre>`:''}<details><summary>Evidence snapshot and supplied inputs</summary>${item.source==='ai'?`<p class="help assessment-policy">Recorded policy digest: <code>${esc(item.policy_hash)}</code>. Inputs retain their original collection limits; this is not verified fleet-wide matching.</p>`:''}<pre class="ai-run-message">${esc(JSON.stringify({snapshot:item.snapshot,inputs:item.inputs},null,2))}</pre></details>${item.run_id?`<a class="button" href="${context?serverLink(context.hostId,'ai'):'#ai-logs'}/run/${encodeURIComponent(item.run_id)}/summary">Original run diagnostics</a><p class="help">Diagnostics may expire under normal retention. This assessment and evidence remain available.</p>`:''}</section>`;
+ }else{
+  root.innerHTML=intro+`<section class="card">${data.items.length?`<div class="table-wrap"><table><thead><tr><th>Recorded</th><th>Source</th><th>Risk</th><th>Requested model</th><th></th></tr></thead><tbody>${data.items.map(r=>`<tr><td>${date(r.created)}</td><td>${esc(r.source==='legacy'?'Preserved legacy result':'AI assessment')}</td><td>${badge(r.risk)}</td><td>${esc(r.model||'Not recorded')}</td><td><a class="button" href="${historyBase}/${encodeURIComponent(r.id)}">Review assessment</a></td></tr>`).join('')}</tbody></table></div>`:empty('No retained assessments yet','History starts with the next completed triage or a preserved result when Re-triage is requested. Existing AI diagnostics remain separate.')}</section><div class="actions"><button id="assessment-previous" ${offset?'':'disabled'}>Previous assessments</button><button id="assessment-next" ${data.more?'':'disabled'}>Next assessments</button></div>`;
+  root.querySelector('#assessment-previous').onclick=()=>{assessmentOffsets.set(key,Math.max(0,offset-20));render();};root.querySelector('#assessment-next').onclick=()=>{assessmentOffsets.set(key,offset+20);render();};
+ }
+}
 // Fleet views share the same API, escaping, role and modal helpers as app.js.
 function assessmentCell(value){
  if(!value)return '—';
