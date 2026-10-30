@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.0 — 2026-10-30
+
+- Migrate fleet Overview into route-linked Summary, Server attention and Monitoring pages.
+- Add bounded server review cards, filter/page context and explicit missing, expired, future and disabled contact states.
+- Retain the glass palette and mascot, with responsive reading surfaces and collection/health limitations.
+
 ## 0.14.0 — 2026-10-30
 
 - Check strict-worker receipt protocol and required tables, columns and primary keys before database initialization or job admission.

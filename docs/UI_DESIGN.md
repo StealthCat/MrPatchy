@@ -116,7 +116,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 |---|---|---|
 | Route map and shared navigation | Server route map and grouped disclosure, v0.6.0 | Apply shared navigation/context rules across families |
 | Shell, authentication and account | Existing sidebar, login, MFA/account dialogs | Global navigation, shell/typography/state-system migration; keyboard/mobile review |
-| Fleet Overview, Servers and enrollment | Server directory cards/filter/pagination v0.7.0; verified landing v0.5.0 | Fleet dashboard and onboarding migration; complete loading/error-state system |
+| Fleet Overview, Servers and enrollment | Fleet Summary/Server attention/Monitoring pages v0.15.0; server directory v0.7.0; verified landing v0.5.0 | Onboarding migration; complete loading/error-state system and whole-family acceptance |
 | Server Overview and navigation | Route groups v0.6.0; Summary/System/Patching pages and stored-data cards v0.7.0 | Lifecycle/AI control content migration and whole-family acceptance |
 | Packages, repositories, patching and schedules | Existing pages; scoped filters v0.6.0 | Shared tables/forms, history/calendar detail pages, approvals and context retention |
 | Investigations and AI activity | Fleet/server run Summary/Cost/Timeline routes and scoped list context v0.10.0 | Investigation evidence/details and wider AI control/loading/pause state migration |
@@ -301,3 +301,37 @@ Reviewed renders: [desktop](screenshots/worker-schema-v0140-desktop.jpg),
 [phone](screenshots/worker-schema-v0140-mobile.jpg). This is a bounded preflight
 UI increment, not full schema compatibility, component health or completion of
 the application-wide redesign.
+
+
+## Fleet Summary, Server attention and Monitoring (v0.15.0)
+
+The fleet dashboard is now three focused route pages using shared navigation,
+mascot introductions and glass surfaces. Summary shows observation counts and a
+compact review queue, a contextual mascot guide and three server preview cards.
+Server attention offers read-only, twelve-card pagination with search and separate
+expired/unknown/disabled/recent groups. Monitoring separates configured timing from
+actual collector success and links to existing server/outcome/coverage workspaces.
+
+The two-minute UI freshness interpretation rejects future and missing timestamps
+and excludes disabled management from recent-contact counts. It does not certify
+readiness or protection, change the existing online API metric, approve trust or
+call targets/providers. Snapshot differences and collection gaps are explicit.
+
+Route links retain Back/Forward and reload. Filters/page survive navigation and
+refresh, clear on reload/sign-out, and clamp when results shrink. Automatic refresh
+does not interrupt focused review controls. Role-specific links and enrollment
+controls retain their existing restrictions. Reading panels are solid, cards wrap
+long diagnostics, focus/forced-color/reduced-transparency rules are retained, and
+phone layouts put whole controls in one column. Existing local artwork supplies
+working/welcome poses across introductions, guidance and empty states.
+
+Reviewed renders: [Summary desktop](screenshots/fleet-summary-v0150-desktop.jpg),
+[Summary tablet](screenshots/fleet-summary-v0150-tablet.jpg),
+[Summary phone](screenshots/fleet-summary-v0150-mobile.jpg),
+[Server attention desktop](screenshots/fleet-attention-v0150-desktop.jpg),
+[Server attention phone](screenshots/fleet-attention-v0150-mobile.jpg),
+[Monitoring phone](screenshots/fleet-monitoring-v0150-mobile.jpg).
+
+This completes the bounded fleet-dashboard migration, not onboarding, the full
+Overview/Servers family or the application-wide redesign. The finite inventory
+and all operational/authorization acceptance requirements remain in force.
