@@ -269,3 +269,18 @@ Reviewed renders: [desktop](screenshots/expected-workers-v0120-desktop.jpg),
 [phone](screenshots/expected-workers-v0120-mobile.jpg). This completes only the
 expected-worker inventory increment, not controller/agent/GCP health or full
 responsive/accessibility acceptance of the application.
+
+
+## Controller/key startup check (v0.13.0)
+
+Registered workers now show verified-at-startup, not enabled or not reported beside
+their identity, visible before horizontal scrolling on phones. The explanation
+explicitly excludes shared-file and target access verification. Readiness remains
+not assessed and stale/version/drain interpretations are unchanged. The same
+readable glass surfaces, state colors and established mascot are retained; no
+new operational action or confirmation is added.
+
+Reviewed renders: [desktop](screenshots/worker-preflight-v0130-desktop.jpg),
+[tablet](screenshots/worker-preflight-v0130-tablet.jpg),
+[phone](screenshots/worker-preflight-v0130-mobile.jpg). Wider component health,
+preflight diagnostics and the remaining UI inventory remain planned.

@@ -28,6 +28,8 @@ async def lifespan(app):
     from .database_config import runtime_guard
     with runtime_guard():
         init()
+        from .worker_preflight import publish
+        publish(APP_VERSION)
         with Session() as s:
             if not s.get(Setting,'admin'):
                 password=os.getenv('ADMIN_PASSWORD','')
@@ -42,7 +44,7 @@ async def lifespan(app):
         finally:
             worker.stop.set()
             if background: background.join()
-APP_VERSION='0.12.0'
+APP_VERSION='0.13.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware

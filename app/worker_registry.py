@@ -99,7 +99,8 @@ class Registration:
         if not owned:raise IdentityLost('Worker identity lock lost; refusing scheduler tick')
     def write(self,state,coordinator,jobs,polls,ai_active,initial=False,pending_polls=0,notification_active=False,observed_action=None):
         self.check_identity()
-        value={'id':self.id,'boot_id':self.boot,'role':self.role,'deployment_type':self.deployment,'version':self.version,
+        from .worker_preflight import RESULT
+        value={'controller_state':RESULT,'id':self.id,'boot_id':self.boot,'role':self.role,'deployment_type':self.deployment,'version':self.version,
                'started':self.started,'heartbeat':time.time(),'uptime_seconds':max(0,time.monotonic()-self.monotonic),
                'state':state,'coordinator':bool(coordinator),'active_jobs':list(jobs)[:16],
                'active_polls':polls,'pending_polls':pending_polls,'notification_active':bool(notification_active),'ai_active':bool(ai_active),'job_capacity':self.capacity['jobs'],'poll_capacity':self.capacity['polls'],'ai_capacity':self.capacity['ai'],
@@ -164,6 +165,7 @@ def page(offset=0,now=None):
             state,reason,age=report_state(data,now)
             try:control=control_value(s,item['id'],data.get('boot_id'))
             except ValueError:control={'revision':None,'action':'invalid'}
+            item['controller_state']=data.get('controller_state') if data.get('controller_state') in ('verified','not_checked') else 'unknown'
             item['control']=control
             item['controllable']=state in ('reporting','draining','drained') and bool(re.fullmatch(r'[0-9a-f]{32}',str(data.get('boot_id','')))) and row.key==record_key(item['id']) and control['revision'] is not None
             item.update(state=state,reason=reason,age_seconds=max(0,age) if age is not None else None,readiness='not_assessed')
