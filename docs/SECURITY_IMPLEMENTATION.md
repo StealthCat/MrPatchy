@@ -2929,6 +2929,10 @@ all nine checks, superseding prior validation heads.
 
 ## v0.14.0 — Required schema structure and receipt-protocol admission
 
+Delivery: [PR #69](https://github.com/StealthCat/MrPatchy/pull/69), initial implementation
+[0ae5577b](https://github.com/StealthCat/MrPatchy/commit/0ae5577b2aa82541517a905c86079654f26eceea).
+The PR records final-head validation and the actual merged main commit.
+
 Completion gate: inspected main `e2573f9f`, latest merged
 [PR #68](https://github.com/StealthCat/MrPatchy/pull/68), its actual startup-gate,
 UI and descendant-test changes, recorded exact-head nine-check validation, current
