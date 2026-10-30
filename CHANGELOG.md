@@ -5,7 +5,7 @@
 - Add a controller encryption canary/version receipt and opt-in fail-closed worker startup verification before worker database initialization or job admission.
 - Enable the limited gate in complete Compose and show verified-at-startup/disabled/unreported states in Workers without claiming full readiness.
 - Document upgrade/recovery limits and add missing/mismatched/private-key, incompatible receipt and native worker refusal coverage.
-- Fix the descendant-test procfs disappearance race found by MySQL CI; retain timeout, zombie/absent success conditions and the surviving-child failure assertion.
+- Fix the descendant-test procfs disappearance race found by MySQL CI; retain timeout, zombie/absent success conditions and the surviving-child failure assertion; use namespace-correct kernel exit checks when host procfs is exposed.
 
 ## 0.12.0 — 2026-10-30
 

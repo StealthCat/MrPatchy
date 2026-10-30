@@ -2915,3 +2915,13 @@ only FileNotFoundError as exit, preserving timeout, zombie handling, survivor
 failure and process cleanup. No runtime process-killing code or preflight check
 is relaxed. The corrected versioned commit must rerun all nine checks; the failed
 head is not mergeable under this task's gate. Final results are recorded in PR #68.
+
+Native diagnostic reconciliation: repeated local descendant checks exposed host
+procfs mounted across PID namespaces. A child reported PID 7, but `/proc/7/stat`
+was an unrelated sites-preview process; syscall getpid() returned 5 while
+`/proc/self/stat` returned host PID 97810 (NSpid 97810/5). The test now checks
+existence with namespace-correct kill(pid, 0), and reads procfs zombie state only
+when self PIDs prove namespace agreement. Disappearance remains success; a live
+child still fails the same two-second deadline. No process-killing runtime code
+is changed and no native assertion is skipped. The corrected final head reruns
+all nine checks, superseding prior validation heads.
