@@ -425,7 +425,7 @@ single `APP_VERSION` authority without importing the web application.
 
 Optionally set `MRPATCHY_WORKER_ID=patchy-worker-01` for one worker instance. Every
 simultaneous instance needs a unique, case-sensitive ID. A named cross-process lock rejects a
-collision; losing that lock exits the scheduler before admitting more work.
+collision; detected loss or uncertainty exits before the next scheduling work.
 Without an ID, each boot generates a new registration. Explicit stable IDs reuse
 the current registration across restarts and get a new boot ID; registration/stop
 events remain in audit. Generated/stale registrations are retained with no automatic

@@ -2432,6 +2432,10 @@ in UI_DESIGN.md. Versioned PR records final CI and actual merge; Git tags are om
 
 ## v0.8.0 — worker registration and role-specific startup foundation
 
+Delivery: [PR #63](https://github.com/StealthCat/MrPatchy/pull/63), initial implementation
+[eeb3a3ac](https://github.com/StealthCat/MrPatchy/commit/eeb3a3acd24878b1de20f89307b04727ae0a9c6e).
+The PR records exact final-head checks and the actual merged main commit.
+
 Completion-gate base: main `bc613af2` ([PR #62](https://github.com/StealthCat/MrPatchy/pull/62)),
 source 0.7.0. The actual directory/Overview diff, recorded validation/renders and
 nine successful exact-head checks were inspected; no PR was open. Worker identity,
