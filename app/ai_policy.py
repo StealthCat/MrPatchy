@@ -28,8 +28,8 @@ def require(host_ids):
     from .ai import AIError
     with Session() as s:
         for identifier in set(host_ids):
-            if status(s,identifier)['paused']:raise AIError('AI integration is paused for this server; no new provider call was sent.')
-        if host_ids and not config(s)['ai_enabled']:raise AIError('AI integration is globally disabled; no new provider call was sent.')
+            if status(s,identifier)['paused']:raise AIError('AI integration is paused for this server; no new provider call was sent.',policy_wait=True)
+        if host_ids and not config(s)['ai_enabled']:raise AIError('AI integration is globally disabled; no new provider call was sent.',policy_wait=True)
 
 
 @contextmanager

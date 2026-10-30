@@ -399,3 +399,22 @@ Implement the [live notification roadmap](SECURITY_IMPLEMENTATION.md#planned-liv
 Human-attention events and significant triage findings should arrive through authenticated server push and update the badge/panel plus bounded in-app alerts without page refresh, navigation, stolen focus or lost form/dialog state. Keep durable per-user read state, severity/source/server/time and exact review links. Reading/dismissing differs from acknowledging/resolving the underlying issue. Retain urgent items in history, handle reconnect/catch-up and visible degraded state, and filter both payloads and counts to current permissions. Existing SMTP/webhook delivery remains independent.
 
 Verify actual asynchronous updates, multi-session read synchronization, replay/deduplication/reopening, role/session boundaries, keyboard/live-region behavior and mobile/tablet/desktop renders. This remains planned until the runtime and acceptance milestones are delivered.
+
+
+### v1.19.0 — Explained process retry eligibility
+
+The existing glass Investigations cards and AI worker status now distinguish
+eligible work, items needing review and paused servers. Per-item text shows the
+attempt count, durable deferral/block reason and recorded eligibility. Eligibility
+is not a promised start time. Reading these surfaces never calls the provider;
+Retry remains an explicit administrator action with CSRF, lifecycle, hourly and
+provider-delay checks. A blocked Retry returns an accessible non-disruptive status
+message without approving the behavior. Text is escaped. The established palette,
+shared navigation and mascot assets are retained. Reload reads authoritative state.
+
+Browser acceptance covers attempted early Retry, text injection, reload, no
+horizontal overflow and actual [phone](screenshots/ai-retry-v1190-320.jpg),
+[tablet](screenshots/ai-retry-v1190-768.jpg) and
+[desktop](screenshots/ai-retry-v1190-1440.jpg) renders. These screens are fixtures,
+not live fleet evidence. They do not complete the queue/concurrency/spend workspace,
+full UI rework or planned asynchronous notification program.

@@ -173,6 +173,7 @@ const assert=require('assert/strict');
     await page.setViewportSize({width:1440,height:1000});
     await require('./ui_fleet.cjs')(page,capture);
     await require('./ui_ai_costs.cjs')(page,capture);
+    await require('./ui_ai_retry.cjs')(page,capture);
     await require('./ui_workers.cjs')(page,capture);
     await require('./ui_activity_pages.cjs')(page,capture);
     await require('./ui_fleet_overview.cjs')(page,capture);

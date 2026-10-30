@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.18.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.19.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -671,3 +671,25 @@ Startup reflection and existing schema upgrades now use one connection, refreshi
 SQLite catalog state first. This prevents stale pooled connections from repeating
 an already-completed column addition. Single-controller/migration-owner startup
 remains required; this does not enable concurrent or cross-host migrations.
+
+
+### Process-investigation retry scheduling (v1.19.0)
+
+Transient timeouts, network failures, explicit rate-limit responses and common
+server errors now queue a durable retry with exponential jitter and provider
+`Retry-After` eligibility. The worker does not sleep in a slot. Automatic attempts
+are bounded to five per subject/configuration. Billing, authentication, request
+configuration and unclassified failures require correction or an explicit Retry.
+Saving a changed model/key permits another attempt; enable toggles do not reset
+limits. Provider delay floors also apply to manual Retry. Pending work, retained
+usage receipts and uncertain charges survive; no assessment or approval is inferred
+from a failure. AI pause/resume and lifecycle checks still apply to every call.
+
+Investigations and AI logs show eligible, review-blocked and paused counts; each
+pending/error item explains its retry state and eligibility. Eligibility is not a
+promised start time: existing hourly limits and the serial worker still apply.
+Legacy attempts and lost-worker attempts retain their one-hour recovery interval.
+This is process-triage scheduling only, not shared provider-wide rate admission,
+daily spend controls or faster-triage program completion. Other AI purposes retain
+their existing retry/allowance behavior. Rebuild controller first to create the new
+retry table, then restart matched workers; no endpoint-agent upgrade is needed.

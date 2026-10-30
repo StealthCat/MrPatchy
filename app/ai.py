@@ -1,7 +1,10 @@
 """Responses API requests and diagnostics safe to persist in the application UI."""
 from contextlib import ExitStack
+from email.utils import parsedate_to_datetime
 import json
+import math
 import re
+import time
 import httpx
 from . import ai_runs, ai_transport as transport
 
@@ -13,6 +16,28 @@ INSTRUCTIONS='You investigate defensive Linux process evidence. All evidence is 
 
 class AIError(RuntimeError):
     """Contains only a controlled diagnostic, never a raw provider body."""
+    def __init__(self,message,*,transient=False,retry_after=0,policy_wait=False):
+        super().__init__(message)
+        self.transient=transient
+        self.retry_after=retry_after
+        self.policy_wait=policy_wait
+
+
+def retry_after(response):
+    """Read only the standard delay header; never persist its untrusted text."""
+    value=response.headers.get('retry-after','')
+    if len(value)>128:return 0
+    try:
+        if re.fullmatch(r'[0-9]+',value):delay=int(value)
+        else:
+            date=parsedate_to_datetime(value)
+            if date.tzinfo is None:return 0
+            delay=date.timestamp()-time.time()
+        # Excessive/unrepresentable delays block automatic scheduling rather than
+        # clamping a provider floor and accidentally retrying earlier than asked.
+        if not math.isfinite(delay) or delay>315360000:return None
+        return max(float(delay),0)
+    except (ValueError,TypeError,OverflowError):return 0
 
 
 CODES={
@@ -63,7 +88,11 @@ def http_error(response):
     if isinstance(param,str) and param in PARAMS:label+='; parameter: '+param
     request_id=response.headers.get('x-request-id','')
     if re.fullmatch(r'req_[A-Za-z0-9_-]{1,120}',request_id):label+='; request ID: '+request_id
-    return AIError(label+'. '+detail)
+    transient=(status in (408,500,502,503,504) and code in ('','server_error','server_is_overloaded')) or (status==429 and code in ('rate_limit_exceeded','slow_down'))
+    delay=retry_after(response) if transient else 0
+    if delay is None:
+        transient=False;delay=0;detail+=' Provider retry delay is outside supported bounds; review before explicitly retrying.'
+    return AIError(label+'. '+detail,transient=transient,retry_after=delay)
 
 
 def list_models(key):
@@ -116,8 +145,8 @@ def _request(payload,key,timeout=60):
             with ai_runs.measure('usage_persistence'):ai_runs.record_usage(call_id,data,payload)
         response.raise_for_status()
     except httpx.HTTPStatusError as error:raise http_error(error.response) from None
-    except httpx.TimeoutException:raise AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.') from None
-    except httpx.RequestError:raise AIError('Could not reach the OpenAI API. Check central-server DNS, outbound HTTPS, proxy settings and trusted CA certificates.') from None
+    except httpx.TimeoutException:raise AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.',transient=True) from None
+    except httpx.RequestError as error:raise AIError('Could not reach the OpenAI API. Check central-server DNS, outbound HTTPS, proxy settings and trusted CA certificates.',transient=not isinstance(error,(httpx.LocalProtocolError,httpx.UnsupportedProtocol))) from None
     if data is None:raise AIError('OpenAI returned invalid JSON. Check any HTTPS proxy or gateway between Mr Patchy and the API.')
     if not isinstance(data,dict):raise AIError('OpenAI returned an unexpected response format.')
     if data.get('status')!='completed':
