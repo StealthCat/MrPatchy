@@ -2357,6 +2357,10 @@ starting points, not evidence that this milestone is finished. Use
 
 ## v0.6.0 — server workbench navigation foundation
 
+Delivery: [PR #61](https://github.com/StealthCat/MrPatchy/pull/61), initial implementation
+[f1d7e077](https://github.com/StealthCat/MrPatchy/commit/f1d7e0776b81e72137b6caf1e1ad3709e3133e61).
+The PR records exact final-head checks and the actual merged main commit.
+
 Completion-gate base: main `49c6722` ([PR #60](https://github.com/StealthCat/MrPatchy/pull/60)),
 source 0.5.1. The actual five-file roadmap/design/version diff, nine successful
 exact-head checks, current checkpoint and absence of open PRs were inspected.
