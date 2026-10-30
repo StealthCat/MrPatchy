@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.14.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.15.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -588,3 +588,22 @@ This is not full schema compatibility: column types/lengths, nullability, defaul
 indexes, foreign/check constraints, data validity, ongoing drift and cross-host
 migration fencing remain unassessed. Shared-state provisioning and real remote
 deployment acceptance remain planned; no endpoint-agent/schema migration is added.
+
+
+### Fleet Overview pages (v0.15.0)
+
+Overview has deep-linked Summary (`#overview`), Server attention
+(`#overview/attention`) and Monitoring (`#overview/monitoring`) pages. Server
+attention searches stored names/addresses and groups expired, unknown, disabled or
+recent contact in twelve-card pages. Filter/page context survives navigation and
+refresh, clearing on reload/sign-out. A shrinking snapshot clamps the page.
+
+Recent contact means a timestamp within two minutes, reported online state and no
+stored integrity findings or target error. Missing/future timestamps remain
+unknown; disabled management is shown separately. This UI interpretation does not
+change the legacy dashboard API's online metric. Counts and server snapshots are
+read separately and may differ during concurrent changes. No view performs a
+target probe, provider call, patch or trust decision. Review operation outcomes
+and individual collector timestamps before acting. These pages do not complete
+the planned deployment-health dashboard, expanded protection or full UI rework.
+Rebuild the controller and keep workers matched; no agent/schema upgrade is needed.

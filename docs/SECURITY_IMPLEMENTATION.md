@@ -3001,3 +3001,83 @@ layout. Final 320/768/1440 renders were reviewed after consolidating repeated sc
 text. Initial full Python regression passed **1,327 tests / 7 skipped**; the final
 run includes added native refusal/current-receipt cases, with its result recorded
 in the delivery PR. Python/JS syntax, whitespace and version consistency passed.
+
+
+## v0.15.0 — Focused fleet Overview and server-attention review
+
+Delivery: [PR #70](https://github.com/StealthCat/MrPatchy/pull/70), initial implementation
+[305fee9c](https://github.com/StealthCat/MrPatchy/commit/305fee9c4bc9b7d5dd6bda1f7a78ece34899a0c4).
+The PR records corrected full regression, exact-final-head validation and the actual merged commit.
+
+Completion gate: inspected fresh main `5a2bcc62`, latest merged
+[PR #69](https://github.com/StealthCat/MrPatchy/pull/69), its actual schema/receipt,
+UI and native-test changes, recorded validation and all nine successful exact-head
+checks, current instructions/checkpoint and open related PRs (none). The roadmap
+remains unfinished. This cycle selects the explicitly remaining fleet-dashboard
+screen migration from the finite UI inventory, with routes/context, honest stored
+observations, responsive surfaces and workflow/visual acceptance.
+
+Overview now has Summary (`#overview`), Server attention (`#overview/attention`)
+and Monitoring (`#overview/monitoring`) pages. Summary separates compact counts,
+a review queue, mascot guidance and three server previews. Server attention shows
+read-only twelve-card pages with search and groups for review, expired/unknown/
+disabled/recent contact. Monitoring separates expected collection timing and gaps
+from observed success, with existing server, operation and authorized coverage/
+worker links. Shared route navigation supports deep links, Back/Forward and reload;
+unknown detail routes normalize to Summary. The obsolete Overview-only table
+renderer is removed as part of its card migration; lifecycle/inspection controls
+remain on existing server/directory workspaces.
+
+Freshness is a narrow UI interpretation of stored observations: within two minutes,
+reported online, no stored integrity findings/error, and management enabled.
+Missing/nonfinite/nonpositive/future timestamps are unknown; expired contact is
+stale; disabled management is separate. No contact state certifies per-collector
+freshness, successful patching, clean endpoints or component readiness. The legacy
+API online metric is unchanged. Dashboard totals and host snapshots are separate
+reads and may differ during concurrent changes. No target probe, provider call,
+trust approval or response mutation is added. Existing AI pause, lifecycle,
+response authorization, role and audit behavior remain unchanged.
+
+Search/filter/page context survives navigation and refresh in account-session
+memory, clears on sign-out/reload, and clamps when results shrink. Focused controls
+suppress automatic refresh. Stale render revisions cannot replace newer pages;
+loading/error/retry states keep escaped diagnostics. Long names/diagnostics wrap,
+solid reading panels and responsive card/control layouts preserve glass colors,
+contrast and the established mascot. Phone guidance gives links their full width;
+forced-color/reduced-transparency behavior reuses the shared system. Actual
+320/768/1440 renders were inspected; selected images are linked in UI_DESIGN.md.
+
+Focused browser acceptance covers deep links, Back/reload, context retention,
+clamping/search/groups/empty results, disabled/future/missing contact, exact freshness
+boundaries, role visibility, escaped names/diagnostics/errors, retry, delayed
+responses, correct server destinations and absence of writes. Source version,
+README and numbered changelog are synchronized at v0.15.0. Full local regression
+and exact-final-head nine-check results, versioned PR and actual merged commit
+are recorded in the delivery PR; final checks must pass before merging.
+
+Remaining: onboarding and full UI-family/state-system acceptance; all other finite
+screen migrations; full controller/worker remote deployment, secure shared keys/
+profiles/trust/artifacts/evidence, schema types/other constraints/job protocol,
+atomic cross-host maintenance/migrations and real remote failure/recovery tests;
+all-component health/readiness/alerts and optional GCP node; comprehensive startup
+job discovery/effective configuration/provenance/classification; CVE exposure and
+known/unknown automatic protection with real-target recovery; retention and
+independent evidence. This completes only the bounded fleet-dashboard migration.
+Existing per-server AI pause remains implemented. Rebuild controller and keep
+workers matched; no endpoint-agent/schema upgrade. No Git tags; schedule unchanged.
+
+Validation reconciliation: initial full local Python run reported **1 failed,
+1,330 passed / 7 skipped**. The unchanged descendant timeout test expired its
+300 ms timer before the fixture interpreter published the forked child's PID
+(FileNotFoundError), so it never reached its survivor assertion. Its Popen test
+wrapper now waits at most five seconds for PID publication and parent exit before
+the same 300 ms bounded-command timeout starts. Failed fixture setup kills/cleans
+its process group. The same namespace-aware two-second live-descendant assertion
+and cleanup remain; runtime process-killing code is unchanged. Focused and full
+regressions must be rerun, and all nine final-head checks remain mandatory.
+
+Local UI validation: full browser suite passed, plus final focused fleet checks
+and reviewed 320/768/1440 renders. A test refresh race was corrected by waiting
+for the old rendered section to detach before changing filters. Version/lifecycle
+checks **21 passed**; syntax, compile, whitespace and version consistency passed.
+Final corrected Python and CI results are recorded in the delivery PR.
