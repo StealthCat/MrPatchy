@@ -111,41 +111,57 @@ def repo_path(name):
 
 def process_evidence(req):
     path=req.get('executable','');expected=req.get('sha256','')
+    expected_uid=req.get('uid')
     checks=req.get('checks',[])
     if not isinstance(path,str) or not path.startswith('/') or len(path)>4096 or not re.fullmatch('[a-f0-9]{64}',expected):
         raise ValueError('Invalid executable identity')
     if not isinstance(checks,list) or not set(checks)<={'package','service','executable'}: raise ValueError('Invalid evidence checks')
-    result={'identity_verified':False,'checks':checks};deadline=time.monotonic()+10
-    for proc in Path('/proc').iterdir():
-        if not proc.name.isdigit(): continue
-        try:
-            if os.readlink(proc/'exe')!=path: continue
-            # Open the process executable, not an arbitrary caller-provided file.
-            sys.path.insert(0,'/usr/local/lib/mrpatchy')
-            from agent import hash_artifact
-            metadata={}
-            digest=hash_artifact(proc/'exe',{},deadline=deadline,metadata=metadata)
-            if digest!=expected: continue
-            result['identity_verified']=True
-            if 'executable' in checks:
-                result['executable']={'sha256':digest,**metadata,
-                    'status':[line for line in (proc/'status').read_text().splitlines() if line.split(':')[0] in ('Uid','Gid','CapEff','NoNewPrivs','Seccomp')]}
-            if 'package' in checks:
-                try: result['package']=run((['rpm','-qf','--',path] if rpm_backend() else ['dpkg-query','-S','--',path]),timeout=15)[:8000]
-                except RuntimeError: result['package']='No installed package ownership found'
-            if 'service' in checks:
-                groups=(proc/'cgroup').read_text()
-                units=re.findall(r'(?:^|/)([A-Za-z0-9_.@:-]+\.service)(?:/|$)',groups,re.M)
-                result['service']=[]
-                for unit in sorted(set(units))[:3]:
-                    result['service'].append(run(['systemctl','show',unit,'--property=Id,LoadState,ActiveState,SubState,FragmentPath,User,Group,NoNewPrivileges,ProtectSystem'],timeout=15)[:8000])
-            return result
-        except (FileNotFoundError,ProcessLookupError): continue
-        except ValueError:
-            result['unverified_processes']=result.get('unverified_processes',0)+1
-        except PermissionError:
-            result['inaccessible_processes']=result.get('inaccessible_processes',0)+1
-    result['reason']='No running executable matches the recorded path and SHA-256; process may have exited or changed'
+    if expected_uid is not None and (not isinstance(expected_uid,str) or not re.fullmatch('[0-9]{1,20}',expected_uid)):
+        raise ValueError('Invalid observed account identity')
+    sys.path.insert(0,'/usr/local/lib/mrpatchy')
+    try:import agent
+    except ImportError:from target import agent
+    result={'version':2,'identity_verified':False,'checks':checks,
+        'coverage':{'cache_eligible':False,'scope':'one_current_matching_executable',
+                    'gaps':['no_stable_matching_process']}}
+    deadline=time.monotonic()+10;overall_deadline=time.monotonic()+80
+    root=agent.response_proc_root()
+    try:
+        for index,name in enumerate(os.listdir(root)):
+            if time.monotonic()>deadline or index>=4096:
+                result['coverage']['gaps'].append('process_search_budget_exceeded');break
+            if not name.isdigit():continue
+            directory=None
+            try:
+                directory=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root)
+                if os.readlink('exe',dir_fd=directory)!=path:continue
+                before,context=agent.triage_process_context(directory,int(name),path,expected,deadline)
+                if expected_uid is not None and before['credentials']['Uid'][1]!=expected_uid:continue
+                candidate={'version':2,'identity_verified':True,'checks':checks,'context':context,
+                    'coverage':context['coverage']}
+                if 'executable' in checks:
+                    candidate['executable']={**context['executable'],'status':[
+                        key+':\t'+'\t'.join(context['credentials'][key]) for key in ('Uid','Gid','CapEff','NoNewPrivs','Seccomp')]}
+                if 'package' in checks:
+                    try:candidate['package']=run((['rpm','-qf','--',path] if rpm_backend() else ['dpkg-query','-S','--',path]),timeout=15)[:8000]
+                    except RuntimeError:candidate['package']='No installed package ownership found'
+                if 'service' in checks:
+                    units=re.findall(r'(?:^|/)([A-Za-z0-9_.@:-]+\.service)(?:/|$)',before['cgroup'].decode(errors='replace'),re.M)
+                    candidate['service']=[]
+                    for unit in sorted(set(units))[:3]:
+                        candidate['service'].append(run(['systemctl','show',unit,'--property=Id,LoadState,ActiveState,SubState,FragmentPath,User,Group,NoNewPrivileges,ProtectSystem'],timeout=15)[:8000])
+                # Package/service reads can outlast the hash budget. Recheck the
+                # same descriptor after them; never return a mixed-PID result.
+                final,fresh=agent.triage_process_context(directory,int(name),path,expected,min(overall_deadline,time.monotonic()+10))
+                if before!=final or context!=fresh:
+                    raise ValueError('Process changed during follow-up collection')
+                return candidate
+            except (OSError,ValueError,UnicodeError):
+                result['unverified_processes']=result.get('unverified_processes',0)+1
+            finally:
+                if directory is not None:os.close(directory)
+    finally:os.close(root)
+    result['reason']='No stable running process matches the recorded executable path and SHA-256; identity or context is unavailable, changed, or outside the collection budget'
     return result
 
 def recovery_hook(operation,identifier):

@@ -3804,3 +3804,112 @@ fix [d95fbd06](https://github.com/StealthCat/MrPatchy/commit/d95fbd0684916c9ac7b
 The PR records exact final head/tree, all nine CI results, full local validation
 and actual merged commit (or precise unfinished blockers). Finish this fix before
 resuming isolated roadmap work; never use earlier-head checks to authorize a merge.
+
+
+## v1.21.0 — Identity-bound follow-up artifact and privilege context
+
+Issue-first gate read main `a7187941` (v1.20.0), AGENTS/CONTRIBUTING, the checkpoint,
+PR #78's actual code/test changes and its recorded final-head validation. All nine
+checks passed on `c03156f5`; actual main tree matches that tested source. Empty
+100-item first pages prove no open issues or unfinished PRs. No issue fix, deferral
+or closure is claimed. The roadmap remains unfinished. This faster-triage batch
+selects stable local context acquisition and honest coverage review, a concrete
+prerequisite of finite cache milestone 1; it does not implement canonical reuse.
+
+Existing allowlisted follow-up requests now add a bounded v2 context receipt. The
+helper opens the kernel procfs root and pins one process directory with no-follow
+directory opens. It captures boot/PID/start ticks, proc identity, UID/GID/groups,
+available capabilities/security flags, PID/network/mount/user namespaces, executable
+metadata and hashes, and supported script/executable mapping file hashes/metadata.
+Maps and cgroup contents are compared locally and retained only as digests, not raw
+AI evidence. Raw arguments/environment and script bytes are not added. The existing
+conservative interpreter parser reads bounded cmdline only to identify a script;
+inline/modules/unknown options and inaccessible artifacts remain unverified.
+
+Executable, process, credentials, namespaces, maps and cgroup samples are checked
+before/after collection; all artifact identities are collected again after optional
+package/service reads. Changes reject the candidate as a whole, without retaining
+a mixed verified package/service/context result. Searches are capped at 4,096
+entries/10 seconds, hashes retain their 128 MiB/per-file two-second bounds, metadata
+reads are bounded, and final rechecks fit an 80-second total collection envelope.
+The worker supplies the observed effective UID when available; a different account
+is not an acceptable current match. No caller-selected path is opened as arbitrary
+evidence: executable selection still requires a live matching proc executable.
+
+The receipt is explicitly **one current matching executable**, not the historical
+observation's original process. Before/after agreement is not an atomic snapshot,
+memory attestation or protection against a compromised target kernel/root. Package
+ownership remains unauthenticated local metadata. Required authenticated provenance,
+configuration, effective startup/behavior and complete security-relevant dependencies
+remain unfinished. Every receipt therefore has `cache_eligible=false` and explicit
+gaps. No cross-host verdict reuse, periodic-retriage exemption, cache hit, revoked
+trust propagation or throughput/paid-call saving is claimed. Context/PID/digest
+fields are not a canonical host-independent key.
+
+Existing one/two-stage model flow, 64 KB evidence limit, output tokens/schema, AI
+pause/data sharing/admission, retained exact inputs and response gates remain.
+Oversized combined evidence fails under the existing limit rather than dropping
+collected evidence for speed. Failure does not imply benign behavior. Full future
+cache context acquisition is not enabled by increasing the helper's metadata.
+
+Assessment detail now has a shared glass coverage notice, collected time, sampled
+identity/account and verified-artifact count with keyboard-operable gap details.
+Missing/old/failed context is explained; current approval and advisory historical
+results remain distinct. Text is escaped, and fleet/server routes and roles remain.
+Actual 320/768/1440 views, missing/failed states and injection cases are validated.
+No UI-only roadmap batch or broad styling change is included.
+
+Initial focused acceptance passed **157 tests / 1 skipped**, followed by updated
+UID/UI coverage; final results are recorded in the delivery PR. Local child-procfs
+inspection is unavailable in this execution environment: the explicit live-process
+case skips locally, while deterministic pinned-directory/race/file tests run.
+Native Ubuntu/Debian/Alma/Fedora SSH acceptance exercises the installed sudo bridge
+with a live interpreter fixture in CI; SQLite/MySQL/browser and all nine checks on
+the exact final head remain mandatory before merge. No live provider is contacted.
+
+Deploy new controller/matched workers and use the existing reviewed Agent upgrade
+workflow to install both helper and collector on each target. Older helpers remain
+readable but supply no new context; history says it is unavailable. No new schema,
+automatic target update or Docker-image publication is implied. APP_VERSION/README/
+changelog/UI/API are v1.21.0; major stays 1. Git tags are skipped and schedule unchanged.
+
+Next priority remains the finite known-good program: complete authenticated/context
+collection, strict versioned host-independent fingerprint, durable safe publication/
+lookup/hit provenance with explicit refresh bypass, audited fleet revocation and
+contradiction review, then full SQLite/MySQL runtime acceptance. Threaded per-item
+claims/renewable leases and fair isolated execution, shared smooth rate/daily-spend/
+unthrottled controls and the independent uncertain-charge ledger remain planned.
+The broader notifications/deployment/health/GCP/startup/CVE/malware/full UI roadmap
+also remains unfinished. Finish any open delivery PR before beginning another batch.
+
+Local pre-publication checkpoint: full Python regression completed **1,416 passed /
+8 skipped**, plus nine version-policy subtests. Complete browser suite passed,
+including context missing/failed states, escaping, approval/refresh flows, scoped
+history, Back/reload and actual phone/tablet/desktop renders. Reviewed images are
+linked in UI_DESIGN.md. A new user-reported offline migration failure interrupted
+publication: its reproducible fix takes priority and is isolated in PR #79. This
+v1.21.0 batch is saved locally and has no remote runtime/CI acceptance or merge yet.
+Reconcile it with the eventual PR #79 main commit before publishing; these local
+checks do not authorize merging a future combined/final commit. Native target
+acceptance, all nine final-head checks and the broader cache program remain open.
+
+
+Reconciliation: reported migration PR #79 merged as `8d2087a5` (v1.20.1), with
+all nine exact-head checks successful. This batch now includes that fix and its
+fresh-process regression; 1.20.1 changelog/history are retained below 1.21.0. Review
+found the new helper import had omitted the trusted install path required by
+Python `-I`; a real isolated-entrypoint regression fails before the path restoration
+and passes afterward. Native acceptance remains required. Coverage rendering also
+tolerates malformed/null artifact entries without treating them as verified. Final
+combined local focus/browser, exact-head CI and actual merge references are recorded
+in the delivery PR. Earlier local-only checkpoint above is superseded by this
+reconciliation; it does not claim cache/runtime-program completion.
+
+
+Combined pre-publication acceptance after PR #79 reconciliation and loader review:
+**63 focused tests passed / 1 skipped**; focused real-browser history/context/refresh
+acceptance passed, including null/untrusted evidence, missing/failed context, roles,
+Back/reload and phone/tablet/desktop views. The earlier full **1,416 / 8 skipped**
+regression and complete browser run predate this final loader/guard reconciliation;
+all nine final-head CI checks cover the combined source before any merge. No source
+change is permitted after that final-head acceptance without applicable new checks.

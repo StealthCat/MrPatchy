@@ -279,11 +279,11 @@ def script_operand(executable,args):
     raise ValueError('Interpreter has no verifiable script entry point')
 
 
-def provenance(proc,cache,deadline=None):
+def provenance(proc,cache,deadline=None,maps=None,include_metadata=False):
     """Mapped file identities and script files; never claim memory attestation."""
     result=[];candidates={}
     try:
-        for line in read(proc/'maps').splitlines():
+        for line in (read(proc/'maps') if maps is None else maps).splitlines():
             fields=line.split(maxsplit=5)
             if len(fields)!=6 or 'x' not in fields[1] or not fields[5].startswith('/'):
                 continue
@@ -306,13 +306,15 @@ def provenance(proc,cache,deadline=None):
         for (kind,name,_),(path,expected) in sorted(candidates.items())[:128]:
             entry={'kind':kind,'path':name,'identity_verified':False}
             try:
-                try:sha=hash_artifact(path,cache,expected,deadline=deadline)
+                metadata={} if include_metadata else None
+                try:sha=hash_artifact(path,cache,expected,deadline=deadline,metadata=metadata)
                 except (OSError,ValueError):
                     if kind!='library' or name.endswith(' (deleted)'):raise
                     # map_files may require an extra kernel capability. A pathname
                     # fallback is safe only when it still refers to the mapped inode.
-                    sha=hash_artifact(proc/'root'/name.lstrip('/'),cache,expected,deadline=deadline)
+                    sha=hash_artifact(proc/'root'/name.lstrip('/'),cache,expected,deadline=deadline,metadata=metadata)
                 entry.update(sha256=sha,identity_verified=True,source='mapped-file' if kind=='library' else 'script-file')
+                if include_metadata:entry['metadata']=metadata
             except (OSError,ValueError) as e:
                 entry['error']=type(e).__name__ if isinstance(e,OSError) else str(e)[:300]
             result.append(entry)
@@ -1284,6 +1286,60 @@ def response_proc_identity(directory,pid):
     namespace=os.stat('ns/pid',dir_fd=directory).st_ino
     if ticks<=0 or namespace<=0:raise ValueError('Invalid process identity')
     return {'pid':pid,'start_ticks':ticks,'pid_namespace':namespace}
+
+
+TRIAGE_CONTEXT_GAPS=('original_observation_process_not_identified','package_authentication_missing',
+    'configuration_not_collected','startup_not_collected','network_history_not_collected',
+    'arguments_and_environment_not_collected','script_execution_not_attested','memory_not_attested')
+
+
+def triage_process_facts(directory,pid):
+    """Bounded kernel metadata through one pinned proc directory; no raw secrets."""
+    identity=response_proc_identity(directory,pid)
+    info=os.fstat(directory)
+    identity.update(boot_id=response_service_boot(),proc_device=info.st_dev,proc_inode=info.st_ino)
+    credentials={}
+    for line in response_proc_read(directory,'status',16384).decode('ascii',errors='replace').splitlines():
+        key,separator,value=line.partition(':')
+        if key not in ('Uid','Gid','Groups','CapInh','CapPrm','CapEff','CapBnd','CapAmb','NoNewPrivs','Seccomp'):continue
+        if not separator or key in credentials:raise ValueError('Invalid process credentials')
+        values=value.split()
+        if key.startswith('Cap'):
+            if len(values)!=1 or not re.fullmatch('[a-fA-F0-9]{1,16}',values[0]):raise ValueError('Invalid process capabilities')
+        elif any(not re.fullmatch('[0-9]{1,20}',v) for v in values):raise ValueError('Invalid process credentials')
+        if key in ('Uid','Gid') and len(values)!=4:raise ValueError('Incomplete process credentials')
+        credentials[key]=values
+    if not {'Uid','Gid','CapEff','NoNewPrivs','Seccomp'}<=credentials.keys():raise ValueError('Incomplete process credentials')
+    namespaces={name:os.stat('ns/'+name,dir_fd=directory).st_ino for name in ('pid','net','mnt','user')}
+    maps=response_proc_read(directory,'maps',262144).decode('utf-8',errors='strict')
+    cgroup=response_proc_read(directory,'cgroup',16384)
+    executable=os.stat('exe',dir_fd=directory)
+    if not stat.S_ISREG(executable.st_mode):raise ValueError('Executable is not a regular file')
+    signature=[executable.st_dev,executable.st_ino,executable.st_mtime_ns,executable.st_ctime_ns,
+        executable.st_size,executable.st_uid,executable.st_gid,stat.S_IMODE(executable.st_mode)]
+    return {'process':identity,'credentials':credentials,'namespaces':namespaces,
+        'executable_identity':signature,'executable_path':os.readlink('exe',dir_fd=directory),
+        'maps':maps,'cgroup':cgroup}
+
+
+def triage_process_context(directory,pid,path,expected,deadline):
+    """Recheck all sampled facts; this is not an atomic snapshot or cache approval."""
+    before=triage_process_facts(directory,pid)
+    if before['executable_path']!=path:raise ValueError('Executable path changed')
+    proc=Path('/proc/self/fd')/str(directory)
+    metadata={};checksum=hash_artifact(proc/'exe',{},deadline=deadline,metadata=metadata)
+    if checksum!=expected:raise ValueError('Executable bytes changed')
+    artifacts=provenance(proc,{},deadline=deadline,maps=before['maps'],include_metadata=True)
+    gaps=list(TRIAGE_CONTEXT_GAPS)
+    if not artifacts or any(item.get('identity_verified') is not True for item in artifacts):gaps.append('artifact_coverage_incomplete')
+    after=triage_process_facts(directory,pid)
+    if time.monotonic()>deadline or before!=after:raise ValueError('Process context changed or collection budget expired')
+    return before,{'version':1,'process':before['process'],'credentials':before['credentials'],
+        'namespaces':before['namespaces'],'maps_sha256':hashlib.sha256(before['maps'].encode()).hexdigest(),
+        'cgroup_sha256':hashlib.sha256(before['cgroup']).hexdigest(),'artifacts':artifacts,
+        'executable':{'sha256':checksum,**metadata},
+        'coverage':{'cache_eligible':False,'gaps':sorted(gaps),'scope':'one_current_matching_executable',
+            'consistency':'matching_before_after_samples','trust':'target_kernel_and_local_files'}}
 
 
 def response_proc_scan(identity):

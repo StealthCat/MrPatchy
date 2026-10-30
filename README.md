@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.20.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.21.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -722,3 +722,28 @@ fleet revocation and linked review, threaded execution and shared rate/spend mod
 remain planned. New assessment/refresh tables require controller-first startup,
 then matched workers. No target-helper upgrade is required. Retained evidence is
 sensitive; history has no automatic deletion or immutable external storage yet.
+
+
+### Identity-bound follow-up context (v1.21.0)
+
+After a reviewed helper/collector upgrade, existing AI follow-up checks also retain
+a bounded context sample: boot/PID/start identity, credentials/capabilities, namespaces,
+executable bytes/metadata and script/mapped-file hashes/metadata. The helper pins one
+proc directory, compares facts around collection, and rechecks artifacts after optional
+package/service queries. Changed, exited, inaccessible or over-budget candidates do not
+produce a verified mixed result. Raw arguments, environment, maps and cgroup text are
+not added to AI evidence; existing allowlisted package/service outputs remain.
+
+The scope is one **current matching executable**, not proof that the historical
+observation's original process is still present. Matching before/after samples are
+not an atomic snapshot or memory attestation. Explicit coverage gaps always keep this
+context ineligible for fleet cache reuse: authenticated package provenance, relevant
+configuration, startup/behavior and other required context remain unfinished. Existing
+model, evidence limits, optional second-stage checks and response authorization remain.
+Oversized combined evidence is refused under the existing limit, never silently cut.
+
+Rebuild controller/workers and use the existing reviewed Agent upgrade workflow on
+each target to install both new helper and collector. Older helpers remain readable
+but do not supply the new context. No new schema, automatic target upgrade, Docker-image
+publication or throughput/cache-hit claim is made. Assessment history retains the
+context actually supplied to each AI stage.

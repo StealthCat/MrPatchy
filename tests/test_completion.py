@@ -150,7 +150,7 @@ def test_two_stage_investigation_uses_only_allowlisted_checks(admin,monkeypatch)
     monkeypatch.setattr(worker.ai.transport,'post',post);monkeypatch.setattr(worker.ssh,'call',call)
     worker.investigate_one()
     assert len(requests)==2 and ssh_calls[0]['action']=='evidence'
-    assert ssh_calls[0]['checks']==['executable']
+    assert ssh_calls[0]['checks']==['executable'] and ssh_calls[0]['uid']=='0'
     assert all(r['store'] is False for r in requests)
     assert 'identity_verified' in requests[1]['input']
 
