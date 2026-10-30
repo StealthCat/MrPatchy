@@ -52,8 +52,10 @@ def test_control_revisions_restart_and_legacy_state(admin,monkeypatch):
         assert second.heartbeat(False,[],0,False)
 
 
-@pytest.mark.parametrize('change',[{'heartbeat':0},{'heartbeat':time.time()+300},{'version':'0.0.1'},{'state':'unknown'}])
+@pytest.mark.parametrize('change',[{'heartbeat':0},{'heartbeat':'future'},{'version':'0.0.1'},{'state':'unknown'}])
 def test_unavailable_or_incompatible_worker_not_controllable(admin,change):
+    change=dict(change)
+    if change.get('heartbeat')=='future':change['heartbeat']=time.time()+300
     with registry.Registration() as node:
         with Session() as s:
             row=s.get(Setting,registry.record_key(node.id));row.value={**row.value,**change};s.commit()
