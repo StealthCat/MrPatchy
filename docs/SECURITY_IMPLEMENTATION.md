@@ -2486,6 +2486,10 @@ reports or a YAML role flag do not complete those requirements.
 
 ## v0.9.0 — cooperative worker drain and configured concurrency
 
+Delivery: [PR #64](https://github.com/StealthCat/MrPatchy/pull/64), initial implementation
+[f4d19d05](https://github.com/StealthCat/MrPatchy/commit/f4d19d057ef5495dc8d35103353791a8330c841c).
+The PR records exact final-head checks and the actual merged main commit.
+
 Completion-gate base: main `076ea6cf` ([PR #63](https://github.com/StealthCat/MrPatchy/pull/63)),
 source 0.8.0. Its actual registry/worker/entrypoint/UI/test diff, checkpoint,
 recorded validation and all nine successful exact-head checks were inspected;
