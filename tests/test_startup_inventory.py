@@ -36,3 +36,21 @@ def test_paging_search_roles_history_and_no_provider(seeded,monkeypatch):
 
 @pytest.mark.parametrize('path,key',[('/etc/crontab','cron'),('/etc/cron.daily/a','cron'),('/etc/systemd/system/a','systemd_local'),('/home/user/.profile','additional')])
 def test_mechanisms_do_not_claim_defaults(path,key):assert view.mechanism(path)[0]==key
+
+
+def test_baseline_labels_and_revision_guard(seeded):
+    from app.db import Setting
+    from app.incidents import PersistenceBaseline,digest
+    with Session() as s:
+        prior=s.get(Inspection,'receipt');inventory={**prior.report['persistence'],'state':'collected','gaps':[],'skipped':0}
+        prior.report={'persistence':inventory}
+        s.add(PersistenceBaseline(id='baseline',host_id='one',inspection_id='receipt',evidence_digest=digest(inventory),actor='admin',reason='Reviewed fixture metadata'))
+        s.add(Setting(key='persistence-baseline:one',value={'id':'baseline'}))
+        rows=[{**r} for r in inventory['entries'][1:]];rows[0]['sha256']='b'*64
+        rows.append({**rows[0],'path':'/etc/cron.d/new'})
+        s.add(Inspection(id='new',host_id='one',created=time.time()+.01,report={'persistence':{**inventory,'entries':rows}}));s.commit()
+    url='/api/hosts/one/security/startup-inventory'
+    result=seeded.get(url,params={'q':'job01'}).json();assert result['items'][0]['change']=='changed'
+    assert seeded.get(url,params={'q':'/new'}).json()['items'][0]['change']=='added'
+    with Session() as s:s.get(Setting,'persistence-baseline:one').value={'id':'missing'};s.commit()
+    assert seeded.get(url,params={'expected_digest':result['digest']}).status_code==400

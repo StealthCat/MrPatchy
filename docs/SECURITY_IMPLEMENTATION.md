@@ -2144,6 +2144,10 @@ scanner-led advisory enrichment does not complete general malware protection.
 
 ## v0.4.0 — stored startup-file review workspace
 
+Delivery: [PR #56](https://github.com/StealthCat/MrPatchy/pull/56), initial implementation
+[18261e91](https://github.com/StealthCat/MrPatchy/commit/18261e91011dfda311cea175e81e1e5e76155be2).
+The PR records exact final checks and its actual merged main commit.
+
 After [PR #55](https://github.com/StealthCat/MrPatchy/pull/55), the startup roadmap
 remains unfinished. This milestone adds File integrity → Browse startup files:
 search by path/mechanism, deterministic 25-file pages, current receipt time/ID,
