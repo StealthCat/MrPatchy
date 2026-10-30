@@ -3913,3 +3913,10 @@ Back/reload and phone/tablet/desktop views. The earlier full **1,416 / 8 skipped
 regression and complete browser run predate this final loader/guard reconciliation;
 all nine final-head CI checks cover the combined source before any merge. No source
 change is permitted after that final-head acceptance without applicable new checks.
+
+Delivery: [PR #80](https://github.com/StealthCat/MrPatchy/pull/80), initial published
+source [0bb3797a](https://github.com/StealthCat/MrPatchy/commit/0bb3797a8b11906fb855bdbc695212738cc8ba67).
+It targets the actual post-fix main `8d2087a5`. Final published head/tree, all nine
+SQLite/MySQL/browser/native acceptance results and actual merged commit (or exact
+unfinished blockers) are recorded in that PR. Reconcile this delivery before new
+roadmap work; no earlier-head or local-only result authorizes merging.
