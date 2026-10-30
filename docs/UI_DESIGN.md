@@ -123,7 +123,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 | Security, integrity, startup and response | Startup Files/Coverage pages (v0.11.0); existing scanner/baseline/vendor/file/process workflows | Migrate other crowded workspaces, review/recovery/export states; comprehensive startup discovery/provenance/classification remains planned |
 | Activity, audit and inventory/package history | Existing global/server pages | Dedicated detail views, shared pagination/filter/long-output components |
 | Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
-| Deployment, worker and GCP health | Worker registration/liveness and cooperative controls v0.9.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
+| Deployment, worker and GCP health | Worker registration/liveness, cooperative controls v0.9.0 and expected-worker inventory v0.12.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
 | Whole-application acceptance | Not complete | All rows migrated; cross-role workflows, state/asset/readability consistency and actual mobile/tablet/desktop review |
 
 No additional mascot artwork is required for this bounded route milestone; it
@@ -251,3 +251,21 @@ Reviewed renders: [Files desktop](screenshots/startup-review-v0110-desktop.jpg),
 [Files phone](screenshots/startup-review-v0110-mobile.jpg),
 [Coverage desktop](screenshots/startup-review-v0110-coverage-desktop.jpg),
 [Coverage phone](screenshots/startup-review-v0110-coverage-mobile.jpg).
+
+
+## Expected worker inventory (v0.12.0)
+
+Activity → Workers now separates controller-configured expected identities from
+paginated registration history. Responsive cards show missing registrations and
+the same stopped/stale/future-clock/version/drain explanations used by the runtime
+table. Configuration errors and absent configuration remain visible; neither is
+presented as a complete or healthy deployment. Readiness remains not assessed.
+The cards reuse glass borders, mint/amber states and the established mascot;
+read-only viewing adds no control or target action. Existing boot/revision-checked
+drain/resume stays solely beside eligible registered runtimes.
+
+Reviewed renders: [desktop](screenshots/expected-workers-v0120-desktop.jpg),
+[tablet](screenshots/expected-workers-v0120-tablet.jpg),
+[phone](screenshots/expected-workers-v0120-mobile.jpg). This completes only the
+expected-worker inventory increment, not controller/agent/GCP health or full
+responsive/accessibility acceptance of the application.

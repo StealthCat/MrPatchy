@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0 — 2026-10-30
+
+- Add a bounded controller-configured expected-worker inventory, including never-registered identities, independent of registration pagination.
+- Explain missing/stale/stopped/version/drain observations and invalid configuration in Activity → Workers, with responsive cards and preserved read-only/administrator boundaries.
+- Add expected-inventory acceptance and document remaining all-component health/deployment work.
+
 ## 0.11.0 — 2026-10-30
 
 1. Move stored startup metadata review into dedicated server Files/Coverage pages with deep links, responsive glass surfaces and the established mascot.
