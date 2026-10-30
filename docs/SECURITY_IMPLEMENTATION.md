@@ -1691,7 +1691,8 @@ remain operator validation. Full service orchestration remains future work.
 
 ## Server management lifecycle
 
-Administrators can disable, enable or delete a server from Servers or its overview.
+Administrators can disable, enable or delete a server from Servers, its overview,
+its Settings → Server management section, or the Manage dialog.
 Each change requires a meaningful reason and the lifecycle revision loaded by the
 page. Delete also requires the exact server name. Role and CSRF checks apply. The
 host executor lock and separate cross-process queue, poll, telemetry, control and AI
@@ -2169,3 +2170,27 @@ vendor-default verification, configured AI classifications/redaction, alerts and
 real-target acceptance. CVE monitoring, automatic containment, general malware
 protection and evidence retention remain planned. No schema or agent upgrade is
 needed; rebuild the controller. Git tags remain omitted by user instruction.
+
+
+## v0.4.1 — server deletion in Settings and Manage
+
+The user reported that deletion was missing from server settings. Inspection of
+main after [PR #56](https://github.com/StealthCat/MrPatchy/pull/56), commit
+`372783ce95b67b7626bad7849783f337480175e3`, confirmed that lifecycle buttons existed
+on the server list/header but were missing from the Manage dialog, and there was no
+dedicated server Settings tab. This fixes that discoverability gap with a shared
+administrator-only Server management section in both locations. A Settings shortcut
+and links to connection/maintenance/agent controls make the page discoverable.
+Disabled servers retain enable/delete controls; deleted servers show retained-history
+information and no lifecycle mutations. Existing connection/tab URLs remain valid.
+
+The same reviewed lifecycle endpoints and confirmation dialog are reused. The exact
+name, reason, CSRF/role checks, revision guards, active-work/hold restrictions, audit,
+local-credential cleanup and retained-history semantics are unchanged. Opening the
+settings or dialog never performs deletion. The remote agent remains installed.
+No schema or remote-helper upgrade is needed; rebuild the controller and confirm
+version 0.4.1 or later in its UI. Git tags remain omitted by user instruction.
+
+This is a focused requested usability fix. Comprehensive startup discovery,
+provenance/AI classifications, CVE monitoring, automatic containment and retention
+remain unfinished as tracked above.
