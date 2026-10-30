@@ -2398,6 +2398,10 @@ not claim complete UI redesign or complete endpoint protection.
 
 ## v0.7.0 — searchable server directory and focused Overview pages
 
+Delivery: [PR #62](https://github.com/StealthCat/MrPatchy/pull/62), initial implementation
+[2f70aea0](https://github.com/StealthCat/MrPatchy/commit/2f70aea0971c3149f626cb6a0a7b3f2dd0f96011).
+The PR records final-head CI and the actual merged main commit.
+
 Completion-gate base: main `716d8f5` ([PR #61](https://github.com/StealthCat/MrPatchy/pull/61)),
 source 0.6.0. Its actual navigation/header/filter diff, committed responsive renders,
 recorded validation and nine successful exact-head checks were inspected; no PR was
