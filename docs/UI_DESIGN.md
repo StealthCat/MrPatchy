@@ -37,3 +37,34 @@ Screenshots are captured directly by the browser as JPEGs after local images dec
 ## Mascot provenance
 
 The illustrations were created for this project with the built-in image-generation tool. The working pose used the welcome pose as its visual identity reference. Original transparent outputs are committed as project assets; there is no runtime image-generation dependency. The exact prompts are retained in `app/static/mascot/PROMPTS.md`.
+
+
+## Planned full-application UI rework
+
+The next full UI rework is tracked in
+[the implementation roadmap](SECURITY_IMPLEMENTATION.md#planned-complete-ui-rework-with-glass-styling-and-extensive-mascot-use).
+The existing theme and two mascot illustrations are its foundation; this guide's
+current-state descriptions do not mean that the new rework has been implemented.
+
+Retain the current color scheme, status semantics and established Mr Patchy
+character. Use the mascot extensively across navigation, introductions, summaries,
+onboarding, help and application states, creating consistent additional artwork
+where useful. Use as many graphics and graphic details as needed for the desired
+polished glass-like appearance, while keeping text, controls and evidence clear.
+
+Plan the navigation before migrating screens. Use separate pages for major tasks,
+contextual tabs for related views and grouped menus for secondary actions; split
+crowded workspaces and long dialogs into focused views. Preserve deep links,
+browser navigation and the user's place during refresh. Readability, usability and
+uncluttered navigation are acceptance criteria alongside the visual finish.
+
+Implement a shared system of glass surfaces, typography, spacing, icons, forms,
+tables and mascot-supported loading/empty/error/success states. Keep high-contrast
+reading surfaces, keyboard/screen-reader behavior, responsive layouts and reduced
+motion/transparency fallbacks. Use real data in charts and show unknown states
+honestly. Preserve authorization, escaping, audit and operational approval rules.
+
+Track the finite screen inventory and migration progress in the roadmap. Refresh
+actual desktop/tablet/mobile screenshots and verify critical workflows through the
+new pages, tabs and menus before declaring the full rework complete. Finished UI
+work remains subject to the scheduled development completion gate.

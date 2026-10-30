@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 — 2026-10-29
+
+1. Add the planned complete UI rework with the established palette, extensive mascot/graphics use and a polished glass-like appearance.
+2. Align the roadmap and UI design guide on focused pages, tabs and menus, shared components, readability/accessibility, responsive workflows and finite completion criteria. This documents planned work; the UI is not redesigned by this update.
+
 ## 0.5.0 — 2026-10-29
 
 1. Open the correct server Overview after backend-confirmed installation verification, retaining success status on refresh.

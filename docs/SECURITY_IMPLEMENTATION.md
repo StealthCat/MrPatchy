@@ -76,6 +76,7 @@ Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, fou
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
 
+- Complete application-wide UI rework retaining the current color scheme and mascot, with extensive graphics, polished glass styling and readable, uncluttered page/tab/menu navigation; see the planned milestone below.
 - Comprehensive startup and scheduled-task awareness, package-default versus custom provenance, and explained AI triage of custom/modified entries; see the planned milestone below.
 - Separate complete/controller-only/worker-only deployments with supported remote-worker state, health, scaling, drain and recovery; see the planned milestone below.
 - Unified deployment health/status dashboard for controllers, workers, agents and integration nodes, plus a dedicated GCP integration Docker node; see the planned milestone below.
@@ -2315,3 +2316,40 @@ and explained AI classifications, CVE exposure/detectors, policy-authorized
 automatic quarantine/termination, general malware protection, retention/immutable
 storage and native/real-target acceptance. Do not treat this workflow as completing
 those requirements.
+
+
+## Planned: complete UI rework with glass styling and extensive mascot use
+
+Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
+The current glass theme, existing mascot artwork and incremental UI polish are
+starting points, not evidence that this milestone is finished. Use
+[the UI design guide](UI_DESIGN.md) to maintain one consistent design system.
+
+### Brand, mascot and visual direction
+
+- Retain the established color scheme and its status meanings: smoky blue/teal surfaces with mint actions/healthy states, amber attention and coral errors/critical priorities. Preserve Mr Patchy's established raccoon identity, patched overalls and character.
+- Use the mascot as extensively as possible throughout the application: sign-in, navigation, page introductions, dashboard summaries, onboarding, guided workflows, loading/empty/error/success states, notices and help. Add reference-consistent poses, expressions and contextual illustrations where needed, with treatments that keep nearby text, controls and operational status easy to read.
+- Deliver a polished glass-like appearance through a coherent system of layered translucent surfaces, controlled blur, subtle highlights, borders, shadows and background depth. Give dense text/tables dependable reading surfaces and clear visual hierarchy; readability must hold over every background and state.
+- Use as many graphics and graphic details as needed to achieve the desired result, including custom illustrations, icons, supporting textures, diagrams, progress treatments and data visualizations. Keep visual identity consistent, optimize assets and provide text equivalents. Operational graphics must reflect real recorded data and explicit unknown states.
+
+### Information architecture and uncluttered navigation
+
+- Rework the whole application, including authentication, fleet/server overviews, enrollment, packages/repositories, schedules, AI investigations/logs, security/startup/integrity/response workflows, history/audit, deployment/worker/GCP health, users and settings. Apply the same system to the other planned roadmap features as they are implemented.
+- Audit the current routes, long pages, repeated controls, oversized dialogs and crowded toolbars. Define a clear navigation map with dedicated pages for major tasks, contextual tabs for related views and grouped menus for secondary actions. Split dense workspaces into focused sections; use progressive disclosure for advanced or infrequent controls.
+- Make the current location and selected server/view obvious through consistent page titles, active navigation/tab states and useful context links. Support deep links, browser Back/Forward, stable tab selection and sensible preservation of filters/search/pagination without losing the user's place during refresh.
+- Prefer focused pages and tabs for substantial workflows and detail records; keep menus discoverable and dialogs suited to brief contextual tasks and confirmations. Retain direct access to essential actions, explicit destructive-action confirmations and existing role/approval/recovery boundaries.
+- Standardize readable typography, spacing, table density, labels, search/filter controls, pagination, primary/secondary actions and status summaries. Keep warnings, coverage limitations, AI uncertainty, pending work and recovery-required states prominent and understandable.
+
+### Shared components, graphics and accessibility
+
+- Establish reusable design tokens and components for the application shell, page headers, tab sets, menus, glass panels, tables, forms, dialogs, charts, notifications and mascot-supported states. Consolidate inconsistent one-off styling as each workspace is migrated.
+- Keep keyboard navigation, visible focus, meaningful labels, screen-reader semantics, contrast and touch targets usable. Honor reduced-motion/reduced-transparency preferences and provide legible fallbacks when glass effects are unsupported.
+- Verify mobile, tablet and desktop layouts, including narrow navigation, dense tables and lengthy evidence/log content. Optimize graphic delivery and glass effects so the redesign stays responsive and avoids obstructed controls, text overflow and layout shifts.
+- Preserve accurate data, input escaping, authorization, audit history, selections and background refresh behavior throughout the redesign; visual changes must not silently change operational decisions.
+
+### Delivery and completion criteria
+
+- Deliver a finite sequence of coherent milestones: route/navigation and visual-system plan; shared shell/components and graphic assets; focused migration of all workspaces; then whole-application usability/accessibility and visual consistency review. Size each cycle using the existing development work budget and record migrated versus outstanding screens.
+- Update the UI design guide, navigation documentation and actual application screenshots with the implemented design. Capture representative populated, loading, empty, error, warning and success states at mobile/tablet/desktop sizes; inspect the rendered text and controls as well as the artwork.
+- Exercise critical end-to-end workflows through the new pages/tabs/menus: login, enrollment and Overview landing, server selection, update selection/approval, scheduling, AI pause/investigation, security evidence/response review, jobs/history, deployment health and settings. Include direct links, Back/Forward, keyboard navigation, permissions and long-content/failed-loading cases.
+- Mark the rework complete only after the defined screen inventory has been migrated and the readability, usability, navigation, visual and regression criteria are met. Existing glass CSS, a few mascot placements or one polished screen do not complete the milestone. Once complete, the existing completion gate prevents open-ended cosmetic work merely to fill scheduled cycles.
