@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.4.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.4.2** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
