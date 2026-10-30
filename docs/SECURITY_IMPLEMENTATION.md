@@ -2559,3 +2559,48 @@ passed, and five reviewed renders are linked in UI_DESIGN.md. Python compilation
 JS/shell syntax, whitespace and source-version consistency passed. All applicable
 GitHub checks must pass on the exact final PR head before merge; the PR records
 those checks and the actual merged commit.
+
+
+### Unfinished PR #64 — validation gate and next-cycle handoff
+
+**Not merged; main remains v0.8.0 / `076ea6cf`.** Continue/reconcile PR #64 before
+another milestone or PR. Target v0.9.0 remains unpublished/unmerged; keep that
+version for completion of this coherent update. No Git tags were created.
+
+Implementation/test head `b8e90229485185f680e751d11297ef7b6e66fd80`, tree
+`e20403a7d059e72fd0f03ff4f29f4ea5943669b2`, passed eight of nine jobs in
+[run 41010603882](https://github.com/StealthCat/MrPatchy/actions/runs/41010603882).
+MySQL failed `tests/test_plan_evidence.py::test_newer_receipts_are_outside_snapshot`:
+related-evidence plan approval returned 409, expected 200 (1 failed / 1,146 passed /
+127 skipped). Earlier [run 41009205410](https://github.com/StealthCat/MrPatchy/actions/runs/41009205410)
+failed the related `test_opt_in_projection_binding_review_and_legacy` with the
+same status mismatch. Worker registry/control tests passed in both MySQL runs.
+The final local full suite passed 1,267 / 7 skipped and the focused related-plan
+suite passed 10 tests, so local SQLite has not reproduced the approval failure.
+The root cause is **unconfirmed**; do not label it fixed, relax approval/evidence
+checks, skip the test or blindly rerun until green. No plan authorization code
+was changed in this cycle. A separate collection-time future-heartbeat fixture
+was corrected and validated; that does not fix/explain the approval failure.
+
+Next validation work: obtain the failing approval response detail and compare the
+captured versus persisted/reconstructed evidence digest, snapshot time boundary,
+numeric types and retained rows under actual MySQL. Investigate storage/transaction/
+serialization or timing differences using fixture data; those are hypotheses,
+not established causes. No Docker/MySQL server is available in this local runtime;
+the CI MySQL service is available for targeted reproduction/diagnostics. Preserve
+all stale/change/deletion/foreign-evidence and authorization rejection tests.
+
+Review also identified an unfinished worker-control edge case: the existing valid
+configured identities `.` and `..` are normalized by URL processing. The UI builds
+an identity path using encodeURIComponent, which leaves these dot segments intact;
+controls reach the wrong route (404). Before merging, move the exact identity into
+a validated request body or another normalization-safe contract, preserve all valid
+existing identities, and add backend/browser regression coverage for dot identities
+and ordinary case-sensitive IDs. Do not silently break their registration contract.
+No late speculative implementation was added for this finding.
+
+This checkpoint-only revision records the blocked handoff; it does not turn prior
+checks into passes. Any eventual final implementation/metadata commit must run all
+applicable checks and pass on that exact head before merge. The PR records current
+head/check links and remains unfinished. The broader remaining roadmap above is
+unchanged, and the existing schedule stays enabled.
