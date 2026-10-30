@@ -1,8 +1,9 @@
 """Responses API requests and diagnostics safe to persist in the application UI."""
+from contextlib import ExitStack
 import json
 import re
 import httpx
-from . import ai_runs
+from . import ai_runs, ai_transport as transport
 
 URL='https://api.openai.com/v1/responses'
 MODELS_URL='https://api.openai.com/v1/models'
@@ -92,7 +93,10 @@ def list_models(key):
 
 def request(payload,key,timeout=60):
     from . import ai_policy
-    with ai_policy.provider():return _request(payload,key,timeout)
+    with ExitStack() as stack:
+        with ai_runs.measure('provider_admission'):
+            stack.enter_context(ai_policy.provider())
+        return _request(payload,key,timeout)
 
 
 def _request(payload,key,timeout=60):
@@ -101,12 +105,15 @@ def _request(payload,key,timeout=60):
     payload={**payload,'model':payload['model'].strip()}
     if not payload['model']:raise AIError('Save an API model ID in Settings before testing.')
     try:
-        call_id=ai_runs.request_started(payload['model'])
-        response=httpx.post(URL,headers={'Authorization':'Bearer '+key},json=payload,timeout=timeout)
+        with ai_runs.measure('receipt_persistence'):
+            call_id=ai_runs.request_started(payload['model'])
+        with ai_runs.measure('provider'):
+            response=transport.post(URL,headers={'Authorization':'Bearer '+key},json=payload,timeout=timeout)
         ai_runs.response_received(response)
         try:data=response.json()
         except (ValueError,UnicodeDecodeError):data=None
-        if isinstance(data,dict):ai_runs.record_usage(call_id,data,payload)
+        if isinstance(data,dict):
+            with ai_runs.measure('usage_persistence'):ai_runs.record_usage(call_id,data,payload)
         response.raise_for_status()
     except httpx.HTTPStatusError as error:raise http_error(error.response) from None
     except httpx.TimeoutException:raise AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.') from None

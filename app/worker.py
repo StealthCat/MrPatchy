@@ -11,7 +11,7 @@ import subprocess
 from sqlalchemy import select, delete, update, func
 from . import host_lifecycle
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, package_history, update_scores, packages as package_backend
+from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, package_history, update_scores, packages as package_backend
 from target.agent import MANAGED
 from .security import unseal
 import httpx
@@ -544,14 +544,16 @@ def validate_patch(s,h,specs):
 
 
 def investigate_one():
+    admission_started=time.perf_counter()
     lock=Lock('ai-triage')
     if not lock.acquire(False):return
     try:
         ai_runs.reconcile('triage')
-        return _investigate_one()
+        return _investigate_one(admission_started)
     finally:lock.release()
 
-def _investigate_one():
+def _investigate_one(admission_started=None):
+    if admission_started is None:admission_started=time.perf_counter()
     with Session() as s:
         cfg=config(s); secret=s.get(Setting,'openai_key')
         if not cfg['ai_enabled'] or not cfg['ai_model'] or not secret: return
@@ -564,6 +566,8 @@ def _investigate_one():
         row.attempted=now; s.commit()
         try:
             with ai_runs.track('triage',cfg['ai_model'],row.host_id,row.id):
+                ai_runs.timing('admission',time.perf_counter()-admission_started)
+                ai_runs.timing('queue_age',now-row.first_seen)
                 _assess_behavior(s,row,cfg,secret)
         except Exception as e:
             s.rollback();row=s.get(Behavior,row.id)
@@ -588,13 +592,17 @@ def _assess_active_behavior(s,row,cfg,secret):
         if not host or not isinstance(checksum,str) or not re.fullmatch(r'[a-f0-9]{64}',checksum) or row.evidence.get('identity_verified') is False:
             evidence={'identity_verified':False,'checks':list(set(checks)),'reason':'The observed executable has no verified identity or its host is unavailable; no remote evidence request was sent'}
         else:
-            try:evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'checks':list(set(checks))},timeout=90)
+            try:
+                with ai_runs.measure('ssh_evidence'):
+                    evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'checks':list(set(checks))},timeout=90)
             except Exception as error:raise ai.AIError('SSH evidence collection failed ('+type(error).__name__+'). Verify target connectivity, host pinning and helper installation.') from None
-        row.evidence={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
-        s.commit()
+        with ai_runs.measure('evidence_persistence'):
+            row.evidence={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
+            s.commit()
         result=assess(row.evidence)
-    row.verdict=result['risk']; row.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
-    s.commit()
+    with ai_runs.measure('result_persistence'):
+        row.verdict=result['risk']; row.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
+        s.commit()
 
 def ai_cycle():
     # Separate quotas keep score batches from starving process investigations.
@@ -605,8 +613,10 @@ def ai_cycle():
 
 def loop(role="embedded"):
     from .worker_registry import Registration
-    with Registration(role) as reporter:
-        _loop(reporter)
+    try:
+        with Registration(role) as reporter:
+            _loop(reporter)
+    finally:ai.transport.close()
 
 def _loop(reporter):
     from .worker_registry import IdentityLost,capacities
@@ -638,7 +648,9 @@ def _loop(reporter):
                         try: future.result()
                         except Exception: log.exception('Job worker failed outside its operation handler')
                         del active_jobs[key]
-                if draining:continue
+                if draining:
+                    ai_transport.close(wait=False)
+                    continue
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
                 if is_leader and now-last_schedule>=30:
                     scheduling.tick(now); incidents.schedule_tick(now);

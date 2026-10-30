@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.17.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.18.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -636,3 +636,30 @@ existing administrator confirmations; viewing details does not replay work.
 Audit API reads accept offset/limit (default/max 200), with timestamp/ID ordering
 and administrator-only `/api/audit/entries/{id}` reads. Existing unscoped job reads
 and payload exclusion remain. Offset pages can shift during collection/retention.
+
+
+### AI transport and performance baseline (v1.18.0)
+
+Billable Responses API calls reuse a bounded, process-local HTTP pool. Each call
+still passes existing server/global policy gates and has its own attempted-call
+receipt; credentials are request-local, cookies are discarded and redirects and
+automatic retries are disabled. Pool/connect waits are bounded to 5/10 seconds;
+existing read/write budgets remain. Worker drain closes idle connections and
+shutdown waits for in-flight sends before closing the pool.
+
+Administrator AI activity → Run → Timeline includes monotonic stage timings for
+provider admission/request, receipts and usage. Serial process triage also records
+queue age, admission, requested SSH evidence and evidence/result persistence.
+Timings overlap and must not be summed. Queue age includes pause/backoff and time
+before eligibility. Small diagnostic batches flush at run completion (or 32 events);
+crashes/database failures can leave gaps. Run timing excludes creation/admission
+and the final timing flush. Existing run-history retention applies to these metrics.
+
+`python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
+loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
+provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
+[implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
+reuse is validated; this is not a production speed or parallel-throughput promise.
+Threaded claims/leases, exact fleet known-good reuse, classified retries and shared
+throttle/daily-spend/unthrottled controls remain planned. Existing hourly limits,
+model, evidence, follow-ups, approval and AI pause behavior remain in force.

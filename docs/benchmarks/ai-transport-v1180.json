@@ -1,0 +1,366 @@
+{
+  "baseline_main": "76fb0686bf2528d810a6440628d23b7eee9a0468",
+  "candidate_version": "1.18.0",
+  "date_utc": "2026-10-30",
+  "command": "python tools/benchmark_ai.py --runs 20",
+  "method": "Same harness sequentially on archived current main and candidate, with 20 queued investigations alternating one/two stages, fixed synthetic evidence and 20ms provider / 10ms SSH waits. HTTP/1.1 loopback server uses TCP_NODELAY. Ambient proxies removed only in the disposable harness. Shared local machine; single paired sample, no confidence intervals or production claim. Final sample repeated after preserving negotiation headers and integrating the major-1 pin. The archived v0.17.0 AI runtime is unchanged in v1.17.0.",
+  "baseline": {
+    "fixture_only": true,
+    "execution": "serial",
+    "runs": 20,
+    "provider_calls": 30,
+    "connections": 30,
+    "elapsed_seconds": 1.684,
+    "runs_per_second": 11.879,
+    "stages": {
+      "run": {
+        "count": 20,
+        "p50_ms": 99.143,
+        "p95_ms": 127.634
+      },
+      "one_stage": {
+        "count": 10,
+        "p50_ms": 52.974,
+        "p95_ms": 102.868
+      },
+      "two_stage": {
+        "count": 10,
+        "p50_ms": 108.207,
+        "p95_ms": 131.776
+      },
+      "provider": {
+        "count": 30,
+        "p50_ms": 33.544,
+        "p95_ms": 59.166
+      },
+      "ssh_evidence": {
+        "count": 10,
+        "p50_ms": 10.087,
+        "p95_ms": 12.875
+      },
+      "admission": {
+        "count": 20,
+        "p50_ms": 11.381,
+        "p95_ms": 22.217
+      },
+      "queue_age": {
+        "count": 20,
+        "p50_ms": 2852.976,
+        "p95_ms": 3542.65
+      },
+      "receipt_persistence": {
+        "count": 30,
+        "p50_ms": 2.7,
+        "p95_ms": 4.301
+      },
+      "usage_persistence": {
+        "count": 30,
+        "p50_ms": 2.194,
+        "p95_ms": 5.06
+      }
+    },
+    "persisted_stages": {},
+    "input_tokens": 3000,
+    "output_tokens": 600,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "errors": 0,
+    "initial_fixture_queue_age_seconds": 2,
+    "notes": "Loopback 20ms provider and 10ms SSH fixtures; no production/TLS speed claim. Admission includes serial lock/query/run creation; run includes persistence."
+  },
+  "pooled_with_batched_timings": {
+    "fixture_only": true,
+    "execution": "serial",
+    "runs": 20,
+    "provider_calls": 30,
+    "connections": 1,
+    "elapsed_seconds": 1.944,
+    "runs_per_second": 10.288,
+    "stages": {
+      "run": {
+        "count": 20,
+        "p50_ms": 95.806,
+        "p95_ms": 128.597
+      },
+      "one_stage": {
+        "count": 10,
+        "p50_ms": 60.523,
+        "p95_ms": 109.856
+      },
+      "two_stage": {
+        "count": 10,
+        "p50_ms": 119.369,
+        "p95_ms": 232.337
+      },
+      "provider": {
+        "count": 30,
+        "p50_ms": 34.396,
+        "p95_ms": 60.517
+      },
+      "ssh_evidence": {
+        "count": 10,
+        "p50_ms": 10.1,
+        "p95_ms": 10.113
+      },
+      "admission": {
+        "count": 20,
+        "p50_ms": 12.662,
+        "p95_ms": 23.783
+      },
+      "queue_age": {
+        "count": 20,
+        "p50_ms": 3071.46,
+        "p95_ms": 3811.294
+      },
+      "receipt_persistence": {
+        "count": 30,
+        "p50_ms": 3.029,
+        "p95_ms": 10.959
+      },
+      "usage_persistence": {
+        "count": 30,
+        "p50_ms": 3.28,
+        "p95_ms": 11.772
+      }
+    },
+    "persisted_stages": {
+      "admission": {
+        "count": 20,
+        "p50_ms": 12.647,
+        "p95_ms": 23.758
+      },
+      "queue_age": {
+        "count": 20,
+        "p50_ms": 3060.376,
+        "p95_ms": 3805.608
+      },
+      "provider_admission": {
+        "count": 30,
+        "p50_ms": 1.185,
+        "p95_ms": 2.16
+      },
+      "receipt_persistence": {
+        "count": 30,
+        "p50_ms": 3.032,
+        "p95_ms": 10.962
+      },
+      "provider": {
+        "count": 30,
+        "p50_ms": 23.02,
+        "p95_ms": 33.573
+      },
+      "usage_persistence": {
+        "count": 30,
+        "p50_ms": 3.284,
+        "p95_ms": 11.778
+      },
+      "result_persistence": {
+        "count": 20,
+        "p50_ms": 2.455,
+        "p95_ms": 6.725
+      },
+      "run": {
+        "count": 20,
+        "p50_ms": 83.245,
+        "p95_ms": 115.358
+      },
+      "ssh_evidence": {
+        "count": 10,
+        "p50_ms": 10.117,
+        "p95_ms": 10.138
+      },
+      "evidence_persistence": {
+        "count": 10,
+        "p50_ms": 3.702,
+        "p95_ms": 13.865
+      }
+    },
+    "input_tokens": 3000,
+    "output_tokens": 600,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "errors": 0,
+    "initial_fixture_queue_age_seconds": 2,
+    "notes": "Loopback 20ms provider and 10ms SSH fixtures; no production/TLS speed claim. Admission includes serial lock/query/run creation; run includes persistence."
+  },
+  "interpretation": "Connections consistently fall from 30 to 1 and capability assertions preserve 30 calls/all follow-ups. Throughput improvement is not established: the final paired sample is slower with diagnostics, while an earlier sample was faster. Shared-load variance and diagnostic overhead remain material. No production or threaded speedup claim. Synthetic-model cost is unavailable, not zero.",
+  "development_observations": "Initial fixture inherited an unsupported ambient SOCKS proxy and produced no valid baseline. First successful eight-run samples showed slower pooled runs; disabling delayed-ACK artifacts and batching timing writes removed avoidable diagnostic overhead. Only the final paired 20-run fixture is recorded as the comparison.",
+  "reconciled_main": "493f374c271375949304f80f4deda926c02027ee",
+  "earlier_paired_sample": {
+    "baseline": {
+      "fixture_only": true,
+      "execution": "serial",
+      "runs": 20,
+      "provider_calls": 30,
+      "connections": 30,
+      "elapsed_seconds": 2.255,
+      "runs_per_second": 8.868,
+      "stages": {
+        "run": {
+          "count": 20,
+          "p50_ms": 105.558,
+          "p95_ms": 229.286
+        },
+        "one_stage": {
+          "count": 10,
+          "p50_ms": 59.186,
+          "p95_ms": 245.476
+        },
+        "two_stage": {
+          "count": 10,
+          "p50_ms": 112.889,
+          "p95_ms": 229.286
+        },
+        "provider": {
+          "count": 30,
+          "p50_ms": 34.795,
+          "p95_ms": 86.52
+        },
+        "ssh_evidence": {
+          "count": 10,
+          "p50_ms": 10.104,
+          "p95_ms": 10.215
+        },
+        "admission": {
+          "count": 20,
+          "p50_ms": 14.75,
+          "p95_ms": 49.584
+        },
+        "queue_age": {
+          "count": 20,
+          "p50_ms": 3351.795,
+          "p95_ms": 4121.484
+        },
+        "receipt_persistence": {
+          "count": 30,
+          "p50_ms": 3.431,
+          "p95_ms": 16.479
+        },
+        "usage_persistence": {
+          "count": 30,
+          "p50_ms": 2.629,
+          "p95_ms": 21.013
+        }
+      },
+      "persisted_stages": {},
+      "input_tokens": 3000,
+      "output_tokens": 600,
+      "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+      "errors": 0,
+      "initial_fixture_queue_age_seconds": 2,
+      "notes": "Loopback 20ms provider and 10ms SSH fixtures; no production/TLS speed claim. Admission includes serial lock/query/run creation; run includes persistence."
+    },
+    "candidate": {
+      "fixture_only": true,
+      "execution": "serial",
+      "runs": 20,
+      "provider_calls": 30,
+      "connections": 1,
+      "elapsed_seconds": 1.812,
+      "runs_per_second": 11.04,
+      "stages": {
+        "run": {
+          "count": 20,
+          "p50_ms": 98.443,
+          "p95_ms": 132.991
+        },
+        "one_stage": {
+          "count": 10,
+          "p50_ms": 59.968,
+          "p95_ms": 111.861
+        },
+        "two_stage": {
+          "count": 10,
+          "p50_ms": 105.734,
+          "p95_ms": 152.345
+        },
+        "provider": {
+          "count": 30,
+          "p50_ms": 32.442,
+          "p95_ms": 73.85
+        },
+        "ssh_evidence": {
+          "count": 10,
+          "p50_ms": 10.124,
+          "p95_ms": 15.578
+        },
+        "admission": {
+          "count": 20,
+          "p50_ms": 11.668,
+          "p95_ms": 22.475
+        },
+        "queue_age": {
+          "count": 20,
+          "p50_ms": 2796.925,
+          "p95_ms": 3677.963
+        },
+        "receipt_persistence": {
+          "count": 30,
+          "p50_ms": 3.149,
+          "p95_ms": 11.458
+        },
+        "usage_persistence": {
+          "count": 30,
+          "p50_ms": 2.217,
+          "p95_ms": 4.333
+        }
+      },
+      "persisted_stages": {
+        "admission": {
+          "count": 20,
+          "p50_ms": 11.651,
+          "p95_ms": 22.429
+        },
+        "queue_age": {
+          "count": 20,
+          "p50_ms": 2789.623,
+          "p95_ms": 3665.012
+        },
+        "provider_admission": {
+          "count": 30,
+          "p50_ms": 1.346,
+          "p95_ms": 6.223
+        },
+        "receipt_persistence": {
+          "count": 30,
+          "p50_ms": 3.152,
+          "p95_ms": 11.462
+        },
+        "provider": {
+          "count": 30,
+          "p50_ms": 22.677,
+          "p95_ms": 49.576
+        },
+        "usage_persistence": {
+          "count": 30,
+          "p50_ms": 2.221,
+          "p95_ms": 4.337
+        },
+        "result_persistence": {
+          "count": 20,
+          "p50_ms": 1.656,
+          "p95_ms": 2.617
+        },
+        "run": {
+          "count": 20,
+          "p50_ms": 87.437,
+          "p95_ms": 122.115
+        },
+        "ssh_evidence": {
+          "count": 10,
+          "p50_ms": 10.139,
+          "p95_ms": 15.591
+        },
+        "evidence_persistence": {
+          "count": 10,
+          "p50_ms": 1.835,
+          "p95_ms": 3.877
+        }
+      },
+      "input_tokens": 3000,
+      "output_tokens": 600,
+      "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+      "errors": 0,
+      "initial_fixture_queue_age_seconds": 2,
+      "notes": "Loopback 20ms provider and 10ms SSH fixtures; no production/TLS speed claim. Admission includes serial lock/query/run creation; run includes persistence."
+    }
+  }
+}

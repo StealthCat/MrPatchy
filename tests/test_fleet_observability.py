@@ -36,11 +36,11 @@ def completed(data):return response({'status':'completed','output':[{'content':[
 def test_triage_persists_stages_error_and_redacts_provider(admin,monkeypatch):
     with Session() as s:
         setup_ai(s);h=host(s);s.add(Behavior(id='b'*64,host_id=h.id,evidence={'executable':'/private/process','sha256':'a'*64,'connections':[]}));s.commit()
-    monkeypatch.setattr(ai.httpx,'post',lambda *a,**kw:response({'error':{'code':'invalid_api_key','message':'secret-api-key /private/process'}},401,headers={'x-request-id':'req_test'}))
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**kw:response({'error':{'code':'invalid_api_key','message':'secret-api-key /private/process'}},401,headers={'x-request-id':'req_test'}))
     worker.investigate_one();ai_runs.heartbeat()
     data=admin.get('/api/ai/runs').json()['items'];assert len(data)==1 and data[0]['state']=='error' and data[0]['calls']==1
     detail=admin.get('/api/ai/runs/'+data[0]['id']).json()
-    assert [e['stage'] for e in detail['events']]==['starting','api_request','api_response','failed']
+    assert [e['stage'] for e in detail['events'] if not e['stage'].startswith('timing_')]==['starting','api_request','api_response','failed']
     assert 'HTTP 401' in json.dumps(detail) and 'req_test' in json.dumps(detail)
     assert 'secret-api-key' not in json.dumps(detail) and '/private/process' not in json.dumps(detail)
     status=admin.get('/api/investigation-status').json();assert status['reason']=='backoff' and status['retry_at']>time.time()
@@ -51,7 +51,7 @@ def test_manual_retry_does_not_reset_hourly_quota(admin,monkeypatch):
         setup_ai(s,1);h=host(s);s.add(Behavior(id='c'*64,host_id=h.id,evidence={}));s.commit()
     calls=[]
     def post(*a,**kw):calls.append(1);return response({'error':{'code':'insufficient_quota'}},429)
-    monkeypatch.setattr(ai.httpx,'post',post)
+    monkeypatch.setattr(ai.transport,'post',post)
     worker.investigate_one();assert admin.post('/api/investigations/'+'c'*64+'/retry').status_code==200
     worker.investigate_one();assert len(calls)==1
     ai_runs.heartbeat();assert admin.get('/api/investigation-status').json()['reason']=='rate_limited'
@@ -99,7 +99,7 @@ def test_update_scores_are_exact_version_advisory_and_bounded(admin,monkeypatch)
         s.commit()
     sent=[]
     def post(*a,**kw):sent.append(kw['json']);return score_reply(*a,**kw)
-    monkeypatch.setattr(ai.httpx,'post',post);update_scores.run_one()
+    monkeypatch.setattr(ai.transport,'post',post);update_scores.run_one()
     assert len(json.loads(sent[0]['input']))==5 and 'PRIVATE_TOKEN' not in sent[0]['input']
     data=admin.get('/api/hosts/host-a/packages').json();scored=[p for p in data if p['assessment']['state']=='complete']
     assert len(scored)==5 and all(p['assessment']['confidence']=='low' and p['priority']=='high' for p in scored)
@@ -118,7 +118,7 @@ def test_score_invalid_batch_not_accepted(admin,monkeypatch,bad):
         elif bad=='bool':value['assessments'][0]['score']=True
         else:value['assessments'].pop()
         return completed(value)
-    monkeypatch.setattr(ai.httpx,'post',post);update_scores.run_one()
+    monkeypatch.setattr(ai.transport,'post',post);update_scores.run_one()
     with Session() as s:assert all(r.score is None and r.state=='error' for r in s.scalars(select(update_scores.UpdateScore)))
 
 
@@ -127,7 +127,7 @@ def test_score_inflight_candidate_change_is_discarded(admin,monkeypatch):
     def post(*a,**kw):
         with Session() as s:s.get(Package,'host-a:openssl:amd64').candidate='3';s.commit()
         return score_reply(*a,**kw)
-    monkeypatch.setattr(ai.httpx,'post',post);update_scores.run_one()
+    monkeypatch.setattr(ai.transport,'post',post);update_scores.run_one()
     with Session() as s:assert s.scalar(select(update_scores.UpdateScore)).state=='superseded'
     assert admin.get('/api/hosts/host-a/packages').json()[0]['assessment']['score'] is None
 

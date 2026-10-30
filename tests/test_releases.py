@@ -152,7 +152,7 @@ def test_ai_blocks_secrets_before_api_call(admin,monkeypatch):
         from app.security import seal
         s.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
         s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'configured-model'}));s.commit()
-        monkeypatch.setattr(releases.httpx,'post',lambda *a,**k:pytest.fail('secret reached API'))
+        monkeypatch.setattr(releases.ai.transport,'post',lambda *a,**k:pytest.fail('secret reached API'))
         with pytest.raises(ValueError,match='Potential secret'):releases.ai_review(s,{},'/etc/test.conf','password=secret','vendor','')
 
 
@@ -266,7 +266,7 @@ def test_ai_blocks_compound_credentials_and_url_passwords(admin,monkeypatch,secr
     with Session() as s:
         s.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
         s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'configured-model'}));s.commit()
-        monkeypatch.setattr(releases.httpx,'post',lambda *a,**k:pytest.fail('secret reached API'))
+        monkeypatch.setattr(releases.ai.transport,'post',lambda *a,**k:pytest.fail('secret reached API'))
         with pytest.raises(ValueError,match='Potential secret'):releases.ai_review(s,{},'/etc/test.conf',secret,'vendor','')
 
 

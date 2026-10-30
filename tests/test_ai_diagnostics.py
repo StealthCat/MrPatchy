@@ -31,7 +31,7 @@ def test_investigation_records_safe_actionable_provider_error(admin,monkeypatch,
     def post(*args,**kwargs):
         return httpx.Response(status,json={'error':{'code':code,'param':param,'message':'secret-test-key /sensitive/host/path private-provider-response'}},
                               headers={'x-request-id':'req_fixture_123'},request=httpx.Request('POST',ai.URL))
-    monkeypatch.setattr(ai.httpx,'post',post)
+    monkeypatch.setattr(ai.transport,'post',post)
     worker.investigate_one()
     with Session() as s:
         row=s.get(Behavior,'api-error')
@@ -53,7 +53,7 @@ def test_unknown_codes_headers_and_non_json_provider_bodies_are_not_echoed():
 @pytest.mark.parametrize('exception',[httpx.ConnectError('secret DNS/proxy credentials'),httpx.ReadTimeout('secret timeout details')])
 def test_transport_errors_are_safe_and_useful(monkeypatch,exception):
     def fail(*a,**kw):raise exception
-    monkeypatch.setattr(ai.httpx,'post',fail)
+    monkeypatch.setattr(ai.transport,'post',fail)
     with pytest.raises(ai.AIError) as error:ai.investigate({},'fixture','secret-test-key')
     assert 'secret' not in str(error.value) and ('HTTPS' in str(error.value) or 'DNS' in str(error.value))
 
@@ -64,7 +64,7 @@ def test_transport_errors_are_safe_and_useful(monkeypatch,exception):
     {'status':'completed','output':[{'content':[{'type':'output_text','text':'{"truncated":"private'}]}]},
     {'status':'completed','output':None}])
 def test_incomplete_refused_and_malformed_responses_are_not_accepted(monkeypatch,body):
-    monkeypatch.setattr(ai.httpx,'post',lambda *a,**k:httpx.Response(200,json=body,request=httpx.Request('POST',ai.URL)))
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:httpx.Response(200,json=body,request=httpx.Request('POST',ai.URL)))
     with pytest.raises(ai.AIError) as error:ai.investigate({},'fixture','secret-test-key')
     assert 'private' not in str(error.value)
 
@@ -73,7 +73,7 @@ def test_ai_probe_uses_saved_settings_no_host_evidence_and_is_rate_limited(admin
     setup_ai();calls=[]
     with Session() as s:s.add(Host(id='private-host',name='private-host',address='192.0.2.4',fingerprint='',inventory={'secret':'host-evidence'}));s.commit()
     def post(*a,**kw):calls.append(kw);return success()
-    monkeypatch.setattr(ai.httpx,'post',post)
+    monkeypatch.setattr(ai.transport,'post',post)
     result=admin.post('/api/settings/ai-test')
     assert result.status_code==200 and result.json()['ok']
     payload=calls[0]['json'];assert payload['model']=='fixture-model' and payload['store'] is False
@@ -83,7 +83,7 @@ def test_ai_probe_uses_saved_settings_no_host_evidence_and_is_rate_limited(admin
 
 
 def test_ai_probe_checks_configuration_permissions_and_csrf(admin,monkeypatch):
-    monkeypatch.setattr(ai.httpx,'post',lambda *a,**kw:pytest.fail('must not call provider'))
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**kw:pytest.fail('must not call provider'))
     assert admin.post('/api/settings/ai-test').status_code==400
     setup_ai()
     with Session() as s:s.get(User,'admin').role='viewer';s.commit()
@@ -96,10 +96,10 @@ def test_ai_probe_checks_configuration_permissions_and_csrf(admin,monkeypatch):
 def test_failed_probe_releases_lock_and_returns_diagnostic(admin,monkeypatch):
     setup_ai()
     def fail(*a,**kw):return httpx.Response(401,json={'error':{'code':'invalid_api_key','message':'secret-test-key'}},request=httpx.Request('POST',ai.URL))
-    monkeypatch.setattr(ai.httpx,'post',fail)
+    monkeypatch.setattr(ai.transport,'post',fail)
     r=admin.post('/api/settings/ai-test');assert r.status_code==502 and 'HTTP 401' in r.json()['detail'] and 'secret-test-key' not in r.text
     with Session() as s:s.get(Setting,'ai-test:last').value={'attempted':0};s.commit()
-    monkeypatch.setattr(ai.httpx,'post',lambda *a,**kw:success())
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**kw:success())
     assert admin.post('/api/settings/ai-test').status_code==200
 
 

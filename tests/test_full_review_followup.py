@@ -104,7 +104,7 @@ def test_unverified_process_investigation_completes_with_explicit_uncertainty(ad
   def raise_for_status(self):pass
   def json(self):return {'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps({'risk':'unknown','explanation':'Identity cannot be verified','recommended_checks':'Review locally','requested_checks':['executable']})}]}]}
  def call(*a,**kw):requests.append(kw['json']);return Response()
- monkeypatch.setattr(worker.httpx,'post',call)
+ monkeypatch.setattr(worker.ai.transport,'post',call)
  monkeypatch.setattr(worker.ssh,'call',lambda *a,**kw:pytest.fail('Unverified identity must not request SSH evidence'))
  worker.investigate_one()
  assert len(requests)==2

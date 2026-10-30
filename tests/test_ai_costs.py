@@ -19,7 +19,7 @@ def response_body(**changes):
 
 
 def post_response(monkeypatch, body, status=200):
-    monkeypatch.setattr(ai.httpx, 'post', lambda *a, **k: httpx.Response(status, json=body, request=httpx.Request('POST', ai.URL)))
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: httpx.Response(status, json=body, request=httpx.Request('POST', ai.URL)))
 
 
 def detail(admin, identifier):
@@ -136,7 +136,7 @@ def test_timeout_after_priced_followup_is_partial_and_retains_receipt(admin, mon
     with pytest.raises(ai.AIError), ai_runs.track('triage', 'gpt-6-luna') as identifier:
         ai.investigate({}, 'gpt-6-luna', 'secret-key')
         def timeout(*a, **k): raise httpx.ReadTimeout('secret-key')
-        monkeypatch.setattr(ai.httpx, 'post', timeout)
+        monkeypatch.setattr(ai.transport, 'post', timeout)
         ai.investigate({}, 'gpt-6-luna', 'secret-key')
     result = detail(admin, identifier)
     assert result['cost']['status'] == 'partial'

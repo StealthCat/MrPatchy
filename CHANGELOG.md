@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.18.0 — 2026-10-30
+
+- Reuse bounded, lifecycle-managed HTTP connections for billable AI calls without reusing credentials/cookies or adding automatic retries.
+- Record redacted stage timings and expose readable timing events in AI run timelines.
+- Add a disposable serial one-/two-stage benchmark, capability checks and connection/concurrency/shutdown regressions; retain the wider faster-triage program as unfinished.
+
 ## 1.17.0 — 2026-10-30
 
 1. Set the major version to 1, retaining the current minor/patch numbers, and keep it fixed until explicitly changed by the user.
