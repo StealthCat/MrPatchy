@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 — 2026-10-29
+
+1. Add an administrator-only searchable startup-file review workspace with deterministic paging, receipt/baseline revision guards and baseline-change labels.
+2. Show mechanism counts, explicit discovery gaps and unassessed provenance without claiming individual job discovery or package-default verification. Preserve stored history and AI-independent access.
+
 ## 0.3.0 — 2026-10-29
 
 1. Add opt-in, bounded cross-source historical evidence to manual scanner AI response plans, with host/source binding, retained review snapshots and stale-evidence rejection. Existing automatic plans remain scanner-only.
