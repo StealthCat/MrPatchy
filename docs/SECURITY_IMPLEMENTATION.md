@@ -2779,6 +2779,10 @@ No Git tags by user instruction; the schedule remains unchanged.
 
 ## v0.12.0 — Expected-worker inventory foundation
 
+Delivery: [PR #67](https://github.com/StealthCat/MrPatchy/pull/67), initial implementation
+[4b5bd105](https://github.com/StealthCat/MrPatchy/commit/4b5bd10520a9a918c7e15700255d480c248a8928).
+The PR records final-head validation and the actual merged main commit.
+
 Completion gate: inspected main `8f1bcc3c`, latest merged
 [PR #66](https://github.com/StealthCat/MrPatchy/pull/66), its actual startup
 workspace diff and recorded nine-check final-head validation, current instructions,
