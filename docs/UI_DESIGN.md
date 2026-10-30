@@ -378,3 +378,12 @@ Reviewed renders: [operation desktop](screenshots/operation-detail-v0170-desktop
 [operation phone](screenshots/operation-detail-v0170-mobile.jpg),
 [audit desktop](screenshots/audit-entry-v0170-desktop.jpg),
 [audit phone](screenshots/audit-entry-v0170-mobile.jpg).
+
+
+## Planned live notification center
+
+Implement the [live notification roadmap](SECURITY_IMPLEMENTATION.md#planned-live-in-app-notifications-and-human-attention-alerts) as part of the shared application shell. Keep a persistent Notifications icon with an accessible unread badge, a compact recent panel and a dedicated paginated/filterable notification center. Apply the existing glass/status palette and Mr Patchy artwork while keeping event text readable.
+
+Human-attention events and significant triage findings should arrive through authenticated server push and update the badge/panel plus bounded in-app alerts without page refresh, navigation, stolen focus or lost form/dialog state. Keep durable per-user read state, severity/source/server/time and exact review links. Reading/dismissing differs from acknowledging/resolving the underlying issue. Retain urgent items in history, handle reconnect/catch-up and visible degraded state, and filter both payloads and counts to current permissions. Existing SMTP/webhook delivery remains independent.
+
+Verify actual asynchronous updates, multi-session read synchronization, replay/deduplication/reopening, role/session boundaries, keyboard/live-region behavior and mobile/tablet/desktop renders. This remains planned until the runtime and acceptance milestones are delivered.
