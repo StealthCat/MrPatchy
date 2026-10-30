@@ -1,6 +1,8 @@
 # Mr Patchy
 
-Current source version: **0.17.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.17.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+
+The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 

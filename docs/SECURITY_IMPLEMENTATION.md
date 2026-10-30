@@ -1,5 +1,21 @@
 # Security implementation checkpoint
 
+## Version policy: major fixed at 1
+
+User instruction (2026-10-30): use **1.MINOR.PATCH** and keep the major number at
+**1** until the user explicitly instructs otherwise. The initial transition is
+`0.17.0` to `1.17.0`, preserving the existing minor/patch numbers. Subsequent
+completed updates retain the existing patch/minor increment criteria and full
+version monotonicity. This overrides automatic major bumps, including for breaking
+changes; record compatibility impacts while keeping major 1.
+
+All other versioning instructions remain in force: authoritative `APP_VERSION`,
+synchronized README/changelog/UI/API metadata, versioned development and merge
+commit subjects and PR titles/labels, exact-final-commit checks and skipped Git
+tags. `AGENTS.md`, the source version checker and the scheduled development task
+carry this policy. Roadmap completion remains governed by the existing completion
+gate and issue-first workflow.
+
 ## Scheduled development completion gate
 
 Before each scheduled development cycle, assess the current roadmap against current

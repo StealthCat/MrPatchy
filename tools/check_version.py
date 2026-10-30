@@ -7,6 +7,7 @@ import re
 import subprocess
 
 ROOT=Path(__file__).resolve().parents[1]
+PINNED_MAJOR=1  # User instruction: change only after an explicit new instruction.
 
 
 def version(source):
@@ -25,6 +26,7 @@ def version(source):
 
 def check(base_ref=None):
     source=(ROOT/'app/main.py').read_text();current=version(source)
+    if current.split('.')[0]!=str(PINNED_MAJOR):raise ValueError(f'Major version must remain {PINNED_MAJOR} until explicitly changed by the user')
     if 'version=APP_VERSION' not in source or "'version':APP_VERSION" not in source:raise ValueError('API metadata must derive from APP_VERSION')
     if f'Current source version: **{current}**' not in (ROOT/'README.md').read_text():raise ValueError('README version differs')
     changelog=(ROOT/'CHANGELOG.md').read_text()

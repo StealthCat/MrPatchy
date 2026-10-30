@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.0 — 2026-10-30
+
+1. Set the major version to 1, retaining the current minor/patch numbers, and keep it fixed until explicitly changed by the user.
+2. Preserve existing minor/patch, metadata, commit/PR and skipped-Git-tag rules in the repository and scheduled development task.
+3. Enforce the major-version pin in the version checker with regression coverage for other majors, minor/patch advances, legacy adoption and unchanged/decreasing versions.
+
 ## 0.17.0 — 2026-10-30
 
 - Separate paginated audit review from operations and add linked audit/operation detail pages.
