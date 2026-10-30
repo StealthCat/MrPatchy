@@ -2174,6 +2174,10 @@ needed; rebuild the controller. Git tags remain omitted by user instruction.
 
 ## v0.4.1 — server deletion in Settings and Manage
 
+Delivery: [PR #57](https://github.com/StealthCat/MrPatchy/pull/57), initial implementation
+[09986a37](https://github.com/StealthCat/MrPatchy/commit/09986a373c01bac11a68510998e44e88b412398d).
+The PR records final validation and its actual merged main commit.
+
 The user reported that deletion was missing from server settings. Inspection of
 main after [PR #56](https://github.com/StealthCat/MrPatchy/pull/56), commit
 `372783ce95b67b7626bad7849783f337480175e3`, confirmed that lifecycle buttons existed
