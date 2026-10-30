@@ -65,6 +65,12 @@ async function serverOverview(revision,{root,hostId}){
  <section class="card"><h3>Collector &amp; freshness</h3><dl class="server-facts">${fact('Last server contact',date(h.last_seen))}${fact('Inventory collected',date(system.collected))}${fact('Telemetry collected',date(collector.collected))}${fact('Integrity sweep',date(collector.hashed_at))}${fact('Processes in latest sample',collector.processes)}${fact('Managed files monitored',collector.managed_files)}</dl><p class="help">These are the latest stored observations. A recent connection alone does not prove the underlying inventory is current.</p></section></div>
  <section class="card"><h3>Patching status</h3><p>${jobs.running||0} running · ${jobs.queued||0} queued · ${jobs.recovery_required||0} requiring recovery</p><p>Last repository check: ${date(h.last_repo)}</p>${h.repo_error?`<div class="notice">${esc(h.repo_error)}</div>`:''}${last_patch?`<p>Most recently submitted patch: ${badge(last_patch.state)} · ${date(last_patch.created)}</p>`:'<p class="help">No patch operations recorded yet.</p>'}<a href="${serverLink(hostId,'patching')}" class="button">View patching timeline →</a></section>
  <section class="card"><h3>Integrity findings</h3>${h.integrity.length?`<ul>${h.integrity.map(item=>`<li><strong>${esc(item.path||'Collector')}</strong> — ${esc(item.issue||JSON.stringify(item))}</li>`).join('')}</ul>`:'<p class="help">No findings in the latest stored snapshot.</p>'}</section>`;
+ if(sessionStorage.getItem('mrpatchy-enrollment-success:'+currentUser.username)===hostId){
+  const notice=document.createElement('div');notice.className='notice';notice.setAttribute('role','status');
+  notice.textContent='Installation verified. Review current agent health and monitoring data below.';
+  root.prepend(notice);
+ }
+
 }
 
 async function serverPatching(revision,context){

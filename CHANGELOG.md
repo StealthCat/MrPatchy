@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 — 2026-10-29
+
+1. Open the correct server Overview after backend-confirmed installation verification, retaining success status on refresh.
+2. Restore tab/account-scoped installation progress after reload; keep pending/failed/interrupted work actionable and recover lost submissions through read-only job lookup without automatic replay.
+3. Add desktop/mobile enrollment regression coverage for correct operation identity, failure/retry, reload and lost-response recovery.
+
 ## 0.4.2 — 2026-10-29
 
 1. Plan complete/controller-only/worker-only deployment modes with remote-worker state, health, scaling, drain, installation and failure/recovery acceptance.
