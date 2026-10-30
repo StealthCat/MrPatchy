@@ -3470,3 +3470,13 @@ This compatible feature batch is now v1.18.0. Historical baseline AI runtime is
 unchanged by the v1.17.0 metadata/policy update. All nine checks must run on this
 integrated final head; earlier-head checks do not authorize its merge. If its PR
 remains open, reconcile/finish that PR before starting cache or other roadmap work.
+
+Delivery: [PR #75](https://github.com/StealthCat/MrPatchy/pull/75), initial source
+[e7fa6a64](https://github.com/StealthCat/MrPatchy/commit/e7fa6a6493fa6ef7ecf278698f16fcb79c1937c2).
+The PR records the final integrated head, all CI results and actual merged commit
+(or the precise pending state). Integrated version/worker/preflight checks: **75
+passed**; final focused timeline workflow and recaptured major-1 phone/tablet/
+desktop renders passed. Both paired benchmark samples are retained: connection
+reuse is established, while consistent throughput improvement remains unproven.
+Resume an open delivery PR before new cache work; do not infer completion or merge
+without all nine applicable exact-final-head checks and unchanged base/mergeability.
