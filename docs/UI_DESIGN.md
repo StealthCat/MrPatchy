@@ -284,3 +284,20 @@ Reviewed renders: [desktop](screenshots/worker-preflight-v0130-desktop.jpg),
 [tablet](screenshots/worker-preflight-v0130-tablet.jpg),
 [phone](screenshots/worker-preflight-v0130-mobile.jpg). Wider component health,
 preflight diagnostics and the remaining UI inventory remain planned.
+
+
+## Schema structure / receipt protocol (v0.14.0)
+
+Workers separates schema-structure/receipt-protocol startup results from key checks
+and readiness. Concise per-identity states remain visible before phone scrolling;
+a shared coverage explanation defines required tables/columns/primary keys and
+unassessed types/other constraints. Unknown old reports never become verified.
+Existing glass surfaces, mint/amber states, typography, mascot and drain safeguards
+are preserved. Browser fixtures derive current versions from health metadata,
+keeping matched/control-enabled examples honest across source upgrades.
+
+Reviewed renders: [desktop](screenshots/worker-schema-v0140-desktop.jpg),
+[tablet](screenshots/worker-schema-v0140-tablet.jpg),
+[phone](screenshots/worker-schema-v0140-mobile.jpg). This is a bounded preflight
+UI increment, not full schema compatibility, component health or completion of
+the application-wide redesign.

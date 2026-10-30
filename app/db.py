@@ -96,8 +96,13 @@ def config(s):
     item = s.get(Setting, 'config')
     return {**DEFAULTS, **(item.value if item else {})}
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
-def init():
+def register_models():
+    # Imports register mappings only; no DDL or web application bootstrap.
+    from . import identity,operations,scheduling,releases,package_history,incidents,update_scores,ai_runs
     from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health,service_monitor,execution_scans
+
+def init():
+    register_models()
     Base.metadata.create_all(engine)
     host_columns={column['name'] for column in inspect(engine).get_columns('hosts')}
     for name,definition in (('enabled','BOOLEAN NOT NULL DEFAULT 1'),('deleted_at','DOUBLE NOT NULL DEFAULT 0'),('lifecycle_revision',"VARCHAR(36) NOT NULL DEFAULT ''")):
