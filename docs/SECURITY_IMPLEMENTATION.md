@@ -2394,3 +2394,33 @@ classifications; CVE exposure/detectors and automatic containment; general malwa
 protection; remote-worker deployments/shared state, health dashboard and GCP node;
 retention/immutable storage and native/real-target acceptance. This milestone does
 not claim complete UI redesign or complete endpoint protection.
+
+
+## v0.7.0 — searchable server directory and focused Overview pages
+
+Completion-gate base: main `716d8f5` ([PR #61](https://github.com/StealthCat/MrPatchy/pull/61)),
+source 0.6.0. Its actual navigation/header/filter diff, committed responsive renders,
+recorded validation and nine successful exact-head checks were inspected; no PR was
+open. The roadmap is not complete. This cycle advances the finite Servers/Overview
+screen family, with implementation and acceptance described in UI_DESIGN.md.
+
+The directory uses local read-only search, enabled/disabled filters and 24-card
+pages; it retains filters/page position during navigation/refresh and resets them
+on sign-out/reload. Existing Open/Manage/Inspect, lifecycle confirmation and deleted
+history workflows are reused. Empty results are distinct from an empty fleet.
+Overview now has deep-linked Summary, System & collector and Patching status pages,
+with Back/reload/server-switch context, explicit stored-data limitations and
+recovery warnings. No operational permission, provider call or target action is
+introduced by browsing. Rebuild controller; no schema/helper upgrade is needed.
+
+This is a partial UI migration. The fleet dashboard, onboarding, shared global
+shell/states, remaining dense content/detail dialogs and lifecycle/AI-control
+presentation remain in the finite inventory. Comprehensive startup discovery,
+provenance/classification, CVE monitoring/automatic containment, general malware
+protection, independent remote workers/shared state, component/GCP health,
+retention/immutable storage and native/real-target acceptance remain unfinished.
+Local validation: full browser suite passed; expanded focused directory/Overview
+checks passed at 320/768/1440, including roles, malicious text, pagination/context,
+future timestamps and recovery warnings. The 21 lifecycle/version tests, JS syntax,
+whitespace and version consistency passed. Reviewed responsive renders are linked
+in UI_DESIGN.md. Versioned PR records final CI and actual merge; Git tags are omitted.
