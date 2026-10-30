@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.20.1 — 2026-10-30
+
+- Fix standalone offline database migration refusing a current schema because its separate model list omitted AI retry and assessment/refresh tables.
+- Share the startup model registry and validate fresh-process dry-run/copy preservation without relaxing unknown-table, offline or destination safeguards.
+
 ## 1.20.0 — 2026-10-30
 
 - Retain completed process assessments, exact supplied evidence, requested model and policy provenance independently of diagnostic pruning.
