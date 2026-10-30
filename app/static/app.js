@@ -53,7 +53,7 @@ function hostTable(rows){return `<div class="table-wrap"><table class="host-tabl
 async function servers(revision=renderRevision){if(location.hash==='#servers/deleted')return deletedServers(revision);if(location.hash.startsWith('#servers/'))return serverWorkspace(revision);$('#content').innerHTML=heading('Your Linux fleet.','Enroll, inspect, and care for every server.','<button class="primary" data-admin data-action="add">+ Add server</button>'+(isAdmin()?'<a class="button" href="#servers/deleted">Deleted servers</a>':'' ))+`<div class="card">${hosts.length?hostTable(hosts):empty('No servers enrolled yet','Start with a server name and SSH address. You can verify its fingerprint after running the installer.','<button class="primary" data-admin data-action="add">Add your first server</button>')}</div>`;}
 async function addServer(){
  modal('Enroll server · Step 1 of 3',`${PatchyUI.enrollment(1)}<p class="help">Enter the endpoint Mr Patchy will reach over SSH.</p><form id="host-form"><div class="form-grid"><label>Display name<input name="name" placeholder="Living-room Pi" required maxlength="120"></label><label>IP address or hostname<input name="address" placeholder="192.168.1.50" required></label><label>SSH port<input type="number" name="port" value="22" min="1" max="65535"></label></div><button class="primary">Continue to preparation →</button></form>`);
- $('#host-form').onsubmit=async e=>{e.preventDefault();try{const b=Object.fromEntries(new FormData(e.target));b.port=+b.port;const r=await api('/hosts','POST',b);hosts=await api('/hosts');await prepareServer(r.id);}catch(e){toast(e.message);}};
+ $('#host-form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');if(button.disabled)return;button.disabled=true;try{const b=Object.fromEntries(new FormData(e.target));b.port=+b.port;const r=await api('/hosts','POST',b);hosts=await api('/hosts');await prepareServer(r.id);}catch(e){toast(e.message+' Close this dialog and review Servers before trying again; the server may already have been created.');}};
 }
 async function prepareServer(id){
  const h=hosts.find(x=>x.id===id);
@@ -88,14 +88,79 @@ async function prepareServer(id){
  };
  $('#prepare-next').onclick=()=>finishServer(id);
 }
+function resumeEnrollment(){
+ if(!isAdmin())return;
+ const saved=enrollmentProgress();
+ if(saved&&hosts.some(h=>h.id===saved.hostId))finishServer(saved.hostId);
+}
+// Tab-local progress contains only host/job IDs; never credentials or target output.
+function enrollmentProgress(value){
+ const key='mrpatchy-enrollment:'+currentUser.username;
+ if(value===undefined){try{return JSON.parse(sessionStorage.getItem(key)||'null');}catch{return null;}}
+ if(value===null)sessionStorage.removeItem(key);else sessionStorage.setItem(key,JSON.stringify(value));
+}
 function finishServer(id){
- const h=hosts.find(x=>x.id===id);
- modal('Connect and verify · Step 3 of 3',`${PatchyUI.enrollment(3)}<p>Mr Patchy will connect to <strong>${esc(h.address)}:${h.port}</strong>, install its collector and service, then verify SHA-256 hashes, ownership, permissions and service state.</p><form id="finish-form"><label>ED25519 host fingerprint printed on the target<input name="fingerprint" value="${esc(h.fingerprint)}" placeholder="SHA256:…" required pattern="SHA256:[A-Za-z0-9+/]{43}"></label><p class="help">Verify this against the target console. SSH identity verification is required before connecting.</p><button class="primary">Finish and verify installation</button></form><div id="enrollment-result"></div>`);
- $('#finish-form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button'),result=$('#enrollment-result');button.disabled=true;try{
-  await api(`/hosts/${id}/fingerprint`,'PUT',{fingerprint:new FormData(e.target).get('fingerprint')});
-  const job=await api(`/hosts/${id}/actions/deploy`,'POST');result.textContent='Queued. This page will show the verification result.';
-  while(result.isConnected&&$('#modal').open){const state=await api('/jobs/'+job.job_id);result.textContent='Installation '+state.state+(state.output?' · '+state.output:'');if(['complete','failed','interrupted'].includes(state.state)){if(state.state==='complete'){result.textContent='Installation verified. Collector service is active; monitoring data will arrive shortly.';hosts=await api('/hosts');}break;}await new Promise(resolve=>setTimeout(resolve,2000));}
- }catch(error){result.textContent=error.message;}finally{button.disabled=false;}};
+ const h=hosts.find(x=>x.id===id);if(!h||!isAdmin())return;
+ const saved=enrollmentProgress();
+ if(saved&&saved.hostId!==id){toast('Finish the pending installation from Activity before starting another.');return;}
+ modal('Connect and verify · Step 3 of 3',`${PatchyUI.enrollment(3)}<p>Mr Patchy will connect to <strong>${esc(h.address)}:${h.port}</strong>, install its collector and service, then verify SHA-256 hashes, ownership, permissions and service state.</p><form id="finish-form"><label>ED25519 host fingerprint printed on the target<input name="fingerprint" value="${esc(h.fingerprint)}" placeholder="SHA256:…" required pattern="SHA256:[A-Za-z0-9+/]{43}"></label><p class="help">Verify this against the target console. SSH identity verification is required before connecting.</p><button class="primary">Finish and verify installation</button></form><div id="enrollment-result" class="notice" role="status" aria-live="polite">${saved?'Restoring installation status…':'After verification, your server Overview will open automatically.'}</div><div class="actions"><button id="enrollment-check" hidden>Check installation status</button><button id="enrollment-stop" hidden>Stop tracking (job continues)</button><a href="#activity" class="button">Review Activity</a></div><p class="help">Closing this dialog does not cancel installation. Reopen Finish / verify installation to resume. Reloading this tab restores saved progress.</p>`);
+ const revision=modalRevision,session=sessionRevision,result=$('#enrollment-result'),form=$('#finish-form'),button=form.querySelector('button'),check=$('#enrollment-check');
+ const current=()=>revision===modalRevision&&session===sessionRevision&&result.isConnected&&$('#modal').open;
+ let progress=saved,busy=false;
+ const stopTracking=$('#enrollment-stop');stopTracking.hidden=!saved;
+ stopTracking.onclick=()=>{enrollmentProgress(null);modalRevision++;$('#modal').close();toast('Tracking stopped. Installation was not cancelled; review Activity before starting more work.');};
+ const observe=async()=>{
+  if(busy||!current())return;busy=true;button.disabled=true;check.hidden=true;
+  try{
+   if(!progress.jobId){
+    const rows=await api('/jobs?host_id='+encodeURIComponent(id)+'&limit=100');if(!current())return;
+    const matches=rows.filter(j=>j.host_id===id&&j.action==='deploy'&&!progress.previous.includes(j.id));
+    if(matches.length!==1)throw Error('Installation submission is unconfirmed. Review Activity before retrying; no installation has been replayed.');
+    progress.jobId=matches[0].id;enrollmentProgress(progress);
+   }
+   while(current()){
+    const state=await api('/jobs/'+encodeURIComponent(progress.jobId));if(!current())return;
+    if(state.host_id!==id||state.action!=='deploy')throw Error('Operation identity does not match this installation. Review Activity.');
+    result.textContent='Installation '+state.state+(state.output?' · '+state.output:'');
+    if(state.state==='complete'){
+     const list=await api('/hosts');if(!current())return;
+     const host=list.find(item=>item.id===id);if(!host||host.enabled===false||host.deleted_at)throw Error('Server is unavailable or management is disabled. Review Activity.');
+     hosts=list;selected=id;enrollmentProgress(null);
+     // Keep the verified confirmation on the destination, including after refresh.
+     sessionStorage.setItem('mrpatchy-enrollment-success:'+currentUser.username,id);
+     modalRevision++;$('#modal').close();location.hash=serverLink(id);await render();
+     toast('Installation verified for '+host.name+'. Monitoring data will arrive shortly.');return;
+    }
+    if(['failed','interrupted','cancelled'].includes(state.state)){
+     stopTracking.hidden=true;enrollmentProgress(null);progress=null;button.disabled=false;button.textContent='Retry installation after reviewing Activity';
+     result.textContent+=' · Review the error and recovery status before explicitly retrying.';return;
+    }
+    if(!['queued','running'].includes(state.state))throw Error('Unrecognized installation state. Review Activity.');
+    await new Promise(resolve=>setTimeout(resolve,2000));
+   }
+  }catch(error){if(current()){result.textContent=error.message;check.hidden=false;}}
+  finally{busy=false;}
+ };
+ check.onclick=observe;
+ form.onsubmit=async e=>{
+  e.preventDefault();if(busy||progress||!current())return;busy=true;button.disabled=true;
+  try{
+   const rows=await api('/jobs?host_id='+encodeURIComponent(id)+'&limit=100');if(!current())return;
+   const active=rows.filter(j=>j.action==='deploy'&&['queued','running'].includes(j.state));
+   if(active.length>1)throw Error('Multiple active installations. Review Activity before proceeding.');
+   if(!active.length){await api(`/hosts/${id}/fingerprint`,'PUT',{fingerprint:new FormData(form).get('fingerprint')});if(!current())return;}
+   progress={hostId:id,jobId:active[0]?.id||'',previous:rows.map(j=>j.id),requestId:crypto.randomUUID()};
+   // Persist before the POST: a lost response must never cause a blind replay.
+   enrollmentProgress(progress);stopTracking.hidden=false;
+   sessionStorage.removeItem('mrpatchy-enrollment-success:'+currentUser.username);
+   if(!progress.jobId){const job=await api(`/hosts/${id}/actions/deploy`,'POST');if(enrollmentProgress()?.requestId!==progress.requestId)return;progress.jobId=job.job_id;enrollmentProgress(progress);}
+   if(!current())return;
+   result.textContent='Installation queued. Waiting for backend verification…';
+  }catch(error){if(current()){result.textContent=error.message;if(progress)check.hidden=false;else button.disabled=false;}}
+  finally{busy=false;}
+  if(progress&&current())observe();
+ };
+ if(saved){button.disabled=true;observe();}
 }
 async function inspect(id){
  selected=id;const h=hosts.find(x=>x.id===id);
@@ -152,7 +217,7 @@ async function tlsModal(){
  $('#tls-profile').onchange=draw;draw();
 }
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset,revision=renderRevision;try{if(action==='retry-investigation'){b.disabled=true;try{const result=await api('/investigations/'+id+'/retry','POST');toast(result.detail);if(revision===renderRevision)await render();}finally{if(b.isConnected)b.disabled=false;}return;}if(action==='add')return addServer();if(action==='inspect')return inspect(id);if(['deploy','refresh'].includes(action)){await api(`/hosts/${id}/actions/${action}`,'POST');toast('Operation queued. See Activity for progress.');return;}if(action==='trust'){const approved=b.dataset.approved!=='true';modal(approved?'Approve known-good behavior':'Revoke behavior approval',`<p>${approved?'Record this exact behavior as reviewed and trusted? Its AI assessment alone is not proof of safety.':'This behavior will no longer be marked as trusted.'}</p><button class="primary" id="confirm-trust">${approved?'Approve behavior':'Revoke approval'}</button>`);$('#confirm-trust').onclick=async()=>{try{await api('/investigations/'+id,'PUT',{approved});$('#modal').close();if(revision===renderRevision)await render();}catch(e){toast(e.message);}};}}catch(e){toast(e.message);}});
-$('#close-modal').onclick=()=>{modalRevision++;releaseRequest++;$('#modal').close();};$('#modal').addEventListener('cancel',()=>{modalRevision++;releaseRequest++;});$('#refresh-page').onclick=render;$('#logout').onclick=async()=>{try{await api('/logout','POST');showLogin();}catch(e){toast(e.message);}};$('#login-form').onsubmit=async e=>{e.preventDefault();try{const d=await api('/login','POST',{password:new FormData(e.target).get('password'),username:new FormData(e.target).get('username')||'admin',otp:new FormData(e.target).get('otp')||''});csrf=d.csrf;e.target.reset();showShell();render();}catch(e){$('#login-error').textContent=e.message;}};window.addEventListener('hashchange',()=>{modalRevision++;releaseRequest++;$('#modal').close();window.scrollTo(0,0);render();});(async()=>{try{csrf=(await api('/session')).csrf;showShell();await render();}catch{showLogin();}})();
+$('#close-modal').onclick=()=>{modalRevision++;releaseRequest++;$('#modal').close();};$('#modal').addEventListener('cancel',()=>{modalRevision++;releaseRequest++;});$('#refresh-page').onclick=render;$('#logout').onclick=async()=>{try{await api('/logout','POST');showLogin();}catch(e){toast(e.message);}};$('#login-form').onsubmit=async e=>{e.preventDefault();try{const d=await api('/login','POST',{password:new FormData(e.target).get('password'),username:new FormData(e.target).get('username')||'admin',otp:new FormData(e.target).get('otp')||''});csrf=d.csrf;e.target.reset();showShell();await render();resumeEnrollment();}catch(e){$('#login-error').textContent=e.message;}};window.addEventListener('hashchange',()=>{modalRevision++;releaseRequest++;$('#modal').close();window.scrollTo(0,0);render();});(async()=>{try{csrf=(await api('/session')).csrf;showShell();await render();resumeEnrollment();}catch{showLogin();}})();
 
 setInterval(()=>{if(!$('#shell').classList.contains('hidden')&&!$('#modal').open&&document.visibilityState==='visible'&&(page==='overview'||(page==='servers'&&(!location.hash.startsWith('#servers/')||location.hash.endsWith('/overview')))))render();},30000);
 

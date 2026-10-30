@@ -79,7 +79,6 @@ the bounded features already implemented):
 - Comprehensive startup and scheduled-task awareness, package-default versus custom provenance, and explained AI triage of custom/modified entries; see the planned milestone below.
 - Separate complete/controller-only/worker-only deployments with supported remote-worker state, health, scaling, drain and recovery; see the planned milestone below.
 - Unified deployment health/status dashboard for controllers, workers, agents and integration nodes, plus a dedicated GCP integration Docker node; see the planned milestone below.
-- After successful server installation/verification, navigate the enrollment workflow to that server's Overview page; see the planned workflow below.
 - General malware protection: known-malware detection, AI-enabled triage of previously unknown malware, and automatic file quarantine plus malicious-process termination; see the planned milestone below.
 - CVE exposure-window exploitation monitoring with automatic quarantine or termination of detected malicious artifacts/processes; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention. Bounded per-server scanner record exports now complement file-response exports; automatic deletion and external storage are not implemented.
@@ -2265,11 +2264,54 @@ separation feature with a unified operational view of the Mr Patchy installation
 - Update GCP installation/upgrade tooling and documentation for the dedicated node, including migration from the existing GCP-ready app/worker image arrangement, clear connectivity tests and supported version combinations. Preserve existing GCP connection functionality during migration.
 - Validate controller and remote-worker routing, credential expiry/missing permissions, node outage/restart, tunnel interruption, duplicate requests and honest incomplete/recovery outcomes. Include non-production live-GCP acceptance; successful container startup alone does not complete the integration.
 
-## Planned: successful enrollment returns to server Overview
+## Implemented in v0.5.0: successful enrollment returns to server Overview
 
-Requested workflow addition (2026-10-29); not yet implemented.
+Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint below.
 
 - At the end of adding a server, once the backend confirms installation and verification have completed successfully, close the enrollment/installation workflow and navigate directly to that specific server's Overview page.
 - Refresh the server's displayed state and retain a clear success confirmation. Generate/install-script completion or a pending background job is not sufficient to trigger the redirect.
 - Keep failed, incomplete, cancelled or timed-out installation on the relevant progress/error step with actionable status and retry/recovery controls. Handle a lost response or page reload without creating a duplicate server or replaying installation blindly.
 - Add browser coverage for successful installation/verification, correct server ID and Overview tab, pending/failure states and retry/reload behavior, preserving existing role and server-lifecycle checks.
+
+
+## v0.5.0 — verified enrollment completion and resumable progress
+
+Delivery: [PR #59](https://github.com/StealthCat/MrPatchy/pull/59), initial implementation
+[d929c96e](https://github.com/StealthCat/MrPatchy/commit/d929c96ecaa2f1a7824bf245144227132e53a1f0).
+The PR records final-head check results and the actual merged main commit.
+
+Completion-gate base: main `c9e152e` ([PR #58](https://github.com/StealthCat/MrPatchy/pull/58)),
+source 0.4.2. Its four-file roadmap/version diff and nine successful exact-head
+checks were inspected; no unfinished PR was open. The broader roadmap is not
+feature complete. This milestone implements the enrollment workflow above.
+
+The final step waits for a backend deploy job with matching host/action and complete
+state, refreshes the host list, closes the dialog and opens that server’s Overview.
+Installer generation and queued/running states do not redirect. The success notice
+is retained for this account/tab, describes completed verification rather than
+claiming ongoing agent health, and clears when a new deployment starts.
+
+Only host/job IDs and the pre-submit job-ID boundary are kept in tab-local session
+storage, scoped to the signed-in username. Reload/login restores saved progress.
+Pending jobs are read rather than requeued; failed/interrupted/cancelled jobs keep
+errors and Activity links with explicit retry. A lost POST response is resolved
+only when exactly one new same-host deploy job is found in the newest 100 jobs;
+ambiguous/missing results remain unconfirmed with a status-check control. This is
+conservative browser recovery, not backend idempotency across independent tabs or
+operators. Stop tracking clears browser progress without cancelling/replaying work.
+Session/modal guards prevent late responses from navigating another dialog/account.
+
+Browser fixtures validate pending→reload→failure→explicit retry, lost response,
+wrong-server rejection, correct Overview routing and retained success after reload,
+with desktop/mobile screenshots. The full local UI suite and 21 lifecycle/version
+tests passed; JS syntax, whitespace and version consistency passed. Existing backend deployment verification and
+recovery gates are reused unchanged. No schema or helper upgrade is required;
+rebuild the controller. Versioned PR records final validation and merged commit.
+Git tags remain omitted by user instruction.
+
+Still planned: separate controller/remote-worker deployment and shared state,
+component health dashboard and GCP node, complete startup/task discovery/provenance
+and explained AI classifications, CVE exposure/detectors, policy-authorized
+automatic quarantine/termination, general malware protection, retention/immutable
+storage and native/real-target acceptance. Do not treat this workflow as completing
+those requirements.
