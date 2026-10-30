@@ -20,6 +20,7 @@ module.exports=async(page,capture)=>{
    if(id===alpha&&lateStarted){const started=lateStarted;lateStarted=null;started();await new Promise(resolve=>lateRelease=resolve);}
    return route.fulfill({json:{host:hosts.find(h=>h.id===id),system:{os:'PRETTY_NAME="Debian GNU/Linux 13"',architecture:'amd64',package_manager:id===alpha?'apt':'rpm',machine_id:scope(id)+'-machine',collected:now},collector:{collected:now,hashed_at:now,processes:143,managed_files:8},counts:{packages:1432,updates:1,held:2,overdue:0,unapproved:1,pending_ai:1,investigations:1},jobs:{queued:1},last_patch:{state:'complete',created:now-86400}}});
   }
+  if(id&&p.endsWith('/security/ai-policy'))return route.fulfill({json:{paused:false,state:'eligible',global_enabled:true,revision:'',reason:''}});
   if(id&&p.endsWith('/packages'))return route.fulfill({json:[packageRow(id)]});
   if(id&&p.endsWith('/patch-policy'))return route.fulfill({json:{reboot:false,rollback:false}});
   if(id&&p.endsWith('/patching'))return route.fulfill({json:{events:[{title:scope(id)+' nightly maintenance',start:now+3600,end:now+7200,trigger:'regular',states:{},timezone:'America/New_York'}],windows:[{days:[0,1,2,3,4],start:120,end:240}],recovery:{reboot:false,rollback:false},schedules:[{id:'nightly',name:scope(id)+' nightly maintenance',enabled:true,frequency:'daily',minute:120,timezone:'America/New_York',window_minutes:60,priorities:['high','critical'],high:{enabled:true,after_minutes:60},critical:{enabled:true,after_minutes:10}}]}});
@@ -36,12 +37,32 @@ module.exports=async(page,capture)=>{
  };
  await page.route('**/api/**',handler);
  const tabs=page.locator('.server-tabs');
- const open=async(name)=>{await tabs.getByRole('link',{name,exact:true}).click();await page.locator('#server-tab-content>h2').filter({hasText:name}).waitFor();};
+ const open=async(name)=>{const link=tabs.getByRole('link',{name,exact:true});if(!await link.isVisible())await tabs.locator('summary').click();await link.click();await page.locator('#server-tab-content>h2').filter({hasText:name}).waitFor();};
  try{
   await page.locator('[data-nav=servers]').click();await page.locator('.server-name').filter({hasText:'Atlas'}).click();
   await page.getByText('Atlas-machine',{exact:true}).waitFor();assert.equal(new URL(page.url()).hash,'#servers/'+alpha+'/overview');
   assert.equal(await page.locator('[data-nav=servers]').getAttribute('aria-current'),'page');
+
+  const originalName=hosts[0].name,originalArchitecture=hosts[0].architecture;
+  hosts[0].name='Atlas <img src=x onerror="window.__badServerHeader=true">';
+  hosts[0].architecture='<svg onload="window.__badServerHeader=true">';
+  await page.locator('#refresh-page').click();
+  await page.getByRole('heading',{name:hosts[0].name,exact:true}).waitFor();
+  assert.equal(await page.locator('#content img[src=x],#content svg[onload]').count(),0);
+  assert.equal(await page.evaluate(()=>window.__badServerHeader),undefined);
+  hosts[0].name=originalName;hosts[0].architecture=originalArchitecture;
+  await page.locator('#refresh-page').click();await page.getByRole('heading',{name:originalName,exact:true}).waitFor();
   await capture('server-overview');
+  assert.equal(await tabs.locator(':scope > a').count(),4);
+  const summary=tabs.locator('summary');
+  await summary.focus();await page.keyboard.press('Enter');
+  assert.equal(await tabs.locator('.section-menu').evaluate(e=>e.open),true);
+  assert.equal(await tabs.locator('.section-menu-groups section').count(),3);
+  await page.keyboard.press('Escape');assert.equal(await summary.evaluate(e=>e===document.activeElement),true);
+  assert.equal(await tabs.locator('.section-menu').evaluate(e=>e.open),false);
+  await summary.click();await page.locator('#breadcrumb').click();
+  assert.equal(await tabs.locator('.section-menu').evaluate(e=>e.open),false);
+
   await open('Packages');await page.locator('#server-tab-body').getByText('Atlas-openssl:amd64',{exact:true}).waitFor();
   assert.equal(await page.locator('#server-select').count(),0);
   await page.locator('#select-all-updates').click();assert.equal(await page.locator('.pkg-check:checked').count(),1);
@@ -51,6 +72,18 @@ module.exports=async(page,capture)=>{
   assert.equal(await page.locator('#server-tab-body').getByText('Atlas-openssl:amd64',{exact:true}).count(),0);
   await page.goBack();await page.locator('#server-tab-body').getByText('Atlas-openssl:amd64',{exact:true}).waitFor();
   await page.reload();await page.locator('#server-tab-body').getByText('Atlas-openssl:amd64',{exact:true}).waitFor();
+  await page.locator('#package-search').fill('Atlas');await page.locator('#updates-only').check();
+  await open('History');await page.locator('#package-history-table').waitFor();
+  await page.goBack();await page.locator('#package-search').waitFor();
+  assert.equal(await page.locator('#package-search').inputValue(),'Atlas');assert.equal(await page.locator('#updates-only').isChecked(),true);
+  assert.equal(await page.locator('.pkg-check:checked').count(),0,'Returning to a view must not restore installation selections');
+  await page.locator('#server-workspace-select').selectOption(beta);await page.locator('#server-tab-body').getByText('Borealis-openssl:amd64',{exact:true}).waitFor();
+  assert.equal(await page.locator('#package-search').inputValue(),'');
+  await page.locator('#server-workspace-select').selectOption(alpha);await page.locator('#server-tab-body').getByText('Atlas-openssl:amd64',{exact:true}).waitFor();
+  assert.equal(await page.locator('#package-search').inputValue(),'Atlas');
+  await page.locator('#refresh-page').click();await page.locator('#server-tab-body').getByText('Atlas-openssl:amd64',{exact:true}).waitFor();
+  assert.equal(await page.locator('#package-search').inputValue(),'Atlas');assert.equal(await page.locator('#updates-only').isChecked(),true);
+  await page.locator('#package-search').fill('');await page.locator('#updates-only').uncheck();
   await open('Patching timeline');await page.getByText('Atlas patch completed',{exact:true}).waitFor({state:'attached'});
   await page.getByText('Atlas nightly maintenance',{exact:false}).first().waitFor();
   assert.equal(requests.filter(p=>p==='/api/audit').length,0,'Server timeline must not fetch fleet audit records');
@@ -85,12 +118,13 @@ module.exports=async(page,capture)=>{
   await page.getByText('Saved for Atlas · Production.',{exact:true}).waitFor();assert.equal(writes.at(-1).path,'/api/operations/'+alpha+'/recovery');
   await page.locator('#server-snapshot-load').click();await page.locator('#server-snapshot summary').first().waitFor();
   await page.locator('#server-snapshot summary').first().click();await page.locator('#server-snapshot pre').filter({hasText:'Atlas-current'}).waitFor();
-  for(const width of [320,390,1440]){
+  for(const width of [320,390,768,1440]){
    await page.setViewportSize({width,height:1000});
    for(const name of ['Overview','Settings','Connection','Packages','Patching timeline','Investigations','AI activity','History','Repositories','Maintenance']){
     await open(name);const marker={'Overview':'.server-facts','Settings':'#server-tab-body [data-server-management]','Connection':'#server-connection-form','Packages':'.pkg-check','Patching timeline':'#server-calendar .server-timeline','Investigations':'.investigation','AI activity':'#ai-log-table tbody tr','History':'#package-history-table tbody tr','Repositories':'#source-files','Maintenance':'#server-recovery-form'}[name];await page.locator(marker).first().waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,name+' overflows at '+width);
     assert.equal(await page.locator('#retry-server-tab').count(),0);
+    if(name==='Overview'){await tabs.locator('summary').click();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await capture('server-sections-'+width);await tabs.locator('summary').click();}
    }
   }
   // A slow response from one server must never replace another server's page.

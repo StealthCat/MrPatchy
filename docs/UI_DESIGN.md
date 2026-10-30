@@ -68,3 +68,67 @@ Track the finite screen inventory and migration progress in the roadmap. Refresh
 actual desktop/tablet/mobile screenshots and verify critical workflows through the
 new pages, tabs and menus before declaring the full rework complete. Finished UI
 work remains subject to the scheduled development completion gate.
+
+
+## Implemented server workbench navigation (v0.6.0)
+
+The server workspace is the first migrated navigation surface, not a completed
+application redesign. The compact header retains the local mascot and explicit
+lifecycle controls. Navigation now precedes AI policy content. A shared
+`PatchyUI.sectionNavigation` component renders ordinary route links and a native
+`details` disclosure; it owns no authorization or API calls. The server caller
+supplies the already-filtered role/lifecycle destinations.
+
+| Navigation | Destinations |
+|---|---|
+| Primary | Overview, Packages, Security, Settings |
+| More sections → Updates & history | Patching timeline, History, Repositories |
+| More sections → Investigations & evidence | Investigations, AI activity, File integrity |
+| More sections → Server administration | Connection, Agent health, Maintenance |
+
+Settings and its deletion controls remain directly discoverable. Unauthorized or
+inactive destinations are omitted using the existing route rules; direct links
+still enforce the same role checks. A current secondary page is named in the
+closed disclosure and breadcrumb. Link URLs remain `#servers/{id}/{tab}`, so
+bookmarks and Back/Forward continue working. Switching servers retains the current
+section where that server's lifecycle permits it.
+
+Desktop uses a contained glass panel with three readable groups; narrow screens
+expand the groups in the page flow. Native Enter/Space/Tab behavior is retained;
+Escape closes the disclosure and restores focus to its summary. Outside clicks
+and route links close it. The component has solid and forced-color fallbacks.
+The existing local mascot portrait anchors the panel without obscuring controls.
+
+Package search and Updates only filters are held in memory, scoped to server ID
+and fleet/server context, and restored when returning or refreshing the view.
+They clear on sign-out/reload and never restore patch-selection checkboxes.
+This is not yet universal filter/pagination/scroll persistence. Other workspaces
+remain on their existing components until their migration below.
+
+## Screen migration inventory
+
+This is the finite acceptance inventory for the requested full rework. New planned
+workspaces join their named family when their underlying features are delivered.
+Existing glass CSS does not count as migrated content. Each remaining row needs
+shared components, readable states, role/workflow checks and inspected renders.
+
+| Milestone / screen family | Current delivery | Remaining acceptance |
+|---|---|---|
+| Route map and shared navigation | Server route map and grouped disclosure, v0.6.0 | Apply shared navigation/context rules across families |
+| Shell, authentication and account | Existing sidebar, login, MFA/account dialogs | Global navigation, shell/typography/state-system migration; keyboard/mobile review |
+| Fleet Overview, Servers and enrollment | Existing pages; verified landing v0.5.0 | Full dashboard/list/onboarding migration, empty/error/progress states |
+| Server Overview and navigation | Compact header/route groups v0.6.0 | Summary cards, lifecycle/AI controls and dense content migration |
+| Packages, repositories, patching and schedules | Existing pages; scoped filters v0.6.0 | Shared tables/forms, history/calendar detail pages, approvals and context retention |
+| Investigations and AI activity | Existing global/server pages | Focused evidence/run detail, cost/uncertainty/pause states |
+| Security, integrity, startup and response | Existing scanner/baseline/vendor/file/process workflows | Split crowded workspaces and long dialogs; migrate review/recovery/export states |
+| Activity, audit and inventory/package history | Existing global/server pages | Dedicated detail views, shared pagination/filter/long-output components |
+| Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
+| Deployment, worker and GCP health | Planned backend features | Migrate when implemented, without fabricating component health |
+| Whole-application acceptance | Not complete | All rows migrated; cross-role workflows, state/asset/readability consistency and actual mobile/tablet/desktop review |
+
+No additional mascot artwork is required for this bounded route milestone; it
+reuses the established illustrations. New poses/graphics remain part of the later
+shared-visual-system/content work. Do not mark the full rework complete from this
+navigation component alone.
+
+Reviewed fixture renders for this milestone: [desktop](screenshots/workbench-navigation-desktop.jpg), [tablet](screenshots/workbench-navigation-tablet.jpg), [mobile](screenshots/workbench-navigation-mobile.jpg). These show the open section chooser; closed-state navigation, roles, Back and server switching are also exercised by the browser suite.

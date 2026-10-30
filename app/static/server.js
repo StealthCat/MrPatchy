@@ -1,5 +1,10 @@
 'use strict';
 const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true]];
+const SERVER_SECTION_GROUPS=[
+ {title:'Updates & history',ids:['patching','history','repositories']},
+ {title:'Investigations & evidence',ids:['investigations','ai','integrity']},
+ {title:'Server administration',ids:['connection','agent','maintenance']}
+];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
 
 function serverPagination(root,offset,more,load,size=50){
@@ -25,9 +30,10 @@ async function serverWorkspace(revision){
  const tabs=SERVER_TABS.filter(t=>(!t[2]||isAdmin())&&allowed.includes(t[0]));
  $('#breadcrumb').textContent='Workspace / Servers / '+h.name+' / '+entry[1];document.title=h.name+' · '+entry[1]+' · Mr Patchy';
  root.innerHTML=`<div class="server-back"><a href="#servers">← All servers</a><label>Server<select id="server-workspace-select" aria-label="Switch server">${hosts.map(item=>`<option value="${esc(item.id)}" ${item.id===id?'selected':''}>${esc(item.name)}</option>`).join('')}</select></label></div>`+
- heading(h.name,`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`,`<span>${badge(h.state)}</span>`+(isAdmin()&&!h.deleted_at&&tab!=='settings'?`<a class="button" href="${serverLink(id,'settings')}">Server settings</a><button data-host-lifecycle="${esc(h.id)}">${h.enabled===false?'Enable':'Disable'} server</button><button data-host-delete="${esc(h.id)}">Delete server</button>`:''))+
+ heading(esc(h.name),esc(`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`),`<span>${badge(h.state)}</span>`+(isAdmin()&&!h.deleted_at&&tab!=='settings'?`<a class="button" href="${serverLink(id,'settings')}">Server settings</a><button data-host-lifecycle="${esc(h.id)}">${h.enabled===false?'Enable':'Disable'} server</button><button data-host-delete="${esc(h.id)}">Delete server</button>`:''))+
  (inactive?`<div class="notice">${h.deleted_at?'Deleted from the managed fleet. Local SSH credentials were removed; these records are retained for review.':'Management disabled. Polling, queued operations, scheduled work and host AI requests are suspended. Existing remote agents and services continue running.'}</div>`:'')+
- `${isAdmin()?'<section id="server-ai-policy" class="card"></section>':''}<nav class="server-tabs" aria-label="Server sections">${tabs.map(t=>`<a href="${serverLink(id,t[0])}" ${t[0]===tab?'class="active" aria-current="page"':''}>${t[1]}</a>`).join('')}</nav><section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
+ `<nav class="server-tabs section-navigation" aria-label="Server sections">${PatchyUI.sectionNavigation(tabs,tab,key=>serverLink(id,key),['overview','packages','security','settings'],SERVER_SECTION_GROUPS)}</nav>${isAdmin()?'<section id="server-ai-policy" class="card"></section>':''}<section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
+ root.querySelector('.heading').classList.add('server-workbench-heading');
  $('#server-workspace-select').onchange=event=>{location.hash=serverLink(event.target.value,tab);};
  const body=$('#server-tab-body'),context={root:body,hostId:id,host:h};
  if(isAdmin()){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.textContent=error.message;});}
