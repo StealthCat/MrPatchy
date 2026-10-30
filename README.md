@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.7.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.8.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -404,3 +404,40 @@ After **Finish and verify installation**, Mr Patchy follows the deployment job a
 Server workspaces use primary **Overview / Packages / Security / Settings** tabs (subject to role and server state), plus **More sections** grouped into updates/history, investigations/evidence and administration. Existing deep links still work. Package search and Updates only filters are remembered per server and separately for the fleet view while signed in, including when refreshing or returning with Back/Forward. Signing out or reloading clears these in-memory filters; patch selections are never restored. See [UI design and migration inventory](docs/UI_DESIGN.md#screen-migration-inventory).
 
 The Servers directory has local name/address/architecture search, enabled/disabled filters and 24-server pages. Filters/page position survive navigation and refresh while signed in, then clear on reload/sign-out. Each server’s Overview has **Summary**, **System & collector**, and **Patching status** pages with deep links (`#servers/ID/overview/system`, `#servers/ID/overview/patching`); switching servers keeps the selected Overview page. Server controls and backend verification/approval rules are unchanged.
+
+
+### Worker registrations (v0.8.0)
+
+Administrators can open **Activity → Workers** (`#activity/workers`) for registered
+scheduler runtime self-reports: identity/boot ID, source version, configured runtime
+type, heartbeat, uptime, coordinator flag and actual executor capacity/active work
+at the report time. Reports are written at most every 15 seconds and become stale
+after 120 seconds. Future heartbeats beyond a five-second tolerance are unknown;
+version mismatch is shown separately. Readiness remains **not assessed**: these
+reports do not verify containers, secrets/shared storage, targets or completed jobs.
+Older workers do not register; an empty list does not mean no worker is running.
+
+The existing complete Compose deployment sets `MRPATCHY_RUNTIME_ROLE=worker`, so
+its worker entrypoint prepares `/data` and skips `/tls` and `app.tls`; app/Caddy
+bootstrap is unchanged. It also reports `MRPATCHY_DEPLOYMENT_TYPE=docker`. Other
+worker processes report `process` unless explicitly configured. Metadata reads the
+single `APP_VERSION` authority without importing the web application.
+
+Optionally set `MRPATCHY_WORKER_ID=patchy-worker-01` for one worker instance. Every
+simultaneous instance needs a unique, case-sensitive ID. A named cross-process lock rejects a
+collision; detected loss or uncertainty exits before the next scheduling work.
+Without an ID, each boot generates a new registration. Explicit stable IDs reuse
+the current registration across restarts and get a new boot ID; registration/stop
+events remain in audit. Generated/stale registrations are retained with no automatic
+cleanup yet. Leave the ID unset for Compose replicas unless each instance can be
+configured uniquely. Graceful shutdown records stopped after pools finish; abrupt
+loss is inferred only from stale heartbeat, never successful remediation.
+
+Rebuild/restart the controller and workers to enable reporting. No schema migration
+or target-helper update is needed: records use the existing settings/audit tables,
+which are already included in offline database migration. Existing job claims,
+per-host/recovery locks, coordinator election, concurrency (2 jobs/8 polls/1 AI task)
+and operational approval boundaries are unchanged. Supported separate-host workers,
+shared secrets/artifacts/state preflight, drain/concurrency controls, expected-node
+inventory, controller/endpoint/GCP health and full deployment acceptance remain
+planned; this view does not complete remote-worker deployment or the unified dashboard.

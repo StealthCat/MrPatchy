@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 — 2026-10-30
+
+1. Register worker runtime identities, boot IDs, source versions, bounded scheduler heartbeats and actual pool/activity snapshots; reject duplicate configured identities and stop scheduling after identity-lock loss.
+2. Add administrator-only Activity → Workers with explicit liveness, clock/version uncertainty and readiness/coverage limits.
+3. Add worker-role container startup that skips controller TLS bootstrap, with process/startup/permission/browser validation. Remote deployment, shared-state preflight, drain and the full component dashboard remain planned.
+
 ## 0.7.0 — 2026-10-29
 
 1. Migrate the Servers directory to searchable, filtered glass cards with 24-server pagination, retained view context and existing lifecycle controls.

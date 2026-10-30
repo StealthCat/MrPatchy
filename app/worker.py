@@ -603,9 +603,15 @@ def ai_cycle():
         except Exception as error:ai_runs.task_failure(error)
 
 
-def loop():
+def loop(role="embedded"):
+    from .worker_registry import Registration
+    with Registration(role) as reporter:
+        _loop(reporter)
+
+def _loop(reporter):
+    from .worker_registry import IdentityLost,POOL_CAPACITY
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=2) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=1) as ai:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=POOL_CAPACITY['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=POOL_CAPACITY['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=POOL_CAPACITY['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
         active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0
         while not stop.wait(1):
@@ -619,6 +625,7 @@ def loop():
                         except Exception:pass
                         is_leader=False
                 if not is_leader:is_leader=leader.acquire(False)
+                reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),ai_task is not None and not ai_task.done())
                 if is_leader:ai_runs.heartbeat()
                 if ai_task is not None and ai_task.done():
                     try:ai_task.result()
@@ -652,7 +659,7 @@ def loop():
                     # Resume observation, never the package transaction, after worker loss.
                     resume_busy={host_id for _,host_id in active_jobs.values()}
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
-                        if len(active_jobs)>=2:break
+                        if len(active_jobs)>=POOL_CAPACITY['jobs']:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=2: break
@@ -681,6 +688,9 @@ def loop():
                     last_cleanup=now
                 if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
                 if is_leader and ai_task is None and now-last_ai>=5: ai_task=ai.submit(ai_cycle);last_ai=now
+            except IdentityLost:
+                if is_leader:leader.release();is_leader=False
+                raise
             except Exception: log.exception('Scheduler tick failed')
         if is_leader:leader.release()
 def start():
@@ -697,4 +707,4 @@ if __name__=='__main__':
         init()
         signal.signal(signal.SIGTERM,lambda *args:stop.set())
         signal.signal(signal.SIGINT,lambda *args:stop.set())
-        loop()
+        loop(role="worker")
