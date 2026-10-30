@@ -3798,3 +3798,9 @@ major 1 and the actual current version sequence. No unrelated roadmap PR should
 be merged while this reported migration fix is unfinished. The broader canonical
 cache, threaded execution, shared spending/throttle controls and remaining roadmap
 stay planned. Schedule unchanged.
+
+Delivery: [PR #79](https://github.com/StealthCat/MrPatchy/pull/79), initial published
+fix [d95fbd06](https://github.com/StealthCat/MrPatchy/commit/d95fbd0684916c9ac7b67e3b0c9eef63883da701).
+The PR records exact final head/tree, all nine CI results, full local validation
+and actual merged commit (or precise unfinished blockers). Finish this fix before
+resuming isolated roadmap work; never use earlier-head checks to authorize a merge.
