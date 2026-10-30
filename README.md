@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.10.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.11.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -508,3 +508,22 @@ work without sending AI requests. Cost estimates/partial/unavailable states reta
 their saved usage/rate limitations; shared batch cost covers the whole run.
 Historical AI views remain available under existing administrator and lifecycle
 controls. No retry, approval or target action occurs when browsing.
+
+
+### Stored startup review pages (v0.11.0)
+
+Server More sections → Startup files opens dedicated Files and Coverage pages
+(`#servers/ID/startup/files` or `/coverage`). Browse startup files from File
+integrity opens the same workspace. Search/page position and receipt revision are
+remembered per server during navigation/refresh, clearing on reload/sign-out.
+Back/Forward and direct links work; switching servers retains the selected review
+page with separate search context. A changed receipt/baseline requires **Refresh
+latest inventory**, which resets paging and the revision guard for review.
+
+Administrators can read retained startup receipts for disabled/deleted servers.
+The view performs no scan, baseline approval, AI request or remediation. It lists
+only bounded metadata already stored by existing inspections, with explicit scope,
+missing roots, skipped entries, gaps and unassessed origin. Comprehensive job/unit
+discovery, effective configuration, vendor-default provenance and AI classification
+remain unfinished. Rebuild controller and keep workers on the matching source
+version; no agent/schema update is required for these review pages.

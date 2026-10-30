@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0 — 2026-10-30
+
+1. Move stored startup metadata review into dedicated server Files/Coverage pages with deep links, responsive glass surfaces and the established mascot.
+2. Retain scoped search/page/revision context, support explicit refresh after receipt changes and allow read-only retained review for inactive servers.
+3. Add browser/backend acceptance for paging, Back/reload, history/roles, untrusted text and collection limits. Comprehensive startup discovery/provenance/classification and the broader roadmap remain unfinished.
+
 ## 0.10.0 — 2026-10-30
 
 1. Migrate fleet/server AI run inspections from long dialogs to Summary, Cost and Timeline pages with deep links, Back/Forward and responsive glass/mascot surfaces.

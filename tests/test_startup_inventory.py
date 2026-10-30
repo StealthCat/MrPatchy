@@ -54,3 +54,13 @@ def test_baseline_labels_and_revision_guard(seeded):
     assert seeded.get(url,params={'q':'/new'}).json()['items'][0]['change']=='added'
     with Session() as s:s.get(Setting,'persistence-baseline:one').value={'id':'missing'};s.commit()
     assert seeded.get(url,params={'expected_digest':result['digest']}).status_code==400
+
+
+def test_retained_startup_review_does_not_require_active_management(seeded):
+    url='/api/hosts/one/security/startup-inventory'
+    before=seeded.get(url).json()
+    with Session() as s:
+        host=s.get(Host,'one');host.enabled=False;host.deleted_at=time.time();s.commit()
+    after=seeded.get(url,params={'expected_digest':before['digest']})
+    assert after.status_code==200 and after.json()['total']==30
+    assert after.json()['digest']==before['digest']

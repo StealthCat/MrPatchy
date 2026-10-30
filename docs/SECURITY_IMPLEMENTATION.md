@@ -2720,3 +2720,54 @@ checks passed. Five reviewed desktop/tablet/phone and cost/timeline renders are
 linked in UI_DESIGN.md. Python/JS compilation, whitespace and version consistency
 passed. Final PR must pass all nine applicable checks on its exact final head
 before merge; its delivery record retains the actual merge and validation links.
+
+
+## v0.11.0 — Stored startup Files and Coverage pages
+
+Completion gate: inspected current main `bf34c2c6` /
+[PR #65](https://github.com/StealthCat/MrPatchy/pull/65), its actual AI activity
+changes and recorded exact-final-head nine-check validation, repository instructions,
+implementation checkpoint and open PRs (none). The roadmap remains unfinished.
+This compatible feature update advances the finite security/startup screen family;
+comprehensive startup collection/provenance/classification is not claimed complete.
+
+Server More sections → Startup files now opens `#servers/HOST/startup/files` or
+`/coverage`. File integrity's existing Browse startup files control opens the same
+workspace instead of a long modal. Files displays escaped metadata, origin explicitly
+not assessed, hashes or symlink targets (not followed), search and bounded paging.
+Coverage presents the stored receipt scope, mechanism counts, missing roots, skipped
+entries, baseline state and explicit gaps. These are observed files, not individual
+jobs, effective commands, authenticated package defaults or malware classifications.
+Viewing/refreshing never queues collection, approves a baseline or sends AI requests.
+
+Deep links, Back/Forward, reload and server switching preserve the selected page.
+Search/page/receipt revision are remembered per server during navigation/refresh,
+clearing on reload/sign-out. Queued responses cannot overwrite a newer route.
+Changed receipt/baseline revisions reject stale browsing; Refresh latest inventory
+clears the revision/page and explicitly reviews the latest receipt, retaining the
+search. Empty/failed states offer actionable explanation and never retain stale rows.
+Administrators can review disabled/deleted retained history; viewer roles make no
+inventory request. Existing lifecycle and response authorization boundaries remain.
+
+The responsive workspace retains shared glass surfaces, mint accents, readable
+wrapping and Mr Patchy's established artwork. The generic AI policy panel remains
+on other server pages and is omitted from this read-only page. Actual 320/768/1440
+Files and desktop/phone Coverage renders were reviewed and are linked in UI_DESIGN.md.
+
+Local validation: full Python suite **1,283 passed / 7 skipped**; focused startup/
+baseline tests **15 passed**; full browser suite passed, including search/paging,
+Back/reload, receipt change/explicit refresh, empty results, escaping, inactive
+history and role restrictions. JS syntax, whitespace and source/README/changelog
+version consistency passed. The resulting PR records exact-final-head nine-check
+validation and the actual merged main commit; all checks must pass before merge.
+
+Remaining: comprehensive cron/anacron/at and effective system/user/runtime systemd
+discovery, broader startup mechanisms, authenticated default provenance, bounded
+consented AI classification and native acceptance; other security/response/recovery
+UI screens; full UI migration; remote worker state/readiness/provisioning and
+migration/failure acceptance; complete component health/GCP integration node; CVE
+and known/unknown malware automatic protection and real-target/recovery acceptance;
+retention and independent evidence/audit requirements. Existing AI pause remains
+implemented. No collector, agent, schema, provider or response-pipeline change is
+introduced. Rebuild the controller and keep worker source versions matched.
+No Git tags by user instruction; the schedule remains unchanged.

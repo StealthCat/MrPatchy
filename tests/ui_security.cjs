@@ -324,12 +324,12 @@ module.exports=async(page,capture)=>{
   await page.getByRole('button',{name:'Browse startup files',exact:true}).click();
   await page.locator('#startup-file-items').filter({hasText:'Origin: not assessed'}).waitFor();
   assert.equal(await page.locator('#startup-file-items script').count(),0);
-  await page.getByText('Mechanism coverage and limitations',{exact:true}).click();
+  await page.getByRole('link',{name:'Coverage',exact:true}).click();await page.getByRole('heading',{name:'Coverage and limitations',exact:true}).waitFor();
   if(capture)await capture('startup-file-review',false);
   await page.setViewportSize({width:390,height:844});
-  assert.ok(await page.locator('#modal').evaluate(e=>e.scrollWidth<=e.clientWidth+1));
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
   if(capture)await capture('startup-file-review-mobile',false);
-  await page.locator('#close-modal').click();await page.setViewportSize({width:1440,height:1000});
+  await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);await page.setViewportSize({width:1440,height:1000});
 
   await page.locator('#security-inspection-form').waitFor();
   await page.getByText('Trust basis: local package database',{exact:true}).waitFor();

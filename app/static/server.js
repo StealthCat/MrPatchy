@@ -1,8 +1,8 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true]];
+const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true],['startup','Startup files',true]];
 const SERVER_SECTION_GROUPS=[
  {title:'Updates & history',ids:['patching','history','repositories']},
- {title:'Investigations & evidence',ids:['investigations','ai','integrity']},
+ {title:'Investigations & evidence',ids:['investigations','ai','integrity','startup']},
  {title:'Server administration',ids:['connection','agent','maintenance']}
 ];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
@@ -24,7 +24,7 @@ async function serverWorkspace(revision){
  selected=id;
  let tab=parts[2]||'overview';if(!SERVER_TABS.some(t=>t[0]===tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const inactive=h.enabled===false||Boolean(h.deleted_at);
- const allowed=inactive?['overview','settings','history','ai','patching','security',...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
+ const allowed=inactive?['overview','settings','history','ai','patching','security','startup',...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
  if(!allowed.includes(tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const entry=SERVER_TABS.find(t=>t[0]===tab);
  const tabs=SERVER_TABS.filter(t=>(!t[2]||isAdmin())&&allowed.includes(t[0]));
@@ -32,15 +32,15 @@ async function serverWorkspace(revision){
  root.innerHTML=`<div class="server-back"><a href="#servers">← All servers</a><label>Server<select id="server-workspace-select" aria-label="Switch server">${hosts.map(item=>`<option value="${esc(item.id)}" ${item.id===id?'selected':''}>${esc(item.name)}</option>`).join('')}</select></label></div>`+
  heading(esc(h.name),esc(`${h.address}:${h.port} · ${h.architecture||'Architecture not reported'}`),`<span>${badge(h.state)}</span>`+(isAdmin()&&!h.deleted_at&&tab!=='settings'?`<a class="button" href="${serverLink(id,'settings')}">Server settings</a><button data-host-lifecycle="${esc(h.id)}">${h.enabled===false?'Enable':'Disable'} server</button><button data-host-delete="${esc(h.id)}">Delete server</button>`:''))+
  (inactive?`<div class="notice">${h.deleted_at?'Deleted from the managed fleet. Local SSH credentials were removed; these records are retained for review.':'Management disabled. Polling, queued operations, scheduled work and host AI requests are suspended. Existing remote agents and services continue running.'}</div>`:'')+
- `<nav class="server-tabs section-navigation" aria-label="Server sections">${PatchyUI.sectionNavigation(tabs,tab,key=>serverLink(id,key),['overview','packages','security','settings'],SERVER_SECTION_GROUPS)}</nav>${isAdmin()?'<section id="server-ai-policy" class="card"></section>':''}<section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
+ `<nav class="server-tabs section-navigation" aria-label="Server sections">${PatchyUI.sectionNavigation(tabs,tab,key=>serverLink(id,key),['overview','packages','security','settings'],SERVER_SECTION_GROUPS)}</nav>${isAdmin()&&tab!=='startup'?'<section id="server-ai-policy" class="card"></section>':''}<section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
  root.querySelector('.heading').classList.add('server-workbench-heading');
- $('#server-workspace-select').onchange=event=>{const detail=tab==='overview'&&['system','patching'].includes(parts[3])?'/'+parts[3]:'';location.hash=serverLink(event.target.value,tab+detail);};
+ $('#server-workspace-select').onchange=event=>{const detail=(tab==='overview'&&['system','patching'].includes(parts[3])||tab==='startup'&&['files','coverage'].includes(parts[3]))?'/'+parts[3]:'';location.hash=serverLink(event.target.value,tab+detail);};
  const body=$('#server-tab-body'),context={root:body,hostId:id,host:h};
- if(isAdmin()){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.textContent=error.message;});}
+ if(isAdmin()&&tab!=='startup'){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.textContent=error.message;});}
  if(h.deleted_at&&!hosts.some(item=>item.id===id)){const option=document.createElement('option');option.value=id;option.textContent=h.name+' (deleted)';option.selected=true;$('#server-workspace-select').append(option);}
  if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,settings:serverSettings,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity};
+  const views={overview:serverOverview,settings:serverSettings,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity,startup:startupFiles};
   if(inactive&&tab==='security')await retainedSecurity(revision,context);else await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
@@ -566,18 +566,32 @@ async function renderServerAIPolicy(panel,hostId,deleted=false){
 }
 
 
-async function browseStartupFiles(hostId,current){
- modal('Stored startup files','<p>Review stored file metadata and collection limits. This is not a complete list of jobs or effective startup configuration.</p><label>Find a path or mechanism<input id="startup-file-search" maxlength="200" type="search"></label><p id="startup-file-status" role="status"></p><div id="startup-file-items"></div><div class="actions"><button id="startup-file-prev">Previous files</button><button id="startup-file-next">Next files</button></div><details><summary>Mechanism coverage and limitations</summary><div id="startup-file-coverage"></div></details>');
- const revision=modalRevision,session=sessionRevision;let offset=0,ticket=0,digest='',timer;
- const alive=()=>current()&&revision===modalRevision&&session===sessionRevision&&$('#modal').open;
- const load=async()=>{const request=++ticket;$('#startup-file-prev').disabled=true;$('#startup-file-next').disabled=true;$('#startup-file-status').textContent='Loading stored startup files…';try{
-  const data=await api('/hosts/'+hostId+'/security/startup-inventory?offset='+offset+'&q='+encodeURIComponent($('#startup-file-search').value)+'&expected_digest='+digest);
-  if(!alive()||request!==ticket)return;digest=data.digest;
-  $('#startup-file-status').textContent=data.inspection_id?'Receipt '+data.inspection_id+' · '+date(data.created)+' · '+data.total+' matching files · '+data.state:'No stored startup inventory. Queue an integrity inspection first.';
-  $('#startup-file-items').innerHTML=data.items.map(row=>'<article class="card"><strong>'+esc(row.path)+'</strong><p>'+esc(row.mechanism_label)+' · '+badge(row.change)+'</p><p>Origin: not assessed · '+esc(row.kind)+' · UID '+esc(row.uid)+' · GID '+esc(row.gid)+' · Mode '+Number(row.mode).toString(8)+'</p><p class="help">'+esc(row.sha256||row.target||'')+'</p></article>').join('')||'<p>No matching files in this stored inventory.</p>';
-  $('#startup-file-prev').disabled=offset===0;$('#startup-file-next').disabled=!data.more;
-  $('#startup-file-coverage').innerHTML='<p>'+esc(data.note||'Collection coverage is unavailable.')+'</p><p>Baseline: '+esc(data.baseline_state)+'</p><ul>'+data.catalog.map(c=>'<li>'+esc(c.label)+': '+c.observed_files+' observed files</li>').join('')+'</ul><p>Receipt scope: '+esc(data.scope.join(', '))+'</p><p>Missing roots: '+esc((data.missing_roots||[]).join(', ')||'None recorded')+' · Skipped: '+esc(data.skipped??'Unknown')+'</p><ul>'+data.gaps.map(g=>'<li>'+esc(g)+'</li>').join('')+'</ul>';
- }catch(error){if(alive()&&request===ticket){$('#startup-file-status').textContent=error.message;$('#startup-file-items').replaceChildren();$('#startup-file-coverage').replaceChildren();$('#startup-file-prev').disabled=true;$('#startup-file-next').disabled=true;}}};
- $('#startup-file-search').oninput=()=>{offset=0;clearTimeout(timer);timer=setTimeout(()=>{if(alive())load();},250);};
- $('#startup-file-prev').onclick=()=>{offset=Math.max(0,offset-25);load();};$('#startup-file-next').onclick=()=>{offset+=25;load();};await load();
+function browseStartupFiles(hostId,current){
+ if(!current())return;$('#modal').close();location.hash=serverLink(hostId,'startup/files');
+}
+
+async function startupFiles(revision,context){
+ const {root,hostId,host}=context,base=serverLink(hostId,'startup'),tab=location.hash.split('/')[3]==='coverage'?'coverage':'files';
+ const saved=startupViewContext.get(hostId)||{q:'',offset:0,digest:''};
+ let {q,offset,digest}=saved,ticket=0,timer;
+ const alive=()=>currentView(revision,'servers')&&root.isConnected;
+ root.innerHTML=`<p class="help">Stored startup file metadata only. Individual jobs, effective commands, package-default authenticity and AI classification are not assessed. Viewing this page never scans, approves a baseline or sends AI requests.</p><nav class="overview-sections" aria-label="Startup review pages">${[['files','Files'],['coverage','Coverage']].map(([key,label])=>`<a href="${base}/${key}" ${key===tab?'class="active" aria-current="page"':''}>${label}</a>`).join('')}</nav><div class="toolbar startup-review-toolbar"><label>Find a path or mechanism<input id="startup-file-search" type="search" maxlength="200" value="${esc(q)}"></label><button id="startup-latest">Refresh latest inventory</button></div><p id="startup-file-status" role="status"></p><section id="startup-file-view"></section>`;
+ const status=root.querySelector('#startup-file-status'),view=root.querySelector('#startup-file-view'),search=root.querySelector('#startup-file-search');
+ const load=async()=>{
+  const turn=++ticket;startupViewContext.set(hostId,{q,offset,digest});status.textContent='Loading stored startup metadata…';
+  try{
+   const data=await api('/hosts/'+encodeURIComponent(hostId)+'/security/startup-inventory?offset='+offset+'&q='+encodeURIComponent(q)+'&expected_digest='+encodeURIComponent(digest));
+   if(!alive()||turn!==ticket)return;digest=data.digest;startupViewContext.set(hostId,{q,offset,digest});
+   status.textContent=data.inspection_id?'Receipt '+data.inspection_id+' · '+date(data.created)+' · '+data.total+' matching files · '+data.state:'No stored startup inventory. '+(host.enabled===false||host.deleted_at?'Retained history only; management is inactive.':'Collect an integrity inspection from File integrity first.');
+   if(tab==='coverage'){
+    view.innerHTML=`<article class="card"><h3>Coverage and limitations</h3><p>${esc(data.note||'No stored coverage receipt is available.')}</p><p>Baseline: ${esc(data.baseline_state)}</p><div class="table-wrap"><table><thead><tr><th>Mechanism</th><th>Observed files</th></tr></thead><tbody>${data.catalog.map(c=>`<tr><td>${esc(c.label)}</td><td>${esc(c.observed_files)}</td></tr>`).join('')}</tbody></table></div><h4>Receipt scope</h4><ul>${data.scope.map(value=>`<li><code>${esc(value)}</code></li>`).join('')||'<li>Not recorded</li>'}</ul><h4>Missing roots</h4><ul>${(data.missing_roots||[]).map(value=>`<li><code>${esc(value)}</code></li>`).join('')||'<li>None recorded; absence is not proof of coverage.</li>'}</ul><p>Skipped entries: ${esc(data.skipped??'Unknown')}</p><h4>Coverage gaps</h4><ul>${data.gaps.map(gap=>`<li>${esc(gap)}</li>`).join('')}</ul></article>`;
+   }else{
+    view.innerHTML=`<div id="startup-file-items">${data.items.map(row=>`<article class="card startup-file"><h3>${esc(row.path)}</h3><p>${esc(row.mechanism_label)} · ${badge(row.change)}</p><p>Origin: not assessed</p><dl class="ai-run-facts"><div><dt>Kind</dt><dd>${esc(row.kind)}</dd></div><div><dt>Owner</dt><dd>UID ${esc(row.uid)} · GID ${esc(row.gid)}</dd></div><div><dt>Mode</dt><dd>${Number(row.mode).toString(8)}</dd></div></dl><p class="help">${row.sha256?'SHA-256':'Symlink target (not followed)'}</p><pre class="ai-run-message">${esc(row.sha256||row.target||'Not recorded')}</pre></article>`).join('')||empty('No matching stored files',data.inspection_id?'Change the search or review Coverage for collection limits.':'No startup metadata receipt is available.')}</div><div class="actions"><button id="startup-file-prev" ${offset?'':'disabled'}>Previous files</button><span>Page ${Math.floor(offset/25)+1}</span><button id="startup-file-next" ${data.more?'':'disabled'}>Next files</button></div>`;
+    for(const [id,next] of [['#startup-file-prev',Math.max(0,offset-25)],['#startup-file-next',offset+25]])view.querySelector(id).onclick=()=>{offset=next;load();};
+   }
+  }catch(error){if(alive()&&turn===ticket){status.textContent=error.message;view.innerHTML=empty('Unable to load startup inventory','If the receipt or baseline changed, refresh latest inventory to review the new snapshot.');}}
+ };
+ search.oninput=()=>{q=search.value;offset=0;startupViewContext.set(hostId,{q,offset,digest});clearTimeout(timer);timer=setTimeout(()=>{if(alive())load();},250);};
+ root.querySelector('#startup-latest').onclick=()=>{clearTimeout(timer);q=search.value;offset=0;digest='';load();};
+ await load();
 }

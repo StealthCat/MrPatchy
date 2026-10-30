@@ -397,3 +397,12 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .ai-run-message { white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word; }
 @media(max-width:800px){.ai-run-facts{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media(max-width:480px){.ai-run-facts{grid-template-columns:minmax(0,1fr);}}
+
+.startup-file h3 { overflow-wrap:anywhere;word-break:break-word; }
+#startup-file-view code { overflow-wrap:anywhere;word-break:break-word; }
+
+.startup-review-toolbar { flex-wrap:wrap;gap:12px; }
+.startup-review-toolbar label { flex:1 1 220px;min-width:0; }
+.startup-review-toolbar input { width:100%;box-sizing:border-box; }
+.startup-review-toolbar button { flex:0 0 auto; }
+@media(max-width:600px){.startup-review-toolbar{align-items:stretch;flex-direction:column}.startup-review-toolbar label{flex:0 0 auto}.startup-review-toolbar button{width:100%;white-space:normal}}

@@ -120,7 +120,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 | Server Overview and navigation | Route groups v0.6.0; Summary/System/Patching pages and stored-data cards v0.7.0 | Lifecycle/AI control content migration and whole-family acceptance |
 | Packages, repositories, patching and schedules | Existing pages; scoped filters v0.6.0 | Shared tables/forms, history/calendar detail pages, approvals and context retention |
 | Investigations and AI activity | Fleet/server run Summary/Cost/Timeline routes and scoped list context v0.10.0 | Investigation evidence/details and wider AI control/loading/pause state migration |
-| Security, integrity, startup and response | Existing scanner/baseline/vendor/file/process workflows | Split crowded workspaces and long dialogs; migrate review/recovery/export states |
+| Security, integrity, startup and response | Startup Files/Coverage pages (v0.11.0); existing scanner/baseline/vendor/file/process workflows | Migrate other crowded workspaces, review/recovery/export states; comprehensive startup discovery/provenance/classification remains planned |
 | Activity, audit and inventory/package history | Existing global/server pages | Dedicated detail views, shared pagination/filter/long-output components |
 | Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
 | Deployment, worker and GCP health | Worker registration/liveness and cooperative controls v0.9.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
@@ -226,3 +226,28 @@ Reviewed renders: [summary desktop](screenshots/ai-run-v0100-desktop.jpg),
 [summary phone](screenshots/ai-run-v0100-mobile.jpg),
 [cost](screenshots/ai-run-v0100-cost.jpg),
 [timeline](screenshots/ai-run-v0100-timeline.jpg).
+
+
+## Startup review pages (v0.11.0)
+
+Server More sections → Startup files opens route-linked Files and Coverage pages.
+The existing File integrity Browse startup files control opens the same workspace.
+Files uses readable metadata cards, search and pagination; Coverage separates the
+receipt scope, missing roots, skipped entries, mechanism counts and explicit gaps.
+Both reuse the glass surfaces, mint navigation and established raccoon artwork.
+The unrelated AI policy panel remains on other server pages; the new read-only
+workspace does not add AI or target controls. Administrators can review retained
+inactive/deleted history; other roles retain the existing access boundary.
+
+Search, page and receipt revision survive navigation/refresh independently per
+server, clearing on reload/sign-out. Back/Forward and deep links retain the selected
+page. A changed receipt rejects stale pagination; Refresh latest inventory explicitly
+opens the latest snapshot without approving a baseline. Empty/error states and
+untrusted metadata are tested. This is a stored-metadata screen migration only,
+not individual-job discovery, authenticated provenance or AI classification.
+
+Reviewed renders: [Files desktop](screenshots/startup-review-v0110-desktop.jpg),
+[Files tablet](screenshots/startup-review-v0110-tablet.jpg),
+[Files phone](screenshots/startup-review-v0110-mobile.jpg),
+[Coverage desktop](screenshots/startup-review-v0110-coverage-desktop.jpg),
+[Coverage phone](screenshots/startup-review-v0110-coverage-mobile.jpg).
