@@ -34,7 +34,7 @@ async function serverWorkspace(revision){
  (inactive?`<div class="notice">${h.deleted_at?'Deleted from the managed fleet. Local SSH credentials were removed; these records are retained for review.':'Management disabled. Polling, queued operations, scheduled work and host AI requests are suspended. Existing remote agents and services continue running.'}</div>`:'')+
  `<nav class="server-tabs section-navigation" aria-label="Server sections">${PatchyUI.sectionNavigation(tabs,tab,key=>serverLink(id,key),['overview','packages','security','settings'],SERVER_SECTION_GROUPS)}</nav>${isAdmin()&&tab!=='startup'?'<section id="server-ai-policy" class="card"></section>':''}<section id="server-tab-content" aria-label="${entry[1]}"><h2>${entry[1]}</h2><div id="server-tab-body">${PatchyUI.loading()}</div></section>`;
  root.querySelector('.heading').classList.add('server-workbench-heading');
- $('#server-workspace-select').onchange=event=>{const detail=(tab==='overview'&&['system','patching'].includes(parts[3])||tab==='startup'&&['files','coverage'].includes(parts[3]))?'/'+parts[3]:'';location.hash=serverLink(event.target.value,tab+detail);};
+ $('#server-workspace-select').onchange=event=>{const detail=(tab==='overview'&&['system','patching'].includes(parts[3])||tab==='startup'&&['files','coverage'].includes(parts[3])||tab==='history'&&['inventory','observations'].includes(parts[3]))?'/'+parts[3]:'';location.hash=serverLink(event.target.value,tab+detail);};
  const body=$('#server-tab-body'),context={root:body,hostId:id,host:h};
  if(isAdmin()&&tab!=='startup'){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.textContent=error.message;});}
  if(h.deleted_at&&!hosts.some(item=>item.id===id)){const option=document.createElement('option');option.value=id;option.textContent=h.name+' (deleted)';option.selected=true;$('#server-workspace-select').append(option);}
@@ -109,10 +109,40 @@ function serverWindowText(windows){
 }
 
 async function serverHistory(revision,context){
- const {root,hostId}=context;
- root.innerHTML=`${isAdmin()?'<div class="actions"><button id="server-inventory-history">Inventory revisions</button><button id="server-observation-history">Process observations</button></div>':''}<div id="server-package-history"></div>`;
- if(isAdmin()){$('#server-inventory-history').onclick=()=>historyModal(hostId);$('#server-observation-history').onclick=()=>historyModal(hostId,'observations');}
- await packageHistory(revision,{hostId,root:$('#server-package-history')});
+ const {root,hostId,host}=context,parts=location.hash.slice(1).split('/'),kind=parts[3]||'packages';
+ if(!['packages','inventory','observations'].includes(kind)){history.replaceState(null,'',serverLink(hostId,'history'));return serverHistory(revision,context);}
+ const link=(key,id='')=>serverLink(hostId,'history'+(key==='packages'?'':'/'+key)+(id?'/'+encodeURIComponent(id):''));
+ const entries=[['packages','Package changes'],...(isAdmin()?[['inventory','Inventory revisions'],['observations','Process observations']]:[])];
+ root.innerHTML='<nav class="overview-sections" aria-label="History pages">'+PatchyUI.sectionNavigation(entries,kind,key=>link(key),entries.map(x=>x[0]),[])+'</nav><div id="history-workspace"></div>';
+ const panel=root.querySelector('#history-workspace');
+ if(kind==='packages')return packageHistory(revision,{hostId,root:panel});
+ if(!isAdmin()){panel.innerHTML=empty('Administrator access required','Inventory and process snapshot pages are restricted to administrators.');return;}
+ const current=()=>currentView(revision,'servers')&&panel.isConnected;
+ $('#breadcrumb').textContent+=' / '+(kind==='inventory'?'Inventory revisions':'Process observations');document.title=(kind==='inventory'?'Inventory revisions':'Process observations')+' · '+host.name+' · Mr Patchy';
+ const note='<p class="help">Retained snapshots are historical observations, not current state or proof of protection. Retention may remove records while you browse. Offset pages may shift as collection continues.</p>';
+ let recordId;try{recordId=decodeURIComponent(parts[4]||'');}catch{panel.innerHTML=empty('Invalid history link','Open a record from its history list.');return;}
+ const key=hostId+':'+kind,state=historyViewContext.get(key)||{offset:0};historyViewContext.set(key,state);
+ if(recordId){
+  panel.innerHTML=PatchyUI.loading();
+  try{
+   const data=await api('/hosts/'+encodeURIComponent(hostId)+'/history/'+encodeURIComponent(recordId)+'?kind='+kind);if(!current())return;
+   if(String(data.id)!==recordId||data.host_id!==hostId)throw Error('History record identity differs; reopen the list.');
+   panel.innerHTML='<a class="button" href="'+link(kind)+'">← Back to snapshot list</a><section class="card history-detail"><div class="history-detail-heading">'+PatchyUI.portrait()+'<div><h3>Snapshot detail</h3><p>'+esc(kind==='inventory'?'Inventory revision':'Process observation')+' · '+date(data.created||data.observed)+'</p></div></div>'+note+'<dl class="server-facts"><div><dt>Record ID</dt><dd>'+esc(data.id)+'</dd></div><div><dt>Server ID</dt><dd>'+esc(data.host_id)+'</dd></div></dl><h4>Stored '+(kind==='inventory'?'inventory':'process evidence')+'</h4><pre tabindex="0" aria-label="Stored snapshot data">'+esc(JSON.stringify(kind==='inventory'?data.inventory:data.evidence,null,2))+'</pre></section>';
+  }catch(error){if(current())panel.innerHTML=empty('Unable to load snapshot',esc(error.message),'<a class="button" href="'+link(kind)+'">Back to snapshot list</a><button id="history-detail-retry">Retry snapshot</button>');const retry=panel.querySelector('#history-detail-retry');if(retry)retry.onclick=render;}
+  return;
+ }
+ panel.innerHTML='<section class="card history-reading"><h3>'+(kind==='inventory'?'Inventory revisions':'Process observations')+'</h3>'+note+(host.enabled===false||host.deleted_at?'<p class="notice">Retained history only; management is inactive.</p>':'')+'<div id="snapshot-list"></div></section>';
+ const list=panel.querySelector('#snapshot-list');let ticket=0;
+ const load=async(offset)=>{
+  const request=++ticket;list.innerHTML=PatchyUI.loading();
+  try{
+   const rows=await api('/hosts/'+encodeURIComponent(hostId)+'/history?kind='+kind+'&offset='+offset+'&limit=20');if(!current()||request!==ticket)return;
+   state.offset=offset;
+   list.innerHTML=rows.length?'<div class="snapshot-list">'+rows.map(row=>'<article><div><h4>'+date(row.created||row.observed)+'</h4><p class="help">Record '+esc(row.id)+'</p></div><a class="button" href="'+link(kind,String(row.id))+'">Open snapshot →</a></article>').join('')+'</div>':empty('No retained snapshots on this page','Try a previous page or check the collection and retention settings.');
+   serverPagination(list,offset,rows.length===20,load,20);
+  }catch(error){if(current()&&request===ticket){list.innerHTML=empty('Unable to load history',esc(error.message),'<button id="snapshot-list-retry">Retry history</button>');list.querySelector('button').onclick=()=>load(offset);}}
+ };
+ await load(state.offset);
 }
 
 async function serverMaintenance(revision,{root,hostId}){

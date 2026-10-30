@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.15.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.16.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -607,3 +607,16 @@ target probe, provider call, patch or trust decision. Review operation outcomes
 and individual collector timestamps before acting. These pages do not complete
 the planned deployment-health dashboard, expanded protection or full UI rework.
 Rebuild the controller and keep workers matched; no agent/schema upgrade is needed.
+
+
+### Historical snapshot pages (v0.16.0)
+
+Server History has Package changes, Inventory revisions and Process observations
+pages. Administrators can open retained inventory/process records by deep link
+(`history/inventory/{record}` or `history/observations/{record}`), return to their
+scoped list page and reload a detail directly. Switching servers preserves the
+history type and drops the previous server's record ID. Pagination is held in
+account-session memory and clears on reload/sign-out. Existing inspection-dialog
+links now navigate to these pages. Missing/deleted snapshots offer list/retry links.
+These are retained observations, not current state or malware verdicts; offset
+pages can shift during collection/retention. No target/provider calls are added.

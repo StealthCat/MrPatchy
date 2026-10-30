@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.16.0 — 2026-10-30
+
+- Add linked server inventory/process snapshot list and detail pages, replacing the history inspection dialog.
+- Preserve scoped pagination, role restrictions, retained history and explicit snapshot/retention limits.
+
 ## 0.15.0 — 2026-10-30
 
 - Migrate fleet Overview into route-linked Summary, Server attention and Monitoring pages.

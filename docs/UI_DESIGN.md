@@ -121,7 +121,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 | Packages, repositories, patching and schedules | Existing pages; scoped filters v0.6.0 | Shared tables/forms, history/calendar detail pages, approvals and context retention |
 | Investigations and AI activity | Fleet/server run Summary/Cost/Timeline routes and scoped list context v0.10.0 | Investigation evidence/details and wider AI control/loading/pause state migration |
 | Security, integrity, startup and response | Startup Files/Coverage pages (v0.11.0); existing scanner/baseline/vendor/file/process workflows | Migrate other crowded workspaces, review/recovery/export states; comprehensive startup discovery/provenance/classification remains planned |
-| Activity, audit and inventory/package history | Existing global/server pages | Dedicated detail views, shared pagination/filter/long-output components |
+| Activity, audit and inventory/package history | Server inventory/process snapshot lists/details v0.16.0; existing package history | Activity/audit detail views and shared filter/long-output components; whole-family acceptance |
 | Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
 | Deployment, worker and GCP health | Worker registration/liveness, cooperative controls v0.9.0 and expected-worker inventory v0.12.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
 | Whole-application acceptance | Not complete | All rows migrated; cross-role workflows, state/asset/readability consistency and actual mobile/tablet/desktop review |
@@ -335,3 +335,23 @@ Reviewed renders: [Summary desktop](screenshots/fleet-summary-v0150-desktop.jpg)
 This completes the bounded fleet-dashboard migration, not onboarding, the full
 Overview/Servers family or the application-wide redesign. The finite inventory
 and all operational/authorization acceptance requirements remain in force.
+
+
+## Historical inventory/process snapshots (v0.16.0)
+
+History now uses Package changes / Inventory revisions / Process observations route
+links. Snapshot lists retain offset by server/type; detail pages have ordinary Back
+to list links, identity/timestamp facts and keyboard-focusable, wrapped evidence
+reading surfaces. Reload supports direct detail links; switching servers retains
+the type and drops record IDs. Administrator UI boundaries remain; retained
+inactive history is readable, missing records offer retry/list recovery, and stale
+responses cannot replace a new view. Existing mascot introductions and portraits,
+glass navigation and solid reading panels are reused. No target or AI action is
+introduced. Offset pages may shift under ongoing collection/retention, and raw
+snapshot evidence is not a current-state or malware verdict. This is a bounded
+history migration, not full long-output/accessibility/application acceptance.
+
+Reviewed renders: [detail desktop](screenshots/snapshot-detail-v0160-desktop.jpg),
+[detail tablet](screenshots/snapshot-detail-v0160-tablet.jpg),
+[detail phone](screenshots/snapshot-detail-v0160-mobile.jpg),
+[list tablet](screenshots/snapshot-list-v0160-tablet.jpg).

@@ -28,7 +28,7 @@ module.exports=async(page,capture)=>{
   if(id&&p.endsWith('/snapshot'))return route.fulfill({json:{inventory:{machine_id:scope(id)+'-current'},telemetry:{collected:now},baseline:{fixture:'hash'}}});
   if(id&&p.endsWith('/repositories'))return route.fulfill({json:{package_manager:'apt',last_checked:now,error:'',health:[],keys:[],files:{'/etc/apt/sources.list':'# '+scope(id)+' sources'}}});
   if(id&&p.endsWith('/history'))return route.fulfill({json:[{id:'snapshot',created:now,observed:now}]});
-  if(id&&p.endsWith('/history/snapshot'))return route.fulfill({json:{inventory:{host:scope(id)}}});
+  if(id&&p.endsWith('/history/snapshot'))return route.fulfill({json:{id:'snapshot',host_id:id,inventory:{host:scope(id)}}});
   if(p==='/api/investigations')return route.fulfill({json:[{id:'investigation-'+url.searchParams.get('host_id'),host_id:url.searchParams.get('host_id'),evidence:{executable:'/'+scope(url.searchParams.get('host_id'))+'/service',uid:1000,sha256:'fixture'},last_seen:now,verdict:'pending',approved:false,analysis:'Awaiting '+scope(url.searchParams.get('host_id'))+' review'}]});
   if(p==='/api/jobs')return route.fulfill({json:[{id:'job-'+url.searchParams.get('host_id'),host_id:url.searchParams.get('host_id'),state:'complete',action:'patch',created:now-86400,output:scope(url.searchParams.get('host_id'))+' patch completed'}]});
   if(p==='/api/ai/runs')return route.fulfill({json:{items:[{id:'batch-fixture',purpose:'update_scoring',state:'complete',started:now,model:'gpt-6-luna',calls:1,message:scope(url.searchParams.get('host_id'))+' update scoring completed',shared_batch:true,cost:{status:'estimated',estimated_usd:'0.000123',priced_calls:1,total_calls:1}}],more:false}});
@@ -124,7 +124,9 @@ module.exports=async(page,capture)=>{
   await open('AI activity');await page.getByText('Atlas update scoring completed',{exact:true}).waitFor();
   await page.getByText('Shared batch',{exact:false}).first().waitFor();
   await open('History');await page.locator('#package-history-table tbody tr').filter({hasText:'Atlas-openssl'}).waitFor();assert.equal(await page.locator('#history-host').count(),0);
-  await page.locator('#server-inventory-history').click();await page.locator('.history-record summary').click();await page.locator('.history-record pre').filter({hasText:'Atlas'}).waitFor();await page.locator('#close-modal').click();
+  await page.getByRole('link',{name:'Inventory revisions',exact:true}).click();await page.getByRole('link',{name:'Open snapshot',exact:false}).click();await page.locator('.history-detail pre').filter({hasText:'Atlas'}).waitFor();
+  await page.locator('#server-workspace-select').selectOption(beta);await page.locator('.snapshot-list').waitFor();assert.equal(new URL(page.url()).hash,'#servers/'+beta+'/history/inventory');
+  await page.locator('#server-workspace-select').selectOption(alpha);await page.locator('.snapshot-list').waitFor();
   await open('Repositories');await page.getByText('/etc/apt/sources.list',{exact:true}).waitFor();
   await open('Connection');await page.locator('#server-connection-form').waitFor();
   await page.locator('#server-connection-form [name=transport]').selectOption('gcp_iap');

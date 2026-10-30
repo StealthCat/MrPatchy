@@ -3081,3 +3081,49 @@ and reviewed 320/768/1440 renders. A test refresh race was corrected by waiting
 for the old rendered section to detach before changing filters. Version/lifecycle
 checks **21 passed**; syntax, compile, whitespace and version consistency passed.
 Final corrected Python and CI results are recorded in the delivery PR.
+
+
+## v0.16.0 — Historical snapshot pages and issue-first development
+
+Issue-first inspection: current main `11f43581` (v0.15.0), repository instructions,
+checkpoint, latest merged PR #70 actual changes/recorded validation and all nine
+successful exact-head checks were inspected. The open-issues API returned an empty
+first page (100/page), and open PRs were empty. No issue was fixed, deferred or
+closed; no issue-list access failure occurred. The feature roadmap is unfinished.
+The newer user instruction supersedes roadmap-only no-op wording: reproducible
+issues take priority even after feature completion. AGENTS.md now records triage,
+reproduction, linked Fixes/Closes PRs and post-merge closure verification.
+
+Selected finite UI milestone: replace server inventory/observation history dialogs
+with focused list/detail routes while retaining package history, administrator UI
+boundaries, host-scoped records and lifecycle/AI/response safeguards. History now
+offers Package changes, Inventory revisions and Process observations. Each record
+has a deep link, identity/timestamp facts and escaped, scrollable evidence. Detail
+responses must match record and server identities before display. Back/Forward,
+reload and recovery links use normal routes. Lists retain offset independently by
+server/type, clearing on reload/sign-out. Server switching retains type but drops
+the previous server's detail identity. Inspection links navigate into these pages.
+Missing/expired/mismatched records never masquerade as successful inspection.
+
+History remains read-only retained evidence, not current state/protection. Existing
+offset paging may shift during collection/retention and full pages may be followed
+by an empty page; Previous remains available. No new target/provider call, backend
+authorization, schema, agent, AI pause or response behavior is introduced. Solid
+reading surfaces, responsive record rows and shared glass navigation reuse the
+mascot/palette. Actual 320/768/1440 renders were inspected and linked in UI_DESIGN.
+
+Validation: focused snapshot browser checks passed; full browser and final exact-
+head CI results are recorded in the delivery PR. Backend history/version/lifecycle
+checks: 48 passed. Browser checks cover routes, scoped offset, Back/reload, both
+record kinds, escaping, missing/mismatched records, retry, empty pages, inactive
+history, delayed-response races, server switching, roles and no writes. All nine applicable final-head checks must pass before merge.
+
+Remaining: Activity/audit and other finite UI families, onboarding, shared long-
+output/state-system and whole-application acceptance; independent remote workers/
+controller Compose/install modes, shared keys/profiles/trust/artifacts/evidence,
+full schema/job compatibility and cross-host migrations/recovery acceptance; full
+component dashboard/readiness/alerts and optional GCP node; comprehensive startup
+discovery/provenance/classification; CVE exposure and known/unknown automatic
+protection with real-target recovery; retention/independent evidence. This is not
+full roadmap completion. Rebuild controller before matched workers; no agent/schema
+upgrade. Version v0.16.0 is synchronized; Git tags skipped, schedule unchanged.

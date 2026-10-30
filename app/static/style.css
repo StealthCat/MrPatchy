@@ -441,3 +441,10 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 @media(forced-colors:active) { .fleet-observation { border:1px solid CanvasText; } }
 
 @media(max-width:600px) { .fleet-guide { display:block;position:relative; }.fleet-guide>.mascot { position:absolute;top:14px;right:14px;width:65px;height:65px;object-fit:contain; }.fleet-guide .eyebrow { min-height:54px;padding-right:75px;align-items:flex-start; }.fleet-guide .button { display:inline-flex;white-space:normal; } }
+
+.history-reading,.history-detail { background:var(--panel);backdrop-filter:none; }
+.snapshot-list article { display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 0;border-bottom:1px solid var(--line); }
+.snapshot-list article>div { min-width:0;overflow-wrap:anywhere; }.snapshot-list p { margin:6px 0; }
+.history-detail-heading { display:flex;gap:14px;align-items:center;margin-bottom:18px; }
+.history-detail pre { max-height:60vh;overflow:auto; }.history-detail dd { overflow-wrap:anywhere; }
+@media(max-width:600px){.snapshot-list article{align-items:flex-start;flex-direction:column}.snapshot-list .button{display:inline-flex}.history-detail{padding:16px}.history-detail pre{font-size:11px}}
