@@ -6,7 +6,7 @@ from sqlalchemy import select
 import httpx
 import pytest
 from app import ai,ai_runs,worker
-from app.db import Session,Host,Behavior,Setting,engine
+from app.db import Session,Host,Behavior,Setting
 from app.security import seal
 
 
@@ -68,15 +68,11 @@ def test_independent_thread_contexts_do_not_mix_timings(admin):
             with ai_runs.measure('provider'):pass
         assert ai_runs.active.get() is None
         return identifier
-    try:
-        with ThreadPoolExecutor(max_workers=4) as pool:identifiers=list(pool.map(run,range(4)))
-        for identifier in identifiers:
-            detail,values=stages(admin,identifier)
-            assert values==['provider','run'] and detail['calls']==0
-        assert ai_runs.active.get() is None
-    finally:
-        # Restore fresh schema caches for later destructive SQLite DDL fixtures.
-        engine.dispose()
+    with ThreadPoolExecutor(max_workers=4) as pool:identifiers=list(pool.map(run,range(4)))
+    for identifier in identifiers:
+        detail,values=stages(admin,identifier)
+        assert values==['provider','run'] and detail['calls']==0
+    assert ai_runs.active.get() is None
 
 
 def test_bad_timing_inputs_and_diagnostic_failure_cannot_change_result(admin,monkeypatch):

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.18.1 — 2026-10-30
+
+- Fix repeated initialization after SQLite schema changes on warmed pooled connections.
+- Keep schema reflection and existing upgrades on one connection; retain single migration-owner requirements.
+- Add before/after pooled-schema regression cases and remove the timing-test pool-disposal workaround.
+
 ## 1.18.0 — 2026-10-30
 
 - Reuse bounded, lifecycle-managed HTTP connections for billable AI calls without reusing credentials/cookies or adding automatic retries.
