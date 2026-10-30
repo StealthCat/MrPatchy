@@ -1,5 +1,21 @@
 # Security implementation checkpoint
 
+## Version policy: major fixed at 1
+
+User instruction (2026-10-30): use **1.MINOR.PATCH** and keep the major number at
+**1** until the user explicitly instructs otherwise. The initial transition is
+`0.17.0` to `1.17.0`, preserving the existing minor/patch numbers. Subsequent
+completed updates retain the existing patch/minor increment criteria and full
+version monotonicity. This overrides automatic major bumps, including for breaking
+changes; record compatibility impacts while keeping major 1.
+
+All other versioning instructions remain in force: authoritative `APP_VERSION`,
+synchronized README/changelog/UI/API metadata, versioned development and merge
+commit subjects and PR titles/labels, exact-final-commit checks and skipped Git
+tags. `AGENTS.md`, the source version checker and the scheduled development task
+carry this policy. Roadmap completion remains governed by the existing completion
+gate and issue-first workflow.
+
 ## Scheduled development completion gate
 
 Before each scheduled development cycle, assess the current roadmap against current
@@ -77,6 +93,7 @@ Remaining major work before the requested system is complete (later sections def
 the bounded features already implemented):
 
 - Complete application-wide UI rework retaining the current color scheme and mascot, with extensive graphics, polished glass styling and readable, uncluttered page/tab/menu navigation; see the planned milestone below.
+- Persistent in-app notification icon/center and asynchronous alerts for human attention and significant triage results; see the planned milestone below.
 - Faster AI triage without capability loss, true threaded parallel investigations and shared rate-throttle/daily-spend/unthrottled controls; see the planned milestone below.
 - Comprehensive startup and scheduled-task awareness, package-default versus custom provenance, and explained AI triage of custom/modified entries; see the planned milestone below.
 - Separate complete/controller-only/worker-only deployments with supported remote-worker state, health, scaling, drain and recovery; see the planned milestone below.
@@ -2400,6 +2417,48 @@ and explained AI classifications, CVE exposure/detectors, policy-authorized
 automatic quarantine/termination, general malware protection, retention/immutable
 storage and native/real-target acceptance. Do not treat this workflow as completing
 those requirements.
+
+
+## Planned: live in-app notifications and human-attention alerts
+
+Requested 2026-10-30; **planned, not implemented by this roadmap update**.
+The existing `operations.Alert` records and SMTP/webhook outbox provide durable
+operational alerts; significant-triage event production must be added. The UI reads
+existing alerts in the Operations panel. Its transient toast helper and periodic view refresh
+are not an asynchronous notification center. Reuse this foundation while retaining
+the existing external delivery configuration and alert lifecycle.
+
+### Notification icon and review workspace
+
+- Add a persistent Notifications bell/icon to the authenticated application shell on desktop, tablet and mobile, with an accessible unread count and severity cue that works on every page. Use the established glass palette, status colors, icons and Mr Patchy mascot without obscuring the alert text.
+- Open a compact recent-notification panel and provide a dedicated paginated notification center with Unread/All and severity/server/type filters. Each entry shows what happened, why attention is needed, severity/source, server or component, occurrence time, read state and a deep link to the exact triage result, incident, operation, coverage problem or pending review. Preserve navigation context and show an honest unavailable/retained-record state when a linked object is gone.
+- Update the icon, count, panel and appropriately bounded non-disruptive in-app alerts while any workspace or dialog is open, without manual refresh, navigation, lost selections/form content, scroll jumps or stolen focus. Urgent actionable events must remain discoverable in the notification center after a toast disappears. Keep keyboard/focus behavior, screen-reader announcements, reduced-motion and responsive/contrast fallbacks; do not flood live regions during replay.
+- Keep per-user read/unread/dismiss state durable and synchronized across sessions/tabs. Viewing, reading or dismissing a notification does not globally acknowledge/resolve an incident, approve an AI result or run a response. Offer any permitted acknowledgement/review through the existing role-checked workflow, with explicit labels and audit where appropriate.
+
+### Actionable sources and durable event identity
+
+- Publish attention events for failed/blocked/interrupted operations, recovery/response holds, required human approval or reconciliation, meaningful node/agent/service health or coverage failures and AI configuration/budget blockers. Include significant validated triage results and planned malware, CVE exploitation and suspicious startup findings as their producers are implemented. Define severity/significance policy explicitly; distinguish an advisory AI assessment from a confirmed detector observation.
+- Link events to the actual subject and evidence revision, not only a host/kind aggregate. Deduplicate repeated unchanged observations and group related occurrences without suppressing distinct findings. New, reopened, materially changed or escalated findings must resurface even after an earlier notification was read or acknowledged. Routine successes and unchanged known-good cache hits must not create a notification storm.
+- Persist stable event IDs, occurrence/revision and safe subject metadata with the originating state change, using a transactional outbox or equivalent committed-event record. Never announce a rolled-back result. Support replay and idempotent consumers across multiple workers/controllers and restarts; an in-memory callback in one process is insufficient. Integrate the current aggregate Alert lifecycle carefully without silently changing global acknowledgement or resolution behavior.
+
+### Asynchronous delivery and access control
+
+- Provide authenticated server push, preferably Server-Sent Events for the one-way event feed, with heartbeat, automatic reconnect and event-ID/cursor replay. Use authoritative paginated catch-up for first connection, page reload, sleeping/offline tabs and reconnect. If history was pruned or a cursor is invalid, explicitly resynchronize counts/history and disclose the gap. A documented polling fallback may provide degraded delivery; periodic whole-page refresh alone does not satisfy live notifications. See the [EventSource standard](https://html.spec.whatwg.org/multipage/server-sent-events.html).
+- Deliver already committed events through the shared durable store or a supported cross-process broker so a worker-created result reaches a browser connected to any controller. Keep streaming independent of triage execution slots and long-lived database transactions. Bound connection counts, per-client buffers, replay batches and message sizes; handle slow clients with explicit reconnect/catch-up rather than unbounded memory or silent event loss.
+- Validate the existing HTTPS/Caddy path for streaming, flushing, heartbeat timeouts, disconnect cleanup and reconnect behavior. Show connection/degraded state and last synchronization time; a connected stream is not evidence that collectors or AI are healthy. In-app alerts work without browser/OS notification permission and without configuring SMTP/webhooks.
+- Filter event payloads, list/detail reads and unread counts by the user's current role and subject access before transmission. Recheck/terminate streams on session expiry, logout, account disable or permission changes; reset all account-scoped client state during account switching. Use authenticated same-origin transport, avoid credentials in event/query data and preserve CSRF protection for read-state/acknowledgement mutations. Escape all untrusted text and keep secrets, raw prompts/provider bodies and unnecessary endpoint evidence out of notifications.
+- Keep deterministic human-attention notifications available when AI is disabled, paused or unavailable. Significant new findings may create an alert, but delivery/read state never grants destructive-action authority or bypasses the existing reviewed/automatic response policies. Preserve the existing SMTP/webhook channel behavior unless separately changed by an administrator.
+
+### Finite delivery and acceptance milestones
+
+1. **Event model and producers:** deliver subject/revision-aware committed events, source/severity policy, safe deduplication/reopening/escalation, recipient authorization and per-user read state, with migration/retention and existing alert-lifecycle coverage.
+2. **Live transport:** deliver authenticated streaming, reconnect/replay/catch-up, bounded resources, current-permission checks and cross-worker/controller operation through the existing HTTPS deployment. Healthy connected-browser acceptance should show committed events within five seconds; document measured latency and degraded/fallback limits separately.
+3. **Notification UI:** deliver the persistent icon/badge, recent panel, dedicated pages/filters, safe deep links and live toasts without disturbing active work. Verify per-user multi-tab synchronization and existing acknowledgement/response boundaries.
+4. **End-to-end acceptance:** validate actual server-generated live updates in two browser sessions, significant triage and human-attention sources, unread/read/dismiss behavior, distinct/replayed/duplicate/reopened events, permissions/account switching, malicious text, disconnect/sleep/reload/replay gaps, retention, slow clients, worker/controller restart/failover, AI pause/outage and SMTP/webhook independence on SQLite/MySQL. Review keyboard/screen-reader behavior plus actual mobile/tablet/desktop renders before marking the requirement complete.
+
+Track this addition in the scheduled development task and UI design guide. Preserve
+issue-first priority, the current AI performance program, the fixed major-1 policy,
+the cycle budget and exact-final-commit version/CI/merge requirements.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
