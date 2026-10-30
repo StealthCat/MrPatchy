@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 — 2026-10-29
+
+1. Add the planned complete/controller-only/worker-only deployment modes and supported remote-worker setup to the implementation roadmap.
+2. Define requirements for role-specific startup, MySQL/shared-state provisioning, worker health/concurrency/drain, installation workflows and multi-worker failure/recovery acceptance. Deployment behavior remains unchanged until implementation.
+
 ## 0.4.1 — 2026-10-29
 
 1. Make server deletion discoverable in a dedicated per-server Settings tab and in the Manage dialog, with a shared administrator-only management section.

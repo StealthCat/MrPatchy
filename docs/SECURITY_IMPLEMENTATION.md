@@ -77,6 +77,7 @@ Remaining major work before the requested system is complete (later sections def
 the bounded features already implemented):
 
 - Comprehensive startup and scheduled-task awareness, package-default versus custom provenance, and explained AI triage of custom/modified entries; see the planned milestone below.
+- Separate complete/controller-only/worker-only deployments with supported remote-worker state, health, scaling, drain and recovery; see the planned milestone below.
 - General malware protection: known-malware detection, AI-enabled triage of previously unknown malware, and automatic file quarantine plus malicious-process termination; see the planned milestone below.
 - CVE exposure-window exploitation monitoring with automatic quarantine or termination of detected malicious artifacts/processes; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention. Bounded per-server scanner record exports now complement file-response exports; automatic deletion and external storage are not implemented.
@@ -2198,3 +2199,44 @@ version 0.4.1 or later in its UI. Git tags remain omitted by user instruction.
 This is a focused requested usability fix. Comprehensive startup discovery,
 provenance/AI classifications, CVE monitoring, automatic containment and retention
 remain unfinished as tracked above.
+
+
+## Planned: separate controller and remote-worker deployments
+
+Requested roadmap addition (2026-10-29); not yet implemented as a supported
+standalone-worker workflow. Existing app/worker containers, MySQL job coordination
+and the shared-local-volume deployment are prerequisites. Deliver deployment
+separation and supported remote-worker setup as one coherent feature, with
+incremental milestones where needed.
+
+### Deployment files and runtime roles
+
+| File | Supported deployment |
+|---|---|
+| `compose.yaml` | Complete single-machine app, worker and Caddy installation |
+| `compose.controller.yaml` | Web app and Caddy with workers deployed separately |
+| `compose.worker.yaml` | Workers only, supporting multiple replicas on one host or a standalone worker machine |
+
+- Preserve the existing one-command complete installation and its persistent data. Reuse service definitions where practical to avoid drift. Provide role-specific environment examples and document supported combinations with the GCP override.
+- Give workers a role-specific startup path that does not initialize web/TLS configuration, require a local Caddy/app container or inherit a local-app Compose dependency. Keep web administration and TLS configuration in the controller role.
+- Support independent app/worker deployment and same-host worker scaling without fixed container-name conflicts. Use compatible versioned application images and explicit schema/protocol compatibility checks so mismatched workers fail clearly before claiming jobs.
+
+### Database, secrets and persistent state
+
+- Use MySQL 8+ for supported multi-machine deployments. Retain SQLite for the local/shared-local-filesystem deployment; do not present a network-mounted SQLite database as the remote-worker solution.
+- Define and implement how remote workers obtain required encryption material, per-target SSH identities, encrypted database/repository configuration, trust bundles, trusted scanner/vendor artifacts, evidence files and other centrally required state currently under `/data`. Separate worker-local disposable caches from persistent shared state. A common database URL alone must not count as complete remote-worker provisioning.
+- Provide an explicit supported secure provisioning/storage arrangement with access controls, rotation, backup and recovery instructions. Do not silently generate an unrelated encryption key on a worker or duplicate secrets into ordinary logs/environment examples. Detect unavailable/mismatched keys, storage and permissions before work begins.
+- Extend database activation and maintenance/migration safeguards across worker machines; a local filesystem maintenance lock must not imply that remote workers have stopped. Preserve the elected coordinator, atomic SQL job claims, per-host operation locks and existing recovery holds.
+
+### Worker management and installation
+
+- Give each worker a distinct identity, heartbeat, readiness/health state and configurable concurrency. Expose worker version, last contact, active jobs and meaningful connection/configuration failures in the controller, with administrator access and existing audit conventions.
+- Add graceful drain for maintenance/upgrades: stop accepting new jobs, finish or safely record active work, and preserve explicit recovery state after interruption. Detect lost workers without replaying destructive target operations or inventing successful completion.
+- Offer installation modes for complete installation, controller only and join as worker. Validate database/TLS connectivity, compatible schema/version, required secrets/storage and target/repository connectivity for the chosen role. Provide clear independent start, scale, drain, upgrade, removal and troubleshooting instructions.
+- Document required network paths and authentication for the selected topology. A worker-only machine must start successfully without local web/TLS services; existing SSH host verification and least-privilege target access continue to apply.
+
+### Acceptance and rollout
+
+- Validate all three Compose configurations and documented environment/GCP combinations, plus backward-compatible upgrades from the existing complete installation.
+- Exercise multiple same-host workers and a real separate-host worker against MySQL. Prove that competing workers do not execute the same job twice, per-host serialization remains intact, and coordinator/worker restart, database disconnection, lost locks and partial operations retain honest failure/recovery state.
+- Cover missing/mismatched secrets, inaccessible shared state, incompatible versions, heartbeat expiry, drain during active jobs, restart after interrupted mutation, migration with remote workers, and backup/restore. Do not mark this feature complete solely because the YAML files were split.
