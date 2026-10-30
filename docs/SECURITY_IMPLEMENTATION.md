@@ -2666,6 +2666,10 @@ The PR records those results and the actual merged commit when delivered.
 
 ## v0.10.0 — AI activity detail pages and scoped navigation
 
+Delivery: [PR #65](https://github.com/StealthCat/MrPatchy/pull/65), initial implementation
+[83a11f2c](https://github.com/StealthCat/MrPatchy/commit/83a11f2c6647f82efa908e5dd95cf018abaeb6d7).
+The PR records final-head validation and the actual merged main commit.
+
 Completion gate: inspected main `b62c4ce2` / [PR #64](https://github.com/StealthCat/MrPatchy/pull/64),
 its actual worker/evidence/UI diff, recorded exact-head nine-check success, current
 instructions/checkpoint and open PRs (none). The roadmap is unfinished. This batch
