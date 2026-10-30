@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0 — 2026-10-30
+
+1. Migrate fleet/server AI run inspections from long dialogs to Summary, Cost and Timeline pages with deep links, Back/Forward and responsive glass/mascot surfaces.
+2. Preserve scoped list purpose/page context during navigation and refresh; fix the malformed Process triage filter option.
+3. Verify server membership for scoped run details, retain shared-batch cost uncertainty, roles and read-only history; add backend/browser acceptance. The wider UI/security/deployment roadmap remains unfinished.
+
 ## 0.9.0 — 2026-10-30
 
 1. Add administrator boot/revision-checked cooperative worker drain/resume, persisted requests, observed states and audit events; stop new admission while assigned work finishes and coordinator leadership transfers.

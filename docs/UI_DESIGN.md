@@ -119,7 +119,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 | Fleet Overview, Servers and enrollment | Server directory cards/filter/pagination v0.7.0; verified landing v0.5.0 | Fleet dashboard and onboarding migration; complete loading/error-state system |
 | Server Overview and navigation | Route groups v0.6.0; Summary/System/Patching pages and stored-data cards v0.7.0 | Lifecycle/AI control content migration and whole-family acceptance |
 | Packages, repositories, patching and schedules | Existing pages; scoped filters v0.6.0 | Shared tables/forms, history/calendar detail pages, approvals and context retention |
-| Investigations and AI activity | Existing global/server pages | Focused evidence/run detail, cost/uncertainty/pause states |
+| Investigations and AI activity | Fleet/server run Summary/Cost/Timeline routes and scoped list context v0.10.0 | Investigation evidence/details and wider AI control/loading/pause state migration |
 | Security, integrity, startup and response | Existing scanner/baseline/vendor/file/process workflows | Split crowded workspaces and long dialogs; migrate review/recovery/export states |
 | Activity, audit and inventory/package history | Existing global/server pages | Dedicated detail views, shared pagination/filter/long-output components |
 | Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
@@ -208,3 +208,21 @@ a validated request body so dot-segment IDs remain controllable. Browser coverag
 now includes `.`/`..` and distinct case IDs, preserving the same confirmation,
 requested/observed states and glass/mascot surfaces. No visual asset or layout
 change is required for this transport correction.
+
+
+## AI run pages (v0.10.0)
+
+Fleet and server AI activity now open Summary, Cost and Timeline pages. Shared
+responsive navigation and facts replace the long inspection modal while retaining
+mascot artwork, glass surfaces, mint state accents and readable diagnostics.
+Purpose/page context survives navigation/refresh per scope; reload/sign-out clears
+it. Server detail requests verify membership. Costs remain saved estimates with
+partial/unavailable and shared-batch caveats, and viewing history performs no AI
+retry, approval or target action. Back/reload, roles, failure/missing history and
+stale response races are browser tested. This does not complete the full AI family.
+
+Reviewed renders: [summary desktop](screenshots/ai-run-v0100-desktop.jpg),
+[summary tablet](screenshots/ai-run-v0100-tablet.jpg),
+[summary phone](screenshots/ai-run-v0100-mobile.jpg),
+[cost](screenshots/ai-run-v0100-cost.jpg),
+[timeline](screenshots/ai-run-v0100-timeline.jpg).

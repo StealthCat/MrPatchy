@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.9.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.10.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -495,3 +495,16 @@ Changed/deleted evidence, foreign references, malformed boundaries and tampered
 exact boundaries remain rejected. Scanner-only and legacy v1 history stays readable;
 v1 plans whose numeric boundary already lost precision may require regeneration.
 Old evidence/digests are never rewritten to make approval succeed.
+
+
+### AI run pages (v0.10.0)
+
+AI activity opens saved runs in deep-linked Summary, Cost and Timeline pages, in
+both fleet and server workspaces. Server detail requests verify direct, shared or
+legacy scoring membership; unrelated runs return 404 in that context. List purpose
+and pagination are remembered separately for fleet and each server during navigation
+and refresh, clearing on reload/sign-out. Back/Forward and direct detail reloads
+work without sending AI requests. Cost estimates/partial/unavailable states retain
+their saved usage/rate limitations; shared batch cost covers the whole run.
+Historical AI views remain available under existing administrator and lifecycle
+controls. No retry, approval or target action occurs when browsing.
