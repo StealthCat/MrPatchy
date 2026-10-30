@@ -42,6 +42,16 @@ module.exports=async(page,capture)=>{
   await page.locator('[data-nav=servers]').click();await page.locator('.server-name').filter({hasText:'Atlas'}).click();
   await page.getByText('Atlas-machine',{exact:true}).waitFor();assert.equal(new URL(page.url()).hash,'#servers/'+alpha+'/overview');
   assert.equal(await page.locator('[data-nav=servers]').getAttribute('aria-current'),'page');
+
+  const originalName=hosts[0].name,originalArchitecture=hosts[0].architecture;
+  hosts[0].name='Atlas <img src=x onerror="window.__badServerHeader=true">';
+  hosts[0].architecture='<svg onload="window.__badServerHeader=true">';
+  await page.locator('#refresh-page').click();
+  await page.getByRole('heading',{name:hosts[0].name,exact:true}).waitFor();
+  assert.equal(await page.locator('#content img[src=x],#content svg[onload]').count(),0);
+  assert.equal(await page.evaluate(()=>window.__badServerHeader),undefined);
+  hosts[0].name=originalName;hosts[0].architecture=originalArchitecture;
+  await page.locator('#refresh-page').click();await page.getByRole('heading',{name:originalName,exact:true}).waitFor();
   await capture('server-overview');
   assert.equal(await tabs.locator(':scope > a').count(),4);
   const summary=tabs.locator('summary');

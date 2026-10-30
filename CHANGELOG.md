@@ -4,7 +4,8 @@
 
 1. Start the planned UI rework with a compact server workbench, four primary routes and a reusable mascot-supported grouped section disclosure, above policy content.
 2. Retain package filters per server/fleet view during navigation and refresh, with fresh installation selections and account-session reset.
-3. Establish the finite screen-migration inventory and navigation map; add keyboard, permissions, route-context and mobile/tablet/desktop checks. The full UI rework and broader security/deployment roadmap remain unfinished.
+3. Escape server names and reported architecture in workspace headers; cover malicious markup as literal text.
+4. Establish the finite screen-migration inventory and navigation map; add keyboard, permissions, route-context and mobile/tablet/desktop checks. The full UI rework and broader security/deployment roadmap remain unfinished.
 
 ## 0.5.1 — 2026-10-29
 

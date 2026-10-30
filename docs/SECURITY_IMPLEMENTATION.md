@@ -2379,7 +2379,9 @@ in-flow mobile grouping and transparency/forced-color fallbacks are included.
 Server/fleet package filters are kept separately in session memory during route
 changes and refresh; sign-out/reload clears them. Installation selections remain
 fresh and still require review. No provider/target calls or mutation decisions are
-introduced by navigation. No schema/helper upgrade is needed; rebuild controller.
+introduced by navigation. Review also fixed pre-existing unescaped server-name
+and architecture text in the workspace header, with malicious-markup browser
+coverage; endpoint/user-controlled text remains literal. No schema/helper upgrade is needed; rebuild controller.
 Local validation: full browser suite passed, the final navigation fixture passed
 at 320/390/768/1440 widths, 21 lifecycle/version tests passed, and JS syntax,
 whitespace and source-version consistency passed. Reviewed desktop/tablet/mobile
