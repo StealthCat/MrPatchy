@@ -3127,3 +3127,11 @@ discovery/provenance/classification; CVE exposure and known/unknown automatic
 protection with real-target recovery; retention/independent evidence. This is not
 full roadmap completion. Rebuild controller before matched workers; no agent/schema
 upgrade. Version v0.16.0 is synchronized; Git tags skipped, schedule unchanged.
+
+Delivery: [PR #71](https://github.com/StealthCat/MrPatchy/pull/71), initial source
+[8e339964](https://github.com/StealthCat/MrPatchy/commit/8e339964518534cfafdf539f40f697e4d83ffec6).
+The delivery PR records final local/CI outcomes and actual merged main commit.
+Validation reconciliation restored an adjacent recovery-summary helper removed
+during editing, and narrowed a generic snapshot test mock that had intercepted
+history details without identity fields. Identity checks and operational approvals
+were retained; final browser checks are required on the corrected source.

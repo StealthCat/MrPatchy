@@ -1,6 +1,6 @@
 const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
- const host=await page.evaluate(async()=> (await(await fetch('/api/hosts')).json())[0].id);
+ const host=await page.evaluate(async()=>{const rows=await(await fetch('/api/hosts')).json();if(rows.length)return rows[0].id;const s=await(await fetch('/api/session')).json();return(await(await fetch('/api/hosts',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':s.csrf},body:JSON.stringify({name:'Snapshot review',address:'192.0.2.88'})})).json()).id;});
  let role='admin',empty=false,fail=false,mismatch=false,writes=0;const reads=[];
  const handler=route=>{const u=new URL(route.request().url());reads.push(u);if(fail)return route.fulfill({status:404,json:{detail:'Snapshot expired <img src=x onerror=window.__snapshotInjected=true>'}});const detail=u.pathname.split('/history/')[1],offset=Number(u.searchParams.get('offset')||0),kind=u.searchParams.get('kind');return route.fulfill({json:detail?{id:detail,host_id:mismatch?'other-server':host,created:1000,observed:1000,inventory:{label:'<img src=x onerror=window.__snapshotInjected=true>'},evidence:{command:'untrusted <svg onload=window.__snapshotInjected=true>'}}:empty?[]:Array.from({length:offset?1:20},(_,i)=>({id:'record-'+(offset+i),created:1000+i,observed:1000+i}))});};
  const identity=async route=>{const r=await route.fetch();return route.fulfill({response:r,json:{...await r.json(),role}});};
