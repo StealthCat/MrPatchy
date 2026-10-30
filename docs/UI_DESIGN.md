@@ -116,8 +116,8 @@ shared components, readable states, role/workflow checks and inspected renders.
 |---|---|---|
 | Route map and shared navigation | Server route map and grouped disclosure, v0.6.0 | Apply shared navigation/context rules across families |
 | Shell, authentication and account | Existing sidebar, login, MFA/account dialogs | Global navigation, shell/typography/state-system migration; keyboard/mobile review |
-| Fleet Overview, Servers and enrollment | Existing pages; verified landing v0.5.0 | Full dashboard/list/onboarding migration, empty/error/progress states |
-| Server Overview and navigation | Compact header/route groups v0.6.0 | Summary cards, lifecycle/AI controls and dense content migration |
+| Fleet Overview, Servers and enrollment | Server directory cards/filter/pagination v0.7.0; verified landing v0.5.0 | Fleet dashboard and onboarding migration; complete loading/error-state system |
+| Server Overview and navigation | Route groups v0.6.0; Summary/System/Patching pages and stored-data cards v0.7.0 | Lifecycle/AI control content migration and whole-family acceptance |
 | Packages, repositories, patching and schedules | Existing pages; scoped filters v0.6.0 | Shared tables/forms, history/calendar detail pages, approvals and context retention |
 | Investigations and AI activity | Existing global/server pages | Focused evidence/run detail, cost/uncertainty/pause states |
 | Security, integrity, startup and response | Existing scanner/baseline/vendor/file/process workflows | Split crowded workspaces and long dialogs; migrate review/recovery/export states |
@@ -132,3 +132,38 @@ shared-visual-system/content work. Do not mark the full rework complete from thi
 navigation component alone.
 
 Reviewed fixture renders for this milestone: [desktop](screenshots/workbench-navigation-desktop.jpg), [tablet](screenshots/workbench-navigation-tablet.jpg), [mobile](screenshots/workbench-navigation-mobile.jpg). These show the open section chooser; closed-state navigation, roles, Back and server switching are also exercised by the browser suite.
+
+
+## Server directory and Overview pages (v0.7.0)
+
+The Servers page now presents 24 cards per page, with local search across name,
+address, architecture and package manager plus enabled/disabled filtering. Counts
+and status describe stored observations, not independent health certification.
+Each card keeps Open server, Manage/Inspect and authorized lifecycle actions; no
+new mutation endpoint or bulk action is introduced. Search/state/page position are
+held in account-session memory, clamped when results shrink, and cleared on
+sign-out/reload. Background refresh does not interrupt focus inside these filters.
+Deleted server history remains its own existing administrator page.
+
+Overview is now a focused set of route pages:
+
+| Page | Deep link | Content |
+|---|---|---|
+| Summary | `#servers/{id}/overview` | Stored metrics, identity summary, integrity findings and contextual mascot guidance |
+| System & collector | `#servers/{id}/overview/system` | Full identity, pinned fingerprint, OS report and independent collection timestamps |
+| Patching status | `#servers/{id}/overview/patching` | Queued/running/recovery counts, repository diagnostics, last submitted patch and timeline link |
+
+Existing Overview links open Summary. Back/Forward and reload retain deep links;
+server switching retains System/Patching where applicable. Breadcrumb/title and
+active local navigation identify the page. Unknown detail routes fall back to
+Summary. The existing administrator AI pause panel remains prominently visible;
+its control-content migration is still outstanding. Missing/stale/future timestamps
+never imply fresh data, and last submission is not presented as verified patching.
+
+The directory and Overview reuse the established palette, typography, mascot and
+shared surface tokens. Narrow action groups wrap as whole controls, title/status
+layout avoids pinching names, and dense card content has a solid reading surface.
+This milestone does not migrate the fleet dashboard, enrollment content, security
+workspaces or future deployment-health screens. Their finite inventory remains above.
+
+Reviewed fixture renders: [directory desktop](screenshots/server-directory-v070-desktop.jpg), [directory phone](screenshots/server-directory-v070-mobile.jpg), [Overview Summary](screenshots/server-overview-v070-summary.jpg), [System/collector tablet](screenshots/server-overview-v070-system.jpg), [Patching status phone](screenshots/server-overview-v070-patching.jpg). The browser suite also exercises empty results/fleet, malicious text, role restrictions, stale/future observations and recovery warnings.

@@ -1,6 +1,6 @@
 const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
- const now=Date.now()/1000,alpha='workspace-alpha',beta='workspace-beta';let role='admin',lateRelease,lateStarted;
+ const now=Date.now()/1000,alpha='workspace-alpha',beta='workspace-beta';let role='admin',lateRelease,lateStarted,recoveryCount=0;
  const hosts=[{id:alpha,name:'Atlas · Production',address:'192.0.2.41',port:22,architecture:'amd64',package_manager:'apt',state:'online',integrity:[],last_seen:now,last_repo:now,fingerprint:'SHA256:fixture',error:'',repo_error:''},{id:beta,name:'Borealis · Build',address:'192.0.2.42',port:22,architecture:'x86_64',package_manager:'rpm',state:'online',integrity:[],last_seen:now,last_repo:now,fingerprint:'SHA256:fixture',error:'',repo_error:''}];
  const scope=id=>id===alpha?'Atlas':'Borealis';
  const packageRow=id=>({id:id+':openssl',name:scope(id)+'-openssl:amd64',installed:'3.0.1',candidate:'3.0.2',priority:'high',priority_manual:false,held:false,dpkg_state:'install ok installed',due:now+86400,installation:{state:'scheduled',at:now+3600,reason:'Next approved maintenance window',schedule:'Nightly patching'},assessment:{state:'complete',score:75,explanation:'Security maintenance',confidence:'low',model:'fixture',completed:now}});
@@ -18,7 +18,7 @@ module.exports=async(page,capture)=>{
   if(request.method()!=='GET'&&(id||p.startsWith('/api/investigations/'))){writes.push({path:p,body:request.postDataJSON()});return route.fulfill({json:{ok:true,detail:'Queued'}});}
   if(id&&p.endsWith('/summary')){
    if(id===alpha&&lateStarted){const started=lateStarted;lateStarted=null;started();await new Promise(resolve=>lateRelease=resolve);}
-   return route.fulfill({json:{host:hosts.find(h=>h.id===id),system:{os:'PRETTY_NAME="Debian GNU/Linux 13"',architecture:'amd64',package_manager:id===alpha?'apt':'rpm',machine_id:scope(id)+'-machine',collected:now},collector:{collected:now,hashed_at:now,processes:143,managed_files:8},counts:{packages:1432,updates:1,held:2,overdue:0,unapproved:1,pending_ai:1,investigations:1},jobs:{queued:1},last_patch:{state:'complete',created:now-86400}}});
+   return route.fulfill({json:{host:hosts.find(h=>h.id===id),system:{os:'PRETTY_NAME="Debian GNU/Linux 13"',architecture:'amd64',package_manager:id===alpha?'apt':'rpm',machine_id:scope(id)+'-machine',collected:now},collector:{collected:now,hashed_at:now,processes:143,managed_files:8},counts:{packages:1432,updates:1,held:2,overdue:0,unapproved:1,pending_ai:1,investigations:1},jobs:{queued:1,recovery_required:recoveryCount},last_patch:{state:'complete',created:now-86400}}});
   }
   if(id&&p.endsWith('/security/ai-policy'))return route.fulfill({json:{paused:false,state:'eligible',global_enabled:true,revision:'',reason:''}});
   if(id&&p.endsWith('/packages'))return route.fulfill({json:[packageRow(id)]});
@@ -52,7 +52,36 @@ module.exports=async(page,capture)=>{
   assert.equal(await page.evaluate(()=>window.__badServerHeader),undefined);
   hosts[0].name=originalName;hosts[0].architecture=originalArchitecture;
   await page.locator('#refresh-page').click();await page.getByRole('heading',{name:originalName,exact:true}).waitFor();
+  const originalSeen=hosts[0].last_seen;hosts[0].last_seen=now+3600;
+  await page.locator('#refresh-page').click();await page.getByText('Server contact is stale, missing or future-dated',{exact:true}).waitFor();
+  hosts[0].last_seen=originalSeen;await page.locator('#refresh-page').click();await page.getByText('Recent server contact',{exact:true}).waitFor();
   await capture('server-overview');
+  await page.getByRole('link',{name:'System & collector',exact:true}).click();
+  await page.getByRole('heading',{name:'Collector & freshness',exact:true}).waitFor();
+  assert.match(page.url(),/overview\/system$/);
+  assert.equal(await page.getByRole('heading',{name:'At a glance',exact:true}).count(),0);
+  await page.locator('#server-workspace-select').selectOption(beta);await page.getByText('Borealis-machine',{exact:true}).waitFor();
+  assert.match(page.url(),/overview\/system$/);
+  await page.goBack();await page.getByText('Atlas-machine',{exact:true}).waitFor();
+  await page.reload();await page.getByRole('heading',{name:'Collector & freshness',exact:true}).waitFor();
+  await page.getByRole('link',{name:'Patching status',exact:true}).click();
+  await page.getByText('Most recently submitted patch:',{exact:false}).waitFor();
+  recoveryCount=1;await page.locator('#refresh-page').click();await page.getByRole('alert').filter({hasText:'Recovery is required'}).waitFor();
+  recoveryCount=0;await page.locator('#refresh-page').click();await page.getByRole('alert').filter({hasText:'Recovery is required'}).waitFor({state:'hidden'});
+  assert.equal(await page.getByRole('heading',{name:'Collector & freshness',exact:true}).count(),0);
+  await page.getByRole('link',{name:'Summary',exact:true}).click();await page.getByRole('heading',{name:'At a glance',exact:true}).waitFor();
+  for(const width of [320,768,1440]){
+   await page.setViewportSize({width,height:1000});
+   for(const [label,key] of [['Summary','summary'],['System & collector','system'],['Patching status','patching']]){
+    await page.getByRole('link',{name:label,exact:true}).click();
+    await page.locator('[data-overview-section="'+key+'"]').waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await capture('server-overview-'+key+'-'+width);
+   }
+  }
+  await page.setViewportSize({width:1440,height:1000});
+  await page.getByRole('link',{name:'Summary',exact:true}).click();await page.locator('[data-overview-section=summary]').waitFor();
+
   assert.equal(await tabs.locator(':scope > a').count(),4);
   const summary=tabs.locator('summary');
   await summary.focus();await page.keyboard.press('Enter');
@@ -145,6 +174,9 @@ module.exports=async(page,capture)=>{
    assert.equal(await tabs.getByRole('link',{name:'AI activity',exact:true}).count(),0);
    await open('Packages');await page.locator('.pkg-check').waitFor();assert.equal(await page.locator('.pkg-check').isDisabled(),nextRole==='viewer');
    await page.evaluate(id=>location.hash='#servers/'+id+'/maintenance',beta);await page.getByRole('heading',{name:'Administrator access required',exact:true}).waitFor();
+   await page.locator('[data-nav=servers]').click();await page.locator('.server-directory-card').first().waitFor();
+   assert.equal(await page.locator('[data-host-delete],[data-host-lifecycle]').count(),0);
+   assert.equal(await page.getByRole('button',{name:'Inspect ↗',exact:true}).count(),2);
   }
   role='admin';await page.evaluate(()=>location.hash='#servers/missing/overview');await page.getByRole('heading',{name:'Server not found.',exact:true}).waitFor();
  }finally{lateRelease?.();await page.unroute('**/api/**',handler);await page.setViewportSize({width:1440,height:1000});}

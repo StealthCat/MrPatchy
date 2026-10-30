@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 — 2026-10-29
+
+1. Migrate the Servers directory to searchable, filtered glass cards with 24-server pagination, retained view context and existing lifecycle controls.
+2. Split server Overview into deep-linked Summary, System & collector and Patching status pages, preserving selected context across server switching.
+3. Improve phone action wrapping, card-title readability, keyboard navigation and honest telemetry/recovery messaging; retain the mascot and operational safeguards.
+4. Add directory/Overview browser coverage and reviewed responsive renders; update the finite screen-migration checkpoint. The full application redesign and broader security/deployment roadmap remain unfinished.
+
 ## 0.6.0 — 2026-10-29
 
 1. Start the planned UI rework with a compact server workbench, four primary routes and a reusable mascot-supported grouped section disclosure, above policy content.
