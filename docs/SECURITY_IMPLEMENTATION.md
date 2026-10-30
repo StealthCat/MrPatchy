@@ -3759,3 +3759,48 @@ and long-name history/dialog renders were inspected. The complete browser suite 
 rerun for this final UI/test change. No broader styling or authorization change is
 included. Recheck all nine checks on the new final head; earlier-head success is
 not final acceptance.
+
+
+## v1.20.1 — Standalone migration registry regression
+
+User-reported blocker takes priority over the unfinished faster-triage batch. Fresh
+issue/PR inspection on main `a7187941` returned empty 100-item first pages; no GitHub
+issue number or issue closure is claimed. PR #78 and its actual changes/final-head
+validation remain the latest merged reference. The roadmap is still unfinished.
+
+Reproduced the exact reported refusal in separate startup and migration processes
+against unmodified main. Normal startup registers `ai_triage_retries`,
+`ai_behavior_assessments` and `ai_behavior_refreshes`; the offline command's second,
+stale registration list omitted all three. Existing tests preload `app.main` through
+conftest, filling shared SQLAlchemy metadata and masking the standalone defect.
+The reproduced dry run exited nonzero, preserved the source and created no target.
+
+The migration metadata entry point now calls the existing `db.register_models()`
+used by startup. It imports mappings only, without web startup, workers, DDL or
+source upgrades. Unknown tables/views, mismatched columns, offline assertion/lock,
+source read-only checks, running-job rejection, empty-destination rules, transaction
+verification and activation safeguards remain unchanged. No table is ignored or
+deleted. Source/README/changelog/UI/API become v1.20.1, major pinned at 1; Git tags
+remain skipped and no published-image claim is made.
+
+A new fresh-process regression initializes the current source independently, seeds
+all three affected tables, and runs dry-run/copy in new interpreters without importing
+main/worker. It verifies table fingerprints, retained assessment inputs, retry state
+and refresh approval intent, plus rejection of unknown tables/views. The same test
+fails on archived main with the exact reported error and passes with the shared
+registry. Focused/full and all nine exact-head results and actual merge references
+are recorded in the delivery PR; do not infer a successful merge from this checkpoint.
+
+The earlier v1.21.0 identity-bound follow-up/context roadmap batch is isolated in
+`feat/verified-triage-context-v1.21.0`, not part of this fix and not merged or claimed
+complete. It must be reconciled with this patch before later publication; retain
+major 1 and the actual current version sequence. No unrelated roadmap PR should
+be merged while this reported migration fix is unfinished. The broader canonical
+cache, threaded execution, shared spending/throttle controls and remaining roadmap
+stay planned. Schedule unchanged.
+
+Delivery: [PR #79](https://github.com/StealthCat/MrPatchy/pull/79), initial published
+fix [d95fbd06](https://github.com/StealthCat/MrPatchy/commit/d95fbd0684916c9ac7b67e3b0c9eef63883da701).
+The PR records exact final head/tree, all nine CI results, full local validation
+and actual merged commit (or precise unfinished blockers). Finish this fix before
+resuming isolated roadmap work; never use earlier-head checks to authorize a merge.

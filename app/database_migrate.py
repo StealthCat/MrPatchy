@@ -1,7 +1,6 @@
 """Offline, verified database copy. Never deletes source data or overwrites destination rows."""
 import argparse
 import hashlib
-import importlib
 import json
 from pathlib import Path
 import sys
@@ -18,10 +17,10 @@ class MigrationError(ValueError):
 
 
 def metadata():
-    # Register every durable model, without importing main or starting workers.
-    for name in ('identity', 'operations', 'releases', 'scheduling', 'ai_runs', 'update_scores', 'package_history', 'incidents', 'evidence_vault', 'quarantine', 'response_monitor', 'response_processes', 'process_response', 'repair_preparation', 'repair_staging', 'repair_publication', 'response_health', 'service_monitor', 'execution_scans'):
-        importlib.import_module('app.' + name)
-    from .db import Base
+    # Startup and offline tools must use the same registry. A second list can
+    # silently omit models when a fresh CLI process has not imported the web app.
+    from .db import Base, register_models
+    register_models()
     return Base.metadata
 
 

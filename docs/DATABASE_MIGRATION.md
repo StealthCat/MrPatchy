@@ -56,3 +56,18 @@ A copy without `--activate` is supported for validation/export; it does not swit
 Recovery activation deliberately uses the **new restore destination** (explicit `DATABASE_URL` for MySQL, `mrpatchy.db` in the new data directory for SQLite). It does not reinstall the old active/staged profiles from the bundle, which may refer to obsolete paths or credentials. Keep the bundle profiles as recovery reference; configure future migrations again after restore.
 
 For rollback **before any writes to the new database**, stop all replicas and restore the original active profile together with the matching original database, or remove the newly activated profile if the original deployment used `DATABASE_URL`/the SQLite default. After the new database has accepted writes, returning to the old source loses those writes: migrate back into a new empty destination instead. Keep database snapshots and encryption/SSH/TLS material together.
+
+## Current-schema refusal in older migration commands
+
+The standalone migration command in v1.19.0/v1.20.0 can reject an already-upgraded
+source because its separate model list omits AI retry and assessment/refresh tables.
+Restarting that same version does not correct this defect. v1.20.1 uses the same
+model registry as startup, including these retained records. Update/rebuild the
+migration container from the corrected source and repeat the offline dry run before
+copy/activation. Keep all app/workers stopped during the migration as described above.
+
+Do not delete the AI tables, bypass schema validation, or overwrite a nonempty
+destination to work around this message. Genuine version/schema mismatches and
+unknown tables/views still require review; this fix does not automatically upgrade
+a source schema or relax the copier's safeguards. Source data is preserved, and a
+refused dry run does not activate a destination.
