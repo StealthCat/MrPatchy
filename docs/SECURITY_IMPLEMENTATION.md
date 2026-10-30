@@ -3617,3 +3617,13 @@ Do not treat this retry submilestone as completion of finite milestone 1 or the
 faster-triage program. Notifications, remote deployment/shared state/health/GCP,
 startup/provenance, malware/CVE automatic containment and full UI work remain
 unfinished. Finish/reconcile this delivery PR before starting new roadmap work.
+
+
+Delivery: [PR #77](https://github.com/StealthCat/MrPatchy/pull/77), initial published
+source [e7c9afd4](https://github.com/StealthCat/MrPatchy/commit/e7c9afd4f95e93a5f4af9d85952a76fe216e3ab6).
+The versioned delivery PR records the final published head/tree, final local and
+SQLite/MySQL/browser/native validation and actual merge SHA, or precise unfinished
+state. Check this PR before any new implementation; the initial source reference
+is not a claim that CI finished or that a merge occurred. All nine applicable
+checks must succeed on the final head, with current main, title/label and
+mergeability rechecked. No source edits are added after those final checks.
