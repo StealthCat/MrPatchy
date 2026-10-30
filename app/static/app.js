@@ -2,6 +2,7 @@
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const packageViewContext=new Map();
 const aiListContext=new Map();
+const startupViewContext=new Map();
 const serverListContext={q:"",state:"all",offset:0};
 let csrf='',hosts=[],selected='',page='overview',cfg={},toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
@@ -14,7 +15,7 @@ function toast(message){
 }
 function showLogin(){
  sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
- packageViewContext.clear();aiListContext.clear();Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';cfg={};currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
+ packageViewContext.clear();aiListContext.clear();startupViewContext.clear();Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';cfg={};currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
  $('#toast').style.display='none';clearTimeout(toastTimer);
  $('#login').classList.remove('hidden');$('#shell').classList.add('hidden');
