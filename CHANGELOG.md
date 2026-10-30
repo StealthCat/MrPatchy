@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0 — 2026-10-30
+
+1. Add administrator boot/revision-checked cooperative worker drain/resume, persisted requests, observed states and audit events; stop new admission while assigned work finishes and coordinator leadership transfers.
+2. Configure bounded startup job/poll concurrency in the actual executors and admission limits, preserving defaults, serialized AI and per-host/recovery safeguards.
+3. Put worker controls beside identities, explain request/acknowledgement and queued-poll/notification state, and validate process, race, permission and responsive workflows. Remote deployment/readiness/migration acceptance remains planned.
+
 ## 0.8.0 — 2026-10-30
 
 1. Register worker runtime identities, boot IDs, source versions, bounded scheduler heartbeats and actual pool/activity snapshots; reject duplicate configured identities and stop scheduling after identity-lock loss.

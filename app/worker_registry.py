@@ -9,6 +9,7 @@ import re
 import time
 import uuid
 from functools import lru_cache
+from fastapi import HTTPException
 from sqlalchemy import select
 from .coordination import Lock
 from .db import Session,Setting,audit
@@ -17,11 +18,50 @@ log=logging.getLogger(__name__)
 PREFIX='worker-registry:'
 FRESH_SECONDS=120
 POOL_CAPACITY={'jobs':2,'polls':8,'ai':1}
+CONTROL_PREFIX='worker-control:'
 GAPS=[
     'Self-reported scheduler-loop liveness; storage, secrets, target access and operational readiness are not independently assessed.',
     'Only registered workers are listed. Expected but never registered nodes, controllers, endpoint agents and GCP integration nodes are not inventoried here.',
-    'Drain, configurable concurrency, remote-worker shared state and cross-host maintenance acceptance remain planned.',
+    'Drain is boot-specific and cooperative: assigned work finishes; it does not stop a process or certify safe maintenance. Remote shared state and cross-host maintenance acceptance remain planned.',
 ]
+
+def capacities():
+    result=dict(POOL_CAPACITY)
+    for key,env,maximum in [('jobs','MRPATCHY_JOB_CONCURRENCY',8),('polls','MRPATCHY_POLL_CONCURRENCY',32)]:
+        value=os.getenv(env,str(result[key]))
+        if not re.fullmatch(r'[0-9]{1,2}',value) or not 1<=int(value)<=maximum:raise ValueError(env+' must be an integer from 1 to '+str(maximum))
+        result[key]=int(value)
+    return result
+
+def control_key(identity):return CONTROL_PREFIX+hashlib.sha256(identity.encode()).hexdigest()
+
+def control_value(s,identity,boot):
+    row=s.get(Setting,control_key(identity))
+    if not row:return {'revision':0,'action':'resume'}
+    data=row.value
+    if not isinstance(data,dict):raise ValueError('Worker control record is invalid; admission blocked')
+    if data.get('boot_id')!=boot:return {'revision':0,'action':'resume'}
+    if data.get('action') not in ('drain','resume') or type(data.get('revision')) is not int or not 1<=data['revision']<=1_000_000_000:raise ValueError('Worker control record is invalid; admission blocked')
+    return {'revision':data['revision'],'action':data['action']}
+
+def request_control(identity,boot,revision,action,reason,username):
+    if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',identity):raise ValueError('Invalid worker identity')
+    if action not in ('drain','resume'):raise ValueError('Invalid worker control')
+    reason=reason.strip()
+    if not 10<=len(reason)<=1000:raise ValueError('Give a reason of 10–1,000 characters')
+    with Lock('worker-control:'+identity),Session() as s:
+        row=s.get(Setting,record_key(identity));data=row.value if row and isinstance(row.value,dict) else {}
+        heartbeat=data.get('heartbeat');now=time.time()
+        if data.get('id')!=identity or data.get('boot_id')!=boot:raise HTTPException(409,'Worker boot changed or is unavailable; refresh before controlling it')
+        if data.get('version')!=source_version() or data.get('state') not in ('reporting','draining','drained') or not isinstance(heartbeat,(int,float)) or isinstance(heartbeat,bool) or not math.isfinite(heartbeat) or not -5<=now-heartbeat<=FRESH_SECONDS:raise HTTPException(409,'Worker is stale, stopped, unknown or a different version; refresh and inspect it')
+        previous=control_value(s,identity,boot)
+        if revision!=previous['revision']:raise HTTPException(409,'Worker control changed; refresh before trying again')
+        if revision>=1_000_000_000:raise HTTPException(409,'Worker control revision exhausted; restart the worker')
+        value={'boot_id':boot,'revision':revision+1,'action':action,'requested':now}
+        s.merge(Setting(key=control_key(identity),value=value))
+        audit(s,'worker '+action+' requested',username+' '+identity+' '+boot+' '+str(revision+1)+' '+reason)
+        s.commit()
+    return {'ok':True,'boot_id':boot,'revision':revision+1,'action':action}
 
 @lru_cache(maxsize=1)
 def source_version():
@@ -47,7 +87,7 @@ class Registration:
         self.role=role;self.boot=uuid.uuid4().hex;self.started=time.time();self.monotonic=time.monotonic();self.last=0
         self.deployment=os.getenv('MRPATCHY_DEPLOYMENT_TYPE','process')
         if self.deployment not in ('docker','process'):raise ValueError('Unsupported reported deployment type')
-        self.version=source_version();self.lock=Lock('worker-identity:'+self.id)
+        self.version=source_version();self.capacity=capacities();self.draining=False;self.control_revision=0;self.last_state=None;self.lock=Lock('worker-identity:'+self.id)
     def __enter__(self):
         if not self.lock.acquire(False):raise ValueError('Worker identity is already in use; choose a unique MRPATCHY_WORKER_ID')
         try:self.write('reporting',False,[],0,False,True)
@@ -57,23 +97,33 @@ class Registration:
         try:owned=self.lock.owned()
         except Exception as error:raise IdentityLost('Unable to verify worker identity lock; refusing scheduler tick') from error
         if not owned:raise IdentityLost('Worker identity lock lost; refusing scheduler tick')
-    def write(self,state,coordinator,jobs,polls,ai_active,initial=False):
+    def write(self,state,coordinator,jobs,polls,ai_active,initial=False,pending_polls=0,notification_active=False,observed_action=None):
         self.check_identity()
         value={'id':self.id,'boot_id':self.boot,'role':self.role,'deployment_type':self.deployment,'version':self.version,
                'started':self.started,'heartbeat':time.time(),'uptime_seconds':max(0,time.monotonic()-self.monotonic),
                'state':state,'coordinator':bool(coordinator),'active_jobs':list(jobs)[:16],
-               'active_polls':polls,'ai_active':bool(ai_active),'job_capacity':POOL_CAPACITY['jobs'],'poll_capacity':POOL_CAPACITY['polls'],'ai_capacity':POOL_CAPACITY['ai'],
+               'active_polls':polls,'pending_polls':pending_polls,'notification_active':bool(notification_active),'ai_active':bool(ai_active),'job_capacity':self.capacity['jobs'],'poll_capacity':self.capacity['polls'],'ai_capacity':self.capacity['ai'],
+               'control_revision':self.control_revision,
                'readiness':'not_assessed'}
         with Session() as s:
             s.merge(Setting(key=record_key(self.id),value=value))
             if initial:audit(s,'worker registered',self.id+' '+self.boot+' '+self.role)
             if state=='stopped':audit(s,'worker stopped',self.id+' '+self.boot)
+            if observed_action:audit(s,'worker '+observed_action+' observed',self.id+' '+self.boot+' '+str(self.control_revision))
+            if state=='drained' and self.last_state!='drained':audit(s,'worker drained',self.id+' '+self.boot+' '+str(self.control_revision))
             s.commit()
-        self.last=time.monotonic()
-    def heartbeat(self,coordinator,jobs,polls,ai_active):
-        # The ownership check is on every tick; storage writes are bounded to 15 seconds.
+        self.last=time.monotonic();self.last_state=state
+    def heartbeat(self,coordinator,jobs,polls,ai_active,pending_polls=0,notification_active=False):
+        # The ownership check is on every tick; periodic writes are every 15 seconds, with immediate state/control changes.
         self.check_identity()
-        if time.monotonic()-self.last>=15:self.write('reporting',coordinator,jobs,polls,ai_active)
+        with Session() as s:control=control_value(s,self.id,self.boot)
+        previous_revision=self.control_revision;changed=control['revision']!=previous_revision
+        self.control_revision=control['revision'];self.draining=control['action']=='drain'
+        state=('draining' if jobs or polls or pending_polls or ai_active or notification_active else 'drained') if self.draining else 'reporting'
+        if changed or state!=self.last_state or time.monotonic()-self.last>=15:
+            try:self.write(state,coordinator and not self.draining,jobs,polls,ai_active,pending_polls=pending_polls,notification_active=notification_active,observed_action=control['action'] if changed else None)
+            except Exception:self.control_revision=previous_revision;raise
+        return self.draining
     def __exit__(self,*args):
         try:self.write('stopped',False,[],0,False)
         except Exception:log.warning('Unable to record worker shutdown')
@@ -89,9 +139,9 @@ def page(offset=0,now=None):
         items=[]
         for row in rows[:50]:
             data=row.value if isinstance(row.value,dict) else {}
-            fields=('id','boot_id','role','deployment_type','version','started','heartbeat','uptime_seconds','coordinator','active_jobs','active_polls','ai_active','job_capacity','poll_capacity','ai_capacity')
+            fields=('id','boot_id','role','deployment_type','version','started','heartbeat','uptime_seconds','coordinator','active_jobs','active_polls','pending_polls','notification_active','ai_active','job_capacity','poll_capacity','ai_capacity','control_revision')
             item={k:data.get(k) for k in fields};heartbeat=data.get('heartbeat')
-            for key in ('started','heartbeat','uptime_seconds','active_polls','job_capacity','poll_capacity','ai_capacity'):
+            for key in ('started','heartbeat','uptime_seconds','active_polls','pending_polls','job_capacity','poll_capacity','ai_capacity','control_revision'):
                 value=item[key]
                 if not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<0:item[key]=None
             item['id']=data.get('id') if isinstance(data.get('id'),str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',data['id']) else row.key[len(PREFIX):]
@@ -100,10 +150,16 @@ def page(offset=0,now=None):
             if age is None or age < -5:state,reason='unknown','Heartbeat is missing, invalid or in the future; check clocks and runtime logs.'
             elif data.get('state')=='stopped':state,reason='stopped','Worker reported a graceful stop; this is retained registration history.'
             elif age>FRESH_SECONDS:state,reason='stale','Heartbeat expired; worker liveness and in-flight outcomes are unknown. Review operations before recovery.'
-            elif data.get('state')!='reporting':state,reason='unknown','Worker report state is not recognized.'
+            elif data.get('state') not in ('reporting','draining','drained'):state,reason='unknown','Worker report state is not recognized.'
             elif not isinstance(data.get('version'),str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',data['version']):state,reason='unknown','Reported worker version is missing or unrecognized.'
             elif data.get('version')!=source_version():state,reason='version_mismatch','Reported worker version differs from this controller; compatibility is not certified.'
+            elif data.get('state')=='draining':state,reason='draining','Worker observed drain; assigned work is finishing. New assignments are blocked.'
+            elif data.get('state')=='drained':state,reason='drained','Worker reports no assigned work and admission paused. Process remains running; readiness is not assessed.'
             else:state,reason='reporting','Scheduler loop reported recently; operational readiness is not independently assessed.'
+            try:control=control_value(s,item['id'],data.get('boot_id'))
+            except ValueError:control={'revision':None,'action':'invalid'}
+            item['control']=control
+            item['controllable']=state in ('reporting','draining','drained') and bool(re.fullmatch(r'[0-9a-f]{32}',str(data.get('boot_id','')))) and row.key==record_key(item['id']) and control['revision'] is not None
             item.update(state=state,reason=reason,age_seconds=max(0,age) if age is not None else None,readiness='not_assessed')
             items.append(item)
     return {'items':items,'more':len(rows)>50,'fresh_seconds':FRESH_SECONDS,'gaps':GAPS}

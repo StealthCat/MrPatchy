@@ -2482,3 +2482,76 @@ health and dedicated GCP node, remaining UI migrations, comprehensive startup
 provenance/classification, CVE and general-malware automatic containment,
 retention/immutable storage and native/real-target recovery acceptance. Fresh loop
 reports or a YAML role flag do not complete those requirements.
+
+
+## v0.9.0 — cooperative worker drain and configured concurrency
+
+Completion-gate base: main `076ea6cf` ([PR #63](https://github.com/StealthCat/MrPatchy/pull/63)),
+source 0.8.0. Its actual registry/worker/entrypoint/UI/test diff, checkpoint,
+recorded validation and all nine successful exact-head checks were inspected;
+no PR was open and no Git tags existed. Worker drain and configurable concurrency
+were concrete unfinished items in the deployment roadmap. The selected batch
+implements these together with operational UI and focused acceptance. The full
+roadmap is not complete.
+
+Administrator-only controls persist a desired drain/resume revision in existing
+settings rows, keyed by exact worker identity hash and bound to the displayed boot.
+Requests require a reason, current revision, fresh compatible report, role and CSRF.
+A cross-process control lock serializes competing requests. Changed/stopped/stale/
+unknown boots and mismatched versions reject control. A new boot does not inherit
+the previous boot's request, including for stable identities. Requests are audit
+records, not job cancellation, process shutdown or maintenance certification.
+
+Before each admission tick, the worker reads current control state; uncertainty
+blocks that tick. A tick already in progress can finish. Observed drain releases
+the coordinator role and prevents new scheduling, job/release-observation claims,
+polls, AI cycles, notifications and cleanup. Already assigned work finishes under
+existing locks, including queued executor polls, notifications and a whole assigned
+AI cycle. Draining/drained state includes all assigned work rather than only running
+threads. Fresh drained means this boot self-reports no assigned work; it is not
+independent readiness, a fleet-wide maintenance lock or proof of successful target
+operations. Stop/loss and interrupted mutations retain existing honest recovery
+semantics. Resume respects existing global/per-server AI and lifecycle/response gates.
+All-worker drain pauses background work, though controller queue submissions remain
+available. Requests, observed control revisions, drained transitions and stops are
+audited. Failed acknowledgement writes retry without admitting work or inventing
+acknowledgement. No destructive response action is authorized by these controls.
+
+`MRPATCHY_JOB_CONCURRENCY` supports 1–8 (default 2),
+`MRPATCHY_POLL_CONCURRENCY` 1–32 (default 8), read at runtime startup. Invalid
+values refuse startup. Executors and both new-job and release-observation admission
+use the same configured limits; AI remains one task. The complete Compose worker
+forwards the settings. The UI reports these actual limits, running and queued polls,
+notification assignment, requested and observed revisions. Controls stay with the
+identity before horizontal scrolling; glass/mascot styling and explained stale/
+unknown/compatibility states remain. Rebuild/recreate controller and workers together;
+no schema or agent upgrade is needed. Settings and audit records already participate
+in offline database migration. Git tags remain omitted by user instruction.
+
+Validation includes real local process drain/resume/SIGTERM, exclusive identities,
+concurrent stale-revision rejection, restart isolation, role/CSRF/input checks,
+unreadable/invalid control, failed acknowledgement retry, coordinator handoff while
+assigned work finishes, no claims while drained, resume with one-job admission,
+capacity bounds, audit and no target/provider contact from control requests.
+Browser checks cover exact identity/boot/revision requests, double submission,
+pending acknowledgement, stale conflict, resume, unauthorized controls and actual
+320/768/1440 layouts plus confirmations. Final validation and delivery references
+are recorded below and in the resulting versioned PR.
+
+Remaining deployment work: separate deployment files and complete/controller/join
+installer modes; secure remote keys/profiles/trust/artifacts/evidence/shared state;
+readiness and schema/protocol compatibility admission gates; expected/controller/
+endpoint/GCP health and dedicated GCP node; cross-host migration, storage and drain/
+interrupted-mutation acceptance. Local cooperative drain/configurable pools do not
+complete remote deployment or the unified dashboard. Remaining security work includes
+comprehensive startup discovery/provenance/AI classification, CVE monitoring and
+evidence-qualified automatic containment, known/unknown malware protection,
+retention/immutable storage and native/real-target recovery. The finite full-UI
+migration inventory remains unfinished in UI_DESIGN.md.
+
+Local validation: full Python suite **1,267 passed / 7 skipped**; focused registry/
+control suite **33 passed**. Full browser suite and focused worker control flows
+passed, and five reviewed renders are linked in UI_DESIGN.md. Python compilation,
+JS/shell syntax, whitespace and source-version consistency passed. All applicable
+GitHub checks must pass on the exact final PR head before merge; the PR records
+those checks and the actual merged commit.

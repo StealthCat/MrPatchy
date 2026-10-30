@@ -123,7 +123,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 | Security, integrity, startup and response | Existing scanner/baseline/vendor/file/process workflows | Split crowded workspaces and long dialogs; migrate review/recovery/export states |
 | Activity, audit and inventory/package history | Existing global/server pages | Dedicated detail views, shared pagination/filter/long-output components |
 | Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
-| Deployment, worker and GCP health | Worker registration/liveness page v0.8.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
+| Deployment, worker and GCP health | Worker registration/liveness and cooperative controls v0.9.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
 | Whole-application acceptance | Not complete | All rows migrated; cross-role workflows, state/asset/readability consistency and actual mobile/tablet/desktop review |
 
 No additional mascot artwork is required for this bounded route milestone; it
@@ -182,3 +182,23 @@ planned all-component deployment-health dashboard. Existing operations/recovery
 controls stay on their original page, and no Docker-daemon access is added.
 
 Reviewed fixture renders: [desktop](screenshots/worker-registrations-v080-desktop.jpg), [tablet](screenshots/worker-registrations-v080-tablet.jpg), [phone](screenshots/worker-registrations-v080-mobile.jpg). Readiness/coverage text stays visible above the table; horizontal scrolling exposes remaining columns on narrow screens.
+
+
+## Worker admission controls (v0.9.0)
+
+The registered-worker page now keeps Drain/Resume controls beside each identity,
+visible before horizontal table scrolling. Reasons and exact boot information are
+reviewed in a responsive confirmation, and requested/observed revisions distinguish
+an accepted request from runtime acknowledgement. Running/queued polls and assigned
+notification work explain why a boot is still draining. Stale/unknown/stopped or
+incompatible runtimes offer no control. Conflicts retain the form and actionable
+error; roles, native form validation and double-submit guards remain enforced.
+Glass surfaces, mint/amber state treatments and existing raccoon artwork are reused.
+
+This migrates the new operational controls only; the all-component dashboard and
+whole-application acceptance remain planned. Reviewed fixture renders:
+[desktop](screenshots/worker-controls-v090-desktop.jpg),
+[tablet](screenshots/worker-controls-v090-tablet.jpg),
+[phone](screenshots/worker-controls-v090-mobile.jpg),
+[desktop review](screenshots/worker-drain-review-v090-desktop.jpg),
+[phone review](screenshots/worker-drain-review-v090-mobile.jpg).

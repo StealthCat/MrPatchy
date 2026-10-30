@@ -383,3 +383,9 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .badge.reporting { color:var(--mint);background:#9ee8d114; }
 .badge.stale,.badge.unknown,.badge.version_mismatch { color:var(--amber);background:#f7cf8a14; }
 .badge.stopped { color:var(--muted);background:#a7bdc714; }
+
+/* Keep cooperative worker controls beside identity, reachable before horizontal scrolling. */
+.worker-registry-table td:first-child { min-width:180px; }
+.worker-registry-table .worker-control { margin-top:10px; }
+.badge.draining { color:var(--amber);background:#f7cf8a14; }
+.badge.drained { color:var(--mint);background:#9ee8d114; }

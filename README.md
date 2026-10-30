@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.8.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.9.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -406,12 +406,12 @@ Server workspaces use primary **Overview / Packages / Security / Settings** tabs
 The Servers directory has local name/address/architecture search, enabled/disabled filters and 24-server pages. Filters/page position survive navigation and refresh while signed in, then clear on reload/sign-out. Each server’s Overview has **Summary**, **System & collector**, and **Patching status** pages with deep links (`#servers/ID/overview/system`, `#servers/ID/overview/patching`); switching servers keeps the selected Overview page. Server controls and backend verification/approval rules are unchanged.
 
 
-### Worker registrations (v0.8.0)
+### Worker registrations and cooperative drain (v0.9.0)
 
 Administrators can open **Activity → Workers** (`#activity/workers`) for registered
 scheduler runtime self-reports: identity/boot ID, source version, configured runtime
 type, heartbeat, uptime, coordinator flag and actual executor capacity/active work
-at the report time. Reports are written at most every 15 seconds and become stale
+at the report time. Periodic reports are written every 15 seconds, with immediate control/state transitions, and become stale
 after 120 seconds. Future heartbeats beyond a five-second tolerance are unknown;
 version mismatch is shown separately. Readiness remains **not assessed**: these
 reports do not verify containers, secrets/shared storage, targets or completed jobs.
@@ -436,8 +436,47 @@ loss is inferred only from stale heartbeat, never successful remediation.
 Rebuild/restart the controller and workers to enable reporting. No schema migration
 or target-helper update is needed: records use the existing settings/audit tables,
 which are already included in offline database migration. Existing job claims,
-per-host/recovery locks, coordinator election, concurrency (2 jobs/8 polls/1 AI task)
-and operational approval boundaries are unchanged. Supported separate-host workers,
-shared secrets/artifacts/state preflight, drain/concurrency controls, expected-node
+per-host/recovery locks, coordinator election and operational approval boundaries
+are preserved. Defaults remain 2 jobs/8 polls/1 AI task. Supported separate-host workers,
+shared secrets/artifacts/state preflight, expected-node
 inventory, controller/endpoint/GCP health and full deployment acceptance remain
 planned; this view does not complete remote-worker deployment or the unified dashboard.
+
+
+Administrators can **Drain worker** or **Resume admission** beside its identity in
+Activity → Workers. Review the exact boot and enter a reason. Requests persist in
+the database and audit trail, target that boot only, and reject stale revisions,
+stale/stopped workers and source-version mismatches. A restart creates a new boot
+that does **not** inherit the old drain request, even with a stable worker ID.
+
+The UI separates the requested revision from the worker's observed revision.
+The worker checks control state before each admission tick (normally every second),
+then releases coordinator leadership and stops scheduling/claiming new jobs, polls,
+AI tasks, notifications and cleanup work. A tick already in progress can finish.
+Assigned work, including queued executor polls and a whole assigned AI cycle,
+continues under its existing locks/policies. **Draining** means assigned work is
+finishing; **drained** means this boot reports no assigned work and admission is
+paused. Neither means the process exited or that maintenance/recovery is safe.
+Refresh to verify the current boot, observed revision and fresh state. If all workers
+are drained, background collection/schedules/scanning/AI/notifications wait; the
+controller can still accept operations into the database queue. Resume respects
+all existing global AI, server AI pause, lifecycle and response controls.
+
+Unreadable/invalid control state blocks the current admission tick. Heartbeats
+then expire if reporting cannot resume; no operation is marked successful as a
+result. Requests, worker acknowledgement, drained transitions and stops are audited.
+Use existing operation/recovery views for failures; drain never clears a hold or
+replays an interrupted mutation. Abrupt process loss retains existing recovery
+semantics. This is a local/shared-state foundation, not remote maintenance acceptance.
+
+Set startup-only `MRPATCHY_JOB_CONCURRENCY` (1–8, default 2) and
+`MRPATCHY_POLL_CONCURRENCY` (1–32, default 8) in `.env` for the complete Compose
+worker, then rebuild/recreate it. Direct worker/embedded processes can use the same
+environment variables. Invalid values refuse startup. These limits apply to real
+executors and job admission; AI remains serialized at one task. Poll/notification
+work shares the poll pool, and already assigned polls may queue behind its limit.
+Higher limits increase target/database/controller load; per-host locks still apply.
+The UI reports actual configured limits. Controller concurrency editing, cross-host
+state preflight, remote migration/drain recovery acceptance and other component
+health remain planned. Rebuild controller and workers together; no target-agent or
+schema upgrade is required. No Git tags are created.
