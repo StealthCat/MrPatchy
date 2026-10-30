@@ -3187,3 +3187,9 @@ known/unknown automatic protection with real-target recovery; retention and
 independent evidence. No full-roadmap completion is claimed. Version v0.17.0 is
 synchronized. Rebuild controller before matched workers; no agent/schema upgrade.
 Git tags skipped; existing schedule unchanged.
+
+Delivery: [PR #72](https://github.com/StealthCat/MrPatchy/pull/72), initial source
+[89d849d7](https://github.com/StealthCat/MrPatchy/commit/89d849d798f0115cef99f7307b56ea8a7264644f).
+The PR records corrected full local regressions, final-head CI and the actual
+merged main commit. No source changes may be added after validation without
+rerunning applicable checks.
