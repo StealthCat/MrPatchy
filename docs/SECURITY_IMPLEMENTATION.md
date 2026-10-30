@@ -2724,6 +2724,10 @@ before merge; its delivery record retains the actual merge and validation links.
 
 ## v0.11.0 — Stored startup Files and Coverage pages
 
+Delivery: [PR #66](https://github.com/StealthCat/MrPatchy/pull/66), initial implementation
+[93bd1a34](https://github.com/StealthCat/MrPatchy/commit/93bd1a344fb0d1f6e25328de04b6f096d6a999ea).
+The PR records final-head validation and the actual merged main commit.
+
 Completion gate: inspected current main `bf34c2c6` /
 [PR #65](https://github.com/StealthCat/MrPatchy/pull/65), its actual AI activity
 changes and recorded exact-final-head nine-check validation, repository instructions,
