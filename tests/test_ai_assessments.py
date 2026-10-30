@@ -230,3 +230,16 @@ def test_retained_result_and_refresh_completion_share_the_result_transaction(adm
     data=current(admin);assert data['current']['verdict']=='error' and data['current']['refresh']['id']
     assert len(data['items'])==1 and 'private transaction details' not in data['current']['analysis']
     with Session() as s:assert not list(s.scalars(select(ai_assessments.Assessment).where(ai_assessments.Assessment.source=='ai')))
+
+
+def test_concurrent_refresh_requests_create_one_intent_and_preserve_one_prior_result(admin,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    seed();revision=current(admin)['current']['revision']
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:pytest.fail('Queueing must not call AI'))
+    def send(_):
+        return admin.post('/api/investigations/subject/retriage',json={'expected_revision':revision,'reason':'Concurrent reviewed refresh'}).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:assert sorted(pool.map(send,range(2)))==[200,409]
+    with Session() as s:
+        assert len(list(s.scalars(select(ai_assessments.Refresh))))==1
+        assert len(list(s.scalars(select(ai_assessments.Assessment))))==1
+        assert s.get(Behavior,'subject').verdict=='pending' and not s.get(Behavior,'subject').approved

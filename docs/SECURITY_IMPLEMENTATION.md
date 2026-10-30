@@ -3746,3 +3746,16 @@ subtests. The delivery PR records the final published head/tree, complete browse
 and all nine applicable SQLite/MySQL/native CI results, and actual merge SHA or
 precise unfinished state. Finish this PR before new cache/threading work. Do not
 infer a successful merge from this source reference or earlier-head checks.
+
+
+Final boundary acceptance adds simultaneous duplicate refresh POSTs: exactly one
+intent and one prior result are retained, with one successful and one rejected
+request and no provider call. The assessment module passes **20 tests**, including
+this additional case. Full local regression above preceded that final case; final
+SQLite/MySQL CI includes it. A valid 192-character executable filename reproduced
+phone overflow in the new header before final freeze. Scoped history-header and
+confirmation-name wrapping now passes the retained viewport assertions; the normal
+and long-name history/dialog renders were inspected. The complete browser suite is
+rerun for this final UI/test change. No broader styling or authorization change is
+included. Recheck all nine checks on the new final head; earlier-head success is
+not final acceptance.
