@@ -707,6 +707,9 @@ if __name__=='__main__':
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
     from .database_config import runtime_guard
     with runtime_guard():
+        from .worker_preflight import admission
+        from .worker_registry import source_version
+        admission(source_version())
         init()
         signal.signal(signal.SIGTERM,lambda *args:stop.set())
         signal.signal(signal.SIGINT,lambda *args:stop.set())

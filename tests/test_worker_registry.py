@@ -108,13 +108,18 @@ def test_metadata_does_not_import_web_runtime(tmp_path):
     assert result.stdout.strip()==APP_VERSION
 
 
-def test_real_worker_process_registration_duplicate_identity_and_stop(tmp_path):
+@pytest.mark.parametrize('strict',[False,True])
+def test_real_worker_process_registration_duplicate_identity_and_stop(tmp_path,strict):
     import json
     import signal
     import sqlite3
     import time
     directory=tmp_path/'process';directory.mkdir();database=directory/'worker.db'
     env={**os.environ,'DATA_DIR':str(directory),'DATABASE_URL':'sqlite:///'+str(database),'MRPATCHY_WORKER_ID':'process-fixture','MRPATCHY_DEPLOYMENT_TYPE':'process'}
+    if strict:
+        env['MRPATCHY_REQUIRE_CONTROLLER_STATE']='1'
+        setup=subprocess.run([sys.executable,'-c',"from fastapi.testclient import TestClient; from app.main import app; c=TestClient(app); c.__enter__(); c.__exit__(None,None,None)"],env=env,capture_output=True,text=True,timeout=20)
+        assert setup.returncode==0,setup.stderr
     output=tmp_path/'worker.log'
     with output.open('w') as stream:
         process=subprocess.Popen([sys.executable,'-m','app.worker'],env=env,stdout=stream,stderr=stream)
@@ -130,6 +135,7 @@ def test_real_worker_process_registration_duplicate_identity_and_stop(tmp_path):
                 time.sleep(.1)
             assert report and report['state']=='reporting',output.read_text()[-2000:]
             assert report['role']=='worker' and report['version']==APP_VERSION
+            assert report['controller_state']==('verified' if strict else 'not_checked')
             duplicate=subprocess.run([sys.executable,'-m','app.worker'],env=env,capture_output=True,text=True,timeout=15)
             assert duplicate.returncode!=0 and 'already in use' in duplicate.stderr
             assert process.poll() is None

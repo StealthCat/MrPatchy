@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.12.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.13.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -547,3 +547,24 @@ means expectations are not configured; it does not mean all workers are present.
 This remains worker-only self-report inventory, with readiness not assessed.
 Controller, endpoint-agent and GCP-node coverage, alerts and remote deployment
 acceptance remain planned. Rebuild the controller and keep worker versions matched.
+
+
+### Worker controller/key startup gate (v0.13.0)
+
+Complete Compose enables `MRPATCHY_REQUIRE_CONTROLLER_STATE=1` for workers. Before
+initializing tables or admitting jobs, workers must read the controller's versioned
+database receipt and decrypt its canary with the existing private `/data/secret.key`.
+The controller publishes this receipt during startup and refuses to overwrite a
+receipt it cannot decrypt. Start/rebuild the controller before upgrading workers.
+The key must be a regular, non-symlinked 44-byte Fernet key, mode 0600 (or stricter),
+owned by the runtime user. Restore the correct protected key; never delete a receipt
+or generate a replacement key to make a mismatch pass. Preserve normal backups.
+
+Non-Compose processes retain legacy behavior unless the gate is explicitly enabled
+with that variable. Workers displays verified-at-startup, not enabled or not reported;
+none means general readiness. Failures terminate startup with a safe diagnostic.
+This checks a receipt/key/version at startup only, not ongoing state freshness, schema
+compatibility, SSH keys, artifact/evidence mounts, correct selection among cloned
+databases using the same key, or target access. It is not a supported remote-worker
+provisioning solution. Full shared-state preflight and remote deployment acceptance
+remain planned. This source update requires no endpoint-agent or schema migration.
