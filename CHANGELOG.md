@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.17.0 — 2026-10-30
+
+- Separate paginated audit review from operations and add linked audit/operation detail pages.
+- Preserve fleet/server list position and verify server scope on operation detail reads; retain existing cancellation/recovery confirmations.
+
 ## 0.16.1 — 2026-10-30
 
 1. Plan faster AI triage with unchanged investigation capability, configurable threaded parallel execution, fair scheduling, safe connection/evidence reuse and classified retry handling.

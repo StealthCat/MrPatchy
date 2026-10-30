@@ -18,7 +18,7 @@ module.exports=async(page,capture)=>{
   assert.equal(await page.locator('#expected-workers img').count(),0);assert.equal(await page.evaluate(()=>window.__expectedInjected),undefined);
   await page.locator('#worker-next').click();await page.getByText('last-worker',{exact:true}).waitFor();
   await page.locator('#worker-prev').click();await page.getByText('worker-one',{exact:true}).waitFor();
-  await page.getByRole('link',{name:'Operations & audit',exact:true}).click();await page.goBack();await page.getByRole('heading',{name:'Registered runtimes',exact:true}).waitFor();
+  await page.getByRole('link',{name:'Operations',exact:true}).click();await page.goBack();await page.getByRole('heading',{name:'Registered runtimes',exact:true}).waitFor();
   await page.reload();await page.getByText('worker-one',{exact:true}).waitFor();
   inject=false;await page.locator('#refresh-page').click();await page.getByText('worker-two',{exact:true}).waitFor();
   assert.equal(await page.locator('.worker-control').count(),1,'Stale/mismatched workers have no control');

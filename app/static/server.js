@@ -84,6 +84,7 @@ async function serverOverview(revision,{root,hostId}){
 }
 
 async function serverPatching(revision,context){
+ if(location.hash.slice(1).split('/')[3]==='jobs')return operationDetail(revision,context,location.hash.slice(1).split('/')[4]||'');
  const {root,hostId}=context;let cursor=new Date();cursor.setHours(0,0,0,0);
  root.innerHTML=`<section class="card"><div class="toolbar"><div><h3>Scheduled start windows</h3><p class="help">Times use ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. These are allowed start windows, not promised completion times.</p></div><div class="actions"><button id="server-period-prev">← Previous month</button><button id="server-period-today">Today</button><button id="server-period-next">Next month →</button></div></div><p id="server-period" class="help"></p><div id="server-calendar"></div></section><div id="server-patch-policies"></div><section class="card"><h3>Pending updates &amp; expected installation</h3><div id="server-patch-forecast"></div></section><section id="server-operations"><h3>Operations for this server</h3><div id="server-job-list"></div></section>`;
  const calendar=$('#server-calendar'),policies=$('#server-patch-policies'),forecast=$('#server-patch-forecast'),jobsRoot=$('#server-job-list');let ticket=0;

@@ -3219,3 +3219,71 @@ Validation reconciliation restored an adjacent recovery-summary helper removed
 during editing, and narrowed a generic snapshot test mock that had intercepted
 history details without identity fields. Identity checks and operational approvals
 were retained; final browser checks are required on the corrected source.
+
+
+## v0.17.0 — Activity/audit list and detail review
+
+Issue-first completion gate: inspected fresh main `8bee5b64` (v0.16.0), repository
+instructions/checkpoint, latest merged PR #71 actual history/route/API fixture
+changes and recorded validation, including all nine successful exact-head checks.
+The accessible open-issues API returned an empty first page (100/page), and no PRs
+were open. No issue was fixed, deferred or closed; no list-access failure occurred.
+The roadmap remains unfinished. Selected batch: dedicated Activity/audit review
+pages, bounded audit pagination/details, expected-server job reads, preserved
+list context, role/scope/native regression tests and responsive visual acceptance.
+
+Activity now separates Operations, Audit trail and Workers. Audit list reads accept
+offset/limit with default/max 200, reject invalid pagination and order equal-time
+entries by descending ID. The UI pages fifty entries and offers administrator-only
+entry deep links. Fleet and server operation details display escaped stored output
+and identity/timestamp facts without replaying jobs. Expected host_id reads reject
+wrong-server jobs, while existing unscoped reads and payload exclusion remain.
+Frontend record/server identities are checked before display. Existing operator/
+viewer job-read access and administrator audit access remain; no new authorization
+or action privilege is introduced. Existing list cancellation/reconciliation
+confirmations, queue locks and backend checks are unchanged.
+
+Fleet/server operation and audit offsets survive navigation independently, clearing
+on reload/sign-out. Back/reload/deep links, missing-record retry and historical
+uncertainty remain explicit. Offset lists may shift during collection/retention;
+full pages can be followed by an empty page with Previous still available. Shared
+glass navigation, solid reading panels, responsive facts and established mascot
+artwork are reused. Actual 320/768/1440 detail renders were inspected and linked
+in UI_DESIGN.md. No target/provider operation is performed by detail viewing.
+
+Validation: focused activity/operations/version tests 25 passed. New tests cover
+equal-time audit ordering, disjoint pages/details, invalid limits, missing records,
+operator/viewer audit denial, job server mismatch and payload omission. Browser
+checks cover audit pagination/context, Back/reload, escaped text/errors, retry,
+role gates, expected-server transport, identity mismatch and absence of writes.
+A browser assertion was corrected to wait for the server body instead of matching
+the previous fleet detail during navigation; scope checks remain enforced. Full
+local regressions and all nine exact-final-head CI results are recorded in the
+delivery PR and must pass before merge.
+
+Remaining: operational-control/state-system and shared filter/long-output/UI
+families, onboarding and full application acceptance; independent remote controller/
+worker Compose/installer modes, keys/profiles/trust/artifacts/evidence provisioning,
+full schema/job compatibility, cross-host maintenance/migration and real remote
+recovery acceptance; all-component health/readiness/alerts and optional GCP node;
+comprehensive startup job discovery/provenance/classification; CVE exposure and
+known/unknown automatic protection with real-target recovery; retention and
+independent evidence. No full-roadmap completion is claimed. Version v0.17.0 is
+synchronized. Rebuild controller before matched workers; no agent/schema upgrade.
+Git tags skipped; existing schedule unchanged.
+
+Delivery: [PR #72](https://github.com/StealthCat/MrPatchy/pull/72), initial source
+[89d849d7](https://github.com/StealthCat/MrPatchy/commit/89d849d798f0115cef99f7307b56ea8a7264644f).
+The PR records corrected full local regressions, final-head CI and the actual
+merged main commit. No source changes may be added after validation without
+rerunning applicable checks.
+
+
+Concurrent-main reconciliation: while PR #72 was validating, the independent
+roadmap PR #73 (v0.16.1) appeared and merged as `3f39ffda`. This branch was held
+until that merge, then current main was integrated with both changelog entries
+and all new AI roadmap text retained. Source remains v0.17.0, above v0.16.1.
+The new parallel-triage, exact known-good cache and AI spending-control program
+remains planned, not implemented by Activity review. Runtime/UI/test files are
+unchanged by this reconciliation; version consistency is checked against the new
+base and all nine checks must rerun on the reconciled final head before merge.

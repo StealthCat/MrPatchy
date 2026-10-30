@@ -121,7 +121,7 @@ shared components, readable states, role/workflow checks and inspected renders.
 | Packages, repositories, patching and schedules | Existing pages; scoped filters v0.6.0 | Shared tables/forms, history/calendar detail pages, approvals and context retention |
 | Investigations and AI activity | Fleet/server run Summary/Cost/Timeline routes and scoped list context v0.10.0 | Investigation evidence/details and wider AI control/loading/pause state migration |
 | Security, integrity, startup and response | Startup Files/Coverage pages (v0.11.0); existing scanner/baseline/vendor/file/process workflows | Migrate other crowded workspaces, review/recovery/export states; comprehensive startup discovery/provenance/classification remains planned |
-| Activity, audit and inventory/package history | Server inventory/process snapshot lists/details v0.16.0; existing package history | Activity/audit detail views and shared filter/long-output components; whole-family acceptance |
+| Activity, audit and inventory/package history | Server snapshots v0.16.0; Activity/audit lists/details v0.17.0; existing package history | Shared filter/long-output/control components and whole-family acceptance |
 | Settings, users and operations | Existing settings pages/forms/dialogs | Consistent grouped administration, accessible forms and destructive confirmations |
 | Deployment, worker and GCP health | Worker registration/liveness, cooperative controls v0.9.0 and expected-worker inventory v0.12.0 | Full expected-component inventory, readiness, controller/endpoint/GCP health and cross-deployment acceptance remain planned |
 | Whole-application acceptance | Not complete | All rows migrated; cross-role workflows, state/asset/readability consistency and actual mobile/tablet/desktop review |
@@ -355,3 +355,26 @@ Reviewed renders: [detail desktop](screenshots/snapshot-detail-v0160-desktop.jpg
 [detail tablet](screenshots/snapshot-detail-v0160-tablet.jpg),
 [detail phone](screenshots/snapshot-detail-v0160-mobile.jpg),
 [list tablet](screenshots/snapshot-list-v0160-tablet.jpg).
+
+
+## Activity and audit review (v0.17.0)
+
+Operations, Audit trail and Workers are separate pages. Administrator audit lists
+use fifty-record pages and timestamp/ID ordering; audit entry detail has escaped,
+keyboard-scrollable text. Fleet/server operations link to identity-checked details
+with recorded outcome/output, leaving existing cancellation/recovery confirmations
+on the lists. Pagination survives route navigation and clears on reload/sign-out;
+server contexts remain independent. Missing records offer retry/back links.
+Historical observations never certify target state or successful recovery.
+
+Shared glass navigation, mascot introductions/portraits, solid reading surfaces,
+responsive two-column facts and phone spacing are reused. This is a finite detail
+page migration; operation controls, shared long-output/filter components and full
+application accessibility/visual acceptance remain planned. Offset paging may
+shift with new records or retention.
+
+Reviewed renders: [operation desktop](screenshots/operation-detail-v0170-desktop.jpg),
+[operation tablet](screenshots/operation-detail-v0170-tablet.jpg),
+[operation phone](screenshots/operation-detail-v0170-mobile.jpg),
+[audit desktop](screenshots/audit-entry-v0170-desktop.jpg),
+[audit phone](screenshots/audit-entry-v0170-mobile.jpg).
