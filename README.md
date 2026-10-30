@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.11.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.12.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -527,3 +527,23 @@ missing roots, skipped entries, gaps and unassessed origin. Comprehensive job/un
 discovery, effective configuration, vendor-default provenance and AI classification
 remain unfinished. Rebuild controller and keep workers on the matching source
 version; no agent/schema update is required for these review pages.
+
+
+### Expected worker inventory
+
+On the controller, optionally set `MRPATCHY_EXPECTED_WORKER_IDS=worker-east,worker-west`
+to list up to 100 unique case-sensitive worker identities in Activity → Workers.
+Set each worker's `MRPATCHY_WORKER_ID` to the corresponding stable identity. Each
+replica needs a unique ID; do not assign one shared ID to scaled replicas. Restart
+the controller after changing its environment. Keep this deployment configuration
+in your normal protected installation/backup configuration. Removing an expectation
+does not remove registration history, drain a worker or stop a process.
+
+The expected inventory is independent of registration pagination. Missing means no
+matching registration, not a verified stopped process. Stale clocks, stopped reports,
+version mismatches and drain states remain explicit. Invalid configuration shows an
+error instead of silently treating the deployment as complete. Empty configuration
+means expectations are not configured; it does not mean all workers are present.
+This remains worker-only self-report inventory, with readiness not assessed.
+Controller, endpoint-agent and GCP-node coverage, alerts and remote deployment
+acceptance remain planned. Rebuild the controller and keep worker versions matched.

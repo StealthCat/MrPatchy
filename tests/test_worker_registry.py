@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import pytest
+from sqlalchemy import select
 from app import worker_registry as registry
 from app.db import Session,Setting
 from app.main import APP_VERSION
@@ -166,3 +167,43 @@ def test_unverifiable_identity_is_fatal(admin,monkeypatch):
         def unavailable():raise OSError('Connection lost')
         monkeypatch.setattr(node.lock,'owned',unavailable)
         with pytest.raises(registry.IdentityLost):node.heartbeat(False,[],0,False)
+
+
+def test_expected_workers_independent_of_pagination_and_no_mutations(admin,monkeypatch):
+    monkeypatch.setenv('MRPATCHY_EXPECTED_WORKER_IDS','Worker-A,worker-a,missing')
+    with Session() as s:
+        for identity,state,heartbeat in [('Worker-A','reporting',1000),('worker-a','stopped',900)]:
+            s.add(Setting(key=registry.record_key(identity),value={'id':identity,'heartbeat':heartbeat,'version':APP_VERSION,'state':state,'secret':'not-exposed'}))
+        s.commit()
+    before=None
+    with Session() as s:before=list(s.scalars(select(Setting.key)))
+    first=registry.page(now=1000);last=registry.page(offset=100,now=1000)
+    assert first['expected']==last['expected'] and not last['items']
+    expected={row['id']:row for row in first['expected']}
+    assert expected['Worker-A']['state']=='reporting' and expected['worker-a']['state']=='stopped'
+    assert expected['missing']['state']=='missing' and expected['missing']['registered'] is False
+    assert all(row['readiness']=='not_assessed' for row in first['expected'])
+    assert 'not-exposed' not in json.dumps(first)
+    with Session() as s:assert list(s.scalars(select(Setting.key)))==before
+
+
+@pytest.mark.parametrize('raw',['same,same','bad/id','one,','x'*49,','.join('w'+str(i) for i in range(101))])
+def test_expected_worker_invalid_config_is_visible(admin,monkeypatch,raw):
+    monkeypatch.setenv('MRPATCHY_EXPECTED_WORKER_IDS',raw)
+    data=admin.get('/api/operations/workers').json()
+    assert data['expected']==[] and data['expectation_error']
+
+
+@pytest.mark.parametrize('state,heartbeat,version,result',[('reporting',879,APP_VERSION,'stale'),('reporting',1006,APP_VERSION,'unknown'),('reporting',1000,'0.0.1','version_mismatch'),('drained',1000,APP_VERSION,'drained')])
+def test_expected_worker_freshness_and_version(admin,monkeypatch,state,heartbeat,version,result):
+    monkeypatch.setenv('MRPATCHY_EXPECTED_WORKER_IDS','one')
+    with Session() as s:s.add(Setting(key=registry.record_key('one'),value={'id':'one','heartbeat':heartbeat,'version':version,'state':state}));s.commit()
+    assert registry.page(now=1000)['expected'][0]['state']==result
+
+
+def test_expectations_absent_and_wrong_identity(admin,monkeypatch):
+    monkeypatch.delenv('MRPATCHY_EXPECTED_WORKER_IDS',raising=False)
+    assert registry.page()['expected']==[] and registry.page()['expectation_error'] is None
+    monkeypatch.setenv('MRPATCHY_EXPECTED_WORKER_IDS','one')
+    with Session() as s:s.add(Setting(key=registry.record_key('one'),value={'id':'different','heartbeat':1000}));s.commit()
+    assert registry.page(now=1000)['expected'][0]['state']=='missing'

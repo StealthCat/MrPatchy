@@ -406,3 +406,7 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .startup-review-toolbar input { width:100%;box-sizing:border-box; }
 .startup-review-toolbar button { flex:0 0 auto; }
 @media(max-width:600px){.startup-review-toolbar{align-items:stretch;flex-direction:column}.startup-review-toolbar label{flex:0 0 auto}.startup-review-toolbar button{width:100%;white-space:normal}}
+
+.expected-worker-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:14px; }
+.expected-worker { border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0; }
+.expected-worker h3,.expected-worker p { overflow-wrap:anywhere; }

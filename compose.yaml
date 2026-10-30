@@ -10,6 +10,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mrpatchy.db}
       COOKIE_SECURE: "true"
       DISABLE_SCHEDULER: "1"
+      MRPATCHY_EXPECTED_WORKER_IDS: ${MRPATCHY_EXPECTED_WORKER_IDS:-}
       MRPATCHY_DEPLOYMENT_TYPE: docker
       # Trust only our dedicated Caddy hop, never arbitrary management clients.
       FORWARDED_ALLOW_IPS: ${CADDY_CONTROL_IP:-172.30.254.2}

@@ -2775,3 +2775,62 @@ retention and independent evidence/audit requirements. Existing AI pause remains
 implemented. No collector, agent, schema, provider or response-pipeline change is
 introduced. Rebuild the controller and keep worker source versions matched.
 No Git tags by user instruction; the schedule remains unchanged.
+
+
+## v0.12.0 — Expected-worker inventory foundation
+
+Delivery: [PR #67](https://github.com/StealthCat/MrPatchy/pull/67), initial implementation
+[4b5bd105](https://github.com/StealthCat/MrPatchy/commit/4b5bd10520a9a918c7e15700255d480c248a8928).
+The PR records final-head validation and the actual merged main commit.
+
+Completion gate: inspected main `8f1bcc3c`, latest merged
+[PR #66](https://github.com/StealthCat/MrPatchy/pull/66), its actual startup
+workspace diff and recorded nine-check final-head validation, current instructions,
+implementation checkpoint and related open PRs (none). The explicit component
+health roadmap still lacks expected-node visibility. This batch adds bounded
+expected-worker inventory and its responsive UI; it does not certify readiness
+or complete the all-component dashboard/remote deployment roadmap.
+
+Controller deployment configuration `MRPATCHY_EXPECTED_WORKER_IDS` optionally lists
+at most 100 unique case-sensitive stable worker identities. Complete Compose passes
+it only to the app, and .env.example/README document matching unique per-worker
+IDs, replica constraints, restart and backup/removal semantics. Invalid entries,
+empty members, duplicates or oversized configuration show an explicit diagnostic.
+Unset configuration is unconfigured, never a claim that every worker is present.
+The configuration is persisted by the administrator's deployment environment, not
+an application mutation endpoint. No new secret or schema is introduced.
+
+The existing administrator-only worker endpoint returns expectations independently
+of registration pagination. Exact hashed identity lookup avoids MySQL collation
+aliases; a mismatched/corrupt identity is missing, never an unrelated registration.
+Missing is not proof that a process is stopped: database reachability, configuration
+and actual deployment require investigation. Registered expectations reuse the same
+freshness, future-clock, stopped, version and drain interpretation as registrations.
+Safe projected identity/state/reason/age fields exclude arbitrary report secrets.
+Readiness remains not assessed. Listing never writes registration, contacts a target
+or provider, or changes scheduler admission. Existing drain/recovery authorization
+remains unchanged. Removing expectations retains all registration/audit history.
+
+Activity → Workers now places responsive expected-worker cards above registered
+history, retaining glass surfaces, state accents and the raccoon identity. Empty
+and invalid configuration, escaped untrusted identities and role boundaries are
+browser tested. Actual 320/768/1440 renders were reviewed and linked in UI_DESIGN.md.
+Focused backend acceptance covers absent/missing/mismatched identities, case-sensitive
+IDs, pagination independence, invalid/oversized/duplicate configuration, stale/future
+reports, stopped/version/drained states, no mutation and safe projection.
+Final local and exact-head CI results, versioned PR and actual merged commit are
+recorded in the delivery PR before merging. No Git tags by user instruction.
+
+Remaining: expected controller/endpoint-agent/GCP integration nodes and actual
+deployment type, readiness/preflight, diagnostics/alerts, optional GCP node, secure
+remote-worker shared state/installer/migration/failure acceptance; comprehensive
+startup discovery/provenance/AI classification; CVE and known/unknown malware
+automatic protection and real-target recovery; retention/independent evidence and
+the remaining finite UI migration. Existing per-server AI pause remains implemented.
+Rebuild controller and keep worker source versions matched; no agent/schema update
+is needed. The existing schedule remains unchanged.
+
+Local validation: full Python **1,294 passed / 7 skipped**; focused worker tests
+**24 passed**; full browser suite and final focused expected-worker browser checks
+passed. JS/Python syntax, whitespace and source-version consistency passed. Final
+CI must validate all nine jobs on the exact final PR head before merge.

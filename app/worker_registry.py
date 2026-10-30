@@ -21,7 +21,7 @@ POOL_CAPACITY={'jobs':2,'polls':8,'ai':1}
 CONTROL_PREFIX='worker-control:'
 GAPS=[
     'Self-reported scheduler-loop liveness; storage, secrets, target access and operational readiness are not independently assessed.',
-    'Only registered workers are listed. Expected but never registered nodes, controllers, endpoint agents and GCP integration nodes are not inventoried here.',
+    'Expected worker identities come from controller configuration; unconfigured nodes, controllers, endpoint agents and GCP integration nodes are not inventoried here.',
     'Drain is boot-specific and cooperative: assigned work finishes; it does not stop a process or certify safe maintenance. Remote shared state and cross-host maintenance acceptance remain planned.',
 ]
 
@@ -131,6 +131,21 @@ class Registration:
             try:self.lock.release()
             except Exception:log.warning('Unable to release worker identity lock')
 
+def report_state(data,now):
+    heartbeat=data.get("heartbeat")
+    age=now-heartbeat if isinstance(heartbeat,(int,float)) and not isinstance(heartbeat,bool) and math.isfinite(heartbeat) and heartbeat>=0 else None
+    if age is None or age < -5:state,reason='unknown','Heartbeat is missing, invalid or in the future; check clocks and runtime logs.'
+    elif data.get('state')=='stopped':state,reason='stopped','Worker reported a graceful stop; this is retained registration history.'
+    elif age>FRESH_SECONDS:state,reason='stale','Heartbeat expired; worker liveness and in-flight outcomes are unknown. Review operations before recovery.'
+    elif data.get('state') not in ('reporting','draining','drained'):state,reason='unknown','Worker report state is not recognized.'
+    elif not isinstance(data.get('version'),str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',data['version']):state,reason='unknown','Reported worker version is missing or unrecognized.'
+    elif data.get('version')!=source_version():state,reason='version_mismatch','Reported worker version differs from this controller; compatibility is not certified.'
+    elif data.get('state')=='draining':state,reason='draining','Worker observed drain; assigned work is finishing. New assignments are blocked.'
+    elif data.get('state')=='drained':state,reason='drained','Worker reports no assigned work and admission paused. Process remains running; readiness is not assessed.'
+    else:state,reason='reporting','Scheduler loop reported recently; operational readiness is not independently assessed.'
+    return state,reason,age
+
+
 def page(offset=0,now=None):
     if offset<0 or offset>100000:raise ValueError('Invalid worker page')
     now=time.time() if now is None else now
@@ -146,20 +161,31 @@ def page(offset=0,now=None):
                 if not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<0:item[key]=None
             item['id']=data.get('id') if isinstance(data.get('id'),str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',data['id']) else row.key[len(PREFIX):]
             item['active_jobs']=[value for value in data.get('active_jobs',[])[:16] if isinstance(value,str) and len(value)<=64] if isinstance(data.get('active_jobs'),list) else []
-            age=now-heartbeat if isinstance(heartbeat,(int,float)) and not isinstance(heartbeat,bool) and math.isfinite(heartbeat) and heartbeat>=0 else None
-            if age is None or age < -5:state,reason='unknown','Heartbeat is missing, invalid or in the future; check clocks and runtime logs.'
-            elif data.get('state')=='stopped':state,reason='stopped','Worker reported a graceful stop; this is retained registration history.'
-            elif age>FRESH_SECONDS:state,reason='stale','Heartbeat expired; worker liveness and in-flight outcomes are unknown. Review operations before recovery.'
-            elif data.get('state') not in ('reporting','draining','drained'):state,reason='unknown','Worker report state is not recognized.'
-            elif not isinstance(data.get('version'),str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',data['version']):state,reason='unknown','Reported worker version is missing or unrecognized.'
-            elif data.get('version')!=source_version():state,reason='version_mismatch','Reported worker version differs from this controller; compatibility is not certified.'
-            elif data.get('state')=='draining':state,reason='draining','Worker observed drain; assigned work is finishing. New assignments are blocked.'
-            elif data.get('state')=='drained':state,reason='drained','Worker reports no assigned work and admission paused. Process remains running; readiness is not assessed.'
-            else:state,reason='reporting','Scheduler loop reported recently; operational readiness is not independently assessed.'
+            state,reason,age=report_state(data,now)
             try:control=control_value(s,item['id'],data.get('boot_id'))
             except ValueError:control={'revision':None,'action':'invalid'}
             item['control']=control
             item['controllable']=state in ('reporting','draining','drained') and bool(re.fullmatch(r'[0-9a-f]{32}',str(data.get('boot_id','')))) and row.key==record_key(item['id']) and control['revision'] is not None
             item.update(state=state,reason=reason,age_seconds=max(0,age) if age is not None else None,readiness='not_assessed')
             items.append(item)
-    return {'items':items,'more':len(rows)>50,'fresh_seconds':FRESH_SECONDS,'gaps':GAPS}
+    expected,error=expected_workers(now)
+    return {'items':items,'more':len(rows)>50,'fresh_seconds':FRESH_SECONDS,'gaps':GAPS,'expected':expected,'expectation_error':error}
+
+
+def expected_workers(now):
+    # Controller deployment configuration only. Never infer an absent process is stopped.
+    raw=os.getenv('MRPATCHY_EXPECTED_WORKER_IDS','')
+    if not raw.strip():return [],None
+    identities=[value.strip() for value in raw.split(',')]
+    if len(raw)>5000 or len(identities)>100 or any(not re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',value) for value in identities) or len(set(identities))!=len(identities):
+        return [],'Expected-worker configuration is invalid. Use at most 100 unique, case-sensitive worker IDs (1–48 letters, numbers, dot, underscore, colon or hyphen), separated by commas.'
+    items=[]
+    with Session() as s:
+        for identity in identities:
+            row=s.get(Setting,record_key(identity))
+            data=row.value if row and isinstance(row.value,dict) else {}
+            registered=data.get('id')==identity
+            if registered:state,reason,age=report_state(data,now)
+            else:state,reason,age='missing','No matching registration is available. The process may be absent, misconfigured or unable to reach this database; inspect the deployment.',None
+            items.append({'id':identity,'registered':registered,'state':state,'reason':reason,'age_seconds':max(0,age) if age is not None else None,'readiness':'not_assessed'})
+    return items,None
