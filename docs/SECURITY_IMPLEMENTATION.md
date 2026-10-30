@@ -3480,3 +3480,57 @@ desktop renders passed. Both paired benchmark samples are retained: connection
 reuse is established, while consistent throughput improvement remains unproven.
 Resume an open delivery PR before new cache work; do not infer completion or merge
 without all nine applicable exact-final-head checks and unchanged base/mergeability.
+
+## v1.18.1 — Pooled-schema initialization prerequisite
+
+Issue-first gate: inspected main `3e7cfa3b` (v1.18.0), instructions, latest PR #75
+actual changes/checkpoint and recorded validation, including all nine successful
+exact-head checks. Open issues and open PRs returned empty 100-item first pages.
+No issue is claimed fixed, deferred or closed. The roadmap remains unfinished.
+The v1.18.0 checkpoint recorded an initialization failure after warming four SQL
+connections. This cycle selects that concrete defect as a safe-threading prerequisite,
+without claiming to implement the cache, parallel scheduler or spending controls.
+
+Reproduction on current main: four sessions load schema state, one pooled connection
+drops the legacy `packages.dpkg_state` column, then two `init()` calls attempt the
+normal idempotent upgrade. Both pytest and a separate disposable SQLite process
+failed with duplicate-column ADD COLUMN. A variant dropping two columns happened
+to pass, so the single-column reproduction is retained; no speculative fix was
+made from that passing variant. Reflection on another warmed connection can retain
+SQLite's previous per-connection schema view while DDL runs on a different connection.
+
+Initialization now performs an actual SQLite catalog query to refresh that view,
+then runs create_all, column reflection and the existing upgrades on one connection.
+Existing defaults and MySQL FLOAT-to-DOUBLE migration definitions remain unchanged.
+Single-controller/migration-owner startup remains required. This is not global
+migration fencing or a promise of atomic MySQL DDL (which can commit implicitly).
+No repair of lost records, general schema/type compatibility or ongoing readiness
+is claimed. The new tests warm four connections, remove each existing host/package
+upgrade column, initialize twice and verify required columns and retained host data.
+The timing test's pool-disposal workaround is removed so later DDL tests exercise
+the production fix with warmed connections.
+
+Validation: the single-column test failed before the fix; the standalone reproduction
+now passes. Initial focused pooled/completion/preflight checks passed 64 tests.
+Final expanded focused and full regression results and all nine exact-final-head
+CI checks are recorded in the delivery PR. No UI behavior or assets changed;
+existing browser/native startup checks still apply. Rebuild controller before matched
+workers; no endpoint-agent upgrade, new schema definition or Git tags. Source,
+README and changelog are synchronized at v1.18.1; major remains pinned at 1.
+
+Next priority remains the faster-triage program: conservative canonical evidence/
+context fingerprints, durable exact known-good reuse/provenance/revocation and
+explicit completed-item Re-triage; then claims/leases, isolated sessions/context,
+pause-safe parallel scheduling/admission, fairness/recovery and shared throttle/
+daily reservations/spend/unthrottled controls. Preserve full capability and complete
+SQLite/MySQL acceptance before declaring those features implemented. Notification,
+remote deployment, protection/startup discovery and full UI milestones remain planned.
+If this delivery PR is open, finish/reconcile it before starting further work.
+
+Delivery: [PR #76](https://github.com/StealthCat/MrPatchy/pull/76), initial source
+[8b19311d](https://github.com/StealthCat/MrPatchy/commit/8b19311d39b663daec490d1c8acc6a2877400f7f).
+Expanded local initialization, settings, timing and preflight coverage: **82 passed /
+1 skipped**. The delivery PR records full local regression, all nine final-head
+checks, the actual merge commit or precise unfinished state. Finish an open PR
+before new cache work. No UI change or new schema definition; existing browser,
+MySQL and native startup checks remain mandatory on the exact final commit.

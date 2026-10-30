@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.18.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.18.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -663,3 +663,11 @@ reuse is validated; this is not a production speed or parallel-throughput promis
 Threaded claims/leases, exact fleet known-good reuse, classified retries and shared
 throttle/daily-spend/unthrottled controls remain planned. Existing hourly limits,
 model, evidence, follow-ups, approval and AI pause behavior remain in force.
+
+
+### Pooled SQLite initialization (v1.18.1)
+
+Startup reflection and existing schema upgrades now use one connection, refreshing
+SQLite catalog state first. This prevents stale pooled connections from repeating
+an already-completed column addition. Single-controller/migration-owner startup
+remains required; this does not enable concurrent or cross-host migrations.

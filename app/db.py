@@ -103,26 +103,30 @@ def register_models():
 
 def init():
     register_models()
-    Base.metadata.create_all(engine)
-    host_columns={column['name'] for column in inspect(engine).get_columns('hosts')}
-    for name,definition in (('enabled','BOOLEAN NOT NULL DEFAULT 1'),('deleted_at','DOUBLE NOT NULL DEFAULT 0'),('lifecycle_revision',"VARCHAR(36) NOT NULL DEFAULT ''")):
-        if name not in host_columns:
-            with engine.begin() as connection:connection.execute(text('ALTER TABLE hosts ADD COLUMN '+name+' '+definition))
-    columns={c['name'] for c in inspect(engine).get_columns('packages')}
-    if 'dpkg_state' not in columns:
-        with engine.begin() as connection:
+    # Reflection and DDL must share a connection. SQLite PRAGMA reflection can
+    # otherwise observe an old per-connection schema after another pooled
+    # connection changed it. An actual catalog query refreshes the schema view.
+    # This is not cross-process migration fencing; startup still requires one
+    # controller/migration owner, and MySQL DDL can commit implicitly.
+    with engine.begin() as connection:
+        if connection.dialect.name=='sqlite':
+            connection.execute(text('SELECT name FROM sqlite_master LIMIT 1')).all()
+        Base.metadata.create_all(connection)
+        host_columns={column['name'] for column in inspect(connection).get_columns('hosts')}
+        for name,definition in (('enabled','BOOLEAN NOT NULL DEFAULT 1'),('deleted_at','DOUBLE NOT NULL DEFAULT 0'),('lifecycle_revision',"VARCHAR(36) NOT NULL DEFAULT ''")):
+            if name not in host_columns:
+                connection.execute(text('ALTER TABLE hosts ADD COLUMN '+name+' '+definition))
+        columns={c['name'] for c in inspect(connection).get_columns('packages')}
+        if 'dpkg_state' not in columns:
             connection.execute(text("ALTER TABLE packages ADD COLUMN dpkg_state VARCHAR(80) NOT NULL DEFAULT 'install ok installed'"))
-    # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
-    # SQLite already stores these values as 64-bit REAL. This migration is
-    # idempotent and runs before workers start, with only one app replica.
-    if engine.dialect.name in ('mysql', 'mariadb'):
-        from sqlalchemy.dialects.mysql import FLOAT
-        inspector = inspect(engine)
-        with engine.begin() as connection:
+        # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
+        # SQLite already stores these values as 64-bit REAL.
+        if connection.dialect.name in ('mysql', 'mariadb'):
+            from sqlalchemy.dialects.mysql import FLOAT
+            inspector = inspect(connection)
             for model in (Host, Package, Behavior, Job, Audit):
                 for column in inspector.get_columns(model.__tablename__):
                     if isinstance(column['type'], FLOAT):
                         table_name = model.__tablename__
                         column_name = column['name']
                         connection.execute(text(f'ALTER TABLE `{table_name}` MODIFY COLUMN `{column_name}` DOUBLE NOT NULL'))
-
