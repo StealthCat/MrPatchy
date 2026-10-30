@@ -19,7 +19,9 @@ def test_timeout_kills_descendant_after_parent_exits(tmp_path,runner):
         deadline=time.monotonic()+2
         while time.monotonic()<deadline:
             path=Path('/proc')/str(pid)/'stat'
-            if not path.exists() or path.read_text().split()[2]=='Z':break
+            try:state=path.read_text().split()[2]
+            except FileNotFoundError:break  # Reaped between proc lookup/read; already exited.
+            if state=='Z':break
             time.sleep(.01)
         else:pytest.fail('Descendant survived bounded command timeout')
     finally:

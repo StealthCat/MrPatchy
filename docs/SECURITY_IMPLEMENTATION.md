@@ -2906,3 +2906,12 @@ worker acceptance **44 passed**; full browser suite and final focused worker UI
 checks passed. Actual phone/tablet/desktop renders were reviewed after moving the
 startup result beside identity. Python/JS syntax, whitespace and version consistency
 passed. All nine checks on the exact final PR head remain mandatory before merge.
+
+CI reconciliation: initial final-head run 41033997788 passed eight checks, but
+MySQL exposed a race in the existing descendant-process test: `/proc/PID/stat`
+disappeared after exists() and before read_text(). This represents a reaped child,
+already an intended success condition. The assertion now reads once and handles
+only FileNotFoundError as exit, preserving timeout, zombie handling, survivor
+failure and process cleanup. No runtime process-killing code or preflight check
+is relaxed. The corrected versioned commit must rerun all nine checks; the failed
+head is not mergeable under this task's gate. Final results are recorded in PR #68.
