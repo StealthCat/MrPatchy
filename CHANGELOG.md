@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.1 — 2026-10-30
+
+1. Plan faster AI triage with unchanged investigation capability, configurable threaded parallel execution, fair scheduling, safe connection/evidence reuse and classified retry handling.
+2. Plan a fleet-wide exact-match known-good cache with source provenance, context-aware fingerprints, revocation and an explicit Re-triage action.
+3. Plan shared rate throttling, an optional daily USD spend cap and unthrottled operation, including concurrent reservations, all billable AI paths and queue/spend diagnostics.
+4. Record finite performance, capability-equivalence and concurrency/budget acceptance milestones. This update changes the roadmap and development task; runtime triage and limits await implementation.
+
 ## 0.16.0 — 2026-10-30
 
 - Add linked server inventory/process snapshot list and detail pages, replacing the history inspection dialog.
