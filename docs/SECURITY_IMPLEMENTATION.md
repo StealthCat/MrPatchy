@@ -3627,3 +3627,113 @@ state. Check this PR before any new implementation; the initial source reference
 is not a claim that CI finished or that a merge occurred. All nine applicable
 checks must succeed on the final head, with current main, title/label and
 mergeability rechecked. No source edits are added after those final checks.
+
+
+## v1.20.0 — Durable assessment provenance and explicit completed-item Re-triage
+
+Issue-first gate: inspected main `5166ba93` (v1.19.0), instructions, the current
+checkpoint and latest PR #77 actual changes/recorded validation. Its final head
+`e98f0c7d` passed all nine checks; the interrupted delivery is fully reconciled.
+Open issues and PRs returned empty 100-item first pages. No issue fix, deferral or
+closure is claimed. The roadmap remains unfinished. This coherent faster-triage
+batch selects durable assessment provenance and explicit completed-item refresh,
+which are prerequisites for safe known-good cache reuse. It does not invent a
+cache hit from the current incomplete cross-server context.
+
+New `ai_behavior_assessments` records retain each newly completed process result,
+its full saved evidence snapshot, each supplied initial/follow-up input after the
+unchanged input limits, the requested model and original run ID. A digest binds
+versioned instructions, schema, output/input/connection budgets captured for each
+stage. These are local per-observation records, not a fleet canonical fingerprint,
+verified package-default proof, memory attestation or reusable trust entry. Failed,
+refused and incomplete runs do not create a completed assessment. The current
+result and retained record are committed together; history persistence failure
+rejects completion rather than fabricating provenance. Normal diagnostic pruning
+does not delete assessments. Original run diagnostics may expire independently.
+There is no automatic history deletion or immutable external custody yet; retained
+snapshots/inputs contain sensitive authorized process evidence and require storage
+planning. No credentials/provider raw bodies are added to these records.
+
+New `ai_behavior_refreshes` retains an administrator's explicit request ID, reason,
+actor, previous assessment ID and whether approval was withdrawn. Re-triage only
+accepts completed low/medium/high/unknown observations on an active managed server.
+It is distinct from Retry for failed/pending work, and it requests fresh work for
+one observation, without changing fleet trust. Legacy current results are preserved
+only when needed and clearly labelled unverified legacy snapshots: no original
+model, run ID, exact input binding or assessment time is invented from today's
+settings. Already-retained matching results are referenced without duplication.
+A new request preserves the prior result, resets pending state, withdraws approval
+only with explicit confirmation, and audits both the request and any withdrawal.
+Fresh AI output never restores administrator approval or authorizes a response.
+
+A revision digest rejects changed results/approvals while ignoring observation-only
+last-seen changes. The distributed triage lock excludes an in-flight assessment;
+the host queue lock serializes approval changes. The pre-lock read transaction is
+ended and state re-read under the host lock so MySQL repeatable-read cannot hide
+a concurrent approval. Duplicate/stale requests do not queue another refresh.
+The request remains durable through failed attempts and the existing retry flow;
+successful result/history persistence completes it in the same transaction. Its
+explicit bypass-cache intent is retained for future cache integration; no runtime
+cache lookup exists yet. A later independent administrator approval can hold work
+under the existing approved-behavior filter; revoke that approval to resume it.
+
+The web request sends no provider call. Workers continue to recheck global/server
+AI pause, lifecycle and saved configuration and preserve hourly limits, provider
+delay floors, original model/token budgets, supplied evidence and conditional SSH
+follow-ups. Failed calls may still be billable. Scoring/plans and response gates
+are unchanged; no new budget ledger, parallelism or provider-wide admission is
+claimed. This submilestone improves explicit control and retained provenance, not
+paid-call throughput or automatic cross-host reuse.
+
+Administrator history list/detail endpoints enforce subject/server identity and
+roles, paginate summaries without loading all evidence into the list response,
+and retain read-only access for inactive/deleted servers. UI fleet/server deep
+links preserve pagination, Back/reload and server scope; sign-out clears context.
+The shared glass surfaces, mascot and confirmation dialog show current approval
+separately from historical advisory results, require a reason and explicit approval
+withdrawal, preserve stale-form feedback and guard duplicate submission. Text is
+escaped; optional evidence/provenance reading surfaces wrap long values. Review
+covers actual phone/tablet/desktop history/confirmation renders. A phone overflow
+was caught before publication and corrected with a scoped digest-wrap rule; browser
+assertions remain enabled. Focused browser fixtures wait for the actual new server
+workspace rather than accepting a heading left over from the fleet page.
+
+Validation: initial integrated tests passed 57 cases; expanded approval-race,
+pause and transaction-rejection coverage is included in the final focused suite.
+Full local, browser and all nine exact-final-head CI results are recorded in the
+delivery PR. SQLite/MySQL acceptance remains mandatory before merge. Source,
+README/changelog/UI/API are v1.20.0; major remains 1. New tables require controller-
+first startup and matched workers; no target-helper/agent upgrade or Git tags.
+The schedule remains unchanged. Finish an open delivery PR before new work.
+
+Finite remaining known-good program, in dependency order:
+1. Collect/validate complete local artifact/script/interpreter/library/config,
+   authenticated provenance, privilege/account/behavior/startup/network/container
+   context and explicit coverage, bound to a stable process/evidence identity.
+   Current executable hashes and bounded follow-up metadata are insufficient.
+2. Define a versioned canonical host-independent fingerprint and strict missing/
+   changed/unverified-context misses, binding all required follow-up evidence and
+   policy versions. The new per-observation revision/policy digests are not this key.
+3. Publish/reuse only complete validated safe outcomes, retain AI-versus-admin
+   classification provenance and per-host hits, enforce explicit refresh bypass,
+   audited fleet revocation/invalidation and linked review on contradictions. Valid
+   unchanged cross-server hits must make zero provider calls/reservations and cannot
+   suppress stronger threat evidence or imply approval.
+4. Validate contextual misses, concurrent first encounters/revocation/manual refresh,
+   retention and role isolation on SQLite/MySQL with full runtime acceptance.
+
+Claims/renewable leases, independent sessions/run contexts, fair pause-safe threaded
+execution and scoring admission, shared rate/daily reservations/uncertain-charge
+ledger/unthrottled settings and all-billable-path migration/acceptance remain next
+parts of the faster-triage program. Notifications, remote deployments/shared state/
+health/GCP, startup provenance, CVE/malware protection and full UI work remain planned.
+This batch does not complete finite faster-triage milestone 1 or the whole roadmap.
+
+
+Pre-publication acceptance: final focused assessment, policy/retry/timing/cost,
+identity, database settings and preflight coverage passed **148 tests / 1 skipped**.
+Focused browser acceptance passed, including escaped results, required approval
+withdrawal, stale-form feedback, duplicate submission, Back/reload, server scope,
+roles, phone/tablet/desktop and late-lookup dialog isolation. Full local regression,
+complete browser suite and exact-final-head CI/merge results are recorded in the
+delivery PR. No source changes are added after its final-head checks.

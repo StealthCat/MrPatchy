@@ -24,7 +24,7 @@ async function serverWorkspace(revision){
  selected=id;
  let tab=parts[2]||'overview';if(!SERVER_TABS.some(t=>t[0]===tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const inactive=h.enabled===false||Boolean(h.deleted_at);
- const allowed=inactive?['overview','settings','history','ai','patching','security','startup',...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
+ const allowed=inactive?['overview','settings','history','ai','patching','security','startup',...(isAdmin()?['investigations']:[]),...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
  if(!allowed.includes(tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const entry=SERVER_TABS.find(t=>t[0]===tab);
  const tabs=SERVER_TABS.filter(t=>(!t[2]||isAdmin())&&allowed.includes(t[0]));

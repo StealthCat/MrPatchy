@@ -456,3 +456,5 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .activity-detail { margin-top:20px; }
 .activity-detail .server-facts { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px; }
 @media(max-width:600px){.activity-detail .server-facts{grid-template-columns:minmax(0,1fr)}}
+
+.assessment-policy code { overflow-wrap:anywhere; }

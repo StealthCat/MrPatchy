@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.20.0 — 2026-10-30
+
+- Retain completed process assessments, exact supplied evidence, requested model and policy provenance independently of diagnostic pruning.
+- Add audited, revision-checked Re-triage for completed observations with explicit approval withdrawal and preserved prior results.
+- Add paginated fleet/server assessment history and detail pages with role, scope, Back/reload and responsive UI acceptance.
+- New assessment/refresh tables require controller-first startup before matched workers. Fleet exact-match reuse, threaded scheduling and shared spending controls remain planned.
+
 ## 1.19.0 — 2026-10-30
 
 - Queue durable, bounded process-triage retries using classified transient errors, exponential jitter and provider Retry-After floors.

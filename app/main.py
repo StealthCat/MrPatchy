@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.19.0'
+APP_VERSION='1.20.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -477,6 +477,60 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(auth)):
         if not row: raise HTTPException(404,'Behavior not found')
         with host_lifecycle.activity([row.host_id],'queue'):
             row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
+
+class RetriageInput(BaseModel):
+    expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
+    reason:str=Field(min_length=10,max_length=4000)
+    withdraw_approval:bool=False
+
+
+@app.post('/api/investigations/{behavior_id}/retriage')
+def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(auth)):
+    from . import ai_assessments
+    reason=body.reason.strip()
+    if len(reason)<10:raise HTTPException(400,'Provide a meaningful re-triage reason')
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Reopen Re-triage when it finishes.')
+    try:
+        with Session() as s:
+            row=s.get(Behavior,behavior_id)
+            if not row:raise HTTPException(404,'Investigation not found')
+            if not host_lifecycle.active(s.get(Host,row.host_id)):raise HTTPException(409,'Server management is unavailable; retained assessments are read-only')
+            host_id=row.host_id
+            with host_lifecycle.activity([host_id],'queue'):
+                # Approval mutations use this host lock. Drop the pre-lock read
+                # transaction so MySQL repeatable-read cannot hide a new approval.
+                s.rollback();row=s.get(Behavior,behavior_id)
+                if not row or row.host_id!=host_id:raise HTTPException(409,'Investigation identity changed; reopen Re-triage')
+                try:refresh=ai_assessments.queue(s,row,body.expected_revision,reason,user['username'],body.withdraw_approval)
+                except ValueError as error:raise HTTPException(409,str(error)) from None
+                s.commit()
+                return {'ok':True,'request_id':refresh.id,'detail':'Fresh triage queued. Prior assessment retained; AI pause, model settings and admission limits still apply.'}
+    finally:lock.release()
+
+
+@app.get('/api/investigations/{behavior_id}/history')
+def investigation_history(behavior_id:str,host_id:str='',offset:int=0,limit:int=20,user=Depends(auth)):
+    from . import ai_assessments
+    if offset<0 or not 1<=limit<=50:raise HTTPException(400,'Invalid assessment pagination')
+    with Session() as s:
+        row=s.get(Behavior,behavior_id)
+        if host_id:host_or_404(s,host_id)
+        if not row or (host_id and row.host_id!=host_id):raise HTTPException(404,'Investigation not found in this scope')
+        rows=list(s.scalars(select(ai_assessments.Assessment).where(ai_assessments.Assessment.subject==row.id,ai_assessments.Assessment.host_id==row.host_id).order_by(ai_assessments.Assessment.created.desc(),ai_assessments.Assessment.id.desc()).offset(offset).limit(limit+1)))
+        return {'current':{'id':row.id,'host_id':row.host_id,'executable':row.evidence.get('executable',''),'verdict':row.verdict,'analysis':row.analysis,'approved':row.approved,'revision':ai_assessments.revision(row),'can_retriage':host_lifecycle.active(s.get(Host,row.host_id)) and row.verdict in ai_assessments.COMPLETE and not s.get(ai_assessments.Refresh,row.id),
+            'refresh':ai_assessments.refresh_info(s.get(ai_assessments.Refresh,row.id))},
+            'items':[{'id':r.id,'source':r.source,'created':r.created,'risk':r.result.get('risk','unknown'),'model':r.model,'run_id':r.run_id} for r in rows[:limit]],'more':len(rows)>limit}
+
+
+@app.get('/api/investigations/{behavior_id}/history/{assessment_id}')
+def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',user=Depends(auth)):
+    from . import ai_assessments
+    with Session() as s:
+        behavior=s.get(Behavior,behavior_id);row=s.get(ai_assessments.Assessment,assessment_id)
+        if host_id:host_or_404(s,host_id)
+        if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
+        return object_dict(row)
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(auth)):
     from .worker_registry import page

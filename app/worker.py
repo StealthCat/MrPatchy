@@ -585,7 +585,12 @@ def _assess_behavior(s,row,cfg,secret):
         return _assess_active_behavior(s,row,cfg,secret)
 
 def _assess_active_behavior(s,row,cfg,secret):
-    def assess(evidence):return ai.investigate(evidence,cfg['ai_model'],unseal(secret.value['encrypted']))
+    from . import ai_assessments
+    inputs=[]
+    def assess(evidence):
+        prepared=ai.investigation_input(evidence)
+        inputs.append({'evidence':prepared,'policy':ai.investigation_policy()})
+        return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
     result=assess(row.evidence)
     checks=result.get('requested_checks',[])
     if checks:
@@ -605,6 +610,7 @@ def _assess_active_behavior(s,row,cfg,secret):
         result=assess(row.evidence)
     with ai_runs.measure('result_persistence'):
         row.verdict=result['risk']; row.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
+        ai_assessments.record(s,row,cfg['ai_model'],result,inputs)
         s.commit()
 
 def ai_cycle():
