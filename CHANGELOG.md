@@ -4,7 +4,8 @@
 
 1. Add administrator boot/revision-checked cooperative worker drain/resume, persisted requests, observed states and audit events; stop new admission while assigned work finishes and coordinator leadership transfers.
 2. Configure bounded startup job/poll concurrency in the actual executors and admission limits, preserving defaults, serialized AI and per-host/recovery safeguards.
-3. Put worker controls beside identities, explain request/acknowledgement and queued-poll/notification state, and validate process, race, permission and responsive workflows. Remote deployment/readiness/migration acceptance remains planned.
+3. Put worker controls beside identities, explain request/acknowledgement and queued-poll/notification state, and use a validated identity body to preserve dot/case IDs. Validate process, race, permission and responsive workflows. Remote deployment/readiness/migration acceptance remains planned.
+4. Preserve exact related-evidence snapshot boundaries across MySQL JSON persistence using scope v2 text metadata; retain strict evidence-digest approval checks, legacy history and malformed/tampered-boundary rejection.
 
 ## 0.8.0 — 2026-10-30
 

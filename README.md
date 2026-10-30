@@ -480,3 +480,18 @@ The UI reports actual configured limits. Controller concurrency editing, cross-h
 state preflight, remote migration/drain recovery acceptance and other component
 health remain planned. Rebuild controller and workers together; no target-agent or
 schema upgrade is required. No Git tags are created.
+
+
+Worker control requests carry the exact case-sensitive identity in the validated
+JSON body of `POST /api/operations/workers/control`, alongside boot, revision,
+action and reason. This preserves valid identities such as `.` and `..` without
+URL path normalization. There is no released path-based worker-control API.
+
+New related-evidence scanner plans use evidence scope v2, retaining the exact
+captured time boundary as controller-generated hexadecimal text. MySQL JSON may
+round the numeric timestamp in the displayed snapshot; approval reconstructs the
+original exact boundary and still requires the full evidence digest to match.
+Changed/deleted evidence, foreign references, malformed boundaries and tampered
+exact boundaries remain rejected. Scanner-only and legacy v1 history stays readable;
+v1 plans whose numeric boundary already lost precision may require regeneration.
+Old evidence/digests are never rewritten to make approval succeed.

@@ -9,8 +9,8 @@ from app.identity import User
 
 
 def send(admin,node,action='drain',revision=0,**changes):
-    body={'boot_id':node.boot,'revision':revision,'action':action,'reason':'Planned worker maintenance',**changes}
-    return admin.post('/api/operations/workers/'+node.id+'/control',json=body)
+    body={'worker_id':node.id,'boot_id':node.boot,'revision':revision,'action':action,'reason':'Planned worker maintenance',**changes}
+    return admin.post('/api/operations/workers/control',json=body)
 
 
 def test_control_acknowledgement_work_completion_resume_and_audit(admin):
@@ -182,3 +182,15 @@ def test_failed_ack_write_retries_without_admitting_work(admin,monkeypatch):
         monkeypatch.setattr(node,'write',original)
         assert node.heartbeat(False,[],0,False)
         assert registry.page()['items'][0]['state']=='drained' and node.control_revision==1
+
+
+@pytest.mark.parametrize('identity',['.','..','Worker-A','worker-a'])
+def test_body_identity_preserves_dot_and_case_identities(admin,monkeypatch,identity):
+    monkeypatch.setenv('MRPATCHY_WORKER_ID',identity)
+    with registry.Registration() as node:
+        assert send(admin,node).status_code==200
+        assert node.heartbeat(False,[],0,False)
+        assert registry.page()['items'][0]['id']==identity
+        assert send(admin,node,'resume',1).status_code==200
+        assert not node.heartbeat(False,[],0,False)
+        assert send(admin,node,worker_id='../other').status_code==422

@@ -2604,3 +2604,61 @@ checks into passes. Any eventual final implementation/metadata commit must run a
 applicable checks and pass on that exact head before merge. The PR records current
 head/check links and remains unfinished. The broader remaining roadmap above is
 unchanged, and the existing schedule stays enabled.
+
+
+### PR #64 reconciliation — exact evidence boundary and identity-safe controls
+
+This supersedes the two unresolved findings in the preceding handoff. Completion
+gate rechecked main `076ea6cf` / PR #63 (v0.8.0), its actual changes/recorded checks,
+repository instructions and the only unfinished related PR #64. The broader roadmap
+remains incomplete. This cycle reconciles that existing update, keeps target
+v0.9.0 and does not start another PR or create Git tags.
+
+The approval failure was reproduced against a disposable native MySQL 8.0.46.
+The captured cutoff `1793340981.9435813` persisted in a JSON scope as
+`1793340981.943581`, changing the reconstructed evidence digest even though no
+receipt changed. The failed HTTP response was the existing stale-plan rejection.
+The only scope difference observed at that reproduction was the numeric cutoff.
+The issue is confirmed, rather than merely inferred from the previous CI failures.
+
+New related-evidence plans use scope version 2 with a controller-generated
+`as_of_hex` string holding the exact binary floating-point cutoff. Reconstructing
+evidence parses that canonical bounded text and uses the original cutoff for the
+same receipt queries/digest. Stored numeric snapshot timestamps remain historical
+presentation metadata and can be rounded by MySQL. No digest comparison, stale/
+deleted/changed evidence check, scope-host boundary, approval expiry, advisory-only
+restriction or provider-output validation is relaxed. A one-bit change to the exact
+cutoff still changes the digest and rejects approval. Missing/malformed/nonfinite/
+overflowed exact cutoffs reject safely. Legacy version 1 scopes and scanner-only
+plans remain readable/reviewable when their original digest still matches; old v1
+plans with already-rounded boundaries may require regeneration. No historic plan,
+evidence or digest is rewritten to force approval.
+
+Worker control now uses `POST /api/operations/workers/control` with validated exact
+`worker_id` in its JSON body, preserving the previously accepted `.`/`..` and case-
+sensitive identities. The unreleased draft path-based route is removed. Boot/
+revision/role/CSRF/freshness/version checks and audit are preserved. Backend tests
+exercise drain/resume for dot and case identities plus invalid paths; browser
+requests assert exact identity/boot/revision and exercise these names without URL
+normalization. The established glass/mascot presentation is unchanged and reviewed
+again at phone/tablet/desktop sizes.
+
+Focused local validation: 55 tests passed on SQLite and 55 passed on native MySQL
+8.0.46, including original approval failures, deterministic JSON-rounding simulation,
+exact-boundary tampering, malformed/nonfinite/overflowed values, legacy approval,
+retention/foreign-evidence rejection and all worker controls. MySQL was extracted
+into disposable local storage and run with the tests; it changes no user database
+or application deployment. Final full regression/browser results and exact-final-
+head GitHub checks are recorded in the PR before any merge. CI's MySQL 8.4 check
+remains mandatory. This resolution does not complete remote worker/state/readiness/
+migration acceptance, the full health/GCP dashboard or the security/UI roadmap.
+
+Reconciliation local validation completed: full Python suite **1,279 passed / 7
+skipped**, focused SQLite/native-MySQL suites **55 passed each**, full browser suite
+passed (including dot/case identity requests) and actual 320/768/1440 renders were
+re-reviewed. UI markup/style and the committed v0.9 screenshots remain representative;
+only control transport changed. Python compilation, JS syntax, whitespace and
+source/README/changelog version consistency passed. No outstanding finding from
+the prior handoff remains locally; all nine exact-final-commit CI jobs, including
+MySQL 8.4, must pass and mergeability/base/head must be rechecked before merging.
+The PR records those results and the actual merged commit when delivered.

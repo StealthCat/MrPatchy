@@ -121,8 +121,11 @@ def generate(s,incident,*,include_related=False):
     from . import plan_evidence
     scope=None
     if include_related:
-        scope={'version':1,'host_id':incident.host_id,'model':cfg['ai_model'],
-            'snapshot':plan_evidence.capture(s,incident)}
+        snapshot=plan_evidence.capture(s,incident)
+        # MySQL JSON can round numeric timestamps on persistence. Bind the exact
+        # captured boundary as text; the snapshot remains readable historical metadata.
+        scope={'version':2,'host_id':incident.host_id,'model':cfg['ai_model'],
+            'snapshot':snapshot,'as_of_hex':float(snapshot['as_of']).hex()}
     evidence=plan_evidence.evidence(s,incident,scope)
     captured=digest(evidence)
     allowed_ids={incident.id,incident.scan_id}

@@ -470,15 +470,16 @@ def registered_workers(offset:int=0,user=Depends(auth)):
     return page(offset)
 
 class WorkerControlInput(BaseModel):
+    worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
     boot_id:str=Field(pattern=r'^[0-9a-f]{32}$')
     revision:int=Field(ge=0,le=1_000_000_000,strict=True)
     action:str=Field(pattern=r'^(drain|resume)$')
     reason:str=Field(min_length=10,max_length=1000)
 
-@app.post('/api/operations/workers/{worker_id}/control')
-def control_worker(worker_id:str,body:WorkerControlInput,user=Depends(auth)):
+@app.post('/api/operations/workers/control')
+def control_worker(body:WorkerControlInput,user=Depends(auth)):
     from .worker_registry import request_control
-    return request_control(worker_id,body.boot_id,body.revision,body.action,body.reason,user['username'])
+    return request_control(body.worker_id,body.boot_id,body.revision,body.action,body.reason,user['username'])
 
 @app.get('/api/jobs')
 def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):

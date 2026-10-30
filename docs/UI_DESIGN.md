@@ -202,3 +202,9 @@ whole-application acceptance remain planned. Reviewed fixture renders:
 [phone](screenshots/worker-controls-v090-mobile.jpg),
 [desktop review](screenshots/worker-drain-review-v090-desktop.jpg),
 [phone review](screenshots/worker-drain-review-v090-mobile.jpg).
+
+The v0.9 reconciliation rechecks these renders and sends exact worker identity in
+a validated request body so dot-segment IDs remain controllable. Browser coverage
+now includes `.`/`..` and distinct case IDs, preserving the same confirmation,
+requested/observed states and glass/mascot surfaces. No visual asset or layout
+change is required for this transport correction.

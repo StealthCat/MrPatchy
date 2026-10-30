@@ -101,3 +101,58 @@ def test_newer_receipts_are_outside_snapshot(configured,admin,monkeypatch):
     with Session() as s:
         s.add(Observation(id='later',host_id='a',received=value['evidence_scope']['snapshot']['as_of']+1,observed=1,evidence={'processes':[{'executable':'/tmp/fixture','sha256':'b'*64}]}));s.commit()
     assert admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':digest}).status_code==200
+
+
+def fixed_boundary(monkeypatch,configured,boundary):
+    from types import SimpleNamespace
+    from app import security_correlation
+    monkeypatch.setattr(security_correlation,'time',SimpleNamespace(time=lambda:boundary))
+    with Session() as s:
+        s.get(incidents.Scan,'scan-1').created=boundary-2
+        for row in s.scalars(select(Observation)):row.received=boundary-1
+        s.commit()
+
+
+def test_exact_boundary_survives_json_rounding_and_rejects_tampering(configured,admin,monkeypatch):
+    import copy
+    import math
+    boundary=1793340981.9435813  # Reproduced MySQL JSON round-trip precision loss.
+    fixed_boundary(monkeypatch,configured,boundary)
+    pid,digest,value=generate(configured,monkeypatch)
+    assert value['evidence_scope']['version']==2
+    assert value['evidence_scope']['as_of_hex']==boundary.hex()
+    with Session() as s:
+        row=s.get(incidents.Plan,pid);content=copy.deepcopy(row.content)
+        # Simulate numeric JSON normalization on SQLite as well as real MySQL.
+        content['evidence_scope']['snapshot']['as_of']=math.nextafter(boundary,-math.inf)
+        row.content=content;s.commit()
+    result=admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':digest})
+    assert result.status_code==200,result.text
+    pid,digest,_=generate(configured,monkeypatch)
+    with Session() as s:
+        row=s.get(incidents.Plan,pid);content=copy.deepcopy(row.content)
+        content['evidence_scope']['as_of_hex']=math.nextafter(boundary,math.inf).hex()
+        row.content=content;s.commit()
+    assert admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':digest}).status_code==409
+
+
+def test_legacy_exact_numeric_boundary_remains_reviewable(configured,admin,monkeypatch):
+    import copy
+    fixed_boundary(monkeypatch,configured,1793340982.5)
+    pid,digest,_=generate(configured,monkeypatch)
+    with Session() as s:
+        row=s.get(incidents.Plan,pid);content=copy.deepcopy(row.content)
+        content['evidence_scope']['version']=1;content['evidence_scope'].pop('as_of_hex')
+        row.content=content;s.commit()
+    result=admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':digest})
+    assert result.status_code==200,result.text
+
+
+@pytest.mark.parametrize('exact',[None,123,'nan','inf','0x1p+999999999999999999999','not-a-boundary'])
+def test_invalid_exact_boundary_is_rejected(configured,admin,monkeypatch,exact):
+    import copy
+    pid,digest,_=generate(configured,monkeypatch)
+    with Session() as s:
+        row=s.get(incidents.Plan,pid);content=copy.deepcopy(row.content)
+        content['evidence_scope']['as_of_hex']=exact;row.content=content;s.commit()
+    assert admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':digest}).status_code==409
