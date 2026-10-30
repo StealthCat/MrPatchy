@@ -25,7 +25,21 @@ window.PatchyUI=(()=>{
  const empty=(title,text,action='')=>`<div class="empty">${mascot('welcome','empty-mascot')}<div><span class="eyebrow">MR PATCHY'S WORKBENCH</span><h3>${title}</h3><p>${text}</p>${action}</div></div>`;
  const loading=()=>`<div class="loading-state" role="status">${portrait()}<div><strong>Mr Patchy is checking in…</strong><p>Gathering your workspace.</p></div><span class="loading-dots" aria-hidden="true">•••</span></div>`;
  const enrollment=step=>`<ol class="enrollment-steps" aria-label="Enrollment progress">${['Server details','Prepare target','Connect & verify'].map((label,index)=>`<li class="${index+1===step?'current':index+1<step?'done':''}" ${index+1===step?'aria-current="step"':''}><span>${index+1<step?'✓':index+1}</span>${label}</li>`).join('')}</ol>`;
+ // Shared route-link navigation, using native disclosure rather than a simulated ARIA menu.
+ function sectionNavigation(entries,current,link,primary,groups){
+  const safe=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const anchor=entry=>`<a href="${safe(link(entry[0]))}" ${entry[0]===current?'class="active" aria-current="page"':''}>${safe(entry[1])}</a>`;
+  const secondary=entries.filter(entry=>!primary.includes(entry[0]));
+  const selected=secondary.find(entry=>entry[0]===current);
+  return primary.map(key=>entries.find(entry=>entry[0]===key)).filter(Boolean).map(anchor).join('')+(secondary.length?`
+   <details class="section-menu ${selected?'has-current':''}"><summary><span>${selected?safe(selected[1])+' · ':''}More sections</span>${icon('overview')}</summary>
+    <div class="section-menu-panel"><div class="section-menu-intro">${portrait()}<div><strong>Your server workbench</strong><small>Choose a focused workspace</small></div></div>
+    <div class="section-menu-groups">${groups.map(group=>{const items=secondary.filter(entry=>group.ids.includes(entry[0]));return items.length?`<section><h3>${safe(group.title)}</h3>${items.map(anchor).join('')}</section>`:'';}).join('')}</div></div>
+   </details>`:'');
+ }
+ document.addEventListener('click',event=>{document.querySelectorAll('.section-menu[open]').forEach(menu=>{if(!menu.contains(event.target)||event.target.closest('a'))menu.open=false;});});
+ document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const menu=event.target.closest('.section-menu[open]');if(menu){menu.open=false;menu.querySelector('summary').focus();event.preventDefault();}});
  document.querySelectorAll('[data-icon]').forEach(node=>node.innerHTML=icon(node.dataset.icon));
  document.querySelectorAll('[data-mascot-portrait]').forEach(node=>node.innerHTML=portrait());
- return {icon,mascot,portrait,heading,empty,loading,enrollment,pages};
+ return {icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation};
 })();

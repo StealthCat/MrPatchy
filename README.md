@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.5.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.6.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -400,3 +400,5 @@ response. See the [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md).
 Use **File integrity → Browse startup files** to search bounded stored startup metadata, review baseline-change labels and inspect mechanism/collection gaps. Origin and job-level discovery remain unassessed.
 
 After **Finish and verify installation**, Mr Patchy follows the deployment job and opens that server’s Overview only after backend verification succeeds. This tab retains the success notice and restores pending progress after reload. Failures stay on the verification step with Activity and explicit retry controls. An unconfirmed submission is checked against server job history rather than replayed; ambiguous results require Activity review. Closing the dialog does not cancel work. **Stop tracking** clears only this tab’s progress, not the server or job. Progress is scoped to the signed-in account in browser session storage; a different browser/tab can use Manage → Finish / verify installation and existing active deployment jobs.
+
+Server workspaces use primary **Overview / Packages / Security / Settings** tabs (subject to role and server state), plus **More sections** grouped into updates/history, investigations/evidence and administration. Existing deep links still work. Package search and Updates only filters are remembered per server and separately for the fleet view while signed in, including when refreshing or returning with Back/Forward. Signing out or reloading clears these in-memory filters; patch selections are never restored. See [UI design and migration inventory](docs/UI_DESIGN.md#screen-migration-inventory).

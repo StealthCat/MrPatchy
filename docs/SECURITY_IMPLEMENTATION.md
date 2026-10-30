@@ -2353,3 +2353,38 @@ starting points, not evidence that this milestone is finished. Use
 - Update the UI design guide, navigation documentation and actual application screenshots with the implemented design. Capture representative populated, loading, empty, error, warning and success states at mobile/tablet/desktop sizes; inspect the rendered text and controls as well as the artwork.
 - Exercise critical end-to-end workflows through the new pages/tabs/menus: login, enrollment and Overview landing, server selection, update selection/approval, scheduling, AI pause/investigation, security evidence/response review, jobs/history, deployment health and settings. Include direct links, Back/Forward, keyboard navigation, permissions and long-content/failed-loading cases.
 - Mark the rework complete only after the defined screen inventory has been migrated and the readability, usability, navigation, visual and regression criteria are met. Existing glass CSS, a few mascot placements or one polished screen do not complete the milestone. Once complete, the existing completion gate prevents open-ended cosmetic work merely to fill scheduled cycles.
+
+
+## v0.6.0 — server workbench navigation foundation
+
+Completion-gate base: main `49c6722` ([PR #60](https://github.com/StealthCat/MrPatchy/pull/60)),
+source 0.5.1. The actual five-file roadmap/design/version diff, nine successful
+exact-head checks, current checkpoint and absence of open PRs were inspected.
+The full UI rework is a concrete outstanding requirement, alongside the previously
+recorded security, startup, deployment and retention roadmap.
+
+This first UI milestone defines a finite screen inventory in
+[UI_DESIGN.md](UI_DESIGN.md#screen-migration-inventory), maps server navigation and
+implements a shared glass disclosure component with the established mascot. The
+server header and four primary routes are compact, secondary pages are grouped,
+and navigation precedes AI policy content. Current page/server, deep links and
+role/lifecycle restrictions remain explicit. Settings/deletion stays directly
+accessible. Native keyboard interaction, Escape/outside dismissal, responsive
+in-flow mobile grouping and transparency/forced-color fallbacks are included.
+
+Server/fleet package filters are kept separately in session memory during route
+changes and refresh; sign-out/reload clears them. Installation selections remain
+fresh and still require review. No provider/target calls or mutation decisions are
+introduced by navigation. No schema/helper upgrade is needed; rebuild controller.
+Local validation: full browser suite passed, the final navigation fixture passed
+at 320/390/768/1440 widths, 21 lifecycle/version tests passed, and JS syntax,
+whitespace and source-version consistency passed. Reviewed desktop/tablet/mobile
+screenshots are linked in the design guide. Versioned PR records final CI
+validation and the merged commit; Git tags are skipped.
+
+Still unfinished: all content-family migrations and application-wide UI acceptance
+listed in the screen inventory; comprehensive startup discovery/provenance/AI
+classifications; CVE exposure/detectors and automatic containment; general malware
+protection; remote-worker deployments/shared state, health dashboard and GCP node;
+retention/immutable storage and native/real-target acceptance. This milestone does
+not claim complete UI redesign or complete endpoint protection.
