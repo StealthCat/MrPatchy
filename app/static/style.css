@@ -448,3 +448,11 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .history-detail-heading { display:flex;gap:14px;align-items:center;margin-bottom:18px; }
 .history-detail pre { max-height:60vh;overflow:auto; }.history-detail dd { overflow-wrap:anywhere; }
 @media(max-width:600px){.snapshot-list article{align-items:flex-start;flex-direction:column}.snapshot-list .button{display:inline-flex}.history-detail{padding:16px}.history-detail pre{font-size:11px}}
+
+.activity-detail { background:var(--panel);backdrop-filter:none; }
+.activity-detail pre { max-height:60vh;overflow:auto; }
+.activity-detail dd,.activity-detail h3 { overflow-wrap:anywhere; }
+.activity-detail .table-wrap { margin:16px 0; }
+.activity-detail { margin-top:20px; }
+.activity-detail .server-facts { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px; }
+@media(max-width:600px){.activity-detail .server-facts{grid-template-columns:minmax(0,1fr)}}

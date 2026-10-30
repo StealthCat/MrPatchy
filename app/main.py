@@ -44,7 +44,7 @@ async def lifespan(app):
         finally:
             worker.stop.set()
             if background: background.join()
-APP_VERSION='0.16.0'
+APP_VERSION='0.17.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -491,8 +491,16 @@ def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):
         if host_id:host_or_404(s,host_id);query=query.where(Job.host_id==host_id)
         return [object_dict(x,('payload',)) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
-def audit_log(user=Depends(auth)):
-    with Session() as s: return [object_dict(x) for x in s.scalars(select(Audit).order_by(Audit.created.desc()).limit(200))]
+def audit_log(offset:int=0,limit:int=200,user=Depends(auth)):
+    if offset<0 or not 1<=limit<=200:raise HTTPException(400,'Invalid audit pagination')
+    with Session() as s:return [object_dict(x) for x in s.scalars(select(Audit).order_by(Audit.created.desc(),Audit.id.desc()).offset(offset).limit(limit))]
+
+@app.get('/api/audit/entries/{entry_id}')
+def audit_detail(entry_id:int,user=Depends(auth)):
+    with Session() as s:
+        row=s.get(Audit,entry_id)
+        if not row:raise HTTPException(404,'Audit entry not found')
+        return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(auth)):
     with Session() as s:
@@ -684,10 +692,10 @@ def set_priority(host_id:str,body:PriorityInput,user=Depends(auth)):
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
 
 @app.get('/api/jobs/{job_id}')
-def job_detail(job_id:str,user=Depends(auth)):
+def job_detail(job_id:str,host_id:str="",user=Depends(auth)):
     with Session() as s:
         job=s.get(Job,job_id)
-        if not job: raise HTTPException(404,'Operation not found')
+        if not job or (host_id and job.host_id!=host_id): raise HTTPException(404,'Operation not found')
         return object_dict(job,('payload',))
 
 @app.get('/api/hosts/{host_id}/history')

@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.16.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.17.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -620,3 +620,17 @@ account-session memory and clears on reload/sign-out. Existing inspection-dialog
 links now navigate to these pages. Missing/deleted snapshots offer list/retry links.
 These are retained observations, not current state or malware verdicts; offset
 pages can shift during collection/retention. No target/provider calls are added.
+
+
+### Activity review pages (v0.17.0)
+
+Activity separates Operations, administrator Audit trail and Workers. Operations
+and audit lists use fifty-record pages and remember position per fleet/server or
+audit context until reload/sign-out. Audit entries (`#activity/audit/{id}`) and
+operations (`#activity/jobs/{id}`) have read-only detail links and error recovery.
+Server operation links use `#servers/{host}/patching/jobs/{id}` and send an expected
+host ID; mismatched records return 404. Cancellation/recovery remain on lists under
+existing administrator confirmations; viewing details does not replay work.
+Audit API reads accept offset/limit (default/max 200), with timestamp/ID ordering
+and administrator-only `/api/audit/entries/{id}` reads. Existing unscoped job reads
+and payload exclusion remain. Offset pages can shift during collection/retention.

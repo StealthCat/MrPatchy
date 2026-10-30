@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.17.0 — 2026-10-30
+
+- Separate paginated audit review from operations and add linked audit/operation detail pages.
+- Preserve fleet/server list position and verify server scope on operation detail reads; retain existing cancellation/recovery confirmations.
+
 ## 0.16.0 — 2026-10-30
 
 - Add linked server inventory/process snapshot list and detail pages, replacing the history inspection dialog.
