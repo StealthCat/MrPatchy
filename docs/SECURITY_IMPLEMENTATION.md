@@ -1974,7 +1974,7 @@ verified code constraints rather than a measured diagnosis of one deployment.
 - `worker_registry.POOL_CAPACITY['ai']` is fixed at one. The scheduler retains one `ai_task`, and `ai_cycle` runs one process investigation and then one update-scoring batch sequentially. Raising a pool size alone does not enable parallel triage.
 - `worker.investigate_one` holds the fleet-wide `ai-triage` lock for the entire investigation. Per-server provider locks also serialize outbound calls for a server. The current reconciliation routine assumes exclusive execution and would interrupt valid concurrent runs if reused unchanged.
 - An investigation can require two sequential model calls with allowlisted SSH evidence collection between them. `ai._request` used top-level `httpx.post` at this baseline; v1.18.0 adds the
-  bounded reusable transport and stage diagnostics described below. Most failed/interrupted investigations wait one hour before retry.
+  bounded reusable transport and stage diagnostics described below. At this baseline most failed/interrupted investigations wait one hour before retry; v1.19.0 adds the bounded process-triage scheduling described below.
 - Process investigations and score batches have independent rolling-hour hard allowances, defaulting to 20 each. Incident/startup plans additionally share a fixed ten-per-hour allowance. Cost receipts are retrospective estimates; they do not implement daily budget admission.
 - Existing behavior IDs include the server ID, so retained assessments/approvals do not provide a fleet-wide exact-match known-good cache. The current Retry action only accepts unapproved pending/error items; it cannot explicitly re-triage a completed safe/cache result.
 
@@ -3534,3 +3534,86 @@ Expanded local initialization, settings, timing and preflight coverage: **82 pas
 checks, the actual merge commit or precise unfinished state. Finish an open PR
 before new cache work. No UI change or new schema definition; existing browser,
 MySQL and native startup checks remain mandatory on the exact final commit.
+
+
+## v1.19.0 — Classified durable process-triage retries
+
+Issue-first/completion gate: inspected current main `a63396f5` (v1.18.1), AGENTS,
+CONTRIBUTING, this checkpoint, PR #76's actual source/test changes and recorded
+validation, including nine successful checks on final head `1fd5d4ab`. Open issue
+and PR collections returned empty 100-item first pages; no issues are claimed
+fixed, deferred or closed. The roadmap is unfinished. No active fix needed
+reconciliation. The selected coherent faster-triage milestone is classified
+transport failure handling, durable bounded process retry scheduling and explained
+queue eligibility. The broader cache/threading/shared-controls program stays planned.
+
+A new `ai_triage_retries` table retains subject, hashed model/key configuration,
+attempt count, deferred/blocked/interrupted state and next/provider-floor timestamps.
+It contains no key, provider body or process evidence. Only the existing distributed
+`ai-triage` lock mutates retry state; no lock is held merely waiting for eligibility.
+The existing lock still spans an actual investigation and concurrency remains one.
+This is not per-item leases, distributed provider pacing or parallel execution.
+
+Transport errors carry controlled classifications. Network/timeouts, explicit
+rate-limit/slow-down responses and HTTP 408/500/502/503/504 without a contradictory
+known configuration/billing code get bounded exponential jitter (30–60 seconds for
+the first retry, increasing upper bound) and valid numeric/HTTP-date Retry-After
+floors. Unsupported/unclassified 429s are conservatively review-blocked rather
+than assumed transient billing. Malformed headers fall back to jitter; parseable
+excessive delays outside the supported ten-year bound block automatic scheduling
+for operator review instead of being clamped into an earlier automatic retry.
+No untrusted header text is persisted. There are at most five automatic attempts
+per subject/configuration, including interrupted attempts. Transport itself never
+replays a paid call. The worker returns while waiting; another eligible subject can
+run. Retry scheduling is durable across fresh sessions/processes and normal AI-log
+pruning. Legacy attempts and crash recovery retain a one-hour wait; exhausted
+interrupted work requires review rather than retrying forever.
+
+Authentication, billing, schema/request/model, invalid/incomplete/refused structured
+output and unclassified/internal/SSH failures do not loop automatically. They require
+a changed model/key or an explicit administrator Retry after review. Enable toggles
+do not reset attempt limits. Configuration changes cannot bypass a saved provider
+delay. Manual Retry is audited and still respects CSRF/roles, lifecycle, provider
+floors and existing hourly admission. A pause between stages defers work until
+resume without counting that policy deferral toward the automatic-failure limit;
+resume retains global/per-server checks and does not reset hourly accounting.
+
+Models, token limits, full authorized input, conditional SSH checks, second-stage
+requests, structured validation and advisory/approval boundaries are unchanged.
+A lost follow-up response retains collected evidence and both call receipts; a
+later retry performs the complete investigation and required checks again. Failed
+calls can be billable; missing usage remains unavailable/uncertain, never free.
+This milestone does not add a durable budget ledger or promise exactly-once paid
+execution. AI run/call diagnostic retention remains unchanged. Retry state alone
+is retained independently until a successful result or explicit reset clears it.
+
+Investigations and AI status explain eligible/review-blocked/paused counts and
+per-item retry state/attempts/eligibility. Paused/inactive work does not count as
+eligible. Eligibility is not a start guarantee: the existing serial worker and
+rolling-hour process/scoring/plan allowances remain. Other AI purposes retain
+their old scheduling; central classification metadata does not add automatic
+replays to tests, plans, scoring or manual calls. Shared Retry-After admission
+across purposes/workers is still part of the planned shared-controls milestone.
+The established glass palette and mascot are reused; actual 320/768/1440 renders,
+text escaping, early-retry feedback and reload behavior are covered by browser tests.
+
+Validation before publication: initial integrated coverage passed 122 tests. Extra
+crash/pause/follow-up cases exposed a missing local API import and mislocated test
+fixture lines; both were corrected before publication. Corrected policy/queue tests
+passed 56 tests, then the expanded final retry module passed 28 tests, including a
+separate process reading persisted eligibility. Full local regression/browser and
+all nine exact-final-head SQLite/MySQL/native checks are recorded in the delivery
+PR; no merge is allowed before their success. Source/README/changelog are v1.19.0,
+major fixed at 1. Rebuild controller first to initialize the new table, then matched
+workers; no endpoint-agent upgrade or Git tags. The development schedule is unchanged.
+
+Remaining priority: full verified context collection/canonical fingerprints and
+persistent fleet exact-known-good reuse with provenance/revocation/manual Re-triage;
+atomic per-item claims/renewable leases, independent sessions, pause-safe same-host
+and cross-host threaded tasks, fairness/scoring admission and recovery; shared
+pacing/daily reservations/uncertain-charge ledger/unthrottled controls plus migration
+preview, complete billable-path coverage and SQLite/MySQL end-to-end acceptance.
+Do not treat this retry submilestone as completion of finite milestone 1 or the
+faster-triage program. Notifications, remote deployment/shared state/health/GCP,
+startup/provenance, malware/CVE automatic containment and full UI work remain
+unfinished. Finish/reconcile this delivery PR before starting new roadmap work.

@@ -43,7 +43,7 @@ def test_triage_persists_stages_error_and_redacts_provider(admin,monkeypatch):
     assert [e['stage'] for e in detail['events'] if not e['stage'].startswith('timing_')]==['starting','api_request','api_response','failed']
     assert 'HTTP 401' in json.dumps(detail) and 'req_test' in json.dumps(detail)
     assert 'secret-api-key' not in json.dumps(detail) and '/private/process' not in json.dumps(detail)
-    status=admin.get('/api/investigation-status').json();assert status['reason']=='backoff' and status['retry_at']>time.time()
+    status=admin.get('/api/investigation-status').json();assert status['reason']=='blocked' and status['blocked']==1 and status['retry_at'] is None
 
 
 def test_manual_retry_does_not_reset_hourly_quota(admin,monkeypatch):

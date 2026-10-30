@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.19.0 — 2026-10-30
+
+- Queue durable, bounded process-triage retries using classified transient errors, exponential jitter and provider Retry-After floors.
+- Block authentication/billing/configuration failures until correction or explicit retry; preserve AI pause, receipts and existing admission limits.
+- Explain retry eligibility, review blockers and paused work in the existing glass investigations/AI status surfaces.
+- Add a retry-state table; upgrade controller before matched workers. Shared rate/spend controls and parallel/cache milestones remain planned.
+
 ## 1.18.1 — 2026-10-30
 
 - Fix repeated initialization after SQLite schema changes on warmed pooled connections.

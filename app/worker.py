@@ -11,7 +11,7 @@ import subprocess
 from sqlalchemy import select, delete, update, func
 from . import host_lifecycle
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, package_history, update_scores, packages as package_backend
+from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend
 from target.agent import MANAGED
 from .security import unseal
 import httpx
@@ -561,18 +561,21 @@ def _investigate_one(admission_started=None):
         recent=list(s.scalars(select(Behavior).where(Behavior.attempted>now-3600)))
         count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
         if max(len(recent),count)>=cfg['ai_hourly_limit']: return
-        row=s.scalar(select(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.verdict.in_(['pending','error']),Behavior.attempted<now-3600).order_by(Behavior.first_seen).limit(1))
+        signature=ai_retry.configuration(s)
+        row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.verdict.in_(['pending','error']),ai_retry.eligible(signature,now)).order_by(Behavior.first_seen,Behavior.id).limit(1))
         if not row: return
-        row.attempted=now; s.commit()
+        row.attempted=now; ai_retry.begin(s,row,signature,now);s.commit()
         try:
             with ai_runs.track('triage',cfg['ai_model'],row.host_id,row.id):
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
                 ai_runs.timing('queue_age',now-row.first_seen)
                 _assess_behavior(s,row,cfg,secret)
+            ai_retry.clear(s,row)
         except Exception as e:
             s.rollback();row=s.get(Behavior,row.id)
             row.verdict='error'
-            row.analysis='Investigation failed; automatic retry after the one-hour backoff. '+ai_runs.safe_error(e)
+            retry=ai_retry.failed(s,row,e,time.time())
+            row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(e)
         s.commit()
 
 def _assess_behavior(s,row,cfg,secret):

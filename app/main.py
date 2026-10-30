@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.18.1'
+APP_VERSION='1.19.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -458,7 +458,17 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(auth))
         stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
         if host_id: host_or_404(s,host_id);stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
-        return [object_dict(x) for x in s.scalars(stmt)]
+        from . import ai_retry,ai_policy
+        rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
+        retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
+        result=[];now=time.time()
+        for row in rows:
+            retry=None
+            if not row.approved and row.verdict in ('error','pending'):
+                retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
+                if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
+            result.append(object_dict(row)|{'retry':retry})
+        return result
 class ApproveInput(BaseModel): approved:bool
 @app.put('/api/investigations/{behavior_id}')
 def approve(behavior_id:str,body:ApproveInput,user=Depends(auth)):
@@ -1211,6 +1221,9 @@ def retry_investigation(behavior_id:str,user=Depends(auth)):
             row=s.get(Behavior,behavior_id)
             if not row or row.approved or row.verdict not in ('error','pending'):raise HTTPException(409,'Only unapproved failed/pending investigations can be retried')
             with host_lifecycle.activity([row.host_id],'queue'):
+                from . import ai_retry
+                try:ai_retry.manual(s,row)
+                except ValueError as error:raise HTTPException(409,str(error)) from None
                 row.attempted=0;row.verdict='pending';row.analysis='Retry requested by an administrator; hourly limits still apply.'
                 audit(s,'retry AI investigation',user['username']+' '+row.id);s.commit()
         return {'ok':True,'detail':'Investigation queued. AI must be enabled and a worker available; hourly limits still apply.'}
