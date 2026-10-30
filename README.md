@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.13.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.14.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -568,3 +568,23 @@ compatibility, SSH keys, artifact/evidence mounts, correct selection among clone
 databases using the same key, or target access. It is not a supported remote-worker
 provisioning solution. Full shared-state preflight and remote deployment acceptance
 remain planned. This source update requires no endpoint-agent or schema migration.
+
+
+### Required schema structure and receipt protocol (v0.14.0)
+
+Strict worker admission also requires receipt protocol 1 and a matching source
+requirements digest, then checks every mapped table, required column and primary
+key using read-only database inspection before worker init. Extra tables/columns
+are allowed for additive compatibility. Missing tables/columns, views replacing
+tables, wrong primary keys or inspection permission failures refuse admission;
+workers do not create or repair them to pass. Workers shows this startup result
+separately from the key check and general readiness.
+
+Start the upgraded controller first. It upgrades valid legacy v0.13 receipts with
+protocol/requirements metadata while retaining the encrypted canary; unknown or
+partially malformed protocol metadata refuses publication. Restore missing state
+or run the normal controller upgrade rather than dropping validation records.
+This is not full schema compatibility: column types/lengths, nullability, defaults,
+indexes, foreign/check constraints, data validity, ongoing drift and cross-host
+migration fencing remain unassessed. Shared-state provisioning and real remote
+deployment acceptance remain planned; no endpoint-agent/schema migration is added.

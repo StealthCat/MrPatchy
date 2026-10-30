@@ -2925,3 +2925,79 @@ when self PIDs prove namespace agreement. Disappearance remains success; a live
 child still fails the same two-second deadline. No process-killing runtime code
 is changed and no native assertion is skipped. The corrected final head reruns
 all nine checks, superseding prior validation heads.
+
+
+## v0.14.0 — Required schema structure and receipt-protocol admission
+
+Delivery: [PR #69](https://github.com/StealthCat/MrPatchy/pull/69), initial implementation
+[0ae5577b](https://github.com/StealthCat/MrPatchy/commit/0ae5577b2aa82541517a905c86079654f26eceea).
+The PR records final-head validation and the actual merged main commit.
+
+Completion gate: inspected main `e2573f9f`, latest merged
+[PR #68](https://github.com/StealthCat/MrPatchy/pull/68), its actual startup-gate,
+UI and descendant-test changes, recorded exact-head nine-check validation, current
+instructions/checkpoint and open related PRs (none). The roadmap remains
+unfinished. This batch advances the explicitly remaining schema/protocol gate
+with bounded structure validation, native refusal acceptance and honest UI scope.
+It does not complete full schema compatibility or remote shared-state readiness.
+
+Controller receipts now include receipt protocol 1 and a SHA-256 digest of the
+source-required table names, column names and ordered primary-key columns. Model
+registration is centralized and can run without web bootstrap or DDL, allowing
+controllers and workers to derive the same requirements. Normal controller init
+still performs its existing creation/migrations; worker verification does not.
+This digest describes source requirements, not a controller certificate that the
+live database is correct. Strict workers independently inspect the live database
+using the existing session before worker init or admission. Missing tables/columns,
+views in place of tables, incorrect primary keys or unavailable inspection refuse
+startup without registering, creating/altering tables or repairing the receipt.
+Extra tables/columns are allowed for additive compatibility.
+
+Valid legacy v0.13 receipts upgrade on controller restart with the encrypted canary
+retained. Unknown/boolean/missing/partial protocol metadata, malformed requirements
+or same-source-version digest mismatches refuse; stripping current receipt fields
+cannot masquerade as a legacy upgrade. Worker failures retain safe redacted
+diagnostics. Private-key/source-version checks and existing coordinator, claims,
+locks, drain and response authorization remain unchanged. Native/legacy opt-out
+behavior remains explicit under MRPATCHY_REQUIRE_CONTROLLER_STATE. Complete
+Compose keeps strict admission enabled; start the upgraded controller first.
+
+Registered-worker reports add a bounded schema_structure enum independently of
+the key result. Workers shows verified-at-startup, not enabled or not reported
+beside identity before phone-table scrolling. A shared explanation covers the
+required structure and unassessed types/other constraints, reducing repeated row
+text. The existing glass palette, mascot and role/control safeguards remain.
+Browser fixtures now derive matching runtime versions from health metadata.
+Reviewed phone/tablet/desktop renders are linked in UI_DESIGN.md.
+
+Focused validation covers legacy upgrade/canary retention, malformed/unknown
+protocol and requirements refusal without rewrite, real SQLite table/column/PK/
+view drift, additive compatibility and SQL observation proving no DDL/DML during
+verification. Native strict workers refuse dropped tables/columns and missing
+primary keys before init; database schema is unchanged and no registration appears.
+A subprocess proves model registration imports no web runtime and creates no
+tables. Permission diagnostics remain redacted. Existing real strict/legacy worker
+registration, duplicate identity, drain/resume and graceful-stop acceptance remains.
+Focused preflight/worker tests: **61 passed**. Full local regression and exact-final-
+head CI results, the versioned PR and actual merged main commit are recorded in
+the delivery PR; all nine applicable checks must pass before merging.
+
+Limits/remaining: types/lengths, nullability, defaults, indexes, foreign/check
+constraints, data validity, worker job/wire protocol, ongoing drift and atomic
+cross-host migration fencing are unassessed. Metadata inspection is point-in-time,
+not proof that concurrent or later DDL cannot change state. Secure remote SSH/key/
+profile/trust/artifact/evidence provisioning, separate Compose/installer modes and
+real remote failure/recovery acceptance remain planned. Controller/endpoint/GCP
+health, alerts/diagnostics and optional GCP node; comprehensive startup discovery/
+provenance/classification; CVE/known/unknown automatic protection and real-target
+recovery; retention/independent evidence and remaining UI migration also remain.
+Existing AI pause remains implemented. Rebuild/restart controller before matched
+workers; this update adds no endpoint-agent or schema migration. No Git tags by
+user instruction; the existing schedule remains unchanged.
+
+Local UI acceptance: full browser suite and final focused schema-status checks
+passed, including verified/disabled/unreported states, roles, drain and responsive
+layout. Final 320/768/1440 renders were reviewed after consolidating repeated scope
+text. Initial full Python regression passed **1,327 tests / 7 skipped**; the final
+run includes added native refusal/current-receipt cases, with its result recorded
+in the delivery PR. Python/JS syntax, whitespace and version consistency passed.

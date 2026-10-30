@@ -99,3 +99,104 @@ def test_controller_refuses_malformed_version(local):
         row=s.get(Setting,gate.KEY);row.value={**row.value,'version':None};s.commit()
     with pytest.raises(ValueError):gate.publish(APP_VERSION)
     with Session() as s:assert s.get(Setting,gate.KEY).value['version'] is None
+
+
+def test_legacy_receipt_upgrade_retains_canary(local):
+    with Session() as s:
+        row=s.get(Setting,gate.KEY);old=row.value['encrypted'];row.value={k:v for k,v in row.value.items() if k not in ('protocol','requirements')}|{'version':'0.13.0'};s.commit()
+    with pytest.raises(ValueError):gate.verify(APP_VERSION)
+    gate.publish(APP_VERSION)
+    assert gate.verify(APP_VERSION)=='verified'
+    with Session() as s:
+        value=s.get(Setting,gate.KEY).value
+        assert value['encrypted']==old and value['protocol']==1
+        assert value['requirements']==gate.requirements_digest(gate.schema_requirements())
+
+
+@pytest.mark.parametrize('change',[{'protocol':2},{'protocol':True},{'protocol':None},{'requirements':'bad'},{'requirements':'a'*64}])
+def test_protocol_and_digest_refuse_without_repair(local,change):
+    from sqlalchemy import update
+    with Session() as s:
+        before={**s.get(Setting,gate.KEY).value,**change}
+        s.execute(update(Setting).where(Setting.key==gate.KEY).values(value=before));s.commit()
+    with pytest.raises(ValueError):gate.verify(APP_VERSION)
+    with pytest.raises(ValueError):gate.publish(APP_VERSION)
+    with Session() as s:assert s.get(Setting,gate.KEY).value==before
+
+
+@pytest.mark.parametrize('damage',['table','column','primary_key','view','additive'])
+def test_read_only_schema_inspection_of_actual_database(local,monkeypatch,tmp_path,damage):
+    from sqlalchemy import create_engine,inspect,Table,Column,MetaData,String,text,event
+    from sqlalchemy.orm import sessionmaker
+    from app.db import Base
+    engine=create_engine('sqlite:///'+str(tmp_path/'isolated.db'))
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(gate,'Session',sessionmaker(engine))
+    try:
+        gate.publish(APP_VERSION)
+        table=Base.metadata.tables['package_events']
+        if damage=='additive':
+            with engine.begin() as c:c.execute(text('ALTER TABLE package_events ADD COLUMN extension TEXT'))
+        else:
+            table.drop(engine)
+            if damage in ('column','primary_key'):
+                Table('package_events',MetaData(),*[Column(c.name,String,primary_key=(c.primary_key and damage!='primary_key')) for c in table.columns if not (damage=='column' and c.name=='host_id')]).create(engine)
+            elif damage=='view':
+                with engine.begin() as c:c.execute(text('CREATE VIEW package_events AS SELECT 1 AS id'))
+        before=inspect(engine).get_table_names()
+        with gate.Session() as s:receipt=dict(s.get(Setting,gate.KEY).value)
+        statements=[]
+        event.listen(engine,'before_cursor_execute',lambda conn,cursor,statement,parameters,context,executemany:statements.append(statement))
+        if damage=='additive':assert gate.verify(APP_VERSION)=='verified'
+        else:
+            with pytest.raises(ValueError,match='required tables/columns/primary keys'):gate.verify(APP_VERSION)
+        assert not any(statement.lstrip().upper().startswith(('CREATE','ALTER','DROP','INSERT','UPDATE','DELETE')) for statement in statements)
+        assert inspect(engine).get_table_names()==before
+        with gate.Session() as s:assert s.get(Setting,gate.KEY).value==receipt
+    finally:engine.dispose()
+
+
+def test_structure_inspection_denial_is_redacted(local,monkeypatch):
+    def denied(*args):raise PermissionError('private database credentials')
+    monkeypatch.setattr(gate,'inspect_structure',denied)
+    with pytest.raises(ValueError) as error:gate.verify(APP_VERSION)
+    assert 'private database credentials' not in str(error.value)
+
+
+def test_model_registration_does_not_bootstrap_database(tmp_path):
+    env={**os.environ,'DATA_DIR':str(tmp_path),'DATABASE_URL':'sqlite:///'+str(tmp_path/'empty.db')}
+    result=subprocess.run([sys.executable,'-c',"import sys; from app.worker_preflight import schema_requirements; assert schema_requirements(); assert 'app.main' not in sys.modules"],env=env,capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stderr
+    import sqlite3
+    connection=sqlite3.connect(tmp_path/'empty.db')
+    assert connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()==[]
+    connection.close()
+
+
+@pytest.mark.parametrize('damage',['table','column','primary_key'])
+def test_native_strict_worker_refuses_drift_before_init(tmp_path,damage):
+    import sqlite3
+    from app.worker_registry import record_key
+    directory=tmp_path/'native';directory.mkdir();database=directory/'state.db'
+    env={**os.environ,'DATA_DIR':str(directory),'DATABASE_URL':'sqlite:///'+str(database),'MRPATCHY_REQUIRE_CONTROLLER_STATE':'1','MRPATCHY_WORKER_ID':'must-not-register'}
+    setup=subprocess.run([sys.executable,'-c',"from fastapi.testclient import TestClient; from app.main import app; c=TestClient(app); c.__enter__(); c.__exit__(None,None,None)"],env=env,capture_output=True,text=True,timeout=30)
+    assert setup.returncode==0,setup.stderr
+    with sqlite3.connect(database) as c:
+        if damage=='table':c.execute('DROP TABLE package_events')
+        elif damage=='column':c.execute('ALTER TABLE package_events DROP COLUMN actor')
+        else:
+            columns=[row[1] for row in c.execute('PRAGMA table_info(package_events)')]
+            c.execute('DROP TABLE package_events')
+            c.execute('CREATE TABLE package_events ('+','.join('"'+column+'" TEXT' for column in columns)+')')
+        before=list(c.execute("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name"))
+    result=subprocess.run([sys.executable,'-m','app.worker'],env=env,capture_output=True,text=True,timeout=30)
+    assert result.returncode!=0 and 'preflight failed' in result.stderr
+    with sqlite3.connect(database) as c:
+        assert list(c.execute("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name"))==before
+        assert c.execute('SELECT value FROM settings WHERE key=?',(record_key('must-not-register'),)).fetchone() is None
+
+
+def test_current_receipt_cannot_masquerade_as_legacy(local):
+    with Session() as s:
+        row=s.get(Setting,gate.KEY);row.value={k:v for k,v in row.value.items() if k not in ('protocol','requirements')};s.commit()
+    with pytest.raises(ValueError):gate.publish(APP_VERSION)

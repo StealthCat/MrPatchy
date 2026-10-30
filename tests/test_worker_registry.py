@@ -136,6 +136,7 @@ def test_real_worker_process_registration_duplicate_identity_and_stop(tmp_path,s
             assert report and report['state']=='reporting',output.read_text()[-2000:]
             assert report['role']=='worker' and report['version']==APP_VERSION
             assert report['controller_state']==('verified' if strict else 'not_checked')
+            assert report['schema_structure']==('verified' if strict else 'not_checked')
             duplicate=subprocess.run([sys.executable,'-m','app.worker'],env=env,capture_output=True,text=True,timeout=15)
             assert duplicate.returncode!=0 and 'already in use' in duplicate.stderr
             assert process.poll() is None

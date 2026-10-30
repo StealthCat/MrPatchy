@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0 — 2026-10-30
+
+- Check strict-worker receipt protocol and required tables, columns and primary keys before database initialization or job admission.
+- Upgrade valid legacy controller receipts with a deterministic requirements digest; refuse malformed or unknown protocol metadata.
+- Display schema-structure startup results separately from key verification and readiness; document remaining type/constraint/shared-state limits.
+
 ## 0.13.0 — 2026-10-30
 
 - Add a controller encryption canary/version receipt and opt-in fail-closed worker startup verification before worker database initialization or job admission.
