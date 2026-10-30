@@ -2140,3 +2140,32 @@ collectors, CVE applicability/effective-fix exposure tracking, validated detecto
 policy-authorized automatic quarantine/termination, maintained signatures/engines,
 retention/immutable storage and real-target response acceptance. This bounded
 scanner-led advisory enrichment does not complete general malware protection.
+
+
+## v0.4.0 — stored startup-file review workspace
+
+Delivery: [PR #56](https://github.com/StealthCat/MrPatchy/pull/56), initial implementation
+[18261e91](https://github.com/StealthCat/MrPatchy/commit/18261e91011dfda311cea175e81e1e5e76155be2).
+The PR records exact final checks and its actual merged main commit.
+
+After [PR #55](https://github.com/StealthCat/MrPatchy/pull/55), the startup roadmap
+remains unfinished. This milestone adds File integrity → Browse startup files:
+search by path/mechanism, deterministic 25-file pages, current receipt time/ID,
+baseline-change labels and a revision guard covering receipt contents and the
+reviewed baseline. The source remains the existing bounded 256-entry metadata
+inventory. Symlink targets are displayed without following them. Incomplete/stale
+receipts, missing roots, skips and unsupported mechanism families remain visible.
+Removed files remain in baseline differences; this view lists current stored entries.
+Origin is explicitly not assessed: package ownership and authenticated defaults are
+not fabricated from path names or baseline acceptance. No AI upload, remote contact,
+job execution, baseline approval or response action occurs. Administrator access and
+retained disabled/deleted history follow existing security-history controls.
+
+This delivers review visibility and an initial extensible mechanism catalog, not
+comprehensive discovery. Still planned: individual cron/anacron/at entries, vendor/
+user/runtime systemd units and precedence, broader boot/login/event mechanisms,
+segmented inventories and referenced scripts, native package ownership plus exact
+vendor-default verification, configured AI classifications/redaction, alerts and
+real-target acceptance. CVE monitoring, automatic containment, general malware
+protection and evidence retention remain planned. No schema or agent upgrade is
+needed; rebuild the controller. Git tags remain omitted by user instruction.

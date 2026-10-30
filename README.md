@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **0.3.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **0.4.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 **Patch management, release upgrades and security monitoring for your Linux fleet.**
 
@@ -396,3 +396,5 @@ integrity evidence** review. This shares bounded historical identity matches and
 coverage gaps, retains an inspectable evidence snapshot and rejects changed evidence
 at generation/approval. Automatic plans remain scanner-only; no AI plan executes a
 response. See the [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md).
+
+Use **File integrity → Browse startup files** to search bounded stored startup metadata, review baseline-change labels and inspect mechanism/collection gaps. Origin and job-level discovery remain unassessed.

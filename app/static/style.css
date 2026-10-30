@@ -301,3 +301,6 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .related-record code { font-size:11px; }
 
 .related-navigation { position:sticky; top:0; z-index:1; background:var(--glass-strong); padding:10px 0; }
+
+/* Startup paths, receipt IDs and hashes remain readable on narrow dialogs. */
+#startup-file-items, #startup-file-status, #startup-file-coverage { min-width: 0; overflow-wrap: anywhere; }

@@ -240,7 +240,8 @@ async function serverAgent(revision,{root,hostId}){
 
 function renderPersistenceBaseline(root,hostId,data,reload,current){
  const panel=root.querySelector('#persistence-baseline');
- panel.innerHTML='<h3>Reviewed startup baseline · '+badge(data.state)+'</h3><p>Compare future inspections with an administrator-reviewed inventory. Matches describe observed metadata, not a clean-host verdict. Queue inspections regularly; observations expire after 24 hours.</p>'+(data.baseline?'<p>Approved by '+esc(data.baseline.actor)+' · '+date(data.baseline.created)+'</p><p>'+esc(data.baseline.reason)+'</p>':'<p>No baseline has been approved.</p>')+'<details><summary>Baseline differences and coverage</summary><pre>'+esc(JSON.stringify(data.comparison,null,2))+'</pre></details><button id="review-startup-baseline" '+(!data.eligible?'disabled':'')+'>Review latest as baseline</button><button id="startup-baseline-history">Baseline review history</button><div id="startup-baseline-history-output"></div>';
+ panel.innerHTML='<button id="browse-startup-files">Browse startup files</button><h3>Reviewed startup baseline · '+badge(data.state)+'</h3><p>Compare future inspections with an administrator-reviewed inventory. Matches describe observed metadata, not a clean-host verdict. Queue inspections regularly; observations expire after 24 hours.</p>'+(data.baseline?'<p>Approved by '+esc(data.baseline.actor)+' · '+date(data.baseline.created)+'</p><p>'+esc(data.baseline.reason)+'</p>':'<p>No baseline has been approved.</p>')+'<details><summary>Baseline differences and coverage</summary><pre>'+esc(JSON.stringify(data.comparison,null,2))+'</pre></details><button id="review-startup-baseline" '+(!data.eligible?'disabled':'')+'>Review latest as baseline</button><button id="startup-baseline-history">Baseline review history</button><div id="startup-baseline-history-output"></div>';
+ panel.querySelector('#browse-startup-files').onclick=()=>browseStartupFiles(hostId,current);
  panel.querySelector('#startup-baseline-history').onclick=async()=>{try{const result=await api('/hosts/'+hostId+'/security/baseline/history');if(current())panel.querySelector('#startup-baseline-history-output').textContent=JSON.stringify(result,null,2);}catch(e){toast(e.message);}};
  panel.querySelector('#review-startup-baseline').onclick=()=>{
   modal('Review startup baseline','<p>Approve the entire displayed scope, including missing roots. This replaces the active comparison baseline and can acknowledge existing changes. It does not repair files or certify that they are safe.</p><p>Observed '+date(data.latest.created)+'</p><pre>'+esc(JSON.stringify(data.latest.inventory,null,2))+'</pre><form id="startup-baseline-approval"><label>Review reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Approve startup baseline</button></form>');
@@ -532,4 +533,21 @@ async function renderServerAIPolicy(panel,hostId,deleted=false){
    }catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
   };
  };show();
+}
+
+
+async function browseStartupFiles(hostId,current){
+ modal('Stored startup files','<p>Review stored file metadata and collection limits. This is not a complete list of jobs or effective startup configuration.</p><label>Find a path or mechanism<input id="startup-file-search" maxlength="200" type="search"></label><p id="startup-file-status" role="status"></p><div id="startup-file-items"></div><div class="actions"><button id="startup-file-prev">Previous files</button><button id="startup-file-next">Next files</button></div><details><summary>Mechanism coverage and limitations</summary><div id="startup-file-coverage"></div></details>');
+ const revision=modalRevision,session=sessionRevision;let offset=0,ticket=0,digest='',timer;
+ const alive=()=>current()&&revision===modalRevision&&session===sessionRevision&&$('#modal').open;
+ const load=async()=>{const request=++ticket;$('#startup-file-prev').disabled=true;$('#startup-file-next').disabled=true;$('#startup-file-status').textContent='Loading stored startup files…';try{
+  const data=await api('/hosts/'+hostId+'/security/startup-inventory?offset='+offset+'&q='+encodeURIComponent($('#startup-file-search').value)+'&expected_digest='+digest);
+  if(!alive()||request!==ticket)return;digest=data.digest;
+  $('#startup-file-status').textContent=data.inspection_id?'Receipt '+data.inspection_id+' · '+date(data.created)+' · '+data.total+' matching files · '+data.state:'No stored startup inventory. Queue an integrity inspection first.';
+  $('#startup-file-items').innerHTML=data.items.map(row=>'<article class="card"><strong>'+esc(row.path)+'</strong><p>'+esc(row.mechanism_label)+' · '+badge(row.change)+'</p><p>Origin: not assessed · '+esc(row.kind)+' · UID '+esc(row.uid)+' · GID '+esc(row.gid)+' · Mode '+Number(row.mode).toString(8)+'</p><p class="help">'+esc(row.sha256||row.target||'')+'</p></article>').join('')||'<p>No matching files in this stored inventory.</p>';
+  $('#startup-file-prev').disabled=offset===0;$('#startup-file-next').disabled=!data.more;
+  $('#startup-file-coverage').innerHTML='<p>'+esc(data.note||'Collection coverage is unavailable.')+'</p><p>Baseline: '+esc(data.baseline_state)+'</p><ul>'+data.catalog.map(c=>'<li>'+esc(c.label)+': '+c.observed_files+' observed files</li>').join('')+'</ul><p>Receipt scope: '+esc(data.scope.join(', '))+'</p><p>Missing roots: '+esc((data.missing_roots||[]).join(', ')||'None recorded')+' · Skipped: '+esc(data.skipped??'Unknown')+'</p><ul>'+data.gaps.map(g=>'<li>'+esc(g)+'</li>').join('')+'</ul>';
+ }catch(error){if(alive()&&request===ticket){$('#startup-file-status').textContent=error.message;$('#startup-file-items').replaceChildren();$('#startup-file-coverage').replaceChildren();$('#startup-file-prev').disabled=true;$('#startup-file-next').disabled=true;}}};
+ $('#startup-file-search').oninput=()=>{offset=0;clearTimeout(timer);timer=setTimeout(()=>{if(alive())load();},250);};
+ $('#startup-file-prev').onclick=()=>{offset=Math.max(0,offset-25);load();};$('#startup-file-next').onclick=()=>{offset+=25;load();};await load();
 }

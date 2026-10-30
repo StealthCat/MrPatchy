@@ -42,7 +42,7 @@ async def lifespan(app):
         finally:
             worker.stop.set()
             if background: background.join()
-APP_VERSION='0.3.0'
+APP_VERSION='0.4.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2264,3 +2264,13 @@ def approve_startup_plan(host_id:str,incident_id:str,plan_id:str,body:SecurityPl
         plan.state='approved';plan.approved_by=user['username'];plan.expires=time.time()+3600
         audit(s,'startup plan approved for manual response',host_id+' '+plan.id+' '+user['username']);s.commit()
         return {'execution':'manual_only','expires':plan.expires}
+
+
+@app.get('/api/hosts/{host_id}/security/startup-inventory')
+def startup_inventory(host_id:str,offset:int=0,q:str='',expected_digest:str='',user=Depends(auth)):
+    from . import startup_inventory as inventory
+    if offset<0 or offset>256 or len(q)>200 or (expected_digest and not re.fullmatch('[a-f0-9]{64}',expected_digest)):
+        raise ValueError('Invalid startup inventory page')
+    with Session() as s:
+        host_or_404(s,host_id)
+        return inventory.page(s,host_id,offset,q,expected_digest)

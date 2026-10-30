@@ -14,6 +14,8 @@ module.exports=async(page,capture)=>{
   const request=route.request(),url=new URL(request.url());
   if(url.pathname.startsWith('/api/security/indicators/'))return route.fulfill({json:{items:[{host_id:host.id,path:'/tmp/security-fixture',state:incidentState,updated:Date.now()/1000}],more:false}});
   if(!url.pathname.startsWith(prefix))return route.fallback();
+  if(url.pathname.endsWith('/startup-inventory'))return route.fulfill({json:{state:'incomplete',items:[{path:'/etc/cron.d/example<script>bad()</script>',mechanism_label:'System cron definitions',change:'not_compared',kind:'regular',uid:0,gid:0,mode:420,sha256:'a'.repeat(64)}],more:false,total:1,digest:'a'.repeat(64),inspection_id:'startup-receipt',created:1,catalog:[{label:'System cron definitions',observed_files:1}],scope:['/etc/cron.d'],gaps:['Individual jobs not parsed'],baseline_state:'unavailable'}});
+
   if(url.pathname.endsWith('/agent')&&request.method()==='GET')return route.fulfill({json:{policy:{auto_upgrade:false,auto_repair:false},status:{state:'drifted',checked:Date.now()/1000,stale:false,issues:[{path:'/usr/local/lib/mrpatchy/agent.py',kind:'unexpected_content_or_missing'}],report:{}},enrolled_outdated:false}});
   if(url.pathname.endsWith('/agent')&&request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().auto_upgrade,true);return route.fulfill({json:{auto_upgrade:true,auto_repair:false}});}
   if(url.pathname.endsWith('/persistence-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().enabled,true);assert.deepEqual(request.postDataJSON().custom_paths,['/srv/myapp/config.json']);return route.fulfill({json:{...request.postDataJSON(),revision:'monitor-version'}});}return route.fulfill({json:{enabled:false,interval_hours:12,link_incidents:false,revision:''}});}
@@ -319,6 +321,16 @@ module.exports=async(page,capture)=>{
   await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/quarantines/response-fixture/restore');
   for(const width of [320,390,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'File response view must fit the viewport');}
   await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);
+  await page.getByRole('button',{name:'Browse startup files',exact:true}).click();
+  await page.locator('#startup-file-items').filter({hasText:'Origin: not assessed'}).waitFor();
+  assert.equal(await page.locator('#startup-file-items script').count(),0);
+  await page.getByText('Mechanism coverage and limitations',{exact:true}).click();
+  if(capture)await capture('startup-file-review',false);
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.locator('#modal').evaluate(e=>e.scrollWidth<=e.clientWidth+1));
+  if(capture)await capture('startup-file-review-mobile',false);
+  await page.locator('#close-modal').click();await page.setViewportSize({width:1440,height:1000});
+
   await page.locator('#security-inspection-form').waitFor();
   await page.getByText('Trust basis: local package database',{exact:true}).waitFor();
   await page.getByText('Trust basis: controller-authenticated RPM artifact',{exact:true}).waitFor();
