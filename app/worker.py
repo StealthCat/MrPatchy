@@ -602,7 +602,7 @@ def _assess_active_behavior(s,row,cfg,secret):
         else:
             try:
                 with ai_runs.measure('ssh_evidence'):
-                    evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'checks':list(set(checks))},timeout=90)
+                    evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'uid':row.evidence.get('uid'),'checks':list(set(checks))},timeout=90)
             except Exception as error:raise ai.AIError('SSH evidence collection failed ('+type(error).__name__+'). Verify target connectivity, host pinning and helper installation.') from None
         with ai_runs.measure('evidence_persistence'):
             row.evidence={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}

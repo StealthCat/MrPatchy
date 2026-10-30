@@ -448,3 +448,21 @@ Reviewed fixtures: assessment detail [phone](screenshots/assessment-history-v120
 [phone](screenshots/retriage-confirm-v1200-320.jpg),
 [tablet](screenshots/retriage-confirm-v1200-768.jpg),
 [desktop](screenshots/retriage-confirm-v1200-1440.jpg).
+
+
+## Identity-bound follow-up coverage (v1.21.0)
+
+Assessment detail uses the existing amber glass notice and responsive fact grid to
+explain a sampled process's identity, collection time, effective UID and verified
+artifact count. Keyboard-operable coverage details distinguish a current executable
+sample from the original historical observation and explain why fleet reuse is
+unavailable. Missing/old/failed receipts do not present a verified sample. No new
+remediation or approval action is attached to these facts.
+
+Browser acceptance retains fleet/server links, Back/reload, administrator isolation,
+missing/failed states, escaped unknown gap text and 320/768/1440 overflow checks.
+Existing mascot/navigation, palette and responsive components remain. Reviewed
+fixtures: [phone](screenshots/triage-context-v1210-320.jpg),
+[tablet](screenshots/triage-context-v1210-768.jpg),
+[desktop](screenshots/triage-context-v1210-1440.jpg). These are illustrative local
+fixtures, not a fleet cache or comprehensive context/AI-workspace acceptance.

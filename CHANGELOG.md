@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.21.0 — 2026-10-30
+
+- Bind read-only AI follow-up artifact/privilege context to a pinned, rechecked process directory.
+- Recheck executable, script and mapped-file identities after package/service queries; refuse mixed or unavailable context.
+- Retain explicit coverage gaps without exporting raw arguments/environment/maps or claiming fleet-cache eligibility.
+- Add controlled race/limit and live Linux SSH acceptance; reviewed target helper/collector upgrade is required for new context. Model/response safeguards remain unchanged.
+
 ## 1.20.1 — 2026-10-30
 
 - Fix standalone offline database migration refusing a current schema because its separate model list omitted AI retry and assessment/refresh tables.
