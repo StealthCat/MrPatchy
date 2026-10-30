@@ -2,8 +2,9 @@
 
 ## 0.4.2 — 2026-10-29
 
-1. Add the planned complete/controller-only/worker-only deployment modes and supported remote-worker setup to the implementation roadmap.
-2. Define requirements for role-specific startup, MySQL/shared-state provisioning, worker health/concurrency/drain, installation workflows and multi-worker failure/recovery acceptance. Deployment behavior remains unchanged until implementation.
+1. Plan complete/controller-only/worker-only deployment modes with remote-worker state, health, scaling, drain, installation and failure/recovery acceptance.
+2. Plan a unified deployment-component health dashboard and dedicated GCP integration Docker node with scoped transport, credentials, installation and migration requirements.
+3. Plan navigation to the specific server's Overview page after backend-confirmed successful installation/verification. These entries add roadmap requirements; deployment and enrollment behavior remain unchanged until implementation.
 
 ## 0.4.1 — 2026-10-29
 

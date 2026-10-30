@@ -78,6 +78,8 @@ the bounded features already implemented):
 
 - Comprehensive startup and scheduled-task awareness, package-default versus custom provenance, and explained AI triage of custom/modified entries; see the planned milestone below.
 - Separate complete/controller-only/worker-only deployments with supported remote-worker state, health, scaling, drain and recovery; see the planned milestone below.
+- Unified deployment health/status dashboard for controllers, workers, agents and integration nodes, plus a dedicated GCP integration Docker node; see the planned milestone below.
+- After successful server installation/verification, navigate the enrollment workflow to that server's Overview page; see the planned workflow below.
 - General malware protection: known-malware detection, AI-enabled triage of previously unknown malware, and automatic file quarantine plus malicious-process termination; see the planned milestone below.
 - CVE exposure-window exploitation monitoring with automatic quarantine or termination of detected malicious artifacts/processes; see the planned milestone below.
 - Configurable evidence retention, external immutable storage and independent audit retention. Bounded per-server scanner record exports now complement file-response exports; automatic deletion and external storage are not implemented.
@@ -2240,3 +2242,34 @@ incremental milestones where needed.
 - Validate all three Compose configurations and documented environment/GCP combinations, plus backward-compatible upgrades from the existing complete installation.
 - Exercise multiple same-host workers and a real separate-host worker against MySQL. Prove that competing workers do not execute the same job twice, per-host serialization remains intact, and coordinator/worker restart, database disconnection, lost locks and partial operations retain honest failure/recovery state.
 - Cover missing/mismatched secrets, inaccessible shared state, incompatible versions, heartbeat expiry, drain during active jobs, restart after interrupted mutation, migration with remote workers, and backup/restore. Do not mark this feature complete solely because the YAML files were split.
+
+
+## Planned: deployment health dashboard and GCP integration node
+
+Requested roadmap addition (2026-10-29); not yet implemented. Extend the deployment
+separation feature with a unified operational view of the Mr Patchy installation.
+
+### Component health dashboard
+
+- Provide a dashboard covering all deployed Dockerized controllers, workers, agents and integration nodes, including the dedicated GCP integration node. Include managed endpoint agents through their existing collection/verification signals, with their actual Docker/systemd deployment type shown rather than assuming every agent is containerized.
+- Maintain an inventory of expected/registered components so stopped or missing nodes remain visible. Show distinct identity, role, machine/location, version/image, last heartbeat, uptime where available, liveness/readiness, healthy/degraded/offline/unknown state and an explained health reason. Show worker concurrency, queued/active jobs and drain state, with links to relevant configuration, jobs and diagnostics.
+- Distinguish container/process liveness from successful service readiness and from fresh endpoint telemetry. Apply explicit heartbeat/freshness thresholds; stale, inaccessible or unsupported observations must not appear healthy. Expose available resource metrics and recent failure summaries with clear unavailable states.
+- Use authenticated component reporting/read-only health checks, bounded safe diagnostics and administrator access. Exclude credentials/tokens and sensitive raw telemetry from dashboard responses. Collect supported runtime metadata without granting the web application unrestricted Docker-daemon control.
+- Integrate with existing alerts/audit records and preserve the established Mr Patchy theme. Validate missing/stopped nodes, startup/restart, version mismatch, stale clocks/heartbeats, partial network failure, permission boundaries and large deployments across local and remote-worker topologies.
+
+### Dedicated GCP integration Docker node
+
+- Add an optional `gcp-integration` service/node, using the GCP Compose configuration and compatible complete/controller-only/remote-worker installation modes. Give it its own runtime configuration, health/readiness checks, identity and heartbeat, and include it in the deployment dashboard.
+- Initially support the existing GCP authentication, project/zone/instance lookup, connection verification and IAP transport workflows through this node. Define an authenticated, scoped service interface for controller/worker requests and how remote workers reach supported tunnels. Preserve per-target SSH identities, host-key pinning, operation deadlines and recovery semantics.
+- Isolate Google Cloud CLI dependencies and cloud credential/configuration state in the integration runtime, with explicit least-privilege IAM/federation setup, persistent-state handling and rotation/backup documentation. Use fixed supported operations rather than caller/model-provided arbitrary cloud or shell commands. Return actionable redacted auth, permission, API and tunnel failures without exposing credentials.
+- Update GCP installation/upgrade tooling and documentation for the dedicated node, including migration from the existing GCP-ready app/worker image arrangement, clear connectivity tests and supported version combinations. Preserve existing GCP connection functionality during migration.
+- Validate controller and remote-worker routing, credential expiry/missing permissions, node outage/restart, tunnel interruption, duplicate requests and honest incomplete/recovery outcomes. Include non-production live-GCP acceptance; successful container startup alone does not complete the integration.
+
+## Planned: successful enrollment returns to server Overview
+
+Requested workflow addition (2026-10-29); not yet implemented.
+
+- At the end of adding a server, once the backend confirms installation and verification have completed successfully, close the enrollment/installation workflow and navigate directly to that specific server's Overview page.
+- Refresh the server's displayed state and retain a clear success confirmation. Generate/install-script completion or a pending background job is not sufficient to trigger the redirect.
+- Keep failed, incomplete, cancelled or timed-out installation on the relevant progress/error step with actionable status and retry/recovery controls. Handle a lost response or page reload without creating a duplicate server or replaying installation blindly.
+- Add browser coverage for successful installation/verification, correct server ID and Overview tab, pending/failure states and retry/reload behavior, preserving existing role and server-lifecycle checks.
