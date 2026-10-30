@@ -2838,6 +2838,10 @@ CI must validate all nine jobs on the exact final PR head before merge.
 
 ## v0.13.0 — Controller/key worker startup admission foundation
 
+Delivery: [PR #68](https://github.com/StealthCat/MrPatchy/pull/68), initial implementation
+[0d75d861](https://github.com/StealthCat/MrPatchy/commit/0d75d86194253e66569789b6572e78e217d36120).
+The PR records final-head validation and the actual merged main commit.
+
 Completion gate: inspected main `67325483`, latest merged
 [PR #67](https://github.com/StealthCat/MrPatchy/pull/67), its actual expected-worker
 API/Compose/UI diff and recorded exact-head nine-check validation, instructions,
