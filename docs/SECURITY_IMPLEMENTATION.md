@@ -77,6 +77,7 @@ Remaining major work before the requested system is complete (later sections def
 the bounded features already implemented):
 
 - Complete application-wide UI rework retaining the current color scheme and mascot, with extensive graphics, polished glass styling and readable, uncluttered page/tab/menu navigation; see the planned milestone below.
+- Faster AI triage without capability loss, true threaded parallel investigations and shared rate-throttle/daily-spend/unthrottled controls; see the planned milestone below.
 - Comprehensive startup and scheduled-task awareness, package-default versus custom provenance, and explained AI triage of custom/modified entries; see the planned milestone below.
 - Separate complete/controller-only/worker-only deployments with supported remote-worker state, health, scaling, drain and recovery; see the planned milestone below.
 - Unified deployment health/status dashboard for controllers, workers, agents and integration nodes, plus a dedicated GCP integration Docker node; see the planned milestone below.
@@ -1942,6 +1943,89 @@ is required; rebuild the controller. Broader correlation, retention and other ma
 work above remain unfinished.
 
 
+## Planned: faster parallel AI triage and configurable spending controls
+
+Requested 2026-10-30; **planned, not implemented by this roadmap update**.
+Inspection baseline: main `8bee5b64`, source v0.16.0, latest merged PR #71.
+No live deployment timing or provider benchmark was available; the following are
+verified code constraints rather than a measured diagnosis of one deployment.
+
+### Current constraints and capability contract
+
+- `worker_registry.POOL_CAPACITY['ai']` is fixed at one. The scheduler retains one `ai_task`, and `ai_cycle` runs one process investigation and then one update-scoring batch sequentially. Raising a pool size alone does not enable parallel triage.
+- `worker.investigate_one` holds the fleet-wide `ai-triage` lock for the entire investigation. Per-server provider locks also serialize outbound calls for a server. The current reconciliation routine assumes exclusive execution and would interrupt valid concurrent runs if reused unchanged.
+- An investigation can require two sequential model calls with allowlisted SSH evidence collection between them. `ai._request` uses top-level `httpx.post` without a reusable client. Most failed/interrupted investigations wait one hour before retry.
+- Process investigations and score batches have independent rolling-hour hard allowances, defaulting to 20 each. Incident/startup plans additionally share a fixed ten-per-hour allowance. Cost receipts are retrospective estimates; they do not implement daily budget admission.
+- Existing behavior IDs include the server ID, so retained assessments/approvals do not provide a fleet-wide exact-match known-good cache. The current Retry action only accepts unapproved pending/error items; it cannot explicitly re-triage a completed safe/cache result.
+
+Improve throughput and time to a useful assessment while retaining the configured
+model and reasoning effort, all currently authorized evidence, conditional follow-up
+checks, identity/freshness checks, structured-output validation, explanations,
+uncertainty, redacted run/cost diagnostics and operational authorization. Do not
+silently substitute a weaker model, reduce effort, truncate required evidence,
+skip follow-up checks or treat an unavailable assessment as benign to claim speed.
+Concurrency primarily reduces queue delay; measure single-investigation latency
+separately instead of promising a fixed production speedup.
+
+### Parallel execution and latency work
+
+- Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
+- Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
+- Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.
+- Make orphan reconciliation lease/heartbeat-aware; do not interrupt all running records when any worker starts a task. Recover expired work without concurrent duplicate claims, repeated acceptance or silent loss. Handle leader transfer, worker crash, restart, graceful drain and interrupted second-stage investigations honestly. A lost provider response may still be billable; do not promise exactly-once provider execution.
+- Schedule investigations, scoring and other AI purposes fairly, with explicit priority/aging and bounded per-host occupancy so a busy server or slow scoring batch cannot monopolize all capacity. Release execution slots while waiting for rate refill, budget reset or retry; do not sleep in a worker thread holding a database/host lock. Keep coordinator election separate from execution so supported workers can consume claimed AI work without becoming competing schedulers.
+- Reuse lifecycle-managed HTTP clients/connection pools with bounded pool/connect/read deadlines and safe per-request credentials; close them on drain/shutdown. Keep slow provider/SSH operations outside database transactions wherever possible. Measure candidate-query/index and repeated evidence-collection costs before optimizing them.
+- Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
+- Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
+
+### Fleet-wide exact-match known-good cache
+
+Additional user requirement (2026-10-30): once an item has completed triage and is
+known good/safe, reuse that assessment on another server when it is **the exact
+same item and relevant context**. Do not pay for another AI investigation unless
+explicitly requested or the entry no longer matches/is no longer valid.
+
+- Persist a fleet-scoped assessment cache separate from per-server observations. Each cache hit records the receiving server/observation, originating triage run and evidence, fingerprint version, matching fields, original classification/confidence/limitations and hit time. Retain whether the source was an AI assessment or an explicit administrator known-good approval; reuse must not silently turn an AI classification into administrator approval or a clean-host claim.
+- Define a versioned canonical fingerprint from verified artifact bytes (SHA-256 plus relevant script/interpreter/library/config identities), package/vendor provenance and versions, effective behavior and security-relevant context. Include execution privilege/account semantics, startup mechanism/command/trigger when applicable, relevant network/service/container context and all follow-up evidence on which the safe assessment depended. Keep evidence-completeness/trust boundaries and model/prompt/policy versions in the eligibility contract. A filename, package name or executable hash alone is insufficient.
+- A reusable key must permit an actual exact match across servers: exclude host ID and documented observation-only differences such as PID/timestamp/ephemeral source ports from the canonical key, while retaining them in local records. Normalize only proven non-security differences; missing/unknown fields, unverified identity or incomparable context are cache misses, not wildcard matches. Validate required local evidence read-only before reuse; matching cannot be inferred by AI similarity.
+- Cache only completed, validated safe/known-good outcomes whose required evidence and explicit scope permit reuse. Pending, partial, failed, suspicious or unknown assessments are ineligible. Changed bytes, provenance, privileges, behavior, configuration, applicable threat evidence or assessment policy invalidate eligibility. Revoking a trusted entry blocks subsequent reuse across the fleet and marks linked assessments for review without rewriting their original history. Stronger new detector/incident evidence always remains visible and actionable.
+- On an eligible hit, reuse the assessment without any provider call or duplicate AI budget reservation, mark it clearly as **Cached known good** and keep its explanation/source link. An unchanged valid exact match must not be periodically re-triaged solely because another server or day is encountered. Continue normal collection, signature scanning and deterministic protection; a cache hit does not authorize containment or suppress future changed evidence.
+- Add an explicit administrator **Re-triage** action for completed/cached safe items, separate from retrying failed work. It bypasses cache lookup for the selected observation while respecting pause, data-sharing, throttling, daily reservations and current evidence. Show whether the user is refreshing one observation or revoking/replacing the shared entry, require explicit scope for fleet trust changes and audit both. Preserve prior assessments; a new suspicious/unknown result revokes the corresponding reusable safe entry and schedules linked review.
+- Keep cache records and their minimum provenance independent of ordinary AI-log pruning; unavailable source evidence must never leave an unverifiable trusted hit. Respect fleet/tenant access boundaries, protect cached evidence and expose cache hit/miss/invalidation reasons and saved calls/cost estimates. Cache lookup may serve retained/local assessments while provider AI is paused; it cannot bypass a restriction on sharing evidence or making a new call.
+- Validate exact cross-server hits with zero provider calls, same-name/different-hash and same-hash/different-behavior misses, script/config/provenance/privilege changes, incomplete/unverified evidence, revoked entries, concurrent first encounters, manual re-triage, changed follow-up evidence, log retention and role isolation on SQLite/MySQL. Preserve per-host observations/audit and existing explicit approval boundaries.
+
+### Throttling, daily cap and unthrottled operation
+
+Provide administrator-controlled modes in Settings with clear effects before save:
+
+| Mode | Admission behavior |
+| --- | --- |
+| Rate throttle | Smoothly pace eligible work at configured rates using shared token/leaky-bucket admission; defer it durably until refill instead of consuming an hourly allowance in a burst and stopping. |
+| Daily spend cap | Allow work while its conservative reservation fits the configured USD/day budget; queue remaining work until the next calendar-day reset. A rate throttle may also be enabled. |
+| Unthrottled | Apply no Mr Patchy rate or spend allowance; run as quickly as configured concurrency, resources and provider limits permit. |
+
+- Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
+- Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
+- Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
+- In cap mode configure a positive USD amount, an explicit IANA timezone and the next calendar-day reset, including daylight-saving transitions. Changes to amount/timezone/mode are revision-checked and audited; prevent resets, restarts, clock changes or mode toggles from silently granting duplicate budget.
+- Reserve cost atomically before admitting each paid call, accounting for all outstanding reservations across workers/purposes, selected model/tier, bounded input and output/reasoning tokens, supported charges and the potential follow-up stage. Define whether an entire multi-stage run is reserved in advance or deferred between stages; never skip a required stage or accept an incomplete verdict because funds run out.
+- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
+- Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
+- In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
+
+### Finite implementation and acceptance milestones
+
+1. **Baseline, transport and known-good reuse:** record queue/admission/provider/SSH/persistence stage timing, p50/p95 end-to-end latency, throughput, calls/tokens/cost, errors and backlog age for representative one/two-stage workloads; add safe client pooling, evidence deduplication and the fleet-wide exact-match known-good cache with explicit re-triage, without changing the capability contract.
+2. **Threaded execution:** deliver configurable concurrent tasks, atomic claims/leases, context/session isolation, fair scheduling, pause-safe same-host/cross-host admission, drain and recovery. Compare serial and parallel execution on identical delayed I/O fixtures: four eligible independent investigations must actually overlap and complete materially faster than their serial sum without lost work or reduced checks. Report measured production limits separately.
+3. **Shared controls and UI:** deliver pacing, daily cap and unthrottled settings, conservative migration, complete billable-path coverage, reservations/reconciliation and clear queue/spend diagnostics. Document operator tuning and upgrade behavior; changing a label or merely raising existing limits does not complete this milestone.
+4. **End-to-end acceptance:** on SQLite and MySQL validate multi-thread/multi-process claims, supported multi-worker admission, contention/fairness, policy/evidence changes, stale/replayed results, provider limits, bounded retries, lease loss/crash/drain, unknown pricing/usage, simultaneous budget admissions and settings changes, two-call reservations, midnight/DST/reset and retained ledgers after history pruning. Verify disabled/paused/data-sharing/role/CSRF behavior and representative benign/suspicious/unknown outcomes with all original evidence checks and response gates intact. Record before/after performance and capability-equivalence results before marking the program complete.
+
+Issue reproduction/fixes retain priority over these roadmap milestones. Reconcile
+unfinished related work first and use the existing cycle budget, source/PR versioning
+and exact-final-commit CI gates. The scheduled task carries the same requirements;
+the feature remains outstanding until runtime behavior and acceptance are delivered.
+
+
 ## Portable per-server scanner records
 
 Administrators can use **Security → Export scanner record** without preparing a file
@@ -3193,3 +3277,13 @@ Delivery: [PR #72](https://github.com/StealthCat/MrPatchy/pull/72), initial sour
 The PR records corrected full local regressions, final-head CI and the actual
 merged main commit. No source changes may be added after validation without
 rerunning applicable checks.
+
+
+Concurrent-main reconciliation: while PR #72 was validating, the independent
+roadmap PR #73 (v0.16.1) appeared and merged as `3f39ffda`. This branch was held
+until that merge, then current main was integrated with both changelog entries
+and all new AI roadmap text retained. Source remains v0.17.0, above v0.16.1.
+The new parallel-triage, exact known-good cache and AI spending-control program
+remains planned, not implemented by Activity review. Runtime/UI/test files are
+unchanged by this reconciliation; version consistency is checked against the new
+base and all nine checks must rerun on the reconciled final head before merge.
