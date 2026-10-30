@@ -3005,6 +3005,10 @@ in the delivery PR. Python/JS syntax, whitespace and version consistency passed.
 
 ## v0.15.0 — Focused fleet Overview and server-attention review
 
+Delivery: [PR #70](https://github.com/StealthCat/MrPatchy/pull/70), initial implementation
+[305fee9c](https://github.com/StealthCat/MrPatchy/commit/305fee9c4bc9b7d5dd6bda1f7a78ece34899a0c4).
+The PR records corrected full regression, exact-final-head validation and the actual merged commit.
+
 Completion gate: inspected fresh main `5a2bcc62`, latest merged
 [PR #69](https://github.com/StealthCat/MrPatchy/pull/69), its actual schema/receipt,
 UI and native-test changes, recorded validation and all nine successful exact-head
