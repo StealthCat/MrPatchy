@@ -79,6 +79,19 @@ def test_atomic_hourly_admission_and_no_duplicate_subject(admin,monkeypatch):
     with Session() as s:assert len(list(s.scalars(select(ai_runs.AIRun))))==2
 
 
+def test_refused_admission_lock_does_not_mutate_work(admin,monkeypatch):
+    seed(count=1)
+    class Refused:
+        def acquire(self):return False
+        def release(self):pytest.fail('An unowned admission lock cannot be released')
+    monkeypatch.setattr(ai_claims,'Lock',lambda name:Refused())
+    assert ai_claims.acquire() is None
+    with Session() as s:
+        assert s.get(Behavior,'subject-0').attempted==0
+        assert not list(s.scalars(select(ai_claims.Claim)))
+        assert not list(s.scalars(select(ai_runs.AIRun)))
+
+
 def test_one_subject_and_one_host_cannot_occupy_multiple_slots(admin,monkeypatch):
     seed(count=4,same_host=True);started=threading.Event();release=threading.Event();sent=[]
     def post(*a,**k):

@@ -80,7 +80,7 @@ def abandon_owner(owner):
 
 def acquire(owner=None):
     lock=Lock('ai-triage')
-    lock.acquire()
+    if not lock.acquire():return None
     try:
         with Session() as s:
             now=time.time();reconcile(s,now);s.commit()

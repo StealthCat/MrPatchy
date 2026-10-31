@@ -4051,3 +4051,13 @@ The post-correction paired benchmark retains identical eight investigations and
 measurements replace the pre-correction sample in the linked report; neither
 measurement claims production performance. The complete local/browser/native
 validation is rerun on the corrected final source before delivery.
+
+
+Final admission review also checks the blocking lock acquisition result before
+any claim/run/attempt mutation. A refusal regression verifies that no work is
+created and an unowned lock is never released. Claims/completion acceptance passed
+**52 tests** after this guard. This guard joins the same unmerged v1.22.0 update;
+its final source receives a fresh complete CI run, including browser acceptance.
+The corrected 426551c1 database run and any transient browser timeout/retry are
+retained in PR #81; only all-success checks on the final published commit permit
+merge. No checks or UI assertions are weakened to obtain a pass.
