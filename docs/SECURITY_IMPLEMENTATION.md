@@ -5294,3 +5294,21 @@ Check names change: `static` and `mysql (1)`–`mysql (4)` are added, and `mysql
 `recovery` are removed. Branch-protection required checks must follow. Future exact-head
 records should list the twelve resulting jobs rather than nine. Action references
 remain major-version tags; SHA pinning belongs to supply-chain issue #201.
+
+## v1.35.33 — Rollback adapter stream isolation (#150)
+
+Issue-first triage on current main `6589f4d` found all open P1 issues already owned by
+active PRs. Issue #150 was the highest-impact independent unclaimed P2 and had no
+related fix. A disposable executable adapter reproduced both snapshot and rollback
+misreporting successful JSON as `JSONDecodeError: Extra data` whenever it also emitted
+a warning on stderr. `recovery_hook` now invokes the existing bounded subprocess
+collector directly, parses stdout alone and rejects stdout above 20 KB before parsing;
+stderr remains separately bounded and cannot corrupt the JSON response. Existing
+root ownership, writable-bit, executable, operation, identifier and object-response
+checks remain unchanged.
+
+Focused regression coverage demonstrates the failure before the fix and covers both
+operations plus the oversized-response guard. Exact-final-head static, SQLite, four
+MySQL shards, browser, SSH/RPM, Docker/TLS/proxy and GCP checks remain the merge gate.
+Version **v1.35.33** follows active allocations through v1.35.32; major remains 1 and
+no Git tag or Docker publication is included.

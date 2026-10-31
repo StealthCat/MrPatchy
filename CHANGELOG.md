@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.33 — 2026-10-31
+
+- Parse successful rollback-adapter JSON exclusively from stdout, keeping stderr warnings separate so snapshot and rollback side effects are not misreported as failures (issue #150).
+- Reject adapter stdout larger than 20 KB before JSON parsing. Invalid or non-object responses still fail closed; the adapter trust, operation and identifier checks are unchanged. No compatibility impact for conforming adapters; major version stays 1.
+
 ## 1.35.25 — 2026-10-31
 
 - Style `.inline-check` like `label.check` so the response-monitoring, response-watch and service-watch checkboxes render inline with their labels (issue #175). A regression test requires every `check`/`inline-check` label in the UI to have a matching stylesheet rule. No compatibility impact; major version stays 1.
