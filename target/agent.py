@@ -372,6 +372,22 @@ def decode_bpf_events(pending,chunk):
     if any(len(line)>65536 for line in lines):raise ValueError('Oversized bpftrace event')
     return [json.loads(line) for line in lines[:-1] if line],lines[-1]
 
+def ebpf_process(data,proc_root=Path('/proc')):
+    """Convert one bpftrace exec record to the canonical collector protocol."""
+    pid_text,uid_text,filename=data.rstrip('\n').split('\t',2)
+    if (not re.fullmatch(r'(?:0|[1-9][0-9]{0,9})',pid_text) or not 0<int(pid_text)<=2**31-1
+        or not re.fullmatch(r'(?:0|[1-9][0-9]{0,9})',uid_text) or not 0<=int(uid_text)<=2**32-1):
+        raise ValueError('Invalid bpftrace process identity')
+    pid=int(pid_text);uid=int(uid_text);proc=proc_root/str(pid);sha=None
+    try:
+        if os.readlink(proc/'exe')==filename:sha=hash_artifact(proc/'exe',{})
+    except (OSError,ValueError):pass
+    event_process={'pid':pid,'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
+                   'connections':[],'capture':'ebpf','identity_verified':sha is not None}
+    try:event_process['process_identity']=triage_observation_identity(observe_process_identity(proc,pid))
+    except (OSError,ValueError):pass
+    return event_process
+
 EBPF_DIAGNOSTIC_LOCK=threading.RLock()
 
 def record_ebpf_diagnostic(instance,line):
@@ -432,16 +448,7 @@ def ebpf_loop():
                     events,pending=decode_bpf_events(pending,chunk)
                     for event in events:
                         if event.get('type')!='printf':continue
-                        pid,uid,filename=event['data'].rstrip('\n').split('\t',2)
-                        proc=Path('/proc')/str(int(pid));sha=None
-                        try:
-                            if os.readlink(proc/'exe')==filename:sha=hash_artifact(proc/'exe',{})
-                        except (OSError,ValueError):pass
-                        # Exited processes remain events even when their executable is no longer readable.
-                        event_process={'pid':int(pid),'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
-                                       'connections':[],'capture':'ebpf','identity_verified':sha is not None}
-                        try:event_process['process_identity']=triage_observation_identity(observe_process_identity(proc,int(pid)))
-                        except (OSError,ValueError):pass
+                        event_process=ebpf_process(event['data'])
                         spool([event_process],time.time())
                         with EBPF_DIAGNOSTIC_LOCK:
                             # The first delivered event proves this run recovered; earlier

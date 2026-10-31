@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.20 — 2026-10-31
+
+- Emit native eBPF execution UIDs as canonical non-negative integers and validate the collector record before durable spooling.
+- Normalize legacy decimal-string UIDs at controller intake so stored verified observations still create scoped execution-scan triggers.
+- Count malformed verified eBPF observations as explicit coverage loss, with a producer-shaped spool-to-queue regression for issue #117.
+
 ## 1.35.19 — 2026-10-31
 
 - Skip identical Debian version comparisons during refresh and inventory reconciliation; reuse up to 512 native comparison results per inventory.
