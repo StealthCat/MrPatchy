@@ -4844,3 +4844,55 @@ acceptance exceed this focused fix. Confirmed #100–#102 remain the next issue-
 followed by safe crash/restart investigation #104. Issue #103 remains a policy question;
 #98 and #96 remain lower-impact maintenance/roadmap work. Faster-AI roadmap development
 resumes only after these higher-priority actionable fixes.
+
+
+## v1.35.3 — Deferred advisory-plan contract and status corrections
+
+Delivery record: version **v1.35.3**, implementation commit
+[`8adc1765`](https://github.com/StealthCat/MrPatchy/commit/8adc1765a786b01393cf9682edb0a4d8894bd90a)
+and [PR #110](https://github.com/StealthCat/MrPatchy/pull/110). The PR may merge only
+after all applicable checks pass on its exact final head; the completion report records
+that final head and merge commit.
+
+Issue-first reconciliation read merged v1.35.2 main, repository instructions, this
+checkpoint and merged PR #109. The first 100 open issues contained #96, #98,
+#100–#104 and #106–#108; no open PR existed. Issues #100–#102 are three confirmed,
+closely related regressions in the v1.35.0 deferred-plan delivery and took priority
+over roadmap work. None had comments or another open/merged fix; PR #95 is their
+common source. Issues #103–#104 require separate policy/crash-recovery work, and
+#106–#108 remain broader spool reliability/observability milestones.
+
+Current v1.35.2 reproduced all three reports in a disposable SQLite application.
+Both operation APIs removed `payload`, while Activity looked inside that absent object,
+so neither a timed eligibility nor administrator-resume wait could render. With one
+eligible deferred plan and one future plan, status evaluated the future `plan_next`
+branch first and reported `backoff`. An `AIError` with `policy_wait=True` and no timed
+eligibility produced zero; both plan handlers treated zero as false and `ai_runs.defer`
+rejected it, leaving the already-started diagnostic run in `error` although its job
+was correctly requeued.
+
+Operation list/detail APIs now expose one explicit `ai_deferred` Boolean derived from
+the internal marker while continuing to exclude the complete payload. Activity reads
+only that safe projection. Status counts eligible advisory plans separately and gives
+eligible work precedence over another plan's future timestamp while preserving the
+future `plan_next_at`. Incident and startup handlers distinguish a controlled zero
+eligibility from `None`; the durable run becomes `deferred` with a bounded resume
+message while the job remains queued at `next_at=0`. Every later execution still
+rechecks host lifecycle, global/per-server pause, evidence, provider, rate and spend
+controls; the correction creates no provider call or remediation authority.
+
+Regression coverage uses the real list/detail API contract, proves the payload remains
+private, exercises mixed eligible/future plans, and drives an untimed policy wait
+inside an actual tracked incident-plan call. Existing timed resume, server pause,
+scoring, retry, activity-detail, host-scope and JavaScript checks remain required,
+followed by exact-final-head SQLite/MySQL/browser and remaining CI before merge.
+Source, README, changelog and UI/API metadata synchronize at v1.35.3 with major fixed
+at 1. No schema, target-helper/agent update, Docker publication, Git tag or schedule
+change is included.
+
+After these issue fixes, #104 is the next confirmed reliability investigation but
+requires safe pre/post-transmission crash acceptance rather than automatic replay.
+#103 remains a policy decision. Spool follow-ups #106–#108, CI warning #98 and OS-
+upgrade roadmap #96 remain open. Faster-AI roadmap work resumes only after higher-
+priority actionable issue fixes; multi-stage release persistence, pricing lifecycle,
+invoice reconciliation and full controller failover/reset acceptance remain planned.

@@ -49,6 +49,9 @@ def test_security_plan_rate_refusal_stays_queued_and_resumes(admin, monkeypatch)
         status=ai_runs.status(session)
         assert status['plan_deferred']==1
         assert status['plan_next_at']==pytest.approx(floor,abs=1)
+    for path in ('/api/jobs?host_id=plan-host','/api/jobs/'+job_id+'?host_id=plan-host'):
+        result=admin.get(path).json();result=result[0] if isinstance(result,list) else result
+        assert result['ai_deferred'] is True and 'payload' not in result
     worker.execute(job_id)
     with Session() as session:
         assert session.get(Job, job_id).state=='queued'
@@ -97,3 +100,32 @@ def test_uncontrolled_plan_error_remains_terminal(admin, monkeypatch):
         job=session.get(Job,job_id)
         assert job.state=='failed' and job.next_at==0
         assert '_ai_deferred' not in job.payload
+
+
+def test_ready_plan_precedes_future_plan_backoff(admin):
+    now=time.time()
+    with Session() as session:
+        for identifier in ('ready-plan-host','future-plan-host'):
+            session.add(Host(id=identifier,name=identifier,address='192.0.2.10',fingerprint='',state='online'))
+        session.add_all([
+            Job(id='ready-plan',host_id='ready-plan-host',action='security-plan',payload={'_ai_deferred':True},next_at=0),
+            Job(id='future-plan',host_id='future-plan-host',action='startup-plan',payload={'_ai_deferred':True},next_at=now+300),
+            Setting(key='worker:heartbeat',value={'seen':now}),
+        ])
+        session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model'}))
+        session.merge(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
+        session.commit();status=ai_runs.status(session)
+        assert status['reason']=='ready' and status['plan_ready']==1
+        assert status['plan_deferred']==2 and status['plan_next_at']==pytest.approx(now+300)
+
+
+def test_indefinite_policy_wait_records_deferred_run(admin, monkeypatch):
+    job_id,_=seed_security_plan()
+    monkeypatch.setattr(ai,'request',lambda *a,**k: (_ for _ in ()).throw(
+        ai.AIError('Administrator pause.',policy_wait=True,retry_after=0)))
+    worker.execute(job_id)
+    with Session() as session:
+        job=session.get(Job,job_id)
+        run=session.scalar(select(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='security_plan'))
+        assert job.state=='queued' and job.next_at==0 and job.payload['_ai_deferred'] is True
+        assert run.state=='deferred' and run.stage=='deferred' and 'resume' in run.message

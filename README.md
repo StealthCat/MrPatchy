@@ -583,13 +583,19 @@ At v1.34.0, manual incident/release/startup plans and connection tests still rej
 safely rather than becoming durable resumable jobs. The next milestone narrows that
 remaining gap for the two single-call advisory plan paths.
 
-### Durable advisory-plan deferral (v1.35.0)
+### Durable advisory-plan deferral (v1.35.0, corrected v1.35.3)
 
 Incident-response and startup-change AI plan jobs now remain queued when a shared
 rate, daily-spend or provider-backoff boundary refuses their single provider call.
 Timed waits retain the exact shared eligibility; administrator-controlled global or
 per-server pause waits retain the job without inventing a retry time. Activity and AI
 worker status show the retained plan and its next start or resume requirement.
+
+The v1.35.3 API projects only a sanitized `ai_deferred` Boolean, never the internal
+job payload, so both Activity list and detail views can render that state through the
+production contract. A plan eligible now takes status precedence over another plan's
+future wait, with separate eligible/deferred counts. Untimed administrator pauses also
+reclassify any already-started diagnostic run as deferred instead of a false error.
 
 Every resume revalidates the current host lifecycle, AI pause and incident evidence,
 then follows the normal admission, budget and provider boundaries. A pre-send refusal

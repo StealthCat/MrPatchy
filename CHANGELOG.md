@@ -5,6 +5,13 @@
 - Enable concurrent agent development coordinated through issue claims, linked draft PRs, explicit ownership/checkpoints, review and handoff records.
 - Require overlap checks, isolated branches and serialized version/integration checks while preserving existing operational authorization boundaries.
 
+
+## 1.35.3 — 2026-10-31
+
+- Project a sanitized `ai_deferred` Boolean from operation APIs so Activity list/detail views show timed eligibility and administrator-resume waits without exposing internal job payloads.
+- Prefer eligible advisory work over another plan's future backoff in AI worker status, with an explicit eligible-plan count alongside deferred/next-time data.
+- Reclassify active incident/startup plan runs blocked by an untimed administrator pause as deferred instead of recording a false terminal error.
+
 ## 1.35.2 — 2026-10-31
 
 - Split large normal process-observation snapshots into durable 256 KiB batches instead of dropping the entire snapshot at the former 2 MB ceiling.
