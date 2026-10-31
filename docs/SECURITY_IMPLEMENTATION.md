@@ -5138,3 +5138,46 @@ Preserve their SBOM, login-audit, enrollment and CI updates as actual ancestors.
 Merge #195 then #138 before this PR. Full exact-final-head checks are required
 again; the original budget implementation passed all nine checks. The earlier
 v1.35.15 proposal is superseded by this explicit dependency order.
+
+
+## v1.35.19 — Debian comparison process reuse (#128)
+
+Codex session `grab-issue-3-20261031` claimed unowned issue #128 after checking
+open issues, claims and related PRs against main 3635d0a (v1.35.6). An instrumented
+execution of the actual current-main inventory helper requested 1,000 dpkg launches
+for 1,000 identical pairs. The fix shares one native Debian comparator between APT
+refresh and inventory reconciliation, skips exact equality and uses an inventory-local
+512-entry LRU cache. Distinct version spellings still go to native dpkg, with a
+ten-second timeout and explicit failure on native errors. No Python reimplementation
+of Debian ordering, dependency or trust-policy change is introduced. RPM is unchanged.
+
+Focused tests cover unchanged/mixed process counts, bounded cache eviction, timeout
+and native errors, epoch/revision/tilde/equivalent spellings and refresh candidate,
+hold, architecture and security-priority behavior. Windows standalone comparator
+tests pass (four passed; native-dpkg case skipped); Linux native/full SQLite/MySQL,
+browser, recovery, Docker/TLS, SSH/RPM and GCP checks remain the exact-head merge
+gate. Version v1.35.12 follows pending allocations through v1.35.11 and must be
+rechecked against main before merge. Source versioning publishes no Docker image;
+no tags, schema, target helper or runtime authorization changes.
+
+Integration checkpoint: preserve main 491df9e v1.35.11 and its eBPF diagnostic
+lifecycle fix. Original head 611c6de passed all nine CI jobs, including MySQL
+(1446 passed, 134 skipped), SQLite (1451 passed, 129 skipped), native benchmarks,
+browser, recovery, SSH/RPM, Docker/TLS/proxy and GCP. Combined-head CI is required
+again before merge; existing agent integration hold remains in force.
+
+Final dependency integration: include PR #195 exact head 0824d084 (v1.35.16)
+without modifying that workstream. Current source is v1.35.18, reserving v1.35.17
+for PR #138. Preserve enrollment temp-file hardening, failed-login auditing and
+CI runtime modernization. Original v1.35.12 validation remains historical; all
+applicable checks must pass again on this combined head. Hold merge until #195
+is tested/merged and its owner releases the integration hold.
+
+Dependency checkpoint: preserve PR #138 exact head 2bf15092 and reserve
+v1.35.19 after #139 planned v1.35.18. Await #139 stable combined head before
+publishing final integration and restarting all exact-head checks.
+
+Final combined dependency: PR #139 exact 914c6b83 includes #138 2bf15092
+and #195 0824d084. Current source v1.35.19 follows those planned merges.
+Retain the budget Decimal/default validation fix and SBOM host binding, then run
+all exact-head checks before merge. No changes to dependency branches.

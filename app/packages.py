@@ -2,9 +2,9 @@
 import json
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 from . import apt
+from . import debian_versions
 from .db import DATA
 from .process import bounded
 from .repository_access import validate as validate_access
@@ -29,7 +29,7 @@ def installed(inv):
 
 def newer_flags(inv,pairs):
     if is_rpm(inv):return native('compare',pairs=pairs) if pairs else []
-    return [subprocess.run(['/usr/bin/dpkg','--compare-versions',a,'gt',b]).returncode==0 for a,b in pairs]
+    return debian_versions.newer_flags(pairs)
 
 
 def refresh(host_id,inv,access=None):
