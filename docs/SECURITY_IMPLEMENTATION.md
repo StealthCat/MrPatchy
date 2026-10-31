@@ -5348,7 +5348,7 @@ the preceding full local suite passed 1647 tests / 9 skipped / 9 subtests on the
 pre-CSS integration tree. Earlier-head CI does not authorize this final integration.
 
 
-## v1.35.30 — Independent periodic scheduler producers (#140)
+## v1.35.32 — Independent periodic scheduler producers (#140)
 
 Owner: Codex `scheduler-6eac54918b34`, branch
 `codex/scheduler-tick-isolation`. Issue-first triage selected #140 after accepting
@@ -5373,10 +5373,16 @@ applicable exact-head GitHub jobs are required before merge. No UI changes were
 made. The runtime pipeline remains a priority, but unrelated roadmap work waits
 behind actionable issues. Wider issues/roadmap are not claimed complete.
 
-Version/source/README/changelog use v1.35.30, major fixed at 1. Depends on the exact
+Version/source/README/changelog use v1.35.32, major fixed at 1. Depends on the exact
 #208 final integration head `a16688690e2a2486cfe3e281ddbae7dce2c09507` (v1.35.29),
 which includes current main `6589f4d` (v1.35.25, #207). Merge #208 first after its
 own exact-head checks; preserve other owners' mutation, recovery and route-role
 work. Re-read main/open PR versions before integration, rerun affected checks if
 head or integration changes, and verify #140 closes only after tested merge.
 No Git tags, Docker publication or schedule changes.
+
+Version allocation correction: another active owner had reserved v1.35.30 for
+#203, and #213 reserves v1.35.31. Reassigned this update to v1.35.32 after the
+fresh open-PR check. Preserve #203's independently owned worker mutation changes;
+coordinate #208 then #203 integration before this later version. Earlier .30
+candidate metadata/CI is superseded; final version metadata receives fresh CI.

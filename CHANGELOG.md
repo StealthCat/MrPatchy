@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.35.30 — Isolate periodic scheduler failures
+## 1.35.32 — Isolate periodic scheduler failures
 
 - A failure in one leader producer no longer skips other periodic tasks, host polling, queued-job dispatch, cleanup, notifications or AI admission. Each task has a separate retry deadline and a named exception log.
 - Failed producers retry after 30, 60, 120, 240 and at most 300 seconds; success restores the normal 30-second cadence. Worker identity loss still stops admission. Leadership, drain, queue claims and target mutation authorization are unchanged.
