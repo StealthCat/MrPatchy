@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.30.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.31.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -487,16 +487,41 @@ interrupted attempts retain the existing recovery delay and finite retry limits.
 A lease cannot cancel an already sent request or guarantee exactly-once billing.
 The full model, evidence and conditional SSH/follow-up flow remain unchanged.
 Same-server parallel investigations, broader fairness, native complete-context
-collection and shared rate/daily-spend/unthrottled controls remain unfinished.
+collection and daily-spend controls remain unfinished.
 v1.30.0 adds exact-context contradiction invalidation and linked review for the
 complete exact candidates described below.
 
 The Investigations/AI activity views report active claims, queued work and fresh
 reported AI capacity. Workers report actual active task counts and configured
 capacity, including draining capacity; these reports are not a readiness guarantee.
-Higher concurrency increases database/target/provider load and can consume the
-existing hourly allowance sooner. No model, allowance or spending mode is changed.
+Higher concurrency increases database/target/provider load and can consume shared
+admission capacity sooner. No model or daily spending cap is implied.
 Set AI concurrency to 1 to preserve serial resource use.
+
+### Shared smooth-rate admission (v1.31.0)
+
+Every existing billable Responses API call now crosses one durable fleet-wide
+admission boundary. **Shared smooth rate throttle** spaces independent logical AI
+work starts evenly and never accumulates a burst. Required second-stage calls stay
+inside their admitted work item while rechecking pause/lifecycle policy. The next
+eligible time is retained across controller/worker
+restarts and shown in AI worker status. Competing SQLite/MySQL workers serialize the
+reservation before any provider request or usage receipt is created. A refused start
+does not call the provider or consume a triage retry attempt.
+
+Existing installations initially retain their separate investigation, scoring and
+incident-plan hourly allowances. Settings shows the conservative suggested shared
+rate (the lower existing automatic allowance); an administrator must review and save
+the migration, which is audited. Fresh installations use shared rate mode. The legacy
+incident/startup-plan queue allowance is disabled only after that explicit migration.
+
+**Unthrottled by Mr Patchy** removes this application pacing only. Finite AI worker
+concurrency, provider limits, global/per-server pause, lifecycle checks, roles and
+data-sharing controls still apply. Invalid local model/key configuration is rejected
+before a reservation. Rate admission currently does not provide a USD/day cap,
+conservative multi-stage cost reservations, invoice reconciliation, or exact durable
+deferral for every manual/plan path; those remain required before the shared
+rate/spend/unthrottled program is complete.
 
 For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
 create `ai_triage_claims`, then start matching workers. Mixed old/new active workers
@@ -841,10 +866,10 @@ does not yet publish or hit this cache; complete synthetic acceptance proves the
 boundary without weakening those gaps.
 
 Lookup currently runs after the existing process-triage claim, AI enablement/pause,
-key/model and rolling-hour admission gates. Complete native evidence collection,
-administrator-origin classifications, shared rate/spend admission and broader
-SQLite/MySQL runtime acceptance remain planned. No schema, target-helper or
-endpoint-agent update is introduced after v1.27.0.
+key/model and configured shared/legacy admission gates. Complete native evidence
+collection, administrator-origin classifications, daily-spend admission and broader
+SQLite/MySQL runtime acceptance remain planned. No target-helper or endpoint-agent
+update is introduced after v1.27.0.
 
 ### Fleet candidate invalidation (v1.29.0)
 

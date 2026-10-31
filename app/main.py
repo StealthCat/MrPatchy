@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.30.0'
+APP_VERSION='1.31.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -599,7 +599,10 @@ def audit_detail(entry_id:int,user=Depends(auth)):
 @app.get('/api/settings')
 def settings(user=Depends(auth)):
     with Session() as s:
-        return config(s)|{'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state()}
+        cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
+        return cfg|{'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
+            'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
+                'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
@@ -608,6 +611,8 @@ class ConfigInput(BaseModel):
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_updates_enabled:bool=True
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
+    ai_control_mode:str=Field(default='rate',pattern='^(legacy|rate|unthrottled)$')
+    ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
 @app.put('/api/settings')
@@ -633,6 +638,8 @@ class AISettingsInput(BaseModel):
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_updates_enabled:bool=True
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
+    ai_control_mode:str=Field(default='legacy',pattern='^(legacy|rate|unthrottled)$')
+    ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
 
 class AIKeyInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -652,8 +659,11 @@ def save_settings_section(values,section):
         with Session() as s:
             if section=='ai' and values['ai_enabled'] and (not values['ai_model'] or not s.get(Setting,'openai_key')):
                 raise HTTPException(400,'Save an API key and select a model before enabling AI. You can save a key independently above.')
-            s.merge(Setting(key='config',value=config(s)|values))
-            audit(s,'update '+section+' settings','Saved '+section+' configuration; no provider test was performed')
+            previous=config(s);s.merge(Setting(key='config',value=previous|values))
+            detail='Saved '+section+' configuration; no provider test was performed'
+            if section=='ai' and previous['ai_control_mode']!=values['ai_control_mode']:
+                detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
+            audit(s,'update '+section+' settings',detail)
             s.commit()
             return {'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
 
@@ -2085,9 +2095,11 @@ def security_plan_queue(host_id:str,incident_id:str,body:SecurityPlanInput|None=
             if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
             pending=s.scalar(select(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.host_id==host_id,Job.state.in_(['queued','running'])))
             if pending:raise HTTPException(409,'An incident plan is already queued or running for this server')
-            # Bound paid work independently of process triage.
-            recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
-            if recent>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
+            # Legacy installations retain this hidden allowance until their
+            # explicit shared-admission migration is saved.
+            if config(s)['ai_control_mode']=='legacy':
+                recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
+                if recent>=10:raise HTTPException(429,'Legacy incident plan limit is 10 per hour across the fleet')
             payload={'incident_id':row.id}
             if body and body.include_related:payload['include_related']=True
             job_id=worker.enqueue(s,host_id,'security-plan',payload)
@@ -2378,8 +2390,9 @@ def queue_startup_plan(host_id:str,incident_id:str,body:StartupPlanRequest,user=
         startup_ai.evidence(s,row)
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1)):
             raise HTTPException(409,'An incident plan is already queued or running for this server')
-        count=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
-        if count>=10:raise HTTPException(429,'Incident plan limit is 10 per hour across the fleet')
+        if config(s)['ai_control_mode']=='legacy':
+            count=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>time.time()-3600))
+            if count>=10:raise HTTPException(429,'Legacy incident plan limit is 10 per hour across the fleet')
         # Preserve the exact revision through MySQL's JSON number serialization.
         return {'job_id':worker.enqueue(s,host_id,'startup-plan',{'incident_id':row.id,'expected_updated':repr(row.updated)})}
 

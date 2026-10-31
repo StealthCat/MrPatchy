@@ -86,9 +86,10 @@ def acquire(owner=None):
             now=time.time();reconcile(s,now);s.commit()
             cfg=config(s);secret=s.get(Setting,'openai_key')
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not secret or not owner_valid(s,owner,True):return None
-            recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
-            count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
-            if max(recent,count)>=cfg['ai_hourly_limit']:return None
+            if cfg['ai_control_mode']=='legacy':
+                recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
+                count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
+                if max(recent,count)>=cfg['ai_hourly_limit']:return None
             signature=ai_retry.configuration(s)
             # One process investigation per host preserves lifecycle/provider
             # serialization and prevents a noisy host occupying every slot.

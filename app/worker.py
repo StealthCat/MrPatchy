@@ -296,8 +296,13 @@ def execute(job_id,reserved_lock=None):
             if not job:return
             lock=host_lock(job.host_id)
         if not lock.acquire(False):return
+    with Session() as s:
+        job=s.get(Job,job_id);action=job.action if job else ''
+    from . import ai_admission
+    admission_token=ai_admission.begin_scope() if action in ('release-plan','security-plan','startup-plan') else None
     try:return execute_locked(job_id)
-    finally:lock.release()
+    finally:
+        ai_admission.end_scope(admission_token);lock.release()
 
 
 def execute_locked(job_id):
