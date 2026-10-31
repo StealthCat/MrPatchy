@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.21.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.22.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -471,17 +471,38 @@ Use existing operation/recovery views for failures; drain never clears a hold or
 replays an interrupted mutation. Abrupt process loss retains existing recovery
 semantics. This is a local/shared-state foundation, not remote maintenance acceptance.
 
-Set startup-only `MRPATCHY_JOB_CONCURRENCY` (1–8, default 2) and
-`MRPATCHY_POLL_CONCURRENCY` (1–32, default 8) in `.env` for the complete Compose
-worker, then rebuild/recreate it. Direct worker/embedded processes can use the same
-environment variables. Invalid values refuse startup. These limits apply to real
-executors and job admission; AI remains serialized at one task. Poll/notification
-work shares the poll pool, and already assigned polls may queue behind its limit.
-Higher limits increase target/database/controller load; per-host locks still apply.
-The UI reports actual configured limits. Controller concurrency editing, cross-host
-state preflight, remote migration/drain recovery acceptance and other component
-health remain planned. Rebuild controller and workers together; no target-agent or
-schema upgrade is required. No Git tags are created.
+Set startup-only `MRPATCHY_JOB_CONCURRENCY` (1–8, default 2),
+`MRPATCHY_POLL_CONCURRENCY` (1–32, default 8) and `MRPATCHY_AI_CONCURRENCY`
+(1–8, default 4; set 1 for serial operation) in `.env`, then recreate the worker.
+Direct worker/embedded processes use the same variables. Invalid values refuse
+startup. These limits size the real executors. Poll/notification work shares the
+poll pool; process investigations and update scoring share AI slots.
+
+Independent servers can now undergo process triage concurrently. A durable,
+renewable claim permits one process investigation per server across supported
+workers, with atomic existing hourly admission and ownership/evidence checks
+before calls and acceptance. The coordinator schedules update scoring, alternating
+purposes even with one AI slot. Claims expire after 120 seconds without renewal;
+interrupted attempts retain the existing recovery delay and finite retry limits.
+A lease cannot cancel an already sent request or guarantee exactly-once billing.
+The full model, evidence and conditional SSH/follow-up flow remain unchanged.
+Same-server parallel investigations, broader fairness, fleet known-good caching
+and shared rate/daily-spend/unthrottled controls remain unfinished.
+
+The Investigations/AI activity views report active claims, queued work and fresh
+reported AI capacity. Workers report actual active task counts and configured
+capacity, including draining capacity; these reports are not a readiness guarantee.
+Higher concurrency increases database/target/provider load and can consume the
+existing hourly allowance sooner. No model, allowance or spending mode is changed.
+Set AI concurrency to 1 to preserve serial resource use.
+
+For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
+create `ai_triage_claims`, then start matching workers. Mixed old/new active workers
+are unsupported: older orphan reconciliation does not recognize live claims.
+The startup model registry also includes claims in verified offline database
+migration and schema preflight. No target-agent upgrade is needed for concurrency.
+Remote shared state, broader health and cross-host maintenance acceptance remain
+planned. No Git tags or Docker-image publication are implied.
 
 
 Worker control requests carry the exact case-sensitive identity in the validated

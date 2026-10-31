@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.21.0'
+APP_VERSION='1.22.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -458,14 +458,16 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(auth))
         stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
         if host_id: host_or_404(s,host_id);stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
-        from . import ai_retry,ai_policy
+        from . import ai_retry,ai_policy,ai_claims
         rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
+        claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
         result=[];now=time.time()
         for row in rows:
             retry=None
             if not row.approved and row.verdict in ('error','pending'):
                 retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
+                if row.id in claimed:retry={**retry,'state':'running','next_at':0,'reason':'A worker owns this investigation. Its result must still pass ownership and evidence checks.'}
                 if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
             result.append(object_dict(row)|{'retry':retry})
         return result
@@ -486,13 +488,15 @@ class RetriageInput(BaseModel):
 
 @app.post('/api/investigations/{behavior_id}/retriage')
 def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(auth)):
-    from . import ai_assessments
+    from . import ai_assessments,ai_claims
     reason=body.reason.strip()
     if len(reason)<10:raise HTTPException(400,'Provide a meaningful re-triage reason')
     lock=worker.Lock('ai-triage')
     if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Reopen Re-triage when it finishes.')
     try:
         with Session() as s:
+            claim=s.get(ai_claims.Claim,behavior_id)
+            if claim and claim.expires>time.time():raise HTTPException(409,'This investigation is running. Reopen Re-triage when it finishes.')
             row=s.get(Behavior,behavior_id)
             if not row:raise HTTPException(404,'Investigation not found')
             if not host_lifecycle.active(s.get(Host,row.host_id)):raise HTTPException(409,'Server management is unavailable; retained assessments are read-only')
@@ -1268,10 +1272,13 @@ def ai_run_detail(run_id:str,host_id:str='',user=Depends(auth)):
 
 @app.post('/api/investigations/{behavior_id}/retry')
 def retry_investigation(behavior_id:str,user=Depends(auth)):
+    from . import ai_claims
     lock=worker.Lock('ai-triage')
     if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Retry when it finishes.')
     try:
         with Session() as s:
+            claim=s.get(ai_claims.Claim,behavior_id)
+            if claim and claim.expires>time.time():raise HTTPException(409,'This investigation is running. Retry when it finishes.')
             row=s.get(Behavior,behavior_id)
             if not row or row.approved or row.verdict not in ('error','pending'):raise HTTPException(409,'Only unapproved failed/pending investigations can be retried')
             with host_lifecycle.activity([row.host_id],'queue'):

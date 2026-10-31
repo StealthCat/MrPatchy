@@ -1962,9 +1962,10 @@ work above remain unfinished.
 
 ## Planned: faster parallel AI triage and configurable spending controls
 
-Requested 2026-10-30; **the program remains unfinished**. v1.18.0 delivers only
-the baseline/transport/timing foundation described in its checkpoint below; fleet
-known-good reuse, threaded execution and shared controls remain planned.
+Requested 2026-10-30; **the program remains unfinished**. v1.18.0 provides the baseline/transport/timing foundation. v1.22.0 adds bounded
+cross-server threaded process triage and renewable claims, as checkpointed below.
+Fleet known-good reuse, same-server parallelism, broader fairness and shared controls
+remain unfinished. The inspection baseline below is historical.
 Inspection baseline: main `8bee5b64`, source v0.16.0, latest merged PR #71.
 No live deployment timing or provider benchmark was available; the following are
 verified code constraints rather than a measured diagnosis of one deployment.
@@ -3920,3 +3921,93 @@ It targets the actual post-fix main `8d2087a5`. Final published head/tree, all n
 SQLite/MySQL/browser/native acceptance results and actual merged commit (or exact
 unfinished blockers) are recorded in that PR. Reconcile this delivery before new
 roadmap work; no earlier-head or local-only result authorizes merging.
+
+
+## v1.22.0 — Concurrent cross-server process triage with renewable claims
+
+Issue-first reconciliation inspected actual main `2e823b76` / PR #80, current
+instructions and checkpoint, its code and all nine successful main checks. Open
+issue and PR lists were empty. No reported issue or issue closure is claimed.
+The faster-triage program remains unfinished. This batch selects a runtime
+concurrency increment independently of the larger authenticated-context/cache
+program; none of the v1.21.0 context gaps become cache eligibility.
+
+`MRPATCHY_AI_CONCURRENCY` sizes the real shared AI executor from 1–8 tasks, default
+4. Independent servers can overlap full one/two-stage process investigations.
+Only one process investigation per host is admitted across supported workers,
+preserving existing host lifecycle and provider serialization and bounding a noisy
+host's occupancy. The coordinator alone schedules update scoring; other workers
+can consume process work. Alternating purposes gives scoring an opportunity even
+at concurrency 1, but this is not a complete priority/aging or same-host fairness
+implementation. There is no unbounded future queue or sleep for deferred work.
+
+Short `ai-triage` transactions atomically claim the subject, record its run and
+consume the existing rolling-hour allowance. No provider/SSH operation holds that
+lock or an ORM read/write transaction. Each task has copied input/configuration,
+independent SQL sessions and ContextVar run/policy/timing state. A claim binds
+subject, host, token, worker/boot, run, exact assessment revision and API
+configuration. Its 120-second lease renews every 15 seconds while work runs.
+Historical observations with a missing server record retain their existing local
+advisory path; they cannot request SSH evidence. Disabled/deleted servers remain
+excluded. Full regression caught and corrected an overly strict initial host filter
+that would have removed this uncertainty-preserving capability.
+Provider requests, SSH collection and fenced persistence verify ownership, expiry,
+unchanged evidence/approval/configuration and matching worker boot. Result,
+retained assessment, explicit-refresh completion and retry removal share one
+transaction. Approval changes during a request remain and prevent stale acceptance.
+Retry/re-triage reject the claimed subject while other subjects remain usable.
+
+Reconciliation interrupts only expired/orphaned process runs, never another
+worker's live claim. Expired attempts keep existing one-hour interrupted recovery
+and bounded retry accounting. Tokens prevent an old owner accepting a result or
+deleting its successor's claim. Cooperative drain and signal shutdown block new owner admission but keep
+scheduler heartbeats and assigned lease renewal alive until work finishes.
+Stale worker heartbeats, lost scheduler identity and new boot identities fence old
+work.
+Already sent calls cannot be recalled. Their usage/uncertain-cost receipts survive
+fencing; this is not exactly-once billing or a daily-spend ledger. SQLite workers
+still need the supported shared local lock/data filesystem; MySQL named locks and
+a common database do not solve the outstanding remote shared-state requirements.
+
+The existing model/effort, 64 KB input and output/schema limits, conditional
+allowlisted evidence, per-call pause/lifecycle checks, structured validation,
+retained assessment provenance, role/CSRF and explicit response authorization remain.
+AI never grants an administrator approval. Existing hourly limits remain; faster
+work can reach them sooner. This does not implement smooth pacing, daily USD caps
+or unthrottled mode. Configuration changes fence old results; policy disable/pause
+cannot retract evidence already sent.
+
+Investigations and fleet AI activity show active claims, queued work and fresh
+reported AI slot capacity; worker rows show actual active task counts. Missing
+legacy counts are unavailable. Capacity includes draining registrations and is
+explicitly not a guarantee of available/readiness-verified slots. Existing glass
+styling, mascot, routes and roles remain. Browser acceptance checks phone/tablet/
+desktop rendering, escaping and navigation with these fields.
+
+Acceptance includes four genuinely overlapping independent investigations with
+one/two model stages, identical model/schema/output limits and all SSH requests,
+atomic hourly admission, duplicate subject/host suppression, thread context
+isolation, fresh-process claims, approval/evidence/configuration/boot/expiry/token
+changes, lease renewal and successor fencing, live-run reconciliation, bounded
+scheduler slots, purpose alternation and drain. SQLite local and MySQL CI run the
+same acceptance. `tools/benchmark_ai.py` supports serial/parallel identical delayed
+loopback I/O; raw paired fixture measurements are in
+`docs/benchmarks/ai-parallel-v1220.json`. They do not establish production latency
+or capacity. Local focused and full/browser/exact-final-head CI results are recorded
+in the delivery PR; all nine applicable checks must pass before merge.
+
+Drain/stop old workers first, upgrade/start the controller to initialize
+`ai_triage_claims`, then start matching workers. Mixed old/new workers are
+unsupported because old orphan reconciliation assumes fleet exclusivity. The
+shared startup model registry includes claims in offline SQLite/MySQL migration
+and schema preflight. No target-helper/collector upgrade is needed for this batch.
+APP_VERSION/README/changelog/UI/API synchronize at v1.22.0; major stays 1.
+No Git tags, Docker publication or schedule change is made.
+
+Remaining: complete authenticated/context collection and strict host-independent
+known-good publication/hit/revocation/refresh acceptance; safe same-host concurrency,
+broader priority/aging and supported remote-worker recovery; shared throttle/daily
+reservations/uncertain-charge ledger/unthrottled controls and all-billable-path
+migration. Notifications, deployment/health/GCP, startup/CVE/malware protection,
+retention and the full UI roadmap remain unfinished. This batch does not complete
+the finite faster-triage program. Reconcile any open delivery PR before new work.

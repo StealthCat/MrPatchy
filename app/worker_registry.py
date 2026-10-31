@@ -17,7 +17,7 @@ from .db import Session,Setting,audit
 log=logging.getLogger(__name__)
 PREFIX='worker-registry:'
 FRESH_SECONDS=120
-POOL_CAPACITY={'jobs':2,'polls':8,'ai':1}
+POOL_CAPACITY={'jobs':2,'polls':8,'ai':4}
 CONTROL_PREFIX='worker-control:'
 GAPS=[
     'Self-reported scheduler-loop liveness; storage, secrets, target access and operational readiness are not independently assessed.',
@@ -27,7 +27,7 @@ GAPS=[
 
 def capacities():
     result=dict(POOL_CAPACITY)
-    for key,env,maximum in [('jobs','MRPATCHY_JOB_CONCURRENCY',8),('polls','MRPATCHY_POLL_CONCURRENCY',32)]:
+    for key,env,maximum in [('jobs','MRPATCHY_JOB_CONCURRENCY',8),('polls','MRPATCHY_POLL_CONCURRENCY',32),('ai','MRPATCHY_AI_CONCURRENCY',8)]:
         value=os.getenv(env,str(result[key]))
         if not re.fullmatch(r'[0-9]{1,2}',value) or not 1<=int(value)<=maximum:raise ValueError(env+' must be an integer from 1 to '+str(maximum))
         result[key]=int(value)
@@ -103,7 +103,7 @@ class Registration:
         value={'schema_structure':STRUCTURE_RESULT,'controller_state':RESULT,'id':self.id,'boot_id':self.boot,'role':self.role,'deployment_type':self.deployment,'version':self.version,
                'started':self.started,'heartbeat':time.time(),'uptime_seconds':max(0,time.monotonic()-self.monotonic),
                'state':state,'coordinator':bool(coordinator),'active_jobs':list(jobs)[:16],
-               'active_polls':polls,'pending_polls':pending_polls,'notification_active':bool(notification_active),'ai_active':bool(ai_active),'job_capacity':self.capacity['jobs'],'poll_capacity':self.capacity['polls'],'ai_capacity':self.capacity['ai'],
+               'active_polls':polls,'pending_polls':pending_polls,'notification_active':bool(notification_active),'ai_active':bool(ai_active),'active_ai_tasks':int(ai_active),'job_capacity':self.capacity['jobs'],'poll_capacity':self.capacity['polls'],'ai_capacity':self.capacity['ai'],
                'control_revision':self.control_revision,
                'readiness':'not_assessed'}
         with Session() as s:
@@ -119,7 +119,7 @@ class Registration:
         self.check_identity()
         with Session() as s:control=control_value(s,self.id,self.boot)
         previous_revision=self.control_revision;changed=control['revision']!=previous_revision
-        self.control_revision=control['revision'];self.draining=control['action']=='drain'
+        self.control_revision=control['revision'];self.draining=control['action']=='drain' or getattr(self,'stopping',False)
         state=('draining' if jobs or polls or pending_polls or ai_active or notification_active else 'drained') if self.draining else 'reporting'
         if changed or state!=self.last_state or time.monotonic()-self.last>=15:
             try:self.write(state,coordinator and not self.draining,jobs,polls,ai_active,pending_polls=pending_polls,notification_active=notification_active,observed_action=control['action'] if changed else None)
@@ -155,9 +155,9 @@ def page(offset=0,now=None):
         items=[]
         for row in rows[:50]:
             data=row.value if isinstance(row.value,dict) else {}
-            fields=('id','boot_id','role','deployment_type','version','started','heartbeat','uptime_seconds','coordinator','active_jobs','active_polls','pending_polls','notification_active','ai_active','job_capacity','poll_capacity','ai_capacity','control_revision')
+            fields=('id','boot_id','role','deployment_type','version','started','heartbeat','uptime_seconds','coordinator','active_jobs','active_polls','pending_polls','notification_active','ai_active','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','control_revision')
             item={k:data.get(k) for k in fields};heartbeat=data.get('heartbeat')
-            for key in ('started','heartbeat','uptime_seconds','active_polls','pending_polls','job_capacity','poll_capacity','ai_capacity','control_revision'):
+            for key in ('started','heartbeat','uptime_seconds','active_polls','pending_polls','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','control_revision'):
                 value=item[key]
                 if not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<0:item[key]=None
             item['id']=data.get('id') if isinstance(data.get('id'),str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',data['id']) else row.key[len(PREFIX):]

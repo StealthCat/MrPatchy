@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.22.0 — 2026-10-30
+
+- Run process investigations concurrently across servers with configurable 1–8 AI slots (default 4, serial at 1).
+- Add renewable durable subject/worker/boot claims, atomic existing hourly admission and fenced evidence/result writes; retain full model and follow-up capability.
+- Recover expired claims without interrupting live investigations; preserve uncertain call receipts, retry limits, approvals and pause/drain boundaries.
+- Show active investigations, queued work, reported capacity and actual worker AI task counts. Add threaded/process races, full one/two-stage acceptance and a reproducible serial/parallel benchmark.
+- Drain old workers, initialize the new claims table with the upgraded controller, then start matching workers. Same-server parallelism, fleet reuse and shared spend/pacing controls remain planned.
+
 ## 1.21.0 — 2026-10-30
 
 - Bind read-only AI follow-up artifact/privilege context to a pinned, rechecked process directory.

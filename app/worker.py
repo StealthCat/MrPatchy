@@ -543,40 +543,28 @@ def validate_patch(s,h,specs):
             raise ValueError('Queued patch is no longer valid; review package '+name)
 
 
-def investigate_one():
+def investigate_one(owner=None):
+    from . import ai_claims
     admission_started=time.perf_counter()
-    lock=Lock('ai-triage')
-    if not lock.acquire(False):return
-    try:
-        ai_runs.reconcile('triage')
-        return _investigate_one(admission_started)
-    finally:lock.release()
-
-def _investigate_one(admission_started=None):
-    if admission_started is None:admission_started=time.perf_counter()
-    with Session() as s:
-        cfg=config(s); secret=s.get(Setting,'openai_key')
-        if not cfg['ai_enabled'] or not cfg['ai_model'] or not secret: return
-        now=time.time()
-        recent=list(s.scalars(select(Behavior).where(Behavior.attempted>now-3600)))
-        count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
-        if max(len(recent),count)>=cfg['ai_hourly_limit']: return
-        signature=ai_retry.configuration(s)
-        row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.verdict.in_(['pending','error']),ai_retry.eligible(signature,now)).order_by(Behavior.first_seen,Behavior.id).limit(1))
-        if not row: return
-        row.attempted=now; ai_retry.begin(s,row,signature,now);s.commit()
+    lease=ai_claims.acquire(owner)
+    if not lease:return
+    with lease:
+        row=lease.work
         try:
-            with ai_runs.track('triage',cfg['ai_model'],row.host_id,row.id):
+            with ai_runs.track('triage',lease.cfg['ai_model'],row.host_id,row.id,run_id=lease.run_id):
+                lease.check()
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
-                ai_runs.timing('queue_age',now-row.first_seen)
-                _assess_behavior(s,row,cfg,secret)
-            ai_retry.clear(s,row)
+                ai_runs.timing('queue_age',time.time()-row.first_seen)
+                _assess_behavior(None,row,lease.cfg,lease.secret)
+        except ai_claims.Lost:
+            lease.lost.set()
         except Exception as e:
-            s.rollback();row=s.get(Behavior,row.id)
-            row.verdict='error'
-            retry=ai_retry.failed(s,row,e,time.time())
-            row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(e)
-        s.commit()
+            try:
+                with lease.mutation() as (s,saved):
+                    saved.verdict='error'
+                    retry=ai_retry.failed(s,saved,e,time.time())
+                    saved.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(e)
+            except ai_claims.Lost:lease.lost.set()
 
 def _assess_behavior(s,row,cfg,secret):
     from . import ai_policy
@@ -585,7 +573,8 @@ def _assess_behavior(s,row,cfg,secret):
         return _assess_active_behavior(s,row,cfg,secret)
 
 def _assess_active_behavior(s,row,cfg,secret):
-    from . import ai_assessments
+    from . import ai_assessments,ai_claims
+    lease=ai_claims.current.get()
     inputs=[]
     def assess(evidence):
         prepared=ai.investigation_input(evidence)
@@ -595,23 +584,32 @@ def _assess_active_behavior(s,row,cfg,secret):
     checks=result.get('requested_checks',[])
     if checks:
         ai_runs.event('ssh_evidence','Collecting the requested allowlisted evidence from the target.')
-        host=s.get(Host,row.host_id)
+        with Session() as lookup:host=lookup.get(Host,row.host_id)
         checksum=row.evidence.get('sha256','')
         if not host or not isinstance(checksum,str) or not re.fullmatch(r'[a-f0-9]{64}',checksum) or row.evidence.get('identity_verified') is False:
             evidence={'identity_verified':False,'checks':list(set(checks)),'reason':'The observed executable has no verified identity or its host is unavailable; no remote evidence request was sent'}
         else:
             try:
                 with ai_runs.measure('ssh_evidence'):
+                    ai_claims.check_current()
                     evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'uid':row.evidence.get('uid'),'checks':list(set(checks))},timeout=90)
+            except ai_claims.Lost:raise
             except Exception as error:raise ai.AIError('SSH evidence collection failed ('+type(error).__name__+'). Verify target connectivity, host pinning and helper installation.') from None
         with ai_runs.measure('evidence_persistence'):
-            row.evidence={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
-            s.commit()
+            updated={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
+            if lease:
+                with lease.mutation() as (write,saved):saved.evidence=updated
+                row.evidence=updated
+            else:row.evidence=updated;s.commit()
         result=assess(row.evidence)
     with ai_runs.measure('result_persistence'):
-        row.verdict=result['risk']; row.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
-        ai_assessments.record(s,row,cfg['ai_model'],result,inputs)
-        s.commit()
+        def save(write,saved):
+            saved.verdict=result['risk'];saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
+            ai_assessments.record(write,saved,cfg['ai_model'],result,inputs)
+            ai_retry.clear(write,saved)
+        if lease:
+            with lease.mutation() as (write,saved):save(write,saved)
+        else:save(s,row);s.commit()
 
 def ai_cycle():
     # Separate quotas keep score batches from starving process investigations.
@@ -633,8 +631,13 @@ def _loop(reporter):
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_task=None; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0
-        while not stop.wait(1):
+        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0; next_ai='scoring'
+        shutting_down=False
+        while True:
+            shutting_down=stop.wait(1) or shutting_down
+            if shutting_down and not active_jobs and not ai_tasks and all(future.done() for future in active_polls.values()) and (notification_task is None or notification_task.done()):break
+            if shutting_down:time.sleep(.25)
+            reporter.stopping=shutting_down
             try:
                 now=time.time()
                 if is_leader:
@@ -644,14 +647,15 @@ def _loop(reporter):
                         try:leader.release()
                         except Exception:pass
                         is_leader=False
-                draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),ai_task is not None and not ai_task.done(),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
+                draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
                 if draining and is_leader:leader.release();is_leader=False
                 if not draining and not is_leader:is_leader=leader.acquire(False)
                 if is_leader:ai_runs.heartbeat()
-                if ai_task is not None and ai_task.done():
-                    try:ai_task.result()
-                    except Exception as error:ai_runs.task_failure(error)
-                    ai_task=None
+                for future in list(ai_tasks):
+                    if future.done():
+                        try:future.result()
+                        except Exception as error:ai_runs.task_failure(error)
+                        del ai_tasks[future]
                 for key,(future,_) in list(active_jobs.items()):
                     if future.done():
                         try: future.result()
@@ -711,9 +715,23 @@ def _loop(reporter):
                         s.commit()
                     last_cleanup=now
                 if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
-                if is_leader and ai_task is None and now-last_ai>=5: ai_task=ai.submit(ai_cycle);last_ai=now
+                if now-last_ai>=5:
+                    # No executor backlog: release slots while quota/retry work
+                    # waits. Alternate purposes even with a serial pool. Only the
+                    # coordinator scores; any supported worker may claim triage.
+                    owner=(reporter.id,reporter.boot) if hasattr(reporter,'id') else None
+                    while len(ai_tasks)<capacity['ai']:
+                        scoring=is_leader and next_ai=='scoring' and 'scoring' not in ai_tasks.values()
+                        if scoring:
+                            ai_tasks[ai.submit(update_scores.run_one)]='scoring';next_ai='triage'
+                        else:
+                            ai_tasks[ai.submit(investigate_one,owner)]='triage';next_ai='scoring'
+                    last_ai=now
             except IdentityLost:
                 if is_leader:leader.release();is_leader=False
+                if hasattr(reporter,'id'):
+                    from . import ai_claims
+                    ai_claims.abandon_owner((reporter.id,reporter.boot))
                 raise
             except Exception: log.exception('Scheduler tick failed')
         if is_leader:leader.release()

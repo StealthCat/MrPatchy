@@ -173,7 +173,7 @@ def event(stage, message, *, state=None, call=False):
     if not run_id: return
     with Session() as s:
         row = s.get(AIRun, run_id)
-        if not row: return
+        if not row or row.state!='running': return
         row.stage = stage; row.message = message[:2000]
         if call: row.calls += 1
         if state: row.state = state; row.finished = time.time()
@@ -182,13 +182,19 @@ def event(stage, message, *, state=None, call=False):
 
 
 @contextmanager
-def track(purpose, model, host_id='', subject='', host_ids=None):
+def track(purpose, model, host_id='', subject='', host_ids=None, run_id=None):
     with Session() as s:
-        row = AIRun(id=str(uuid.uuid4()), purpose=purpose, model=model, host_id=host_id, subject=subject)
-        s.add(row)
-        for member in set(host_ids or []) | ({host_id} if host_id else set()):
-            s.add(AIRunHost(run_id=row.id,host_id=member))
-        s.commit(); identifier = row.id
+        if run_id:
+            row=s.get(AIRun,run_id)
+            if not row or (row.purpose,row.model,row.host_id,row.subject,row.state)!=(purpose,model,host_id,subject,'running'):
+                raise ValueError('Pre-admitted AI run changed; refusing execution')
+        else:
+            row = AIRun(id=str(uuid.uuid4()), purpose=purpose, model=model, host_id=host_id, subject=subject)
+            s.add(row)
+            for member in set(host_ids or []) | ({host_id} if host_id else set()):
+                s.add(AIRunHost(run_id=row.id,host_id=member))
+            s.commit()
+        identifier = row.id
     from . import ai_policy
     policy_token=ai_policy.scope.set(tuple(set(host_ids or []) | ({host_id} if host_id else set())))
     token = active.set(identifier)
@@ -240,12 +246,15 @@ def task_failure(error):
 
 
 def status(s):
-    from . import ai_retry,ai_policy,host_lifecycle
+    from . import ai_retry,ai_policy,host_lifecycle,ai_claims,worker_registry
     now=time.time(); cfg=config(s)
     query=select(Behavior.attempted,Behavior.first_seen,Behavior.host_id,ai_retry.TriageRetry).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
     rows=list(s.execute(query)); recent=list(s.scalars(select(Behavior.attempted).where(Behavior.attempted>now-3600)))
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
     running=s.scalar(select(AIRun).where(AIRun.purpose=='triage',AIRun.state=='running').order_by(AIRun.started.desc()).limit(1))
+    active_count=s.scalar(select(func.count()).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now))
+    reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
+    capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
     latest=s.scalar(select(AIRun).where(AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1))
     run_count=s.scalar(select(func.count()).select_from(AIRun).where(AIRun.purpose=='triage',AIRun.started>now-3600))
     used=max(len(recent),run_count)
@@ -258,7 +267,7 @@ def status(s):
     if not cfg['ai_enabled']: reason='disabled'; message='Automatic AI triage is disabled in Settings.'
     elif not cfg['ai_model'] or not s.get(Setting,'openai_key'): reason='configuration'; message='Save a model ID and API key in Settings.'
     elif not seen or now-seen>90: reason='worker_unavailable'; message='No recent scheduler heartbeat. Check app/worker container logs and DISABLE_SCHEDULER.'
-    elif running: reason='running'; message='Investigation in progress: '+running.stage
+    elif running: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running.stage
     elif used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Hourly investigation limit reached.'; retry=min(recent+([oldest_run] if oldest_run else []))+3600
     elif not rows: reason='idle'; message='No unapproved pending behaviors. Collectors must report observations before triage can run.'
     elif not ready and retry: reason='backoff'; message='Transient or interrupted investigations are waiting for retry eligibility. Configuration failures require review.'
@@ -267,5 +276,6 @@ def status(s):
     return {'pending':len(rows),'oldest':min((r.first_seen for r in rows),default=None),'hourly_limit':cfg['ai_hourly_limit'],
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
+            'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None}
