@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.35.31** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.35.37** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -183,6 +183,7 @@ Configure each host under **Account → Operations → SSO, SMTP & target polici
 - Transient SSH/health failures are retried for up to ten minutes. Persistent post-reboot health failure requests one approved snapshot rollback; a rollback reboot is verified separately.
 - Before a rollback-enabled patch, the central database durably records the original inventory fingerprint, configuration hashes/ownership/modes and running services. Rollback must restore that evidence, clean dpkg state and service health; a healthy boot alone is insufficient. Missing or changed evidence requires reconciliation.
 - A verified rollback leaves the patch job failed and blocks later rollout stages. Uncertain recovery becomes `recovery_required`.
+- Without reboot/rollback, an ordinary patch whose outcome is unknown also becomes `recovery_required`: a lost, truncated or invalid completion reply after the package request was sent, a bridge exit without its own failure receipt, or a post-patch inventory read that fails. The patch is never replayed automatically, and any receipt is kept in the operation output. Failures before the request starts (stale selection, changed policy, unreachable SSH) and failures the target reports itself stay `failed` and release the host.
 - Orphaned `running` and `recovery_required` jobs block further queued work and configuration mutations for that host. Monitoring continues. Busy workers skip the host instead of tying up another worker slot.
 - After inspecting package/service state, snapshots and pending reboot timers through a trusted console, use **Activity → Review interrupted operation**. Reconciliation also requires idle central and target mutation locks. It releases the queue without replaying the interrupted job.
 
@@ -307,7 +308,7 @@ DATABASE_URL=mysql+pymysql://mrpatchy:URL_ENCODED_PASSWORD@db-host:3306/mrpatchy
 
 Switching the URL does not migrate existing data. After an offline migration, the encrypted active profile overrides `DATABASE_URL` for both app and workers. Configure verified database TLS for remote deployments.
 
-Use [the encrypted restic workflow](docs/ENTERPRISE_RECOVERY.md#complete-encrypted-off-host-recovery) to back up the database, encryption key, complete SSH rotation directory and TLS/Caddy volumes. Stop **all app and worker replicas** first. SQLite sources must exist, pass integrity checks and contain the application tables; a missing path cannot create an empty successful backup. Restore verifies content into staging before activation into empty destinations. Protect `.env`, IdP/database secrets and restic credentials separately through your infrastructure recovery procedures.
+Use [the encrypted restic workflow](docs/ENTERPRISE_RECOVERY.md#complete-encrypted-off-host-recovery) to back up the database, encryption key, complete SSH rotation directory, retained controller evidence, vendor/YARA bundles and trust keyrings, local GCP credential state and TLS/Caddy volumes. Format-2 bundles record per-file coverage and reject changed or unsafe state before activation; legacy bundles explicitly warn that evidence/trust recovery is unverified. Stop **all app and worker replicas** first. SQLite sources must exist, pass integrity checks and contain the application tables; a missing path cannot create an empty successful backup. Restore verifies content into staging before activation into empty destinations. Protect `.env`, IdP/database secrets and restic credentials separately through your infrastructure recovery procedures.
 
 The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.py` for full deployment recovery. Test restores before relying on them.
 

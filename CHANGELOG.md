@@ -1,8 +1,33 @@
 # Changelog
 
-## 1.35.31 — 2026-10-31
+## 1.35.37 — 2026-10-31
 
 - Accept DNF4 `versionlock exclude` entries (`!name-epoch:version-release.*`) in RPM inventory. The leading `!` is now stripped before the optional epoch, so the entry is held conservatively instead of failing the whole inventory, collector and patching (issue #152). Unsupported expressions are still rejected. No compatibility impact; major version stays 1.
+## 1.35.35 — Log and audit rejected SSO callbacks
+
+- Fix #170: the SSO callback no longer discards every validation failure silently. The server logs the exception class and a fixed-vocabulary sanitized reason (discovery/endpoint, issuer or subject mismatch, unbound subject, missing ID token, token exchange) and writes an `SSO login failed` audit entry with issuer, truncated hashed subject and reason.
+- Audit entries are rate-limited to one per reason/subject per five minutes (bounded table) so unauthenticated callers cannot flood the audit log. The user-facing 400 message is unchanged, so there is no enumeration signal; raw provider error text and subjects are never recorded.
+- Add regressions for misconfigured discovery, unassigned subject and rate limiting. No schema changes; major remains 1.
+
+## 1.35.30 — 2026-10-31
+
+- Hold the server with `recovery_required` when an ordinary patch (reboot and rollback off) may have changed packages without a trustworthy outcome: a lost, truncated or invalid completion reply, a bridge exit without its own failure receipt, or a failed post-patch inventory read (#119). Later queued work waits for **Review interrupted operation**, and the patch is never replayed.
+- Keep `failed` without a hold for known-unstarted failures (pre-send validation, inactive server, SSH unreachable before the remote command starts) and for failures the target bridge reports in its own JSON receipt. `ssh.call` now records whether the remote command started, and structured bridge errors raise `ssh.RemoteFailure` (still a `RuntimeError`).
+- Preserve the target's patch receipt in the operation output whenever a later step fails, and audit uncertain outcomes as `uncertain patch` with the operation ID.
+- Compatibility: an ordinary patch that loses its SSH reply now pauses the server until an administrator reviews it, instead of releasing the queue. Major version stays 1.
+
+## 1.35.29 — Enforce deleted-server read boundaries
+
+- Resolve host authorization for query-scoped investigations, jobs and package history and job-ID output reads. Viewers/operators receive the existing administrator-only refusal for deleted-server records.
+- Filter deleted-server jobs and package events in SQL before pagination; keep administrator retention access and disabled-server read policy unchanged.
+- Add API regressions for both non-admin roles, indirect/query/global reads, pagination, missing/mismatched scope, administrator retention, disabled servers and hostless jobs. No schema or target-helper changes; major remains 1.
+
+## 1.35.27 — 2026-10-31
+
+1. Fix complete recovery omitting controller evidence archives, vendor packages/trusted keys, YARA rules/trusted keys and local GCP credential state (#120). Format-2 manifests record exact file coverage and hashes; backup, restore and activation validate this state. Verified archive records require their content and receipt files.
+2. Restore durable directories/files with private permissions and service ownership; reject links and special files. Continue accepting format-1 bundles with an explicit missing-coverage warning. Report absent directories and external infrastructure/credential dependencies honestly.
+3. Add SQLite evidence verification, signed vendor/YARA authentication, tamper/link/legacy regressions and native encrypted SQLite/MySQL recovery drills. Install native restic/MySQL clients in MySQL CI.
+4. Compatibility: older script versions cannot read format-2 bundles; update the recovery script before restoring. Unsafe linked/special filesystem state or missing verified evidence now blocks publication/activation. Major stays 1. No Docker image publication or Git tag.
 
 ## 1.35.25 — 2026-10-31
 

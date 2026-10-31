@@ -122,6 +122,8 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements*.txt
+      - name: Native encrypted MySQL recovery tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends restic mariadb-client
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
 
