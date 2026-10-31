@@ -4011,3 +4011,17 @@ reservations/uncertain-charge ledger/unthrottled controls and all-billable-path
 migration. Notifications, deployment/health/GCP, startup/CVE/malware protection,
 retention and the full UI roadmap remain unfinished. This batch does not complete
 the finite faster-triage program. Reconcile any open delivery PR before new work.
+
+
+Delivery: [PR #81](https://github.com/StealthCat/MrPatchy/pull/81), initial published
+source [1fd7de00](https://github.com/StealthCat/MrPatchy/commit/1fd7de005e567e9a5d7cfe925156c2ffafa549b3).
+Its initial published tree matches reviewed local source
+`3dc6d2c9669701c0f9c0e6b6b01ad46cf273e323`. Final local focused concurrency,
+worker lifecycle, shutdown/drain, fresh-process migration and schema preflight
+acceptance passed **114 tests**. The complete local browser suite and final
+v1.22.0 focused responsive acceptance passed; reviewed final renders are linked
+in UI_DESIGN.md. Full final-source Python regression, exact published final head/
+tree, all nine applicable CI checks and completed overall workflow, and actual
+merge SHA (or precise unfinished blockers) are recorded in PR #81. Finish this
+delivery before beginning another roadmap batch. No earlier-head result authorizes
+a merge; source changes after final validation require applicable new checks.
