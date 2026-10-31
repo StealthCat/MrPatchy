@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.31 — 2026-10-31
+
+- Accept DNF4 `versionlock exclude` entries (`!name-epoch:version-release.*`) in RPM inventory. The leading `!` is now stripped before the optional epoch, so the entry is held conservatively instead of failing the whole inventory, collector and patching (issue #152). Unsupported expressions are still rejected. No compatibility impact; major version stays 1.
+
 ## 1.35.25 — 2026-10-31
 
 - Style `.inline-check` like `label.check` so the response-monitoring, response-watch and service-watch checkboxes render inline with their labels (issue #175). A regression test requires every `check`/`inline-check` label in the UI to have a matching stylesheet rule. No compatibility impact; major version stays 1.

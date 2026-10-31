@@ -156,9 +156,7 @@ def local_inventory():
             line=line.strip()
             if not line or line.startswith('#'):continue
             # Conservative: preserve every named package, even locks allowing some versions.
-            pattern=re.sub(r'^!?\d+:','',line).rsplit('-',2)[0]
-            if not pattern or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-*?' for c in pattern):raise ValueError('Unsupported versionlock expression')
-            held.append(pattern)
+            held.append(versionlock_name(line))
     if files.get(LOCK_FILES[2]):
         try:import tomllib
         except ImportError:raise ValueError('DNF5 versionlock inventory requires Python 3.11+')
@@ -173,6 +171,13 @@ def local_inventory():
             'os':Path('/etc/os-release').read_text(),'architecture':arch,'foreign_architectures':[],
             'status':json.dumps(packages,sort_keys=True),'files':files,'keys':keys,
             'machine_id':Path('/etc/machine-id').read_text().strip(),'collected':time.time()}
+
+
+def versionlock_name(line):
+    # Exclude entries ('!') are treated as held too: conservative, and they must not fail inventory.
+    pattern=re.sub(r'^\d+:','',line.lstrip('!')).rsplit('-',2)[0]
+    if not pattern or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-*?' for c in pattern):raise ValueError('Unsupported versionlock expression')
+    return pattern
 
 
 def validate_main(inv):
