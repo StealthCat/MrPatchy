@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.7 — 2026-10-31
+
+- Audit failed sign-ins: each rejected password login now records `login failed` with the submitted username, source address and a coarse reason (unknown or disabled account, bad password, bad MFA code). Submitted passwords and one-time codes are never recorded.
+- Audit sign-in lockouts: a rate-limit rejection records one `login throttled` entry per limit and five-minute window (account, address or global), so rejected requests cannot flood the audit history.
+- Compatibility: HTTP status codes and response bodies are unchanged, so account existence is still not revealed to the client. No schema, role, session or throttling-threshold change.
+
 ## 1.35.4 — 2026-10-31
 
 - Enable concurrent agent development coordinated through issue claims, linked draft PRs, explicit ownership/checkpoints, review and handoff records.

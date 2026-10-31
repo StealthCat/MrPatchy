@@ -4896,3 +4896,35 @@ requires safe pre/post-transmission crash acceptance rather than automatic repla
 upgrade roadmap #96 remain open. Faster-AI roadmap work resumes only after higher-
 priority actionable issue fixes; multi-stage release persistence, pricing lifecycle,
 invoice reconciliation and full controller failover/reset acceptance remain planned.
+
+
+## v1.35.7 — Failed sign-in and lockout auditing
+
+Delivery record: version **v1.35.7**, branch `fix/failed-login-audit-v1.35.7`, which
+addresses [issue #136](https://github.com/StealthCat/MrPatchy/issues/136); the PR
+number and tested final commit are recorded on the pull request. Proposed merge order:
+after PR #115 and PR #116 (both claim v1.35.5) and PR #113 (v1.35.6); the version must
+be re-checked against current `main` immediately before merging.
+
+Before this change `POST /api/login` audited only successful sign-ins (`login`) and
+authenticated state-changing requests. Failed passwords, unknown or disabled accounts,
+bad MFA codes and rate-limit rejections left no audit history, so password spraying and
+credential guessing were invisible to administrators. This was found by code review of
+v1.35.3 and is a detection gap, not an authentication bypass.
+
+Failed password sign-ins now record `login failed` with `<username> <address> <reason>`
+where the reason is `unknown or disabled account`, `bad password` or `bad MFA code`.
+The username is already restricted to `[A-Za-z0-9_.-]{1,64}` by the request model, so
+it cannot inject log lines; the submitted password and one-time code are never
+recorded. Rate-limit rejections record `login throttled` with the reason `account limit`,
+`address limit` or `global limit`, once per limit and five-minute window, so rejected
+requests cannot flood the audit table. The audit entries are written outside the global
+login lock.
+
+Unchanged: HTTP status codes and response bodies (a client still cannot distinguish an
+unknown account from a wrong password), the 10-per-account / 50-per-address / 10,000
+global thresholds, scrypt parameters, sessions, roles, CSRF and SSO. Audit reasons are
+visible to administrators only. SSO (OIDC) failures are not covered by this change.
+Known remaining items from the same review, deliberately separate: per-account
+throttling for distributed guessing, the global 10,000-bucket lockout, serialising
+logins on one lock during hashing, and purging expired sessions.
