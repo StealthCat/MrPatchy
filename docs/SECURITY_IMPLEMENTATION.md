@@ -5259,3 +5259,5 @@ intact and this update's entries reapplied.
 
 
 Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
+
+Checkpoint (v1.35.26, issue #160): `/api/metrics` `mrpatchy_hosts` now counts only servers with `deleted_at==0`, matching the dashboard and `/api/hosts`. No role, audit, schema, response-authorization, Docker publication or Git tag change. Version allocated above pending PRs #203 (1.35.22), #206 (1.35.21), #207 (1.35.23) and #208 (1.35.25).

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.26 — 2026-10-31
+
+- Exclude soft-deleted servers from the Prometheus `mrpatchy_hosts` count so it matches the dashboard and `/api/hosts` (#160). Regression test added.
+- Compatibility: the `mrpatchy_hosts` value may drop after deletions. Major version stays 1.
+
 ## 1.35.21 — 2026-10-31
 
 - Fix full recovery backups of a valid zero-server deployment, which failed with `FileNotFoundError` because `ssh/` is created only when the first server is added. The bundle now carries an explicit empty owner-only SSH directory that activation restores.
