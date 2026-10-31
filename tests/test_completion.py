@@ -149,10 +149,17 @@ def test_two_stage_investigation_uses_only_allowlisted_checks(admin,monkeypatch)
         ssh_calls.append(payload);return {'identity_verified':False,'reason':'exited'}
     monkeypatch.setattr(worker.ai.transport,'post',post);monkeypatch.setattr(worker.ssh,'call',call)
     worker.investigate_one()
-    assert len(requests)==2 and ssh_calls[0]['action']=='evidence'
+    if len(requests)!=2:
+        from app import ai_runs
+        with Session() as s:diagnostics=[(r.state,r.message) for r in s.scalars(select(ai_runs.AIRun))]
+        pytest.fail('Required follow-up did not run: '+repr(diagnostics))
+    assert ssh_calls[0]['action']=='evidence'
     assert ssh_calls[0]['checks']==['executable'] and ssh_calls[0]['uid']=='0'
     assert all(r['store'] is False for r in requests)
     assert 'identity_verified' in requests[1]['input']
+    with Session() as s:
+        row=s.scalar(select(Behavior))
+        assert json.loads(requests[1]['input'])['investigation']==row.evidence['investigation']
 
 def test_package_state_schema_upgrade_is_idempotent(admin):
     with engine.begin() as connection: connection.execute(text('ALTER TABLE packages DROP COLUMN dpkg_state'))

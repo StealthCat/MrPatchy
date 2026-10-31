@@ -466,3 +466,22 @@ fixtures: [phone](screenshots/triage-context-v1210-320.jpg),
 [tablet](screenshots/triage-context-v1210-768.jpg),
 [desktop](screenshots/triage-context-v1210-1440.jpg). These are illustrative local
 fixtures, not a fleet cache or comprehensive context/AI-workspace acceptance.
+
+
+## v1.22.0 concurrent triage status
+
+The shared AI status card now shows active process investigations, queued work and
+fresh reported AI slot capacity. It explains the per-server limit, shared scoring
+slots and draining-capacity limitation. Worker rows show actual task counts; legacy
+missing counts remain unavailable. Existing glass components, mascot, navigation
+and administrator boundaries are retained.
+
+Real Chromium acceptance reviewed the following illustrative fixture renders,
+including overflow at 320/768/1440, escaped evidence, retry feedback, Back/reload,
+worker controls and operator/viewer isolation:
+
+- AI queue: [phone](screenshots/ai-parallel-v1220-320.jpg), [tablet](screenshots/ai-parallel-v1220-768.jpg), [desktop](screenshots/ai-parallel-v1220-1440.jpg).
+- Worker counts: [phone](screenshots/worker-ai-v1220-320.jpg), [tablet](screenshots/worker-ai-v1220-768.jpg), [desktop](screenshots/worker-ai-v1220-1440.jpg).
+
+These are documentation fixtures, not production workers or live provider results.
+The worker table intentionally scrolls horizontally on narrow screens.

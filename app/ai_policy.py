@@ -38,6 +38,8 @@ def provider():
     with ExitStack() as stack:
         for identifier in identifiers:stack.enter_context(Lock('ai-provider:'+identifier))
         require(identifiers)
+        from .ai_claims import check_current
+        check_current()
         yield
 
 

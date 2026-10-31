@@ -94,11 +94,11 @@ def test_invalid_control_blocks_admission_without_forging_ack(admin):
 def test_configured_capacities_report_actual_pool_limits(admin,monkeypatch,jobs,polls):
     monkeypatch.setenv('MRPATCHY_JOB_CONCURRENCY',jobs);monkeypatch.setenv('MRPATCHY_POLL_CONCURRENCY',polls)
     with registry.Registration() as node:
-        assert node.capacity=={'jobs':int(jobs),'polls':int(polls),'ai':1}
+        assert node.capacity=={'jobs':int(jobs),'polls':int(polls),'ai':4}
         row=registry.page()['items'][0];assert row['job_capacity']==int(jobs) and row['poll_capacity']==int(polls)
 
 
-@pytest.mark.parametrize('env,value',[('MRPATCHY_JOB_CONCURRENCY','0'),('MRPATCHY_JOB_CONCURRENCY','9'),('MRPATCHY_POLL_CONCURRENCY','33'),('MRPATCHY_POLL_CONCURRENCY','-1'),('MRPATCHY_JOB_CONCURRENCY','2.0'),('MRPATCHY_POLL_CONCURRENCY','nan')])
+@pytest.mark.parametrize('env,value',[('MRPATCHY_JOB_CONCURRENCY','0'),('MRPATCHY_JOB_CONCURRENCY','9'),('MRPATCHY_POLL_CONCURRENCY','33'),('MRPATCHY_POLL_CONCURRENCY','-1'),('MRPATCHY_JOB_CONCURRENCY','2.0'),('MRPATCHY_POLL_CONCURRENCY','nan'),('MRPATCHY_AI_CONCURRENCY','0'),('MRPATCHY_AI_CONCURRENCY','9'),('MRPATCHY_AI_CONCURRENCY','1.5')])
 def test_invalid_concurrency_refuses_start(env,value,monkeypatch):
     monkeypatch.setenv(env,value)
     with pytest.raises(ValueError,match=env):registry.Registration()
