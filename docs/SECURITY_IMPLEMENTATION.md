@@ -5024,3 +5024,48 @@ with stubbed `curl`/`sudo` to confirm a pre-existing `mrpatchy-enroll.sh` is ign
 the file used is mode 0600, and it is removed afterwards. The browser fixture in
 `tests/ui_enrollment.cjs` carries the new command string; it was updated but not
 executed locally because Playwright and a supported Node version were not installed.
+
+
+## v1.35.14 — CI runtime maintenance integration
+
+User-directed integration of PR #115 / issue #98 preserves PR #137 login auditing and PR #116 enrollment hardening. All checkout/setup-python/setup-node actions use v7 and the browser job uses Node 26. Source, README and changelog agree at v1.35.14. Exact-final-head full CI is required before merge; no Git tag or Docker publication.
+
+
+## v1.35.11 eBPF diagnostic lifecycle (#123)
+
+A single bpftrace stderr warning previously persisted in `ebpf-diagnostic.json`
+forever, and controller ingestion treated any nonempty diagnostic as a current
+integrity issue regardless of its age or the collector state. A recovered or
+intentionally disabled collector therefore kept the host in **attention**.
+
+The collector now tags every recorded warning with the identifier of the bpftrace
+run that emitted it, writes that run's `starting` status before its stderr reader
+can record anything, and stores the time of the last state transition (`since`) in
+`ebpf-status.json`. Under one lock shared with the stderr reader, a warning is
+retired (state `historical`, with `retired_at`, `retired_reason` and the recovering
+run) when the run delivers its first event, when eBPF is disabled and when the
+collector restarts. Retirement preserves the original warning text and time; a later
+warning from the current run is recorded as current again, so a persisting or new
+fault is not suppressed.
+
+Ingestion independently treats a diagnostic as history when it is retired, when the
+collector is disabled, when it belongs to an earlier run than the current status, or
+when it predates the current run's transition to active. A current-run warning,
+a malformed or non-numeric diagnostic, and status from an older untagged collector
+continue to raise the finding (fail closed) until the collector is upgraded through
+normal agent maintenance. The delivered diagnostic is retained in host telemetry as
+`ebpf_diagnostic`. eBPF status findings (`error`/`warning`/`unavailable`) are
+unchanged.
+
+Regressions drive the real collector loop with a fake bpftrace through failure,
+recovery, a post-recovery warning, process exit, disable and restart, then deliver
+the files through the bridge snapshot to controller ingestion. No schema, role,
+audit, response-authorization, Docker publication or Git tag change is included.
+Source, README, changelog and UI/API metadata synchronize at v1.35.11 with major
+fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #121,
+#117, #131 and #124).
+
+
+## v1.35.16 — User-directed integration of PRs #116, #137 and #115
+
+Main advanced to v1.35.11 while initial integration CI was running. Combined PR #195 preserves that eBPF diagnostic lifecycle update and all original PR heads as ancestors, synchronizes source metadata at v1.35.16 (above pending v1.35.15), and carries the enrollment hardening, failed-login audit and CI runtime maintenance together. The connector cannot write the contributor fork, so the maintainer explicitly approved upstream publication. All nine applicable checks must pass on the exact final integration commit before merge. Verify original PRs and issues #136/#98 close after the tested merge. No Git tags or Docker publication.
