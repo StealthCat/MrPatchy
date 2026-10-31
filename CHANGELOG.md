@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.21 — 2026-10-31
+
+- Declare the required role on every route (`viewer`, `operator`, `admin`, self-service or an allow-listed public route) instead of deciding roles from path substrings in `auth()`; a route that declares no role now stops the application from starting rather than defaulting to viewer-readable (#198).
+- Add a route inventory test that fails for any route missing from the expected-role table, and viewer/operator tests for every admin-only and operator route. Role assignments, CSRF, audit, host lifecycle and self-service behaviour are unchanged. Compatibility: a refused request names the required tier ("Administrator access required" or "This role cannot perform that operation") instead of the old path-dependent wording; status codes are unchanged. Major version stays 1.
+
 ## 1.35.17 — 2026-10-31
 
 - Fix populated SBOM exports by retaining the resolved host for Debian/RPM package URL selection (#121).

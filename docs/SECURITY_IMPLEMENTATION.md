@@ -5099,3 +5099,31 @@ included.
 Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (SQLite 1450 passed/129 skipped; MySQL 1445 passed/134 skipped). Main then advanced to 491df9e (v1.35.11). This merge preserves PR #183 diagnostics and all prior history, allocates v1.35.17 above pending versions through v1.35.15, and requires fresh exact-head CI before merge.
 
 Dependency checkpoint: PR #138 now includes exact PR #195 head 0824d084 as an ancestor and depends on its tested merge first. Enrollment hardening, failed-login auditing and CI action upgrades remain owned by #195; all are preserved here. Fresh exact-head CI validates their combination with the SBOM repair. If #195 changes, refresh/reassess before merge.
+
+## v1.35.21 — Per-route role declarations (#198)
+
+Claude Code session `012YQAphimPkYCq5KWgr1sGh` claimed issue #198 after reading main
+`1328a82` (v1.35.17), all open issues and open PRs. Pending #139, #168, #174 and #196
+hold versions up to v1.35.20 and also edit `app/main.py`; this update proposes
+v1.35.21, subject to refreshing main before merge.
+
+`auth()` used to decide roles by testing the request path (`'/security' in path`,
+`path.endswith('/patch')`, prefix lists), so a new route defaulted to viewer-readable
+and any path ending in `/preview` was operator-writable. Roles are now declared per
+route through `viewer_user`, `operator_user`, `admin_user` and `self_user`, which share
+one `authenticate()` that keeps session, generation, CSRF and host lifecycle checks in
+their existing order. `app/route_roles.py` builds an inventory of every route at
+startup (including the SSO router) and raises if a route declares no role, declares
+conflicting roles, or is public without being listed in `PUBLIC_ROUTES`.
+
+The authenticated routes were migrated from the roles the old logic produced and compared
+against it. The full suite caught one route the template comparison missed: operators may
+run `refresh` through `/api/hosts/{id}/actions/{action}`, so `refresh` is now its own
+operator route and the other actions stay admin. Old accidental matches (a concrete id such
+as `patch` ending a path) no longer grant operator access. `tests/test_route_roles.py` pins
+the full route-to-role table, proves unlisted routes fail closed, and drives a viewer
+and an operator through every admin-only and operator route. #157 (viewer-readable
+`/api/investigation-status`) is still a viewer route here; changing it is now a one-word
+edit on the new mechanism and is left to that issue. Host-lifecycle and deleted-record
+checks still read the path; they are not role decisions and were out of scope.
+
