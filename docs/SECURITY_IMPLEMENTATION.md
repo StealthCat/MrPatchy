@@ -168,7 +168,8 @@ avoids depending on GitHub's mutable host `base-files` package. SSH key-rotation
 checks assert the wrapped authentication exception and its underlying cause, so
 unrelated connection errors cannot count as successful key revocation. Both SSH
 matrix entries run even if one fails. CI supports manual dispatch and bounds each
-job to 30 minutes; PR and main-push triggers remain enabled.
+job to at most 30 minutes (see "CI pipeline review (v1.35.24)" for current limits);
+PR and main-push triggers remain enabled.
 
 ## Managed-agent health and maintenance
 
@@ -5260,8 +5261,42 @@ intact and this update's entries reapplied.
 
 Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
 
+## CI pipeline review (v1.35.24)
 
-## v1.35.22 — Uncertain ordinary patch outcomes (#119)
+The owner requested a full CI review, committed directly to `main`. Changes are
+confined to `.github/workflows/ci.yml`, a test-sharding hook in `tests/conftest.py`
+and documentation. No application, role, audit, target helper, response-authorization
+or Docker publication change is included.
+
+- **Main verification.** The concurrency group was shared by every push to `main`,
+  with `cancel-in-progress`. Each merge therefore cancelled the previous main run:
+  runs 329, 331, 334, 335 and 337 (v1.35.16–v1.35.20) never completed on `main`.
+  Push and manual runs now get unique groups. Only an older run of the same pull
+  request (keyed by PR number, not branch name) is superseded.
+- **Shell syntax.** `bash -n a b c` parses only `a`, so only
+  `deploy/entrypoint.sh` had been checked. Each tracked `*.sh` is now checked on its
+  own, as is every tracked `*.js`/`*.cjs` file, and `scripts/`, `tools/` and `tests/`
+  are byte-compiled. All of them pass today.
+- **Runner image (#197).** Every job is pinned to `ubuntu-24.04`. Adopting Ubuntu 26.04
+  should be a separate, fully validated change.
+- **Critical path.** A `static` job (10-minute limit) runs version, syntax and
+  Compose checks without waiting for the SQLite suite. The serial MySQL suite took
+  about 21 of its 30 minutes. It now runs as four isolated jobs (20-minute limit),
+  each with its own MySQL 8.4 service. `MRPATCHY_TEST_SHARD=INDEX/TOTAL` assigns whole
+  test files greedily by test count, so file order and module fixtures are preserved.
+  Every file lands in exactly one shard, and an invalid specification is a usage error.
+- **Duplication.** The restic backup/restore drill now runs in the `tests` job by
+  installing restic, so the separate `recovery` job was removed. Native RPM unit tests
+  use the runner's libdnf/libRPM rather than the matrix target, so they run in the
+  `fedora:44` leg only. Pip and npm downloads are cached.
+
+Check names change: `static` and `mysql (1)`–`mysql (4)` are added, and `mysql` and
+`recovery` are removed. Branch-protection required checks must follow. Future exact-head
+records should list the twelve resulting jobs rather than nine. Action references
+remain major-version tags; SHA pinning belongs to supply-chain issue #201.
+
+
+## v1.35.30 — Uncertain ordinary patch outcomes (#119)
 
 MrPatchy hourly development, Claude Code session `session_01AfdfYehh8Cf5AJiiyGRkCf`,
 claimed unowned issue #119 after reviewing all open issues, comments and PRs at
@@ -5288,8 +5323,9 @@ Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malforme
 replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
 inventory failure, verified target failure, inactive and unreachable servers
 (using the real `ssh.call`), the remote-start marker, structured-failure parsing
-and a later queued job. Version v1.35.22 follows main v1.35.21; PRs #174 (v1.35.20)
-and #196 (v1.35.21) merged during this work and are preserved. Pending PRs #207
-(v1.35.23) and #208 (v1.35.25) are higher; #206 still shows v1.35.21 and must
-re-version. Recheck before merge. No schema, target helper or Git tag change; source versioning
+and a later queued job. First proposed as v1.35.22. While this PR waited, main
+advanced through PRs #174 (v1.35.20), #196 (v1.35.21) and the CI review
+(v1.35.24); all are preserved. Open PRs hold v1.35.22 and v1.35.24-v1.35.29, so
+this update takes v1.35.30, newer than main and every pending allocation, and is
+rechecked before merge. No schema, target helper or Git tag change; source versioning
 publishes no Docker image.
