@@ -134,9 +134,10 @@ def test_evidence_for_exited_identity_is_explicit():
     assert bridge.process_evidence({'executable':'/does-not-exist','sha256':'a'*64,'checks':['executable']})['identity_verified'] is False
 
 def test_two_stage_investigation_uses_only_allowlisted_checks(admin,monkeypatch):
+    identity={'pid':123,'start_ticks':456,'pid_namespace':789,'boot_id':'11111111-1111-1111-1111-111111111111','proc_device':10,'proc_inode':20}
     with Session() as s:
         h=create_host(s)
-        worker.record_behavior(s,h,{'executable':'/bin/test','sha256':'a'*64,'uid':'0','connections':[]},time.time())
+        worker.record_behavior(s,h,{'executable':'/bin/test','sha256':'a'*64,'uid':'0','connections':[],'process_identity':identity},time.time())
         s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'test-model','ai_hourly_limit':20}))
         s.add(Setting(key='openai_key',value={'encrypted':seal('test-not-a-real-key')}));s.commit()
     requests=[];ssh_calls=[]
@@ -155,11 +156,34 @@ def test_two_stage_investigation_uses_only_allowlisted_checks(admin,monkeypatch)
         pytest.fail('Required follow-up did not run: '+repr(diagnostics))
     assert ssh_calls[0]['action']=='evidence'
     assert ssh_calls[0]['checks']==['executable'] and ssh_calls[0]['uid']=='0'
+    assert ssh_calls[0]['process_identity']==identity
     assert all(r['store'] is False for r in requests)
+    assert all('process_identity' not in json.loads(r['input']) for r in requests)
     assert 'identity_verified' in requests[1]['input']
     with Session() as s:
         row=s.scalar(select(Behavior))
         assert json.loads(requests[1]['input'])['investigation']==row.evidence['investigation']
+
+
+def test_process_identity_updates_pending_behavior_without_changing_its_key(admin):
+    first={'pid':100,'start_ticks':200,'pid_namespace':300,'boot_id':'11111111-1111-1111-1111-111111111111','proc_device':400,'proc_inode':500}
+    second={**first,'pid':101,'start_ticks':201,'proc_inode':501}
+    process={'executable':'/bin/test','sha256':'a'*64,'uid':'0','connections':[],'process_identity':first}
+    with Session() as s:
+        h=create_host(s);worker.record_behavior(s,h,process,1);row=s.scalar(select(Behavior));identifier=row.id
+        worker.record_behavior(s,h,{**process,'process_identity':second},2);rows=list(s.scalars(select(Behavior)))
+        assert len(rows)==1 and rows[0].id==identifier and rows[0].evidence['process_identity']==second
+        rows[0].verdict='low';worker.record_behavior(s,h,{**process,'process_identity':first},3)
+        assert rows[0].evidence['process_identity']==second
+
+
+def test_malformed_or_missing_process_identity_cannot_replace_a_verified_one(admin):
+    identity={'pid':100,'start_ticks':200,'pid_namespace':300,'boot_id':'11111111-1111-1111-1111-111111111111','proc_device':400,'proc_inode':500}
+    process={'executable':'/bin/test','sha256':'a'*64,'uid':'0','connections':[],'process_identity':identity}
+    with Session() as s:
+        h=create_host(s);worker.record_behavior(s,h,process,1);row=s.scalar(select(Behavior))
+        worker.record_behavior(s,h,{**process,'process_identity':{'pid':101}},2)
+        assert row.evidence['process_identity']==identity
 
 def test_package_state_schema_upgrade_is_idempotent(admin):
     with engine.begin() as connection: connection.execute(text('ALTER TABLE packages DROP COLUMN dpkg_state'))

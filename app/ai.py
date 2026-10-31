@@ -171,6 +171,9 @@ def _request(payload,key,timeout=60):
 
 def investigation_input(evidence):
     evidence=json.loads(json.dumps(evidence))
+    # The exact process identity is a local follow-up selector, not model input.
+    # Retain it in the observation/assessment snapshot without widening sharing.
+    evidence.pop('process_identity',None)
     connections=evidence.get('connections',[])
     if len(connections)>INVESTIGATION_CONNECTIONS:
         evidence['connections']=connections[:INVESTIGATION_CONNECTIONS];evidence['omitted_connections']=len(connections)-INVESTIGATION_CONNECTIONS

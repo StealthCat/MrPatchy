@@ -93,10 +93,15 @@ def repository_access(s,host_id):
 
 def record_behavior(s,h,p,observed):
     e=behavior_evidence(p)
-    key=hashlib.sha256((h.id+json.dumps(e,sort_keys=True)).encode()).hexdigest()
+    # Process identity binds follow-up collection but is observation-specific and
+    # must not create a new behavior for every restart or PID assignment.
+    keyed={key:value for key,value in e.items() if key!='process_identity'}
+    key=hashlib.sha256((h.id+json.dumps(keyed,sort_keys=True)).encode()).hexdigest()
     row=s.get(Behavior,key)
     if row:
         row.last_seen=max(row.last_seen,observed);row.first_seen=min(row.first_seen,observed)
+        if row.verdict in ('pending','error') and e.get('process_identity') is not None and e['process_identity']!=row.evidence.get('process_identity'):
+            row.evidence={**row.evidence,'process_identity':copy.deepcopy(e['process_identity'])}
     else:
         s.add(Behavior(id=key,host_id=h.id,evidence=e,first_seen=observed,last_seen=observed))
         s.flush()
@@ -128,6 +133,10 @@ def behavior_evidence(p):
     evidence={'executable':p['executable'],'sha256':p['sha256'],'uid':p['uid'],'network_namespace':p.get('network_namespace'),'provenance':p.get('provenance',[]),'capture':p.get('capture','sample'),'connections':[json.loads(c) for c in connections]}
     if p.get('capture')=='ebpf' or 'identity_verified' in p:
         evidence['identity_verified']=p.get('identity_verified') is True
+    identity=p.get('process_identity')
+    integers=('pid','start_ticks','pid_namespace','proc_device','proc_inode')
+    if isinstance(identity,dict) and set(identity)=={*integers,'boot_id'} and all(type(identity[key]) is int and identity[key]>0 for key in integers) and isinstance(identity['boot_id'],str) and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',identity['boot_id']):
+        evidence['process_identity']={key:identity[key] for key in ('pid','start_ticks','pid_namespace','boot_id','proc_device','proc_inode')}
     return evidence
 
 def ingest(s,h,snapshot,include_inventory=True):
@@ -593,7 +602,7 @@ def _assess_active_behavior(s,row,cfg,secret):
             try:
                 with ai_runs.measure('ssh_evidence'):
                     ai_claims.check_current()
-                    evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'uid':row.evidence.get('uid'),'checks':list(set(checks))},timeout=90)
+                    evidence=ssh.call(host,{'action':'evidence','executable':row.evidence['executable'],'sha256':checksum,'uid':row.evidence.get('uid'),'process_identity':row.evidence.get('process_identity'),'checks':list(set(checks))},timeout=90)
             except ai_claims.Lost:raise
             except Exception as error:raise ai.AIError('SSH evidence collection failed ('+type(error).__name__+'). Verify target connectivity, host pinning and helper installation.') from None
         with ai_runs.measure('evidence_persistence'):

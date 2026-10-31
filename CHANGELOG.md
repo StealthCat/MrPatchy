@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.23.0 — 2026-10-30
+
+- Retain boot/PID/start/proc identities for new process observations without changing behavior deduplication keys.
+- Require follow-up evidence to match the exact recorded process before and after optional package/service reads; never substitute an equivalent executable.
+- Keep legacy observations on the existing conservative current-match path and keep every other fleet-cache coverage gap intact.
+- Explain recorded versus sampled process scope in Assessment history and add PID-reuse/restart, collector, persistence, native SSH and responsive acceptance.
+- Rebuild controller/workers and upgrade the reviewed target helper/collector together; no schema change or fleet cache hit is introduced.
+
 ## 1.22.0 — 2026-10-30
 
 - Run process investigations concurrently across servers with configurable 1–8 AI slots (default 4, serial at 1).
