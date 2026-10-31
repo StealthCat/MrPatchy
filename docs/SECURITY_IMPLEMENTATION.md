@@ -5181,3 +5181,36 @@ Final combined dependency: PR #139 exact 914c6b83 includes #138 2bf15092
 and #195 0824d084. Current source v1.35.19 follows those planned merges.
 Retain the budget Decimal/default validation fix and SBOM host binding, then run
 all exact-head checks before merge. No changes to dependency branches.
+
+
+## v1.35.22 — Uncertain ordinary patch outcomes (#119)
+
+MrPatchy hourly development, Claude Code session `session_01AfdfYehh8Cf5AJiiyGRkCf`,
+claimed unowned issue #119 after reviewing all open issues, comments and PRs at
+main 56d4eb7 (v1.35.19). Reproduced on that main: with reboot/rollback off, an
+injected `RemoteProtocolError` on the patch send left the job `failed` and the
+host unquarantined, so the next queued mutation ran.
+
+The worker now tracks ordinary patch progress (not sent, sent, receipt received,
+inventory observed). After the request is sent, a failure is held as
+`recovery_required` unless `ssh.call` proves the remote command never started or
+the bridge returned its own structured JSON failure (`ssh.RemoteFailure`). A
+bridge exit without that receipt, a lost/truncated/invalid reply, a timeout, a
+transport error after `exec_command`, and a failed post-patch inventory read are
+all uncertain. Held jobs keep the receipt, the error and the operation identity
+in output and audit (`uncertain patch <job id>`), block later queued work through
+the existing quarantine states and are released only through the existing
+reconciliation path; nothing is replayed. Once the post-patch inventory is
+observed, a later health regression stays a terminal `failed` rollout stage.
+Protected-patch, release-upgrade, role, response-authorization and audit
+boundaries are unchanged. `repository`, `key` and `repair` mutations keep their
+existing classification; see the follow-up issue recorded on #119.
+
+Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malformed
+replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
+inventory failure, verified target failure, inactive and unreachable servers
+(using the real `ssh.call`), the remote-start marker, structured-failure parsing
+and a later queued job. Version v1.35.22 follows main v1.35.19, the v1.35.20 used
+by PRs #174 and #196 and the v1.35.21 proposed for #198; it must be rechecked
+before merge. No schema, target helper or Git tag change; source versioning
+publishes no Docker image.
