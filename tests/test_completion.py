@@ -44,7 +44,54 @@ def test_spool_survives_restart_and_ack_is_selective(tmp_path,monkeypatch):
 def test_oversize_spool_is_reported(tmp_path,monkeypatch):
     monkeypatch.setattr(agent,'ROOT',tmp_path)
     agent.spool([{'oversize':'x'*2_000_001}],time.time())
-    assert agent.pending_events()['spool']=={'pending':0,'dropped':1}
+    spool=agent.pending_events()['spool']
+    assert spool['pending']==0 and spool['dropped']==1 and spool['dropped_observations']==1
+    assert spool['drop_reasons']=={'oversize':{'batches':1,'observations':1},
+                                   'capacity':{'batches':0,'observations':0},'unclassified_batches':0}
+
+def test_large_snapshot_is_split_without_loss(tmp_path,monkeypatch):
+    monkeypatch.setattr(agent,'ROOT',tmp_path)
+    processes=[{'pid':pid,'evidence':'x'*70_000} for pid in range(10)]
+    agent.spool(processes,time.time())
+    collected=[]
+    while True:
+        snapshot=agent.pending_events();collected.extend(p for event in snapshot['events'] for p in event['processes'])
+        if not snapshot['events']:break
+        agent.acknowledge([event['id'] for event in snapshot['events']])
+    assert collected==processes
+    assert snapshot['spool']['dropped']==0
+
+def test_capacity_eviction_has_a_distinct_loss_reason(tmp_path,monkeypatch):
+    monkeypatch.setattr(agent,'ROOT',tmp_path)
+    monkeypatch.setattr(agent,'SPOOL_BATCH_BYTES',400)
+    monkeypatch.setattr(agent,'SPOOL_CAPACITY_BYTES',500)
+    for pid in range(3):agent.spool([{'pid':pid,'evidence':'x'*240}],time.time())
+    spool=agent.pending_events()['spool']
+    assert spool['pending']==1 and spool['dropped']==2 and spool['dropped_observations']==2
+    assert spool['drop_reasons']['capacity']=={'batches':2,'observations':2}
+    assert spool['drop_reasons']['oversize']=={'batches':0,'observations':0}
+
+def test_spool_loss_alert_reports_only_new_loss():
+    previous={'dropped':950,'dropped_observations':0,'drop_reasons':{'unclassified_batches':950}}
+    assert worker.spool_loss_issue(previous,previous) is None
+    current={'dropped':952,'dropped_observations':3,'drop_reasons':{
+        'oversize':{'batches':1,'observations':1},'capacity':{'batches':1,'observations':2},
+        'unclassified_batches':950}}
+    message=worker.spool_loss_issue(current,previous)
+    assert message=='2 new observation batches lost (3 observations): 1 oversize records, 1 spool capacity; 952 cumulative batches retained in telemetry'
+
+def test_unchanged_cumulative_spool_loss_clears_active_integrity_finding(admin):
+    spool={'pending':0,'queued_bytes':0,'capacity_bytes':48_000_000,'batch_limit_bytes':262_144,
+           'dropped':950,'dropped_observations':0,'drop_reasons':{
+               'oversize':{'batches':0,'observations':0},'capacity':{'batches':0,'observations':0},
+               'unclassified_batches':950}}
+    with Session() as s:
+        host=create_host(s);snapshot={'telemetry':telemetry(),'events':[],'spool':spool}
+        worker.ingest(s,host,snapshot)
+        assert any(item['path']=='event spool' for item in host.integrity)
+        worker.ingest(s,host,snapshot)
+        assert not any(item['path']=='event spool' for item in host.integrity)
+        assert host.telemetry['spool']==spool
 
 def test_replayed_events_are_idempotent(admin):
     event={'id':str(uuid.uuid4()),'observed':time.time()-300,'processes':[{'executable':'/usr/bin/test','sha256':'a'*64,'uid':'0','connections':[]}]}
