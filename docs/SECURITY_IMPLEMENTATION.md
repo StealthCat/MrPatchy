@@ -4326,3 +4326,10 @@ acceptance covers eligibility, nonpublication, idempotence, cross-host and concu
 deduplication, contextual misses, inactive entries, retained API state and published
 UI text. APP_VERSION/README/changelog/UI/API synchronize at v1.27.0; major remains 1.
 No Docker publication, Git tag or schedule change is introduced.
+
+Versioned implementation commit
+[`a630d669`](https://github.com/StealthCat/MrPatchy/commit/a630d6698d1a331bce26511974b9f17036cf6e55)
+is published in [PR #87](https://github.com/StealthCat/MrPatchy/pull/87), targeting
+`main` with label `v1.27.0`. The exact final documentation head, all required workflow
+results and actual merge commit are recorded in the completion report; this reference
+does not permit merging an earlier or failed head.
