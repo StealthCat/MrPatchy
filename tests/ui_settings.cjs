@@ -20,6 +20,15 @@ module.exports=async(page,capture)=>{
  assert.equal(await page.locator('[name=repo_minutes]').inputValue(),'35');
  await page.goBack();await page.locator('#history-settings-form').waitFor();
  await page.locator('[href="#settings/ai"]').first().click();await page.locator('#ai-settings-form').waitFor();
+ // Exercise the omitted-cap API default and its real rendered budget summary.
+ const defaultCap=await page.evaluate(async()=>{
+  const response=await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_control_mode:'daily_cap'})});
+  return response.status;
+ });
+ assert.equal(defaultCap,200);
+ await page.reload();await page.locator('#ai-settings-form').waitFor();
+ assert.equal(await page.locator('[name=ai_daily_cap_usd]').inputValue(),'10');
+ assert.match(await page.locator('#ai-settings-form').textContent(),/remaining \$10(?:\s|$)/);
  await page.locator('[name=ai_control_mode]').selectOption('rate_and_daily');
  await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
  await page.locator('[name=ai_budget_timezone]').fill('America/New_York');

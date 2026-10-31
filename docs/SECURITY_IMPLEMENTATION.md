@@ -4960,3 +4960,29 @@ spool reliability/observability work, #98 remains CI maintenance, #96 remains th
 upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap priority
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
+
+## v1.35.10 — Accurate AI budget amounts
+
+Codex session `grab-issue-2-20261031` claims issue #124 in isolated branch
+`fix/budget-money-124`. Claim timestamp correction: the claim was posted before
+19:21:27 UTC on 2026-10-31; its manually entered 19:24 timestamp was inaccurate.
+Issue-first reconciliation listed all open reports and PRs #115, #116 and #137;
+#121 was already actively claimed, so this work takes independent unclaimed #124.
+Current main was v1.35.6 (`3635d0a`). Proposed v1.35.10 reserves room for pending
+v1.35.7/v1.35.8 work and must be reassessed with main immediately before merge.
+
+Executing the actual formatter extracted from current-main source reproduced
+`10 -> 1`, `100 -> 1` and `1000000 -> 1`, while `10.000000` remained `10`.
+The correction strips zeros only after a decimal point. Both settings request
+models validate their float default cap. Regressions cover integral/fractional
+and Numeric-style Decimal exponents, signed zero, omitted-cap persistence through
+both settings APIs, and the real browser input/remaining-budget amount.
+
+The local Windows host cannot import the Linux-only application's fcntl locking.
+Local validation therefore covers the extracted formatter regressions, compilation,
+JavaScript syntax, whitespace and version consistency. Exact-final-head Linux
+SQLite/MySQL, browser, recovery, SSH/RPM, Docker and GCP checks remain mandatory
+before merge. No schema, provider-call, admission-policy or operational authorization
+change is included. Source, README and changelog synchronize at v1.35.10; no Git tag
+or Docker publication is implied. The linked PR and final validation/merge receipt
+are recorded in the issue checkpoints; close #124 only after tested merge verification.
