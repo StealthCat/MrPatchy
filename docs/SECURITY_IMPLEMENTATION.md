@@ -5424,3 +5424,11 @@ entry remain intact. The combined final source receives fresh full local and
 all twelve exact-head CI checks. Do not merge #208 before #212's tested merge is
 verified; if its head changes, refresh/reassess this candidate. No other branch
 ownership or schedule changes.
+
+
+Checkpoint v1.35.35 (#170): failed SSO callbacks are logged server-side with
+the exception class and a fixed sanitized reason, and audited as `SSO login
+failed` with issuer, hashed subject prefix and reason, rate-limited per
+reason/subject per five minutes. Responses keep the generic 400 message; no
+raw provider text, token or plain subject is recorded. Roles, successful-login
+audit and response-authorization boundaries are unchanged.
