@@ -39,8 +39,10 @@ def test_select_internal_external_and_default(admin, endpoints):
         link = result.json()
         assert link['url'].startswith(item['url']+'/enroll/')
         assert link['endpoint'] == item['id'] and link['expires_in'] == 3600
-        assert shlex.split(link['command']) == ['curl','-fsSL',link['url'],'-o','/tmp/mrpatchy-enroll.sh',
-                                                '&&','sudo','bash','/tmp/mrpatchy-enroll.sh']
+        # Unpredictable owner-only temp file; never a fixed world-writable path executed by root.
+        assert '/tmp/' not in link['command']
+        assert shlex.split(link['command']) == ['f=$(mktemp)','&&','curl','-fsSL',link['url'],'-o','$f',
+                                                '&&','sudo','bash','$f;','rm','-f','$f']
         # The personalized download is accessible without a login cookie on either origin.
         token_path = urlsplit(link['url']).path
         assert admin.get(token_path).text == admin.get(path+'/installer').text
@@ -72,7 +74,8 @@ def test_generated_command_quotes_url(admin, endpoints, monkeypatch):
     path, _ = endpoints
     monkeypatch.setenv('PUBLIC_URL', "https://canonical.example.test/a'$(id)")
     result = admin.post(path+'/enrollment-link').json()
-    assert shlex.split(result['command'])[2] == result['url']
+    parts = shlex.split(result['command'])
+    assert parts[parts.index('curl')+2] == result['url']  # one argv element: no shell expansion of the URL
     assert "'\"'\"'" in result['command']
 
 
@@ -87,3 +90,24 @@ def test_enrollment_endpoints_require_admin_and_links_require_csrf(admin, endpoi
     assert admin.post(path+'/enrollment-link',json={'endpoint':'internal'}).status_code == 403
     admin.cookies.clear()
     assert admin.get(path+'/enrollment-endpoints').status_code == 401
+
+
+def test_enrollment_command_uses_private_temp_file_and_ignores_fixed_path(admin, endpoints, tmp_path):
+    import os, subprocess, stat
+    path, _ = endpoints
+    command = admin.post(path+'/enrollment-link', json={'endpoint':'default'}).json()['command']
+    bin_dir = tmp_path/'bin'; bin_dir.mkdir()
+    seen = tmp_path/'seen'
+    # Stub curl to write the "installer" to the -o target; stub sudo to record what bash would execute.
+    (bin_dir/'curl').write_text('#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\nprintf "echo installer\\n" > "$out"\n')
+    (bin_dir/'sudo').write_text('#!/bin/bash\nstat -c %a "$2" > "'+str(seen)+'.mode"\nprintf %s "$2" > "'+str(seen)+'.path"\ncat "$2" > "'+str(seen)+'.body"\n')
+    for stub in ('curl','sudo'): (bin_dir/stub).chmod(0o755)
+    decoy = tmp_path/'mrpatchy-enroll.sh'; decoy.write_text('attacker content')
+    env = {**os.environ, 'PATH':str(bin_dir)+os.pathsep+os.environ['PATH'], 'TMPDIR':str(tmp_path)}
+    subprocess.run(['bash','-c',command], env=env, check=True)
+    used = open(str(seen)+'.path').read()
+    assert used != str(decoy) and used.startswith(str(tmp_path)+'/tmp.')
+    assert open(str(seen)+'.body').read() == 'echo installer\n'
+    assert open(str(seen)+'.mode').read().strip() == '600'
+    assert not os.path.exists(used)          # removed after the run
+    assert decoy.read_text() == 'attacker content'
