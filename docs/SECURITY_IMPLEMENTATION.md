@@ -5099,3 +5099,42 @@ included.
 Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (SQLite 1450 passed/129 skipped; MySQL 1445 passed/134 skipped). Main then advanced to 491df9e (v1.35.11). This merge preserves PR #183 diagnostics and all prior history, allocates v1.35.17 above pending versions through v1.35.15, and requires fresh exact-head CI before merge.
 
 Dependency checkpoint: PR #138 now includes exact PR #195 head 0824d084 as an ancestor and depends on its tested merge first. Enrollment hardening, failed-login auditing and CI action upgrades remain owned by #195; all are preserved here. Fresh exact-head CI validates their combination with the SBOM repair. If #195 changes, refresh/reassess before merge.
+
+## v1.35.18 — Accurate AI budget amounts
+
+Codex session `grab-issue-2-20261031` claims issue #124 in isolated branch
+`fix/budget-money-124`. Claim timestamp correction: the claim was posted before
+19:21:27 UTC on 2026-10-31; its manually entered 19:24 timestamp was inaccurate.
+Issue-first reconciliation listed all open reports and PRs #115, #116 and #137;
+#121 was already actively claimed, so this work takes independent unclaimed #124.
+Current main was v1.35.6 (`3635d0a`). Proposed v1.35.15 reserves room for pending
+v1.35.7/v1.35.8 work and must be reassessed with main immediately before merge.
+
+Executing the actual formatter extracted from current-main source reproduced
+`10 -> 1`, `100 -> 1` and `1000000 -> 1`, while `10.000000` remained `10`.
+The correction strips zeros only after a decimal point. Both settings request
+models validate their float default cap. Regressions cover integral/fractional
+and Numeric-style Decimal exponents, signed zero, omitted-cap persistence through
+both settings APIs, and the real browser input/remaining-budget amount.
+
+The local Windows host cannot import the Linux-only application's fcntl locking.
+Local validation therefore covers the extracted formatter regressions, compilation,
+JavaScript syntax, whitespace and version consistency. Exact-final-head Linux
+SQLite/MySQL, browser, recovery, SSH/RPM, Docker and GCP checks remain mandatory
+before merge. No schema, provider-call, admission-policy or operational authorization
+change is included. Source, README and changelog synchronize at v1.35.15; no Git tag
+or Docker publication is implied. The linked PR and final validation/merge receipt
+are recorded in the issue checkpoints; close #124 only after tested merge verification.
+
+Integration update: current main advanced to v1.35.11 in PR #183 while earlier
+PRs remained pending. This merge preserves that diagnostics fix and allocates
+v1.35.15 above main and pending v1.35.12/v1.35.13/v1.35.14 proposals.
+All nine checks passed on original head 67b5f2e; full exact-head CI must pass
+again on this integration commit before merge.
+
+Dependency integration update: v1.35.18 stacks on exact PR #138 head
+2bf15092 (v1.35.17), which includes PR #195 head 0824d084 (v1.35.16).
+Preserve their SBOM, login-audit, enrollment and CI updates as actual ancestors.
+Merge #195 then #138 before this PR. Full exact-final-head checks are required
+again; the original budget implementation passed all nine checks. The earlier
+v1.35.15 proposal is superseded by this explicit dependency order.

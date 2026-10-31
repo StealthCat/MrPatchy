@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.18 — 2026-10-31
+
+- Preserve significant integral zeros in every AI budget amount, so a configured $10 cap and remaining budget display as $10.
+- Validate and normalize omitted daily-cap defaults consistently in both settings APIs, with Decimal, API and visible settings regressions.
+
 ## 1.35.17 — 2026-10-31
 
 - Fix populated SBOM exports by retaining the resolved host for Debian/RPM package URL selection (#121).

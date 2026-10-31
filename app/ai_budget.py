@@ -47,7 +47,8 @@ def _window(now, name):
 
 def _money(value):
     value=Decimal(value or 0)
-    rendered=format(value,'f').rstrip('0').rstrip('.')
+    rendered=format(value,'f')
+    if '.' in rendered:rendered=rendered.rstrip('0').rstrip('.')
     return rendered if rendered and rendered!='-0' else '0'
 
 
