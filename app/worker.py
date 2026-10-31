@@ -309,6 +309,7 @@ def execute_locked(job_id):
     with Session() as s:
         job=s.get(Job,job_id)
         if not job or (job.state!='queued' and not (job.action=='release-upgrade' and job.state=='running')):return
+        if job.state=='queued' and job.next_at>time.time():return
         # End a pre-lock MySQL REPEATABLE READ snapshot before quarantine checks.
         s.rollback()
         s.refresh(job)
@@ -328,7 +329,7 @@ def execute_locked(job_id):
         publication_id=job.payload.get('publication_id') if job.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
         if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=job.action=='evidence-archive-status',service_response_id=response_id if job.action=='response-service-health' else None):return
         if not resuming and not operations.eligible(s,job): return
-        claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued').values(state='running')).rowcount
+        claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued',Job.next_at<=time.time()).values(state='running')).rowcount
         s.commit()
         if claimed!=1:return
         s.refresh(job)
@@ -507,12 +508,23 @@ def execute_locked(job_id):
             else: raise ValueError('Unsupported job')
             job.output=job.output.encode()[:48000].decode(errors='ignore')
             job.state='failed' if result.get('outcome') in ('rolled_back','response_incomplete') else 'complete'
+            if job.action in ('security-plan','startup-plan'):
+                job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             audit(s,('rolled back ' if result.get('outcome')=='rolled_back' else 'incomplete ' if result.get('outcome')=='response_incomplete' else 'complete ')+job.action,h.id)
         except Exception as e:
             s.rollback()
             job=s.get(Job,job_id)
             h=s.get(Host,job.host_id)
+            eligible=ai.defer_until(e) if job.action in ('security-plan','startup-plan') else None
+            if eligible is not None:
+                job.state='queued';job.next_at=eligible
+                job.payload={**job.payload,'_ai_deferred':True}
+                job.output=('AI planning remains queued until '+('the saved shared eligibility time.' if eligible else 'AI is resumed for this server and globally.'))
+                audit(s,'deferred '+job.action,job.host_id+' controlled AI wait')
+                s.commit();return
             job.state='recovery_required' if protected else 'failed'
+            if job.action in ('security-plan','startup-plan'):
+                job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
             if job.action in ('process-suspend','process-resume'):process_response.reject_unstarted(s,job)
             if job.action=='trusted-repair-publish':
@@ -730,8 +742,9 @@ def _loop(reporter):
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
                         if len(active_jobs)>=capacity['jobs']:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
-                    for j in s.scalars(select(Job).where(Job.state=='queued',Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
+                    for j in s.scalars(select(Job).where(Job.state=='queued',Job.next_at<=now,Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=capacity['jobs']: break
+                        if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
                         from . import quarantine,process_response
                         response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
                         process_id=j.payload.get('process_id') if j.action in process_response.RECOVERY_ACTIONS else None

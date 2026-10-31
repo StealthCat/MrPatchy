@@ -26,6 +26,21 @@ class AIError(RuntimeError):
         self.policy_wait=policy_wait
 
 
+def defer_until(error, now=None):
+    """Return one stable eligibility instant for a controlled AI wait.
+
+    Zero means an administrator-controlled pause with no time-based wake-up;
+    None means the error must retain the normal terminal failure behavior.
+    """
+    if not isinstance(error,AIError) or not (error.policy_wait or error.transient):return None
+    if hasattr(error,'defer_until'):return error.defer_until
+    delay=error.retry_after
+    if not isinstance(delay,(int,float)) or not math.isfinite(delay) or delay<=0:eligible=0
+    else:eligible=(time.time() if now is None else now)+delay
+    error.defer_until=eligible
+    return eligible
+
+
 def retry_after(response):
     """Read only the standard delay header; never persist its untrusted text."""
     value=response.headers.get('retry-after','')
