@@ -6,11 +6,25 @@
 - Failed producers retry after 30, 60, 120, 240 and at most 300 seconds; success restores the normal 30-second cadence. Worker identity loss still stops admission. Leadership, drain, queue claims and target mutation authorization are unchanged.
 - Regression tests reproduce each of seven failing producer positions on current main, verify independent work continues, and cover bounded backoff, recovery cadence and identity-loss propagation. No schema, target helper, UI, Git tag or Docker publication changes. Major stays 1.
 
+## 1.35.30 — 2026-10-31
+
+- Hold the server with `recovery_required` when an ordinary patch (reboot and rollback off) may have changed packages without a trustworthy outcome: a lost, truncated or invalid completion reply, a bridge exit without its own failure receipt, or a failed post-patch inventory read (#119). Later queued work waits for **Review interrupted operation**, and the patch is never replayed.
+- Keep `failed` without a hold for known-unstarted failures (pre-send validation, inactive server, SSH unreachable before the remote command starts) and for failures the target bridge reports in its own JSON receipt. `ssh.call` now records whether the remote command started, and structured bridge errors raise `ssh.RemoteFailure` (still a `RuntimeError`).
+- Preserve the target's patch receipt in the operation output whenever a later step fails, and audit uncertain outcomes as `uncertain patch` with the operation ID.
+- Compatibility: an ordinary patch that loses its SSH reply now pauses the server until an administrator reviews it, instead of releasing the queue. Major version stays 1.
+
 ## 1.35.29 — Enforce deleted-server read boundaries
 
 - Resolve host authorization for query-scoped investigations, jobs and package history and job-ID output reads. Viewers/operators receive the existing administrator-only refusal for deleted-server records.
 - Filter deleted-server jobs and package events in SQL before pagination; keep administrator retention access and disabled-server read policy unchanged.
 - Add API regressions for both non-admin roles, indirect/query/global reads, pagination, missing/mismatched scope, administrator retention, disabled servers and hostless jobs. No schema or target-helper changes; major remains 1.
+
+## 1.35.27 — 2026-10-31
+
+1. Fix complete recovery omitting controller evidence archives, vendor packages/trusted keys, YARA rules/trusted keys and local GCP credential state (#120). Format-2 manifests record exact file coverage and hashes; backup, restore and activation validate this state. Verified archive records require their content and receipt files.
+2. Restore durable directories/files with private permissions and service ownership; reject links and special files. Continue accepting format-1 bundles with an explicit missing-coverage warning. Report absent directories and external infrastructure/credential dependencies honestly.
+3. Add SQLite evidence verification, signed vendor/YARA authentication, tamper/link/legacy regressions and native encrypted SQLite/MySQL recovery drills. Install native restic/MySQL clients in MySQL CI.
+4. Compatibility: older script versions cannot read format-2 bundles; update the recovery script before restoring. Unsafe linked/special filesystem state or missing verified evidence now blocks publication/activation. Major stays 1. No Docker image publication or Git tag.
 
 ## 1.35.25 — 2026-10-31
 

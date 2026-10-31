@@ -60,6 +60,16 @@ class Pinned(paramiko.MissingHostKeyPolicy):
         if fingerprint(key)!=self.expected: raise paramiko.SSHException('SSH host fingerprint mismatch; verify on target console')
 class RemoteProtocolError(RuntimeError):
     """A reply cannot be trusted as a complete remote operation receipt."""
+class RemoteFailure(RuntimeError):
+    """The target bridge returned a structured failure receipt for the request."""
+
+def request_unstarted(error):
+    """True only when call() failed before the remote command could start.
+
+    call() records this on every error it raises. Errors without the marker
+    (for example from an unexpected wrapper) are never treated as unstarted."""
+    from . import host_lifecycle
+    return isinstance(error,host_lifecycle.Inactive) or getattr(error,'remote_started',None) is False
 
 def read_channel(channel, deadline, max_bytes=64*1024*1024):
     """Drain both streams; an idle timeout alone does not bound a trickling peer."""
@@ -86,7 +96,10 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
     if status:
         try: detail=json.loads(output).get('error')
         except (ValueError,AttributeError): detail=None
-        raise RuntimeError(detail or diagnostics.decode(errors='replace') or 'Remote bridge failed')
+        # Only the bridge's own JSON error is a failure receipt; a bare non-zero
+        # exit may be a crash part-way through a mutation.
+        if detail: raise RemoteFailure(detail)
+        raise RuntimeError(diagnostics.decode(errors='replace') or 'Remote bridge failed')
     try: result=json.loads(output)
     except (ValueError,UnicodeDecodeError) as error:
         # Never echo inventory/key material from a damaged response into logs/UI.
@@ -94,7 +107,7 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
         location=(' at character '+str(position)) if position is not None else ''
         raise RemoteProtocolError('SSH returned incomplete or invalid JSON'+location+' ('+str(len(output))+' bytes received). Verify target state before retrying.') from None
     if not isinstance(result,dict): raise ValueError('Remote bridge returned a non-object response')
-    if result.get('error'): raise RuntimeError(result['error'])
+    if result.get('error'): raise RemoteFailure(result['error'])
     return result
 
 def call(host, payload, timeout=60, key_file=None):
@@ -102,9 +115,16 @@ def call(host, payload, timeout=60, key_file=None):
     if not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
     kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
     with host_lifecycle.activity([host.id],kind):
-        return _call(host,payload,timeout,key_file)
+        stage={'started':False}
+        try:return _call(host,payload,timeout,key_file,stage)
+        except Exception as error:
+            # Callers deciding whether a mutation may have run need to know if
+            # the remote command was ever requested, whatever the error type.
+            error.remote_started=stage['started']
+            raise
 
-def _call(host, payload, timeout=60, key_file=None):
+def _call(host, payload, timeout=60, key_file=None, stage=None):
+    stage=stage if stage is not None else {}
     deadline=time.monotonic()+timeout
     from . import connections
     route=connections.for_host(host)
@@ -120,6 +140,7 @@ def _call(host, payload, timeout=60, key_file=None):
         client.get_transport().set_keepalive(20)
         remaining=deadline-time.monotonic()
         if remaining<=0: raise TimeoutError('SSH connection exceeded its total deadline')
+        stage['started']=True
         stdin,stdout,stderr=client.exec_command('mrpatchy',timeout=remaining)
         stdin.write(json.dumps(payload));stdin.flush();stdin.channel.shutdown_write()
         try: return read_channel(stdout.channel,deadline)

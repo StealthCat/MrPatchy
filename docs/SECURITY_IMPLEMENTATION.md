@@ -5347,6 +5347,120 @@ requires fresh exact-head CI and local focused authorization/CSS/lifecycle check
 the preceding full local suite passed 1647 tests / 9 skipped / 9 subtests on the
 pre-CSS integration tree. Earlier-head CI does not authorize this final integration.
 
+## v1.35.27 — Durable controller recovery coverage (#120)
+
+Codex `recovery-437f6ead2050` selected independent P1 #120 after reading main
+fa5d933 (v1.35.24), repository instructions, the checkpoint, all 77 open issues
+(one 100-item API page, no next link), six open PRs and candidate issue comments.
+P1 #118/#119/#205 already have #208/#203/#209 and retain their owners; #204 depends
+on #203. No roadmap work or competing fix was started. Claim comment's 21:40Z
+was an inaccurate manually entered timestamp; actual claim was near 21:35Z.
+
+On unchanged main, the new staged-bundle regression failed because
+`evidence-archive/sample/content` did not exist after backup. The cause was the
+explicit database/key/SSH/TLS-only allowlist in scripts/recovery.py. A format-2
+manifest now inventories evidence-archive, vendor-packages, yara-rules and local
+gcloud trees with names, sizes and hashes, explicit absence, and verified archive
+IDs. Both restore and activation recheck coverage. Backup refuses missing files
+for verified archives. SQLite activation independently checks retained SQL rows.
+Private evidence/trust/GCP contents restore with 0700 directories, 0600 files and
+app service ownership; links/special files are rejected. Format 1 remains readable
+with an honest missing-coverage warning. External dependencies and reconstructible
+caches are inventoried in docs/ENTERPRISE_RECOVERY.md. Existing response authority,
+role/lifecycle and #131 SSH safeguards remain intact; mounted-volume retry work
+remains separate in #151.
+
+Validation at first publication: unchanged-main failure recorded; focused recovery
+and final-feature suites 37 passed / 4 skipped locally (native restic/MySQL absent).
+New tests verify an actual EvidenceArchive after a SQLite snapshot/activation and
+reauthenticate signed vendor/YARA bundles using restored keyrings. They cover
+modified/missing/extra files, links/FIFOs, missing verified files and legacy/absent
+coverage. Native encrypted SQLite and MySQL dump/import drills are CI gates;
+MySQL CI now installs restic and MariaDB clients. Full suite and exact-head CI are
+pending. This is self-review, not independent approval. No issue closure before
+all applicable exact-final-head checks pass and the tested PR merges.
+
+Proposed version v1.35.27 follows main .24 and pending work through #210 .26;
+recheck main and actively owned lower-version PR integration before merging.
+Keep the same focused branch/PR if integration is still held. No Git tags, Docker
+publication, schedule change or completed-roadmap claim.
+
+Self-review/validation update (2026-10-31T21:44Z): full local Python suite on the
+initial published tree completed with **1637 passed, 11 skipped, 9 subtests passed**.
+The follow-up adds missing-trust warnings and staging-restore tamper coverage;
+focused final recovery/final-feature validation with an extracted native restic
+binary completed **42 passed, 1 skipped** (only the MySQL-specific drill). The
+real encrypted SQLite evidence recovery and both existing restic drills pass.
+No local MySQL server/client or Docker acceptance is claimed. All twelve exact-head
+GitHub jobs must run after this follow-up, including the native MySQL drill.
+PR #212 targets main, has the matching v1.35.27 label and Fixes #120. Initial
+published commit 96c000071caee68ffc5287730e657454afa9a560 exactly matched the locally
+tested tree. Active integration/version holds were posted on #203/#206/#207/#208/
+#209 because main's direct CI update is already v1.35.24. Do not merge ahead of
+that coordinated issue-fix sequence or reuse lower versions. Keep #120 open until
+the tested final merge is verified; continue the same PR if this cycle ends first.
+
+
+Final integration refresh (2026-10-31T21:54Z): all twelve checks passed on PR #212
+head e4ea3714a60ad06139ea9c6cd9e95849831d8788 (run 41244989750). SQLite CI:
+1521 passed / 129 skipped / 9 subtests. MySQL shards combined: 1517 passed /
+133 skipped / 9 subtests; the native encrypted MySQL archive recovery drill is
+included in successful shard 1. Browser, both SSH and RPM legs, GCP runtime and
+static checks passed. Main advanced just before merge to 6589f4d (PR #207,
+v1.35.25). Preserve its checkbox CSS/regression and delivery entry; retain
+v1.35.27 and rerun ALL checks on this new merged final commit. No stale-combination
+merge was attempted. #208's owner explicitly confirmed independent integration
+and will refresh its .29 work if #212 integrates first. Current next-integration
+proposal is #212 at .27; preserve other independently owned fixes and recheck
+main immediately before merge. The earlier blanket hold was superseded by
+PR #212's integration discussion. No issue closure before verified tested merge.
+
+
+Coordinated P1 integration: preserve exact #212 head
+`8253159beb1799986dec5f1644e67cd08174f4eb` (v1.35.27) as an explicit dependency
+of #208 v1.35.29. Serial merge order agreed in PR discussions: #212, #208,
+#203, then later versions. Recovery code, native validation and every delivery
+entry remain intact. The combined final source receives fresh full local and
+all twelve exact-head CI checks. Do not merge #208 before #212's tested merge is
+verified; if its head changes, refresh/reassess this candidate. No other branch
+ownership or schedule changes.
+
+
+## v1.35.30 — Uncertain ordinary patch outcomes (#119)
+
+MrPatchy hourly development, Claude Code session `session_01AfdfYehh8Cf5AJiiyGRkCf`,
+claimed unowned issue #119 after reviewing all open issues, comments and PRs at
+main 56d4eb7 (v1.35.19). Reproduced on that main: with reboot/rollback off, an
+injected `RemoteProtocolError` on the patch send left the job `failed` and the
+host unquarantined, so the next queued mutation ran.
+
+The worker now tracks ordinary patch progress (not sent, sent, receipt received,
+inventory observed). After the request is sent, a failure is held as
+`recovery_required` unless `ssh.call` proves the remote command never started or
+the bridge returned its own structured JSON failure (`ssh.RemoteFailure`). A
+bridge exit without that receipt, a lost/truncated/invalid reply, a timeout, a
+transport error after `exec_command`, and a failed post-patch inventory read are
+all uncertain. Held jobs keep the receipt, the error and the operation identity
+in output and audit (`uncertain patch <job id>`), block later queued work through
+the existing quarantine states and are released only through the existing
+reconciliation path; nothing is replayed. Once the post-patch inventory is
+observed, a later health regression stays a terminal `failed` rollout stage.
+Protected-patch, release-upgrade, role, response-authorization and audit
+boundaries are unchanged. `repository`, `key` and `repair` mutations keep their
+existing classification; tracked in follow-up issue #204.
+
+Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malformed
+replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
+inventory failure, verified target failure, inactive and unreachable servers
+(using the real `ssh.call`), the remote-start marker, structured-failure parsing
+and a later queued job. First proposed as v1.35.22. While this PR waited, main
+advanced through PRs #174 (v1.35.20), #196 (v1.35.21), the CI review (v1.35.24),
+#207 (v1.35.25), #212 (v1.35.27) and #208 (v1.35.29), in the order agreed on
+#203/#208/#212; all are preserved. v1.35.30 is newer than main and below the
+later #213-#215 allocations. No schema, target helper or Git tag change; source versioning
+publishes no Docker image.
+
+
 
 ## v1.35.32 — Independent periodic scheduler producers (#140)
 
@@ -5393,3 +5507,18 @@ or the rest of the loop. A focused import-failure regression joins the seven rea
 loop failures and backoff/identity checks (67 focused tests pass). Superseded local
 suite/CI results do not authorize this final runtime revision; rerun the full suite
 and all applicable exact-head jobs on the final published tree.
+
+
+Continuation integration (Codex scheduler-85a36b0d8f8a, 2026-10-31): SAME PR #214
+accepts the released handoff after #212/#208/#203 merged. Current main db7871e
+(v1.35.30) reproduces all seven producer-position failures: queued dispatch is
+skipped and the failed producer retries every loop. Preserve all recovery,
+read-authorization and ordinary-patch uncertainty implementation, regressions,
+CI and delivery records while retaining independent periodic producers. No new
+roadmap or unrelated UI scope. This run retrieved 73 open issues (under the
+100-result limit) and nine open PRs; prior run's initial count was 77, not the
+copied historical 78. Keep source v1.35.32 pending coordinated .31/#213 order;
+refresh main and version allocations before merge. The earlier candidate's green
+checks do not authorize this changed integration: require combined focused/full
+local validation and all twelve exact-final-head CI jobs. No issue closure before
+tested merge; no tags, Docker publication or schedule changes.
