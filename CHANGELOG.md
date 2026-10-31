@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.23 — 2026-10-31
+
+- Style `.inline-check` like `label.check` so the response-monitoring, response-watch and service-watch checkboxes render inline with their labels (issue #175). A regression test requires every `class="...check"` label in the UI to have a matching stylesheet rule. No compatibility impact; major version stays 1.
+
 ## 1.35.21 — 2026-10-31
 
 - Fix full recovery backups of a valid zero-server deployment, which failed with `FileNotFoundError` because `ssh/` is created only when the first server is added. The bundle now carries an explicit empty owner-only SSH directory that activation restores.
