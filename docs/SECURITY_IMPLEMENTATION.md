@@ -4898,13 +4898,78 @@ priority actionable issue fixes; multi-stage release persistence, pricing lifecy
 invoice reconciliation and full controller failover/reset acceptance remain planned.
 
 
+## v1.35.6 — Interrupted advisory-plan recovery
+
+Delivery record: version **v1.35.6**, original implementation commit
+[`7abe6f1e`](https://github.com/StealthCat/MrPatchy/commit/7abe6f1e65e09bb05d0f77c8cd9eac99990041c1)
+and [PR #113](https://github.com/StealthCat/MrPatchy/pull/113), which addresses
+[issue #104](https://github.com/StealthCat/MrPatchy/issues/104). The issue may close
+only after every applicable check passes on the exact final PR head and that commit
+is merged.
+
+Issue-first reconciliation read merged v1.35.3 main, repository instructions, this
+checkpoint, merged PR #110, all open issues and the absence of an open PR. Issues
+#100–#102 were closed by v1.35.3. The remaining list included #96, #98, #103, #104,
+#106–#108 and #111. Issue #111 was already claimed by a separate Codex session with a
+documented AGENTS/task-instruction scope, so this run did not duplicate it. Issue #104
+was the highest-impact independent reproducible report; its thread had no earlier
+comments or related open/merged fix before this run claimed it.
+
+A disposable SQLite application reproduced current v1.35.3 with a running security
+plan, running diagnostic, missing usage receipt and uncertain spend reservation. A
+worker invocation left both job and run permanently `running`; scheduler recovery
+selected only release upgrades, and the unreconciled job kept the server quarantined.
+The cause was the deliberate safety rule that refuses to replay running advisory work
+without a complementary restart path to surface it for human review.
+
+The elected scheduler now scans running incident/startup advisory jobs every five
+seconds. It attempts the same distributed per-server lock used by job execution. A
+live owner therefore remains untouched; after a process loss, the available lock lets
+the scheduler atomically recheck and mark the job recovery-required plus the exact
+host/incident-matched running diagnostic interrupted. No job is requeued and no
+provider call is made. Existing call receipts and the independent spend ledger remain
+unchanged, including conservative uncertain charges. The bounded job/run message
+explains that a transmitted call without a receipt may still have incurred a charge.
+
+Activity distinguishes this advisory recovery from a target mutation. An administrator
+must explicitly confirm review of the retained run, per-call usage and spend reservation
+before releasing the queue. The advisory-only reconciliation uses existing admin, CSRF,
+audit and host-lock controls but does not issue an irrelevant SSH operation-status call;
+all package/target operations retain their existing trusted-console verification.
+
+Regression coverage exercises both advisory actions, live-lock exclusion, idempotent
+recovery, zero replay, bounded diagnostics, receipt/ledger preservation, audit output
+and the administrator reconciliation boundary alongside existing orphan and release-
+resume tests. Exact-final-head SQLite, MySQL, browser, SSH/RPM and remaining CI checks
+remain the merge gate. Source, README, changelog and UI/API metadata synchronize at
+v1.35.6 with major fixed at 1. No schema, target helper, Docker publication, Git tag or
+schedule change is included.
+
+User-directed PR #113 integration (Codex session `c30b40e47808`) preserves merged
+PR #112's v1.35.4 coordination rules and changelog, allocating v1.35.6 because PR #115
+already proposed v1.35.5. Advisory-recovery exceptions are logged and paced at the
+normal five-second interval without aborting unrelated scheduler admissions. Tests
+adapted from the offered duplicate PR #114 exercise actual worker execution interrupted
+before and after provider transmission, retained sent spend, no automatic replay,
+separate distributed-lock ownership and unrelated-job/run scoping. All applicable
+checks must pass on the final integration commit before merge; PR #115 must reconcile
+its version and validation against the resulting main.
+
+After this focused issue fix, #103 remains a policy decision, #106–#108 remain broader
+spool reliability/observability work, #98 remains CI maintenance, #96 remains the OS-
+upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap priority
+then returns to multi-stage release-plan persistence, remaining billable-path controls,
+pricing lifecycle and full multi-controller failover/reset acceptance.
+
+
 ## v1.35.7 — Failed sign-in and lockout auditing
 
 Delivery record: version **v1.35.7**, branch `fix/failed-login-audit-v1.35.7`, which
 addresses [issue #136](https://github.com/StealthCat/MrPatchy/issues/136); the PR
 number and tested final commit are recorded on the pull request. Proposed merge order:
-after PR #115 and PR #116 (both claim v1.35.5) and PR #113 (v1.35.6); the version must
-be re-checked against current `main` immediately before merging.
+after PR #115 and PR #116 (both claim v1.35.5); PR #113 (v1.35.6) has merged and `main`
+was merged into this branch. The version must be re-checked against current `main`
+immediately before merging.
 
 Before this change `POST /api/login` audited only successful sign-ins (`login`) and
 authenticated state-changing requests. Failed passwords, unknown or disabled accounts,

@@ -6,11 +6,17 @@
 - Audit sign-in lockouts: a rate-limit rejection records one `login throttled` entry per limit and five-minute window (account, address or global), so rejected requests cannot flood the audit history.
 - Compatibility: HTTP status codes and response bodies are unchanged, so account existence is still not revealed to the client. No schema, role, session or throttling-threshold change.
 
+## 1.35.6 — 2026-10-31
+
+- Detect orphaned running incident/startup advisory-plan jobs under the elected scheduler and each server's distributed worker lock, while leaving live workers untouched.
+- Surface interrupted paid work as an explicit recovery hold without automatically replaying a provider request, preserving AI run, call-usage and spend-reservation records for review.
+- Require an administrator to review retained AI/spend records before releasing the server queue, without performing an unrelated target SSH status query.
+- Isolate advisory recovery failures from other scheduler work and verify crash recovery before and after provider transmission without duplicating a paid call.
+
 ## 1.35.4 — 2026-10-31
 
 - Enable concurrent agent development coordinated through issue claims, linked draft PRs, explicit ownership/checkpoints, review and handoff records.
 - Require overlap checks, isolated branches and serialized version/integration checks while preserving existing operational authorization boundaries.
-
 
 ## 1.35.3 — 2026-10-31
 
