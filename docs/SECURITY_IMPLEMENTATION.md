@@ -4154,3 +4154,49 @@ The faster-triage priority remains unchanged: complete verified context and the
 host-independent exact-known-good cache, then safe same-host fairness and shared
 throttle/daily-spend/unthrottled controls. Notifications and the broader security,
 deployment and UI roadmaps also remain unfinished.
+
+
+## v1.24.0 — Host-independent exact-match fingerprint contract
+
+Issue-first reconciliation read current main `3b8406a4`, repository instructions,
+this checkpoint and merged PR #83. The first 100-item open issue and open PR pages
+were empty, so no actionable report or unfinished delivery competed with roadmap
+work. The user's database-migration refusal remains blocked on the new v1.23.1
+category detail or a separately reviewed schema inventory; no object is guessed away
+and no closure is claimed.
+
+This dependency-ordered faster-triage milestone adds a controller-side versioned
+canonical known-good evaluator. A candidate exists only for a completed low-risk AI
+assessment with the recorded model/policy digest, exact recorded process scope and an
+explicit complete verified-manifest contract for artifact bytes, authenticated
+provenance, configuration, effective privileges/startup/network/execution/memory,
+required follow-up evidence and coverage. Every manifest digest contributes to the
+key. Model or policy changes produce a different key. Missing, partial, malformed,
+oversized or unverified context returns bounded human-readable miss reasons and no
+fingerprint.
+
+Host/server identity, PID/start/proc identity, collection time and ephemeral source
+ports are accepted only in an isolated observation section and excluded from the
+canonical key. The same complete contract therefore fingerprints identically across
+servers/days, while any observation-only field embedded in canonical evidence is a
+hard miss rather than a silently normalized match. Unknown canonical component fields
+remain included in the digest, so future security-relevant additions cannot be ignored
+without a fingerprint change. Current v1 follow-up receipts do not claim the new
+complete manifest and remain ineligible.
+
+Authenticated Assessment detail exposes only this readiness result. It escapes miss
+reasons and states that even an eligible fingerprint is an unpublished candidate.
+There is no cache table, lookup, provider-call avoidance, implicit approval, response
+authorization, detector suppression, target-helper/schema change, Docker publication,
+Git tag or schedule change. APP_VERSION/README/changelog/UI/API synchronize at
+v1.24.0; major remains 1.
+
+Focused acceptance proves host/PID/time/ephemeral-port independence, per-domain
+sensitivity, model/policy sensitivity, incomplete/unverified failure, canonical host
+field rejection, retained-history API behavior and escaped UI output. The finite
+known-good program remains unfinished: next collect/authenticate the required
+manifests, then add durable publication and atomic cross-server lookup/hit provenance,
+zero-provider-call reuse, audited revocation/invalidation, contradiction-linked review,
+manual Re-triage bypass and SQLite/MySQL concurrency/role acceptance. Safe same-host
+fairness and shared throttle/daily-spend/unthrottled controls follow under the existing
+priority; notification and broader security/deployment/UI roadmaps remain planned.

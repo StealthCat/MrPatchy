@@ -401,6 +401,21 @@ Human-attention events and significant triage findings should arrive through aut
 Verify actual asynchronous updates, multi-session read synchronization, replay/deduplication/reopening, role/session boundaries, keyboard/live-region behavior and mobile/tablet/desktop renders. This remains planned until the runtime and acceptance milestones are delivered.
 
 
+### v1.24.0 — Exact-match readiness on assessment detail
+
+The retained Assessment detail card includes a glass-compatible **Fleet match
+readiness** notice. Incomplete historical/current evidence shows escaped, human-readable
+cache-miss reasons rather than a trust badge. A fully verified future manifest may show
+its versioned candidate fingerprint, always alongside a prominent statement that no
+safe verdict has been published or reused. The notice does not approve a behavior,
+trigger remediation, perform cache lookup, call the provider or imply a clean host.
+
+The canonical contract isolates host/PID/time/ephemeral-port observations and rejects
+those fields if they leak into reusable security evidence. UI acceptance covers escaped
+provider/evidence/reason text and phone/tablet/desktop assessment layouts. Durable cache
+publication/hits, revocation and contradiction-linked review remain planned surfaces.
+
+
 ### v1.19.0 — Explained process retry eligibility
 
 The existing glass Investigations cards and AI worker status now distinguish

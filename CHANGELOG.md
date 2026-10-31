@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.24.0 — 2026-10-31
+
+- Define a strict versioned canonical fingerprint contract for future fleet-wide exact known-good reuse.
+- Bind verified artifact bytes, authenticated provenance, configuration, effective behavior, required follow-up evidence, coverage, model and assessment policy while excluding isolated host/PID/time/ephemeral-port observations.
+- Fail closed with explicit cache-miss reasons for incomplete, unverified, malformed or host-contaminated evidence; current partial receipts remain ineligible.
+- Show candidate readiness on retained assessment detail without publishing/looking up cache entries, granting approval, suppressing protection or avoiding provider calls.
+
 ## 1.23.1 — 2026-10-31
 
 - Explain database-migration schema refusals with bounded, escaped lists of missing tables, unexpected tables and unexpected views.

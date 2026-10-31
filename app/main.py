@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.23.1'
+APP_VERSION='1.24.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -529,12 +529,13 @@ def investigation_history(behavior_id:str,host_id:str='',offset:int=0,limit:int=
 
 @app.get('/api/investigations/{behavior_id}/history/{assessment_id}')
 def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',user=Depends(auth)):
-    from . import ai_assessments
+    from . import ai_assessments, known_good
     with Session() as s:
         behavior=s.get(Behavior,behavior_id);row=s.get(ai_assessments.Assessment,assessment_id)
         if host_id:host_or_404(s,host_id)
         if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
-        return object_dict(row)
+        result=object_dict(row);result['known_good']=known_good.assessment(row)
+        return result
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(auth)):
     from .worker_registry import page
