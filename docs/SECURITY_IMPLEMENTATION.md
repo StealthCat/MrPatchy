@@ -4960,3 +4960,24 @@ spool reliability/observability work, #98 remains CI maintenance, #96 remains th
 upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap priority
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
+
+
+## v1.35.12 — Debian comparison process reuse (#128)
+
+Codex session `grab-issue-3-20261031` claimed unowned issue #128 after checking
+open issues, claims and related PRs against main 3635d0a (v1.35.6). An instrumented
+execution of the actual current-main inventory helper requested 1,000 dpkg launches
+for 1,000 identical pairs. The fix shares one native Debian comparator between APT
+refresh and inventory reconciliation, skips exact equality and uses an inventory-local
+512-entry LRU cache. Distinct version spellings still go to native dpkg, with a
+ten-second timeout and explicit failure on native errors. No Python reimplementation
+of Debian ordering, dependency or trust-policy change is introduced. RPM is unchanged.
+
+Focused tests cover unchanged/mixed process counts, bounded cache eviction, timeout
+and native errors, epoch/revision/tilde/equivalent spellings and refresh candidate,
+hold, architecture and security-priority behavior. Windows standalone comparator
+tests pass (four passed; native-dpkg case skipped); Linux native/full SQLite/MySQL,
+browser, recovery, Docker/TLS, SSH/RPM and GCP checks remain the exact-head merge
+gate. Version v1.35.12 follows pending allocations through v1.35.11 and must be
+rechecked against main before merge. Source versioning publishes no Docker image;
+no tags, schema, target helper or runtime authorization changes.

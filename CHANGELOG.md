@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.12 — 2026-10-31
+
+- Skip identical Debian version comparisons during refresh and inventory reconciliation; reuse up to 512 native comparison results per inventory.
+- Bound each remaining dpkg comparison to ten seconds and fail closed on native errors, preserving Debian epochs, revisions and tilde ordering.
+- Cover native version edge cases, inventory process counts, candidate/hold/architecture semantics and comparison cache limits.
+
 ## 1.35.6 — 2026-10-31
 
 - Detect orphaned running incident/startup advisory-plan jobs under the elected scheduler and each server's distributed worker lock, while leaving live workers untouched.
