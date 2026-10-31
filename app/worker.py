@@ -417,9 +417,9 @@ def execute_locked(job_id):
         if claimed!=1:return
         s.refresh(job)
         h=s.get(Host,job.host_id);protected=job.action=='release-upgrade';result={}
-        # Ordinary patch progress: None before the package request is sent,
+        # Non-journaled mutation progress: None before the request is sent,
         # then 'sent', 'received' (target receipt) and 'observed' (inventory).
-        patch_stage=None;patch_receipt=None
+        mutation_stage=None;mutation_receipt=None
         try:
             if not h: raise ValueError('Host no longer exists')
             health=s.get(Setting,'agent-status:'+h.id)
@@ -580,16 +580,16 @@ def execute_locked(job_id):
                         job.payload={**job.payload,'_patch_original':original};s.commit()
                         request['original']=original
                     request.update(action='protected-patch',job_id=job.id,policy=policy)
-                ordinary_patch=job.action=='patch' and not protected
-                if ordinary_patch:patch_stage='sent'
+                tracked_mutation=not protected
+                if tracked_mutation:mutation_stage='sent'
                 result=ssh.call(h,request,timeout=7500 if protected else 3700)
                 if protected:result=finish_recovery(s,h,job,result,policy)
                 job.output=json.dumps(result)
-                if ordinary_patch:patch_stage='received';patch_receipt=job.output
+                if tracked_mutation:mutation_stage='received';mutation_receipt=job.output
                 token=package_history.operation.set({'job_id':job.id,'actor':job.payload.get('_actor','system')})
                 try:save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0;s.commit()
                 finally:package_history.operation.reset(token)
-                if ordinary_patch:patch_stage='observed'
+                if tracked_mutation:mutation_stage='observed'
                 if job.action=='patch' and '_depends_on' in job.payload:
                     health=ssh.call(h,{'action':'health'})
                     comparison=operations.patch_health_comparison(health_before,health)
@@ -612,7 +612,7 @@ def execute_locked(job_id):
                 job.output=('AI planning remains queued until '+('the saved shared eligibility time.' if eligible else 'AI is resumed for this server and globally.'))
                 audit(s,'deferred '+job.action,job.host_id+' controlled AI wait')
                 s.commit();return
-            uncertain=patch_outcome_uncertain(patch_stage,e)
+            uncertain=mutation_outcome_uncertain(mutation_stage,e)
             job.state='recovery_required' if protected or uncertain else 'failed'
             if job.action in ('security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
@@ -644,10 +644,15 @@ def execute_locked(job_id):
                 plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
                 if plan:plan.state=job.state;plan.error=str(e)[:1000]
             receipt=job.output if protected or job.action=='agent-update' else ''
-            if patch_receipt is not None:receipt='Patch receipt: '+patch_receipt
+            if mutation_receipt is not None:receipt=job.action.capitalize()+' receipt: '+mutation_receipt
             if uncertain:
-                receipt=('Package changes may have been applied: '+('the target returned a patch receipt, but the post-patch inventory could not be read.' if patch_stage=='received' else 'the patch request was sent without a trustworthy completion receipt.')
-                    +' Server changes are paused and the patch will not be replayed automatically. Verify installed package state on the target, then review this operation in Activity.\n'+receipt)
+                # Keep ordinary-patch wording while explaining the relevant
+                # package/configuration/trust changes for the other actions.
+                changes={'patch':'Package','repair':'Package database or package','repository':'Repository configuration','key':'Repository signing-key'}[job.action]
+                verification={'patch':'installed package state','repair':'package database and package state',
+                              'repository':'repository configuration','key':'signing-key files and package-manager trust'}[job.action]
+                receipt=(changes+' changes may have been applied: '+('the target returned a '+job.action+' receipt, but the post-'+job.action+' inventory could not be read.' if mutation_stage=='received' else 'the '+job.action+' request was sent without a trustworthy completion receipt.')
+                    +' Server changes are paused and the '+job.action+' will not be replayed automatically. Verify '+verification+' on the target, then review this operation in Activity.\n'+receipt)
             job.output=(str(e)+'\n'+receipt).encode()[:48000].decode(errors='ignore')
             if h:
                 h.error=str(e)[:4000]
@@ -655,12 +660,13 @@ def execute_locked(job_id):
             audit(s,('uncertain ' if uncertain else 'failed ')+job.action,(job.id+' ' if uncertain else '')+str(e)[:4000])
         s.commit()
 
-def patch_outcome_uncertain(stage,error):
-    """Whether an ordinary patch failure may have left package changes behind.
+def mutation_outcome_uncertain(stage,error):
+    """Whether a non-journaled target mutation has an unverified outcome.
 
     Pre-send failures and errors raised before the remote command started are
     known-unstarted. A structured target failure receipt is a verified remote
-    failure. Lost/invalid receipts and a missing post-patch inventory are not."""
+    failure (not proof that no changes occurred). Lost/invalid receipts and a
+    missing post-mutation inventory are not verified outcomes."""
     if stage=='received':return True
     if stage!='sent':return False
     return not (ssh.request_unstarted(error) or isinstance(error,ssh.RemoteFailure))
