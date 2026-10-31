@@ -174,6 +174,9 @@ def investigation_input(evidence):
     # The exact process identity is a local follow-up selector, not model input.
     # Retain it in the observation/assessment snapshot without widening sharing.
     evidence.pop('process_identity',None)
+    details=evidence.get('investigation',{}).get('details',{}) if isinstance(evidence.get('investigation'),dict) else {}
+    contract=details.get('known_good_context') if isinstance(details,dict) else None
+    if isinstance(contract,dict):contract.pop('observation',None)
     connections=evidence.get('connections',[])
     if len(connections)>INVESTIGATION_CONNECTIONS:
         evidence['connections']=connections[:INVESTIGATION_CONNECTIONS];evidence['omitted_connections']=len(connections)-INVESTIGATION_CONNECTIONS

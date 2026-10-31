@@ -2,6 +2,8 @@ import copy
 import pytest
 
 from app import known_good
+from app.db import Session
+from app.incidents import Inspection
 
 
 def sha(letter):
@@ -125,3 +127,68 @@ def test_model_and_policy_are_part_of_the_exact_match_contract():
     baseline = evaluate()['fingerprint']
     assert evaluate(model='other-model')['fingerprint'] != baseline
     assert evaluate(policy_hash=sha('0'))['fingerprint'] != baseline
+
+
+def vendor_report(path='/usr/bin/fixture',checksum=None,state='matches_artifact_bytes'):
+    checksum=checksum or sha('a')
+    manifest={'package':'fixture','version':'1.0-1','architecture':'amd64',
+        'entries':[{'path':path,'sha256':checksum,'size':123}]}
+    proof={'bundle_id':'fixture','release_sha256':sha('b'),'index_sha256':sha('c'),
+        'artifact_sha256':sha('d'),'keyring_sha256':sha('e'),'signers':['A'*40],
+        'authenticated_at':123,'scope':'fixture'}
+    receipt={'trust_basis':'controller_authenticated_debian_artifact','package':'fixture','version':'1.0-1',
+        'architecture':'amd64','scope_files':1,'examined':1,'state':state,'gaps':[],'findings':[]}
+    return {'version':1,'trust_basis':'controller_authenticated_debian_artifact','state':'collected','packages':[],
+        'persistence':None,'vendor_manifest':manifest,'vendor_authentication':proof,'vendor_verification':receipt}
+
+
+def partial(host='one',pid=10,collected=100):
+    return {'executable':'/usr/bin/fixture','sha256':sha('a'),'identity_verified':True,
+        'investigation':{'collected':collected,'details':{'version':2,'identity_verified':True,
+            'context':{'version':1,'process':{'pid':pid,'start_ticks':20,'boot_id':'a'*8+'-'+'a'*4+'-'+'a'*4+'-'+'a'*4+'-'+'a'*12,
+                'proc_device':30,'proc_inode':40},'coverage':{'cache_eligible':False,'scope':'recorded_process_identity',
+                'gaps':['package_authentication_missing','configuration_not_collected']}}}}}
+
+
+def test_controller_authenticated_vendor_receipt_binds_exact_artifact_but_stays_ineligible(client):
+    with Session() as s:
+        s.add(Inspection(id='vendor-one',host_id='one',created=123,report=vendor_report()));s.commit()
+        bound=known_good.bind_vendor_provenance(s,'one',partial(),100)
+    details=bound['investigation']['details'];contract=details['known_good_context']
+    assert 'package_authentication_missing' not in details['context']['coverage']['gaps']
+    assert contract['artifact']['sha256']==sha('a') and contract['provenance']['verified']
+    result=evaluate(bound)
+    assert not result['eligible'] and result['fingerprint']==''
+    assert 'provenance_binding_invalid' not in codes(result)
+    assert {'configuration_binding_invalid','behavior_binding_invalid','followup_binding_invalid','coverage_binding_invalid'}<=set(codes(result))
+
+
+def test_vendor_binding_is_cross_host_stable_but_observations_remain_local(client):
+    report=vendor_report()
+    with Session() as s:
+        s.add_all([Inspection(id='vendor-cross-one',host_id='cross-one',created=123,report=report),
+            Inspection(id='vendor-cross-two',host_id='cross-two',created=456,report=copy.deepcopy(report))]);s.commit()
+        first=known_good.bind_vendor_provenance(s,'cross-one',partial('cross-one',10,100),100)
+        second=known_good.bind_vendor_provenance(s,'cross-two',partial('cross-two',99,900),900)
+    left=first['investigation']['details']['known_good_context'];right=second['investigation']['details']['known_good_context']
+    assert {name:left[name] for name in known_good.COMPONENTS}=={name:right[name] for name in known_good.COMPONENTS}
+    assert left['observation']!=right['observation']
+
+
+@pytest.mark.parametrize('inspection_id,host,report',[
+    ('vendor-miss-hash','miss-hash',vendor_report(checksum=sha('f'))),
+    ('vendor-miss-state','miss-state',vendor_report(state='differences')),
+])
+def test_changed_or_incomplete_vendor_receipt_is_a_contextual_miss(client,inspection_id,host,report):
+    with Session() as s:
+        s.add(Inspection(id=inspection_id,host_id=host,created=123,report=report));s.commit()
+        bound=known_good.bind_vendor_provenance(s,host,partial(host),100)
+    assert 'known_good_context' not in bound['investigation']['details']
+    assert 'package_authentication_missing' in bound['investigation']['details']['context']['coverage']['gaps']
+
+
+@pytest.mark.parametrize('details',[None,{},{'version':2,'identity_verified':True,'context':None},
+    {'version':2,'identity_verified':True,'context':{'coverage':{'scope':'recorded_process_identity','gaps':[None]}}}])
+def test_malformed_followup_never_crashes_vendor_binding(client,details):
+    evidence={'executable':'/usr/bin/fixture','sha256':sha('a'),'investigation':{'details':details}}
+    with Session() as s:assert known_good.bind_vendor_provenance(s,'one',evidence,100)==evidence

@@ -7,6 +7,7 @@ Current partial follow-up receipts therefore remain cache misses.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -20,6 +21,7 @@ COMPONENTS = ('artifact', 'provenance', 'configuration', 'behavior', 'followup',
 OBSERVATION_FIELDS = {
     'host_id', 'pid', 'start_ticks', 'boot_id', 'proc_device', 'proc_inode',
     'collected', 'received', 'observed', 'ephemeral_source_ports',
+    'vendor_inspection_id', 'authenticated_at',
 }
 FORBIDDEN_CANONICAL_FIELDS = OBSERVATION_FIELDS | {
     'hostname', 'server_id', 'timestamp', 'mtime', 'ctime', 'source_port',
@@ -170,3 +172,40 @@ def evaluate(snapshot, model, policy_hash, result, source):
 
 def assessment(row):
     return evaluate(row.snapshot, row.model, row.policy_hash, row.result, row.source)
+
+
+def bind_vendor_provenance(s, host_id, evidence, collected):
+    """Attach exact controller-authenticated artifact provenance, if available."""
+    from sqlalchemy import select
+    from .incidents import Inspection
+    from . import vendor
+    value=copy.deepcopy(evidence)
+    investigation=value.get('investigation');details=investigation.get('details') if isinstance(investigation,dict) else None
+    context=details.get('context') if isinstance(details,dict) else None
+    coverage=context.get('coverage') if isinstance(context,dict) else None
+    gaps=coverage.get('gaps') if isinstance(coverage,dict) else None
+    if (not isinstance(details,dict) or not isinstance(coverage,dict) or details.get('version')!=2
+        or details.get('identity_verified') is not True or not isinstance(gaps,list) or not all(isinstance(gap,str) for gap in gaps)
+        or coverage.get('scope')!='recorded_process_identity' or 'package_authentication_missing' not in gaps):return value
+    path=value.get('executable');checksum=value.get('sha256')
+    if not isinstance(path,str) or not re.fullmatch(r'/[^\x00-\x1f]{0,4095}',path) or not _sha(checksum):return value
+    rows=s.scalars(select(Inspection).where(Inspection.host_id==host_id).order_by(Inspection.created.desc(),Inspection.id.desc()).limit(50))
+    binding=None;inspection_id=''
+    for row in rows:
+        report=row.report if isinstance(row.report,dict) else {}
+        try:binding=vendor.known_good_binding(report.get('vendor_manifest'),report.get('vendor_authentication'),report.get('vendor_verification'),path,checksum)
+        except (TypeError,ValueError):continue
+        inspection_id=row.id;break
+    if binding is None:return value
+    artifact,provenance,authenticated_at=binding
+    remaining=sorted(gap for gap in gaps if gap!='package_authentication_missing')
+    process=context.get('process') if isinstance(context.get('process'),dict) else {}
+    observation={key:process[key] for key in ('pid','start_ticks','boot_id','proc_device','proc_inode') if key in process}
+    observation.update(host_id=host_id,collected=collected,vendor_inspection_id=inspection_id,authenticated_at=authenticated_at)
+    details['known_good_context']={'version':CONTEXT_VERSION,'artifact':artifact,'provenance':provenance,
+        'configuration':{'version':CONTEXT_VERSION,'complete':False},
+        'behavior':{'version':CONTEXT_VERSION,'complete':False},
+        'followup':{'version':CONTEXT_VERSION,'complete':False,'policy_version':'process-followup-v1'},
+        'coverage':{'version':CONTEXT_VERSION,'complete':False,'gaps':remaining},'observation':observation}
+    coverage['gaps']=remaining
+    return value

@@ -7,6 +7,7 @@ from sqlalchemy import select,delete
 from app import ai,ai_assessments,ai_runs,worker
 from app.db import Session,Host,Behavior,Setting,Audit
 from app.identity import User
+from app.incidents import Inspection
 from app.security import seal
 
 
@@ -82,6 +83,40 @@ def test_retained_complete_results_bound_to_exact_supplied_inputs_and_log_prunin
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:pytest.fail('History cannot call AI'))
     monkeypatch.setattr(worker.ssh,'call',lambda *a,**k:pytest.fail('History cannot contact target'))
     assert admin.get(url).json()==record
+
+
+def test_followup_binds_authenticated_vendor_provenance_without_sharing_host_observation(admin,monkeypatch):
+    seed(verdict='pending');sent=[]
+    manifest={'package':'fixture','version':'1.0-1','architecture':'amd64',
+        'entries':[{'path':'/srv/fixture','sha256':'a'*64,'size':12}]}
+    proof={'bundle_id':'fixture','release_sha256':'b'*64,'index_sha256':'c'*64,
+        'artifact_sha256':'d'*64,'keyring_sha256':'e'*64,'signers':['A'*40],
+        'authenticated_at':123,'scope':'fixture'}
+    receipt={'trust_basis':'controller_authenticated_debian_artifact','package':'fixture',
+        'version':'1.0-1','architecture':'amd64','scope_files':1,'examined':1,
+        'state':'matches_artifact_bytes','gaps':[],'findings':[]}
+    report={'version':1,'trust_basis':'controller_authenticated_debian_artifact','state':'collected',
+        'packages':[],'persistence':None,'vendor_manifest':manifest,
+        'vendor_authentication':proof,'vendor_verification':receipt}
+    with Session() as s:s.add(Inspection(id='vendor-provenance',host_id='one',created=123,report=report));s.commit()
+    def post(*args,**kwargs):
+        sent.append(kwargs['json'])
+        return provider('low',['executable'] if len(sent)==1 else [])
+    followup={'version':2,'identity_verified':True,'context':{'version':1,
+        'process':{'pid':10,'start_ticks':20},'coverage':{'scope':'recorded_process_identity',
+        'gaps':['package_authentication_missing','configuration_not_collected']}}}
+    monkeypatch.setattr(ai.transport,'post',post)
+    monkeypatch.setattr(worker.ssh,'call',lambda *args,**kwargs:copy.deepcopy(followup))
+    worker.investigate_one();assert len(sent)==2
+    record=admin.get('/api/investigations/subject/history/'+current(admin)['items'][0]['id']).json()
+    contract=record['snapshot']['investigation']['details']['known_good_context']
+    assert contract['artifact']['sha256']=='a'*64 and contract['provenance']['verified']
+    assert contract['observation']['host_id']=='one' and contract['observation']['vendor_inspection_id']=='vendor-provenance'
+    assert 'package_authentication_missing' not in record['snapshot']['investigation']['details']['context']['coverage']['gaps']
+    assert not record['known_good']['eligible'] and 'configuration_binding_invalid' in [row['code'] for row in record['known_good']['reasons']]
+    assert 'known_good_context' in record['inputs'][1]['evidence']['investigation']['details']
+    assert 'observation' not in record['inputs'][1]['evidence']['investigation']['details']['known_good_context']
+    assert json.loads(sent[1]['input'])==record['inputs'][1]['evidence']
 
 
 def test_current_saved_result_uses_existing_retained_revision_without_duplicate_legacy(admin,monkeypatch):

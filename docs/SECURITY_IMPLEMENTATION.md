@@ -4200,3 +4200,47 @@ zero-provider-call reuse, audited revocation/invalidation, contradiction-linked 
 manual Re-triage bypass and SQLite/MySQL concurrency/role acceptance. Safe same-host
 fairness and shared throttle/daily-spend/unthrottled controls follow under the existing
 priority; notification and broader security/deployment/UI roadmaps remain planned.
+
+
+## v1.25.0 — Controller-authenticated artifact provenance binding
+
+Issue-first reconciliation read current main `d80965e0`, repository instructions,
+this checkpoint and merged PR #84. The first 100-item open-issue and open-PR pages
+were empty, so no actionable GitHub report or unfinished delivery competed with this
+roadmap batch. The chat-reported database-migration refusal remains blocked on its
+v1.23.1 mismatch category or separately reviewed schema inventory; no object is
+ignored or guessed away and no closure is claimed.
+
+This next dependency-ordered exact-known-good milestone persists the complete
+controller-authenticated vendor package manifest with the existing signature proof
+and target verification receipt. Storage and later binding strictly revalidate the
+bounded manifest, Debian/RPM authentication fields and complete target receipt. A
+matching follow-up can bind only its exact executable path and SHA-256 from a
+same-server inspection whose entire authenticated regular-file scope matched. Target
+package ownership, a name/hash alone, changed bytes, incomplete verification and
+malformed or contradictory receipts remain misses.
+
+The bound versioned artifact and provenance components include stable file/package/
+proof digests. Authentication time, inspection identity and server/PID/proc identity
+remain in the isolated observation section and do not alter cross-server canonical
+components. The observation section is retained in assessment history but stripped
+from provider-bound evidence. Existing AI model/effort, structured validation,
+optional second-stage evidence and response authorization are unchanged.
+
+Only `package_authentication_missing` is removed. Configuration, effective behavior,
+follow-up and complete-coverage components remain explicitly incomplete, so current
+assessments still produce no known-good fingerprint and every investigation still
+contacts the provider. There is no cache table, publication/lookup/hit, implicit
+approval, deterministic-protection suppression, schema/helper change, Docker
+publication, Git tag or schedule change. APP_VERSION/README/changelog/UI/API
+synchronize at v1.25.0; major remains 1.
+
+Focused acceptance covers Debian/RPM persistence, tampered proof/manifest/receipt
+refusal, exact and changed artifact matches, malformed follow-up failure, stable
+cross-host canonical components with local observations, retained assessment history
+and provider-input redaction. The finite program remains unfinished: collect complete
+configuration/behavior/follow-up/coverage manifests, then implement durable safe-only
+publication and atomic cross-server zero-call lookup, audited invalidation/revocation,
+contradiction-linked review, explicit Re-triage bypass and SQLite/MySQL race/role
+acceptance. Shared pacing/spend modes and remaining roadmap programs follow under the
+existing priority.
