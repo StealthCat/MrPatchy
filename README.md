@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.35.29** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.35.30** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -183,6 +183,7 @@ Configure each host under **Account → Operations → SSO, SMTP & target polici
 - Transient SSH/health failures are retried for up to ten minutes. Persistent post-reboot health failure requests one approved snapshot rollback; a rollback reboot is verified separately.
 - Before a rollback-enabled patch, the central database durably records the original inventory fingerprint, configuration hashes/ownership/modes and running services. Rollback must restore that evidence, clean dpkg state and service health; a healthy boot alone is insufficient. Missing or changed evidence requires reconciliation.
 - A verified rollback leaves the patch job failed and blocks later rollout stages. Uncertain recovery becomes `recovery_required`.
+- Without reboot/rollback, an ordinary patch whose outcome is unknown also becomes `recovery_required`: a lost, truncated or invalid completion reply after the package request was sent, a bridge exit without its own failure receipt, or a post-patch inventory read that fails. The patch is never replayed automatically, and any receipt is kept in the operation output. Failures before the request starts (stale selection, changed policy, unreachable SSH) and failures the target reports itself stay `failed` and release the host.
 - Orphaned `running` and `recovery_required` jobs block further queued work and configuration mutations for that host. Monitoring continues. Busy workers skip the host instead of tying up another worker slot.
 - After inspecting package/service state, snapshots and pending reboot timers through a trusted console, use **Activity → Review interrupted operation**. Reconciliation also requires idle central and target mutation locks. It releases the queue without replaying the interrupted job.
 
