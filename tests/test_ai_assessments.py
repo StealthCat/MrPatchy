@@ -4,7 +4,7 @@ import time
 import httpx
 import pytest
 from sqlalchemy import select,delete
-from app import ai,ai_assessments,ai_runs,worker
+from app import ai,ai_assessments,ai_provider_backoff,ai_retry,ai_runs,worker
 from app.db import Session,Host,Behavior,Setting,Audit
 from app.identity import User
 from app.incidents import Inspection
@@ -153,6 +153,11 @@ def test_failure_and_pause_preserve_request_and_previous_result_until_success(ad
     monkeypatch.setattr(ai.transport,'post',timeout);worker.investigate_one()
     data=current(admin);assert data['current']['verdict']=='error' and data['current']['refresh']['id']
     assert len(data['items'])==1 and 'private-key' not in data['current']['analysis']
+    assert admin.post('/api/investigations/subject/retry').status_code==409
+    with Session() as s:
+        s.get(ai_retry.TriageRetry,'subject').provider_until=0
+        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0
+        s.commit()
     assert admin.post('/api/investigations/subject/retry').status_code==200
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:calls.append(1) or provider('unknown'))
     worker.investigate_one();assert len(calls)==2

@@ -249,7 +249,7 @@ def task_failure(error):
 
 
 def status(s):
-    from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,worker_registry
+    from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,ai_provider_backoff,worker_registry
     now=time.time(); cfg=config(s)
     query=select(Behavior.attempted,Behavior.first_seen,Behavior.host_id,ai_retry.TriageRetry).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
     rows=list(s.execute(query)); recent=list(s.scalars(select(Behavior.attempted).where(Behavior.attempted>now-3600)))
@@ -269,12 +269,16 @@ def status(s):
     retry=min((r['next_at'] for r in states if r['state']!='blocked' and r['next_at']>now),default=None)
     admission=ai_admission.status(s)
     budget=ai_budget.status(s,now)
+    provider_backoff=ai_provider_backoff.status(s,now)
+    if provider_backoff['blocked']:
+        retry=min([value for value in (retry,provider_backoff['next_at']) if value is not None])
     if admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now:
         retry=min([value for value in (retry,admission['next_at']) if value is not None])
     if not cfg['ai_enabled']: reason='disabled'; message='Automatic AI triage is disabled in Settings.'
     elif not cfg['ai_model'] or not s.get(Setting,'openai_key'): reason='configuration'; message='Save a model ID and API key in Settings.'
     elif not seen or now-seen>90: reason='worker_unavailable'; message='No recent scheduler heartbeat. Check app/worker container logs and DISABLE_SCHEDULER.'
     elif running: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running.stage
+    elif provider_backoff['blocked']:reason='backoff';message='Shared provider backoff is waiting for retry eligibility after a transient failure.'
     elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min(recent+([oldest_run] if oldest_run else []))+3600
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
     elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
@@ -287,4 +291,4 @@ def status(s):
             'blocked':blocked,'paused':paused,
             'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
-            'last_run':latest.id if latest else None,'admission':admission,'budget':budget}
+            'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff}

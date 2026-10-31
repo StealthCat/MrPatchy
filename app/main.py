@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.32.0'
+APP_VERSION='1.33.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -598,11 +598,11 @@ def audit_detail(entry_id:int,user=Depends(auth)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(auth)):
-    from . import ai_budget
+    from . import ai_budget,ai_provider_backoff
     with Session() as s:
         cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
         return cfg|{'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
-            'ai_budget':ai_budget.status(s),
+            'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
 class ConfigInput(BaseModel):

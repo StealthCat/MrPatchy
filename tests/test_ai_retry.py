@@ -7,7 +7,7 @@ from email.utils import formatdate
 import httpx
 import pytest
 from sqlalchemy import select
-from app import ai, ai_retry, ai_runs, worker
+from app import ai, ai_provider_backoff, ai_retry, ai_runs, worker
 from app.db import Session, Setting, Behavior, Host, Audit
 from app.identity import User
 from app.security import seal
@@ -73,7 +73,8 @@ def test_durable_deferral_restart_manual_floor_receipts_and_success(admin,monkey
     ai_runs.heartbeat();status=admin.get('/api/investigation-status').json()
     assert status['ready']==0 and status['retry_at']>time.time() and status['reason']=='backoff'
     with Session() as s:
-        r=s.get(ai_retry.TriageRetry,'subject');r.next_at=0;r.provider_until=0;s.commit()
+        r=s.get(ai_retry.TriageRetry,'subject');r.next_at=0;r.provider_until=0
+        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:calls.append(1) or success())
     worker.investigate_one()
     assert len(calls)==2
@@ -107,9 +108,15 @@ def test_bounded_retries_and_manual_reset_is_audited(admin,monkeypatch):
         worker.investigate_one()
         with Session() as s:
             r=s.get(ai_retry.TriageRetry,'subject');assert r.attempts==i+1
-            if i<4:r.next_at=0;s.commit()
-    worker.investigate_one();assert len(calls)==5 and bounds==[(30,60),(30,120),(30,240),(30,480)]
+            if i<4:
+                r.next_at=0;r.provider_until=0
+                s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
+    worker.investigate_one();assert len(calls)==5 and bounds==[(30,60),(30,60),(30,120),(30,120),(30,240),(30,240),(30,480),(30,480),(30,960)]
     with Session() as s:assert s.get(ai_retry.TriageRetry,'subject').state=='blocked'
+    assert admin.post('/api/investigations/subject/retry').status_code==409
+    with Session() as s:
+        s.get(ai_retry.TriageRetry,'subject').provider_until=0
+        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
     assert admin.post('/api/investigations/subject/retry').status_code==200
     with Session() as s:
         assert s.get(ai_retry.TriageRetry,'subject') is None
@@ -174,21 +181,25 @@ def test_failed_follow_up_retains_evidence_receipts_and_repeats_required_checks(
         assert 'investigation' in s.get(Behavior,'subject').evidence
         assert len(list(s.scalars(select(ai_runs.AICall))))==2
         assert all(r.status=='unavailable' for r in s.scalars(select(ai_runs.AICall)))
-        s.get(ai_retry.TriageRetry,'subject').next_at=0;s.commit()
+        retry=s.get(ai_retry.TriageRetry,'subject');retry.next_at=0;retry.provider_until=0
+        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
     worker.investigate_one();assert len(calls)==4 and len(ssh_calls)==2
     assert all(c['model']=='fixture' and c['max_output_tokens']==1600 and c['text']['format']['schema']==ai.SCHEMA for c in calls)
     with Session() as s:
         row=s.get(Behavior,'subject');assert row.verdict=='low' and not row.approved
         assert len(list(s.scalars(select(ai_runs.AICall))))==4
-def test_same_host_independent_subject_not_blocked_by_retry_and_duplicate_workers(admin,monkeypatch):
+def test_same_host_independent_subject_respects_shared_provider_floor_and_duplicate_workers(admin,monkeypatch):
     setup();calls=[]
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:calls.append(1) or response(headers={'retry-after':'120'}))
     worker.investigate_one()
     with Session() as s:s.add(Behavior(id='other',host_id='host',evidence={}));s.commit()
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:calls.append(1) or success())
     with ThreadPoolExecutor(max_workers=2) as pool:list(pool.map(lambda _:worker.investigate_one(),range(2)))
-    assert len(calls)==2
-    with Session() as s:assert s.get(Behavior,'other').verdict=='low' and s.get(Behavior,'subject').verdict=='error'
+    assert len(calls)==1
+    with Session() as s:
+        assert s.get(Behavior,'subject').verdict=='error'
+        other=s.get(Behavior,'other');assert other.verdict=='error' and not other.approved
+        retry=s.get(ai_retry.TriageRetry,'other');assert retry.state=='deferred' and retry.attempts==0
 
 
 def test_manual_retry_roles_and_csrf(admin):

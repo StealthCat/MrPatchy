@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.33.0 — 2026-10-31
+
+- Add one durable fleet-wide provider backoff boundary before rate and budget admission for every current billable AI request path.
+- Honor valid provider Retry-After floors and use bounded exponential full-jitter delays for transient responses, timeouts and connection failures without automatically replaying a potentially billable request.
+- Preserve process-investigation queue eligibility and attempt counts while shared backoff is active, prevent manual retry bypass, and expose sanitized failure count/next eligibility in Settings and AI worker status.
+- Clear stale escalation after a successful or non-transient provider response without allowing an older parallel success to erase a newer failure; already in-flight calls and complete durable queuing for every manual/plan path remain documented limitations.
+
 ## 1.32.0 — 2026-10-31
 
 - Add daily-cap and rate-plus-cap AI modes with an administrator-set USD/day amount and explicit IANA reset timezone.

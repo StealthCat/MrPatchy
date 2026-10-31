@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.32.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.33.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -543,6 +543,29 @@ Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
 alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
 failover/reset acceptance remain required before the shared controls program is
 complete.
+
+### Shared provider backoff (v1.33.0)
+
+Every current billable provider path checks one durable fleet-wide transient-failure
+floor before budget and rate admission. A valid provider `Retry-After` is retained
+exactly; transient 408/429/5xx responses, connection failures and timeouts without a
+valid floor use bounded exponential backoff with full jitter from 30 seconds up to 30
+minutes. The sanitized state is shared across controllers and workers, survives
+restart and is cleared by the next completed/non-transient provider response that
+started after the latest recorded failure. An older parallel success cannot erase a
+newer floor.
+
+No automatic HTTP replay occurs: each transmitted attempt still has one receipt and,
+in capped mode, one reservation. Calls blocked by the shared floor create neither a
+receipt nor a rate/budget reservation. Process investigations remain durably queued
+at the shared eligibility time without consuming another attempt, and manual retry
+cannot bypass it. Settings and AI worker status show consecutive transient failures
+and the next eligible time.
+
+Already concurrent in-flight calls cannot be recalled after another call discovers a
+provider floor. Exact durable queue/resume for every manual plan and connection-test
+request, scoring-specific next-start persistence and full multi-controller failover
+acceptance remain unfinished.
 
 For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
 create `ai_triage_claims`, then start matching workers. Mixed old/new active workers
