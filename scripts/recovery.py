@@ -107,6 +107,11 @@ def read_manifest(bundle):
                 if os.path.lexists(folder):raise ValueError('Unexpected durable-state directory: '+name)
             elif not isinstance(expected,dict) or tree_inventory(folder)!=expected:
                 raise ValueError('Durable-state contents differ from backup manifest: '+name)
+        for name in ('vendor-packages','yara-rules'):
+            if coverage[name] is not None:
+                key=Path(bundle)/name/'trustedkeys.gpg'
+                if not key.is_file() or not key.stat().st_size:
+                    print('WARNING: '+name+' has no nonempty trustedkeys.gpg; recover operator trust material separately before authenticating retained bundles.',file=sys.stderr,flush=True)
         identifiers=manifest.get('verified_archives')
         if not isinstance(identifiers,list):raise ValueError('Missing verified archive coverage')
         check_archives(bundle,identifiers)

@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import sqlite3
 import stat
 import uuid
 
@@ -16,6 +15,8 @@ from app.db import Base
 from app import evidence_archive
 from app.evidence_vault import EvidenceArchive
 from test_recovery_ssh import recovery, deployment, activate
+from test_vendor import signing, bundle as vendor_bundle
+from test_yara import bundle as yara_bundle
 
 
 def durable_state(data):
@@ -122,10 +123,6 @@ def test_missing_verified_archive_blocks_successful_backup(recovery,tmp_path):
     assert not recovery.calls
 
 
-from test_vendor import signing, bundle as vendor_bundle
-from test_yara import bundle as yara_bundle
-
-
 def test_signed_vendor_and_yara_bundles_authenticate_after_recovery(recovery,tmp_path,monkeypatch,vendor_bundle,yara_bundle):
     from app import vendor,yara_rules
     location=tmp_path/'deployment';location.mkdir()
@@ -173,3 +170,22 @@ def test_native_encrypted_evidence_recovery_drill(client,tmp_path,monkeypatch,ba
         record=session.get(EvidenceArchive,row.id)
         assert record and evidence_archive.verify(record)=='verified'
     restored.dispose()
+
+
+def test_missing_trust_material_is_reported_explicitly(recovery,tmp_path,capsys):
+    data,others=deployment(tmp_path,ssh_dir=False);durable_state(data)
+    (data/'yara-rules/trustedkeys.gpg').unlink()
+    recovery.backup(data,*others)
+    assert 'yara-rules has no nonempty trustedkeys.gpg' in capsys.readouterr().err
+
+
+def test_staging_restore_revalidates_durable_coverage(recovery,tmp_path,monkeypatch):
+    data,others=deployment(tmp_path,ssh_dir=False);durable_state(data)
+    recovery.backup(data,*others);bundle,=recovery.bundles
+    (bundle/'evidence-archive/sample/content').write_bytes(b'tampered')
+    def restore(args,**kwargs):
+        assert args[:2]==['restic','restore']
+        shutil.copytree(bundle,Path(args[args.index('--target')+1])/'bundle')
+    monkeypatch.setattr(recovery,'run',restore)
+    with pytest.raises(ValueError,match='contents differ'):
+        recovery.restore('latest',tmp_path/'staging')

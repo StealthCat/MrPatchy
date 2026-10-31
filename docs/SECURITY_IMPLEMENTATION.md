@@ -5299,7 +5299,7 @@ remain major-version tags; SHA pinning belongs to supply-chain issue #201.
 ## v1.35.27 — Durable controller recovery coverage (#120)
 
 Codex `recovery-437f6ead2050` selected independent P1 #120 after reading main
-fa5d933 (v1.35.24), repository instructions, the checkpoint, all 78 open issues
+fa5d933 (v1.35.24), repository instructions, the checkpoint, all 77 open issues
 (one 100-item API page, no next link), six open PRs and candidate issue comments.
 P1 #118/#119/#205 already have #208/#203/#209 and retain their owners; #204 depends
 on #203. No roadmap work or competing fix was started. Claim comment's 21:40Z
@@ -5333,3 +5333,18 @@ Proposed version v1.35.27 follows main .24 and pending work through #210 .26;
 recheck main and actively owned lower-version PR integration before merging.
 Keep the same focused branch/PR if integration is still held. No Git tags, Docker
 publication, schedule change or completed-roadmap claim.
+
+Self-review/validation update (2026-10-31T21:44Z): full local Python suite on the
+initial published tree completed with **1637 passed, 11 skipped, 9 subtests passed**.
+The follow-up adds missing-trust warnings and staging-restore tamper coverage;
+focused final recovery/final-feature validation with an extracted native restic
+binary completed **42 passed, 1 skipped** (only the MySQL-specific drill). The
+real encrypted SQLite evidence recovery and both existing restic drills pass.
+No local MySQL server/client or Docker acceptance is claimed. All twelve exact-head
+GitHub jobs must run after this follow-up, including the native MySQL drill.
+PR #212 targets main, has the matching v1.35.27 label and Fixes #120. Initial
+published commit 96c000071caee68ffc5287730e657454afa9a560 exactly matched the locally
+tested tree. Active integration/version holds were posted on #203/#206/#207/#208/
+#209 because main's direct CI update is already v1.35.24. Do not merge ahead of
+that coordinated issue-fix sequence or reuse lower versions. Keep #120 open until
+the tested final merge is verified; continue the same PR if this cycle ends first.

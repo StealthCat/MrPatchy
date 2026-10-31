@@ -77,7 +77,9 @@ Format-2 bundles also retain `DATA_DIR/evidence-archive`, `vendor-packages`,
 and `gcloud` (the standard GCP credential/configuration location). The manifest
 records each present tree's exact filenames, byte lengths and SHA-256 digests;
 missing directories are explicitly recorded and reported, rather than claimed as
-covered. Records marked verified in the evidence archive table require both
+covered. Present vendor/YARA trees without a nonempty `trustedkeys.gpg`
+produce a specific missing-trust warning; recovering their files does not claim
+they can be authenticated. Records marked verified in the evidence archive table require both
 content and receipt files before a backup can succeed. Restore and activation
 revalidate tree coverage; activation does so before writing destination state.
 Files/directories in these private trees restore as 0600/0700 and app service
