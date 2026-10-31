@@ -4896,3 +4896,36 @@ requires safe pre/post-transmission crash acceptance rather than automatic repla
 upgrade roadmap #96 remain open. Faster-AI roadmap work resumes only after higher-
 priority actionable issue fixes; multi-stage release persistence, pricing lifecycle,
 invoice reconciliation and full controller failover/reset acceptance remain planned.
+
+
+## v1.35.5 — Enrollment command temporary-file hardening
+
+Delivery record: version **v1.35.5**, branch `fix/enrollment-temp-file-v1.35.5`; the
+PR number and tested final commit are recorded on the pull request. Proposed merge
+order: after PR #112 and PR #113, which both claim v1.35.4. The version must be
+re-checked against current `main` immediately before merging.
+
+The one-line enrollment command issued by `POST /api/hosts/{id}/enrollment-link`
+previously downloaded the personalized installer to the fixed path
+`/tmp/mrpatchy-enroll.sh` and then ran it with `sudo bash`. A fixed, predictable path
+in a sticky world-writable directory lets a local user on the target pre-create or
+swap the file before the administrator runs the command. Default Ubuntu/Debian
+kernels (`fs.protected_symlinks=1`, `fs.protected_regular=2`) block the symlink and
+pre-created-file variants, leaving a denial of service; targets with those protections
+disabled remain exposed to execution of attacker-controlled content as root. This was
+assessed by code reading and a sysctl check, not by a working exploit.
+
+The command now creates an unpredictable owner-only (0600) file with `mktemp`,
+downloads into it, runs it, and removes it:
+`f=$(mktemp) && curl -fsSL '<url>' -o "$f" && sudo bash "$f"; rm -f "$f"`. The URL
+remains shell-quoted. The downloaded installer content, token lifetime (one hour,
+reusable), authentication, roles, audit and the manual download path are unchanged.
+Making enrollment tokens single-use is deliberately not part of this change because a
+partial download would then require issuing a new link.
+
+Tests assert the command shape, that no fixed `/tmp/` path appears, that the URL
+remains a single shell argument, and execute the generated command in a real shell
+with stubbed `curl`/`sudo` to confirm a pre-existing `mrpatchy-enroll.sh` is ignored,
+the file used is mode 0600, and it is removed afterwards. The browser fixture in
+`tests/ui_enrollment.cjs` carries the new command string; it was updated but not
+executed locally because Playwright and a supported Node version were not installed.

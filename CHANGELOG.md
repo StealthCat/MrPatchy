@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.5 — 2026-10-31
+
+- Harden the generated enrollment command: the installer is downloaded to an unpredictable owner-only `mktemp` file and removed afterwards, instead of a fixed `/tmp/mrpatchy-enroll.sh` path that root then executes. Compatibility: operators copying a previously issued command keep working; new commands use the temporary file. No schema, helper, token-lifetime or authorization change.
+
 ## 1.35.3 — 2026-10-31
 
 - Project a sanitized `ai_deferred` Boolean from operation APIs so Activity list/detail views show timed eligibility and administrator-resume waits without exposing internal job payloads.

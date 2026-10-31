@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.3'
+APP_VERSION='1.35.5'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -354,7 +354,7 @@ def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=No
         s.add(Setting(key='enroll:'+token_hash(token),value={'host_id':host_id,'expires':time.time()+3600})); s.commit()
         url=selected['url']+'/enroll/'+token
         return {'url':url,'endpoint':endpoint,'expires_in':3600,
-                'command':f'curl -fsSL {shlex.quote(url)} -o /tmp/mrpatchy-enroll.sh && sudo bash /tmp/mrpatchy-enroll.sh'}
+                'command':f'f=$(mktemp) && curl -fsSL {shlex.quote(url)} -o "$f" && sudo bash "$f"; rm -f "$f"'}
 @app.get('/enroll/{token}')
 def enroll(token:str):
     with Session() as s:
