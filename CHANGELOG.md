@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.35.33 — 2026-10-31
+## 1.35.34 — 2026-10-31
 
 - Record role, enabled-state and password changes in the `manage user` audit detail (old → new role, old → new enabled state, `password set: yes/no`; never the password) (issue #161). Role checks and audit retention are unchanged. No compatibility impact; major version stays 1.
 
