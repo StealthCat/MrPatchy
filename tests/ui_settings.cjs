@@ -19,6 +19,16 @@ module.exports=async(page,capture)=>{
  await page.locator('[href="#settings/patching"]').first().click();await page.locator('#patch-settings-form').waitFor();
  assert.equal(await page.locator('[name=repo_minutes]').inputValue(),'35');
  await page.goBack();await page.locator('#history-settings-form').waitFor();
+ await page.locator('[href="#settings/ai"]').first().click();await page.locator('#ai-settings-form').waitFor();
+ await page.locator('[name=ai_control_mode]').selectOption('rate_and_daily');
+ await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
+ await page.locator('[name=ai_budget_timezone]').fill('America/New_York');
+ await page.getByRole('button',{name:'Save AI settings',exact:true}).click();
+ await page.locator('#ai-save-result').filter({hasText:'AI settings saved'}).waitFor();
+ const aiState=await (await page.request.get(new URL('/api/settings',page.url()).href)).json();
+ assert.equal(aiState.ai_control_mode,'rate_and_daily');assert.equal(aiState.ai_daily_cap_usd,12.5);
+ assert.equal(aiState.ai_budget_timezone,'America/New_York');
+ assert.match(await page.locator('#ai-settings-form').textContent(),/uncertain.*remaining/s);
  for(const width of [320,390,1440]){
   await page.setViewportSize({width,height:1000});
   for(const section of ['ai','patching','database','https','history']){

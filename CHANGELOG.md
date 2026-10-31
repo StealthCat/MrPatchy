@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.32.0 — 2026-10-31
+
+- Add daily-cap and rate-plus-cap AI modes with an administrator-set USD/day amount and explicit IANA reset timezone.
+- Atomically reserve a conservative per-call ceiling across workers before provider transmission; unknown model, tier, tool, output or long-context pricing fails closed instead of becoming zero cost.
+- Reconcile valid usage to retained public-price estimates, release unsent failures and keep full uncertain reservations after transmitted timeouts, missing receipts or restarts.
+- Retain the budget ledger independently of diagnostic-history pruning, canonicalize its fixed-precision amounts during offline database verification, and show settled, reserved, uncertain, remaining and next-reset values in Settings and AI worker status; provider invoice reconciliation and complete durable deferral remain planned.
+
 ## 1.31.0 — 2026-10-31
 
 - Add one durable fleet-wide admission boundary to every current billable AI path, with smooth no-burst logical-work pacing and an explained next-start time.

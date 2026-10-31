@@ -4535,3 +4535,53 @@ classifications also remain planned. APP_VERSION/README/changelog/UI/API synchro
 at v1.31.0 with major fixed at 1. Rebuild the controller first to initialize the new
 table, then matching workers. No target-helper/agent update, Docker publication, Git
 tag or schedule change is included.
+
+
+## v1.32.0 — Conservative daily AI spend admission and retained ledger
+
+Issue-first reconciliation read merged v1.31.0 main, repository instructions, this
+checkpoint and PR #91. The first 100 open-issue and open-PR results were empty, so no
+actionable report or unfinished fix competed with this roadmap batch. The separately
+reported database-migration refusal remains blocked on its categorized post-v1.23.1
+schema mismatch output or a reviewed inventory; no object is guessed or ignored.
+
+This shared-controls milestone adds explicit daily-cap and rate-plus-daily-cap modes.
+Before every current billable provider request, a fleet-wide budget lock calculates
+and persists a conservative per-call ceiling from the exact catalogued model,
+requested processing tier, bounded serialized request bytes and maximum output
+tokens. It uses the highest applicable ordinary/cached/cache-write input rate.
+Unknown models, snapshots, tiers, tool fees, unbounded output, unsupported cache
+settings and unpriced long context fail closed before rate admission or transport;
+none becomes a zero-dollar reservation. Combined mode reserves budget before
+consuming a smooth-rate start.
+
+The independent `ai_budget_entries` ledger records only run/call identifiers,
+bounded model/rate provenance, timestamps, status and amounts—never keys, prompts or
+evidence. It is not part of diagnostic-history cleanup. A valid usage receipt
+reconciles to the retained public-price estimate. An unsent failure releases its
+reservation. Once provider transmission begins, a timeout, restart or unavailable
+usage/price retains the full ceiling as uncertain; a later valid receipt may still
+settle it. SQLite and MySQL contenders serialize admission with the existing
+cross-process lock design.
+Offline migration fingerprints encode fixed-precision decimal values with an explicit
+type tag so SQLite/MySQL copies compare the ledger without float conversion.
+
+Administrators choose the USD/day cap and an explicit validated IANA reset timezone.
+Mode, cap and timezone changes are audited. Settings and worker status expose
+settled, reserved, uncertain, counted, remaining and reset values and explain that
+estimates are not provider invoices. Unthrottled continues to remove only Mr Patchy
+rate/spend controls, not provider limits, finite concurrency, pause, lifecycle, roles
+or data-sharing policy.
+
+Regression acceptance first failed because no `ai_budget` module or ledger existed.
+Focused coverage includes unknown-pricing refusal before rate/provider work,
+eight-thread atomic admission, reset/remaining status, actual reconciliation,
+uncertain transmitted failures, unsent release, combined-mode settings and timezone
+validation. Exact-head SQLite, MySQL, browser and full-suite checks remain mandatory.
+
+This does not complete the program. Exact durable defer/resume for every manual and
+plan path, pricing-catalog update/expiry controls, provider-invoice reconciliation,
+long-horizon reports and full SQLite/MySQL reset/failover acceptance remain planned.
+APP_VERSION/README/changelog/UI/API synchronize at v1.32.0 with major fixed at 1.
+Rebuild the controller first to create the ledger table, then matching workers. No
+target-helper/agent update, Docker publication, Git tag or schedule change is included.

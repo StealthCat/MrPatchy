@@ -5,6 +5,8 @@ and the individual /api/docs/models/{model} pages for the older models below.
 Only exact catalogued IDs are priced: never guess a fine-tune/snapshot's rate.
 """
 from decimal import Decimal
+from decimal import ROUND_CEILING
+import json
 import re
 
 VERSION = '2026-10-26'
@@ -27,6 +29,7 @@ ALIASES = {
     'gpt-5-mini-2025-08-07': 'gpt-5-mini',
 }
 TOKEN_FIELDS = ('input_tokens', 'cached_tokens', 'cache_write_tokens', 'output_tokens', 'reasoning_tokens')
+CAP_MODES = ('daily_cap', 'rate_and_daily')
 
 
 def identifier(value):
@@ -110,3 +113,48 @@ def estimate(data, payload):
         'cache_ttl': ttl if modern else None,
     })
     return result
+
+
+def reservation(payload):
+    """Return a conservative USD ceiling before a capped provider call.
+
+    UTF-8 JSON bytes are a safe upper bound for token count for the bounded text
+    requests Mr Patchy sends. Unknown models, tiers, output bounds, tool fees or
+    long-context prices fail closed instead of becoming a zero-dollar estimate.
+    """
+    requested = identifier(payload.get('model'))
+    model = ALIASES.get(requested, requested)
+    if model not in RATES:
+        return {'ok': False, 'reason': 'The selected model has no verified price for a safe reservation.'}
+    output = payload.get('max_output_tokens')
+    if type(output) is not int or not 1 <= output <= 1_000_000:
+        return {'ok': False, 'reason': 'The request has no bounded output-token maximum for a safe reservation.'}
+    if payload.get('tools'):
+        return {'ok': False, 'reason': 'Tool fees are not available for a safe reservation.'}
+    tier = payload.get('service_tier', 'default')
+    rates = RATES[model]; modern = rates[3] is not None
+    multipliers = {'default': '1'}
+    if modern: multipliers.update(flex='0.5', priority='2', fast='2')
+    if model in ('gpt-6-astra', 'gpt-6.1-sol'): multipliers['ultrafast'] = '6'
+    if tier not in multipliers:
+        return {'ok': False, 'reason': 'The requested processing tier has no verified price for a safe reservation.'}
+    excluded = {'model', 'store', 'max_output_tokens', 'service_tier', 'prompt_cache_options'}
+    tokenized = {key: value for key, value in payload.items() if key not in excluded}
+    try: input_ceiling = len(json.dumps(tokenized, sort_keys=True, separators=(',', ':')).encode('utf-8'))
+    except (TypeError, ValueError, UnicodeError):
+        return {'ok': False, 'reason': 'The request cannot be bounded for a safe reservation.'}
+    if input_ceiling > 1_000_000 or (modern and input_ceiling > 272000):
+        return {'ok': False, 'reason': 'Long-context pricing is not available for a safe reservation.'}
+    options = payload.get('prompt_cache_options') or {}
+    ttl = options.get('ttl', '30m') if isinstance(options, dict) else ''
+    if ttl not in ('30m', '12h'):
+        return {'ok': False, 'reason': 'Prompt-cache pricing is not available for a safe reservation.'}
+    factor = Decimal(multipliers[tier])
+    prices = [Decimal(value) * factor if value is not None else Decimal(0) for value in rates]
+    if ttl == '12h' and modern: prices[3] *= 2
+    input_rate = max(prices[0], prices[1], prices[3])
+    amount = (Decimal(input_ceiling) * input_rate + Decimal(output) * prices[2]) / Decimal(1_000_000)
+    amount = amount.quantize(Decimal('0.000001'), rounding=ROUND_CEILING)
+    return {'ok': True, 'amount_usd': amount, 'model': model, 'service_tier': tier,
+            'pricing_version': VERSION, 'pricing_source': SOURCE,
+            'input_token_ceiling': input_ceiling, 'output_token_ceiling': output}

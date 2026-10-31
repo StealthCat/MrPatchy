@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.31.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.32.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -486,8 +486,8 @@ purposes even with one AI slot. Claims expire after 120 seconds without renewal;
 interrupted attempts retain the existing recovery delay and finite retry limits.
 A lease cannot cancel an already sent request or guarantee exactly-once billing.
 The full model, evidence and conditional SSH/follow-up flow remain unchanged.
-Same-server parallel investigations, broader fairness, native complete-context
-collection and daily-spend controls remain unfinished.
+Same-server parallel investigations, broader fairness and native complete-context
+collection remain unfinished.
 v1.30.0 adds exact-context contradiction invalidation and linked review for the
 complete exact candidates described below.
 
@@ -495,7 +495,7 @@ The Investigations/AI activity views report active claims, queued work and fresh
 reported AI capacity. Workers report actual active task counts and configured
 capacity, including draining capacity; these reports are not a readiness guarantee.
 Higher concurrency increases database/target/provider load and can consume shared
-admission capacity sooner. No model or daily spending cap is implied.
+admission or daily spending capacity sooner. No provider invoice guarantee is implied.
 Set AI concurrency to 1 to preserve serial resource use.
 
 ### Shared smooth-rate admission (v1.31.0)
@@ -518,10 +518,31 @@ incident/startup-plan queue allowance is disabled only after that explicit migra
 **Unthrottled by Mr Patchy** removes this application pacing only. Finite AI worker
 concurrency, provider limits, global/per-server pause, lifecycle checks, roles and
 data-sharing controls still apply. Invalid local model/key configuration is rejected
-before a reservation. Rate admission currently does not provide a USD/day cap,
-conservative multi-stage cost reservations, invoice reconciliation, or exact durable
-deferral for every manual/plan path; those remain required before the shared
-rate/spend/unthrottled program is complete.
+before a reservation.
+
+### Daily spend admission (v1.32.0)
+
+Settings offers **Daily spend cap** and **Rate throttle + daily spend cap** alongside
+rate-only and unthrottled modes. Capped modes atomically reserve a conservative USD
+ceiling before every current provider call, using bounded request bytes, maximum
+output tokens, requested tier and a versioned exact-model public price catalog.
+Unknown models, tiers, tool fees, output bounds or long-context pricing fail closed;
+they are never admitted as free. Rate-plus-cap work reserves budget before consuming
+a smooth-rate start.
+
+Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
+without reliable pricing or usage—including timeouts and interrupted workers—keep the
+full ceiling counted. Unsent failures release their reservation. The separate ledger
+is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
+remaining and next-reset values in Settings and AI worker status. The administrator
+sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
+changes are audited. Estimates use published token prices and may differ from the
+provider invoice.
+
+Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
+alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
+failover/reset acceptance remain required before the shared controls program is
+complete.
 
 For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
 create `ai_triage_claims`, then start matching workers. Mixed old/new active workers
@@ -712,9 +733,10 @@ Threaded claims/leases and classified retries are implemented. Strict exact flee
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical
 model, policy and verified context invalidates it automatically. Linked history is
-flagged for review. Native completeness and shared throttle/daily-spend/unthrottled
-controls remain planned. Existing hourly limits, model, evidence, follow-ups, approval
-and AI pause behavior remain in force.
+flagged for review. Native completeness remains planned. Shared rate, daily-cap,
+combined and unthrottled modes are available; complete durable deferral, pricing
+lifecycle and end-to-end failover acceptance remain unfinished. Existing model,
+evidence, follow-ups, approval and AI pause behavior remain in force.
 
 
 ### Pooled SQLite initialization (v1.18.1)
@@ -867,7 +889,7 @@ boundary without weakening those gaps.
 
 Lookup currently runs after the existing process-triage claim, AI enablement/pause,
 key/model and configured shared/legacy admission gates. Complete native evidence
-collection, administrator-origin classifications, daily-spend admission and broader
+collection, administrator-origin classifications, broader budget concurrency and
 SQLite/MySQL runtime acceptance remain planned. No target-helper or endpoint-agent
 update is introduced after v1.27.0.
 

@@ -59,7 +59,7 @@ def test_one_logical_work_scope_preserves_multi_stage_capability(admin,monkeypat
 
 def test_tracked_run_scopes_two_provider_stages_to_one_start(admin,monkeypatch):
     configure(rate=20);monkeypatch.setattr(ai_admission.time,'time',lambda:3600.0)
-    calls=[];monkeypatch.setattr(ai,'_request',lambda payload,key,timeout=60:calls.append(payload) or {'ok':True})
+    calls=[];monkeypatch.setattr(ai,'_request',lambda payload,key,timeout=60,reservation=None:calls.append(payload) or {'ok':True})
     with ai_runs.track('triage','fixture-model',subject='fixture'):
         ai.request({'model':'fixture-model','input':'first'},'fixture-key')
         ai.request({'model':'fixture-model','input':'follow-up'},'fixture-key')

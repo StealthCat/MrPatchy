@@ -1,5 +1,6 @@
 """Offline, verified database copy. Never deletes source data or overwrites destination rows."""
 import argparse
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -102,10 +103,13 @@ def validate_destination(connection, meta):
 
 def fingerprint(connection, table):
     """Order-independent SHA-256 row multiset, bounded memory across DB collations."""
+    def encode(value):
+        if isinstance(value,Decimal):return {'__mrpatchy_decimal__':format(value,'f')}
+        raise TypeError('Unsupported database value in migration fingerprint')
     count, total = 0, 0
     rows = connection.execution_options(stream_results=True).execute(select(table)).mappings()
     for row in rows:
-        canonical = json.dumps(dict(row), sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False)
+        canonical = json.dumps(dict(row), sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False,default=encode)
         total = (total + int.from_bytes(hashlib.sha256(canonical.encode()).digest(), 'big')) % (1 << 256)
         count += 1
     return {'rows': count, 'fingerprint': format(total, '064x')}

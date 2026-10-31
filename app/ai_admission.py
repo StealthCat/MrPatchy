@@ -45,7 +45,7 @@ def admit(model):
     with Lock('ai-shared-admission'):
         with Session() as session:
             settings=config(session);mode=settings['ai_control_mode']
-            if mode!='rate':
+            if mode not in ('rate','rate_and_daily'):
                 if work is not None:work['admitted']=True
                 return {'mode':mode,'admitted':True,'next_at':None}
             now=time.time();row=session.get(Admission,'global')
@@ -65,5 +65,5 @@ def admit(model):
 def status(session):
     settings=config(session);row=session.get(Admission,'global')
     return {'mode':settings['ai_control_mode'],'rate_per_hour':settings['ai_rate_per_hour'],
-        'next_at':row.next_at if row and settings['ai_control_mode']=='rate' else None,
+        'next_at':row.next_at if row and settings['ai_control_mode'] in ('rate','rate_and_daily') else None,
         'admitted':row.admitted if row else 0}

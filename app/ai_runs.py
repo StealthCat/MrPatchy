@@ -130,13 +130,14 @@ def request_started(model):
 
 
 def record_usage(call_id, data, payload):
-    if not call_id: return
     values = ai_pricing.estimate(data, payload)
+    if not call_id: return values
     with Session() as s:
         row = s.get(AICall, call_id)
-        if not row: return
+        if not row: return values
         for key, value in values.items(): setattr(row, key, value)
         s.commit()
+    return values
 
 
 def call_receipts(s, run_ids):
@@ -248,7 +249,7 @@ def task_failure(error):
 
 
 def status(s):
-    from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,worker_registry
+    from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,worker_registry
     now=time.time(); cfg=config(s)
     query=select(Behavior.attempted,Behavior.first_seen,Behavior.host_id,ai_retry.TriageRetry).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
     rows=list(s.execute(query)); recent=list(s.scalars(select(Behavior.attempted).where(Behavior.attempted>now-3600)))
@@ -267,14 +268,16 @@ def status(s):
     blocked=sum(r['state']=='blocked' for r in states);paused=len(rows)-len(states)
     retry=min((r['next_at'] for r in states if r['state']!='blocked' and r['next_at']>now),default=None)
     admission=ai_admission.status(s)
-    if admission['mode']=='rate' and admission['next_at'] and admission['next_at']>now:
+    budget=ai_budget.status(s,now)
+    if admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now:
         retry=min([value for value in (retry,admission['next_at']) if value is not None])
     if not cfg['ai_enabled']: reason='disabled'; message='Automatic AI triage is disabled in Settings.'
     elif not cfg['ai_model'] or not s.get(Setting,'openai_key'): reason='configuration'; message='Save a model ID and API key in Settings.'
     elif not seen or now-seen>90: reason='worker_unavailable'; message='No recent scheduler heartbeat. Check app/worker container logs and DISABLE_SCHEDULER.'
     elif running: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running.stage
     elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min(recent+([oldest_run] if oldest_run else []))+3600
-    elif admission['mode']=='rate' and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
+    elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
+    elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
     elif not rows: reason='idle'; message='No unapproved pending behaviors. Collectors must report observations before triage can run.'
     elif not ready and retry: reason='backoff'; message='Transient or interrupted investigations are waiting for retry eligibility. Configuration failures require review.'
     elif not ready: reason='blocked'; message='Investigations need configuration review, explicit retry or server AI resume. No automatic call is eligible.'
@@ -284,4 +287,4 @@ def status(s):
             'blocked':blocked,'paused':paused,
             'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
-            'last_run':latest.id if latest else None,'admission':admission}
+            'last_run':latest.id if latest else None,'admission':admission,'budget':budget}
