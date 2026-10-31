@@ -34,3 +34,13 @@ def test_reset_refuses_missing_nonadmin_and_weak_password(admin):
     with Session() as s:
         u=s.get(User,'admin');u.role='viewer';s.commit()
     with pytest.raises(ValueError):reset('admin','replacement-password-long')
+
+
+def test_user_management_audit_records_role_enabled_and_password(admin):
+    assert admin.put('/api/users',json={'username':'bob','role':'viewer','password':'bob-password-long-1'}).status_code==200
+    assert admin.put('/api/users',json={'username':'bob','role':'admin','enabled':False}).status_code==200
+    with Session() as s:
+        details=[a.detail for a in s.scalars(select(Audit).where(Audit.action=='manage user'))]
+    assert any('bob' in d and 'role new → viewer' in d and 'password set: yes' in d for d in details)
+    assert any('bob' in d and 'role viewer → admin' in d and 'enabled true → false' in d and 'password set: no' in d for d in details)
+    assert 'bob-password-long-1' not in str(details)

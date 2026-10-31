@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.25'
+APP_VERSION='1.35.33'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -916,12 +916,17 @@ def save_user(body:UserInput,user=Depends(auth)):
     if body.password and len(body.password)<12: raise HTTPException(400,'Password must have at least 12 characters')
     with Session() as s:
         row=s.get(User,body.username)
-        if not row:
+        created=row is None
+        if created:
             if not body.password: raise HTTPException(400,'New users require a password')
             row=User(username=body.username,password=password_hash(body.password));s.add(row);s.flush()
-        elif body.password: row.password=password_hash(body.password)
+            old_role=old_enabled='new'
+        else:
+            old_role=row.role;old_enabled=str(bool(row.enabled)).lower()
+            if body.password: row.password=password_hash(body.password)
         row.role=body.role;row.enabled=body.enabled;row.generation+=1
-        audit(s,'manage user',user['username']+' → '+body.username);s.commit()
+        detail=(user['username']+' → '+body.username+'; role '+str(old_role)+' → '+body.role+'; enabled '+old_enabled+' → '+str(bool(body.enabled)).lower()+'; password set: '+('yes' if body.password else 'no'))
+        audit(s,'manage user',detail);s.commit()
     return {'ok':True}
 
 class Reauthenticate(BaseModel):
