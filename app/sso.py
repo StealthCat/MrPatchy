@@ -1,7 +1,9 @@
 """OIDC authorization-code + PKCE login; explicit issuer/subject account binding."""
 import hashlib
+import logging
 import os
 import secrets
+import threading
 import time
 from fastapi import APIRouter,HTTPException,Request
 from fastapi.responses import RedirectResponse
@@ -12,6 +14,8 @@ from .identity import User
 from .security import token_hash
 
 router=APIRouter()
+log=logging.getLogger('mrpatchy.sso')
+failure_logged={};failure_lock=threading.Lock()
 oauth=OAuth()
 issuer=os.getenv('OIDC_ISSUER','')
 if issuer:
@@ -27,6 +31,31 @@ def resolve_identity(s,claims):
     identity=s.get(User,binding.value['username']) if binding else None
     if not identity or not identity.enabled:raise ValueError('SSO identity has no enabled account binding')
     return identity
+
+def failure_reason(exc):
+    # Fixed vocabulary only: provider error text can echo tokens, codes or attacker input.
+    text=str(exc)
+    if isinstance(exc,HTTPException):return 'provider discovery or endpoint validation failed'
+    if isinstance(exc,ValueError):
+        if 'issuer/subject' in text:return 'issuer or subject mismatch'
+        if 'no enabled account binding' in text:return 'subject has no enabled account binding'
+        if 'ID token' in text:return 'ID token missing'
+    return 'token exchange or provider error'
+def record_failure(exc,claims=None):
+    reason=failure_reason(exc)
+    log.warning('SSO callback rejected: %s (%s)',reason,type(exc).__name__)
+    subject=(claims or {}).get('sub')
+    digest=hashlib.sha256((issuer+'\0'+str(subject)).encode()).hexdigest()[:16] if subject else 'none'
+    key=reason+':'+digest;now=time.time()
+    with failure_lock:
+        for k in [k for k,v in failure_logged.items() if now-v>=300]:del failure_logged[k]
+        # One audit entry per reason/subject and window; unauthenticated callers cannot flood the log.
+        if key in failure_logged or len(failure_logged)>=1000:return
+        failure_logged[key]=now
+    try:
+        with Session() as s:
+            audit(s,'SSO login failed','issuer '+issuer+' subject '+digest+' '+reason);s.commit()
+    except Exception:log.exception('SSO failure audit could not be written')
 
 async def validate_provider():
     from urllib.parse import urlsplit
@@ -64,6 +93,7 @@ async def callback(request:Request):
         # Consume exactly once, including across web processes.
         if s.execute(delete(Setting).where(Setting.key==key)).rowcount!=1:raise HTTPException(400,'SSO state already used')
         s.commit()
+    claims=None
     try:
         await validate_provider()
         token=await oauth.provider.authorize_access_token(request)
@@ -78,6 +108,7 @@ async def callback(request:Request):
         response=RedirectResponse('/',status_code=303)
         response.set_cookie('mrpatchy',session,httponly=True,secure=True,samesite='strict',max_age=43200)
         return response
-    except Exception:
+    except Exception as exc:
+        record_failure(exc,claims if isinstance(claims,dict) else None)
         request.session.clear()
         raise HTTPException(400,'SSO validation failed or account is not assigned')
