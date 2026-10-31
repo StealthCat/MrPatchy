@@ -174,7 +174,12 @@ def recovery_hook(operation,identifier):
     if not hook.is_file() or hook.is_symlink() or info.st_uid!=0 or info.st_mode & 0o022 or not info.st_mode & 0o100:
         raise ValueError('Rollback adapter must be a root-owned, non-writable executable')
     if operation not in ('snapshot','rollback','probe') or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',identifier):raise ValueError('Invalid recovery operation')
-    result=json.loads(run([str(hook),operation,identifier],timeout=1800))
+    output,_diagnostics=bounded(
+        [str(hook),operation,identifier],timeout=1800,
+        env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
+    if len(output.encode())>20_000:raise ValueError('Rollback adapter response exceeds 20 KB')
+    try:result=json.loads(output)
+    except json.JSONDecodeError:raise ValueError('Invalid rollback adapter response') from None
     if not isinstance(result,dict):raise ValueError('Invalid rollback adapter response')
     return result
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.37 — 2026-10-31
+
+- Parse successful rollback-adapter JSON exclusively from stdout, keeping stderr warnings separate so snapshot and rollback side effects are not misreported as failures (issue #150).
+- Reject adapter stdout larger than 20 KB before JSON parsing. Invalid or non-object responses still fail closed; the adapter trust, operation and identifier checks are unchanged. No compatibility impact for conforming adapters; major version stays 1.
+
 ## 1.35.35 — Log and audit rejected SSO callbacks
 
 - Fix #170: the SSO callback no longer discards every validation failure silently. The server logs the exception class and a fixed-vocabulary sanitized reason (discovery/endpoint, issuer or subject mismatch, unbound subject, missing ID token, token exchange) and writes an `SSO login failed` audit entry with issuer, truncated hashed subject and reason.

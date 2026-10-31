@@ -5325,6 +5325,46 @@ Check names change: `static` and `mysql (1)`–`mysql (4)` are added, and `mysql
 records should list the twelve resulting jobs rather than nine. Action references
 remain major-version tags; SHA pinning belongs to supply-chain issue #201.
 
+## v1.35.37 — Rollback adapter stream isolation (#150)
+
+Issue-first triage on current main `6589f4d` found all open P1 issues already owned by
+active PRs. Issue #150 was the highest-impact independent unclaimed P2 and had no
+related fix. A disposable executable adapter reproduced both snapshot and rollback
+misreporting successful JSON as `JSONDecodeError: Extra data` whenever it also emitted
+a warning on stderr. `recovery_hook` now invokes the existing bounded subprocess
+collector directly, parses stdout alone and rejects stdout above 20 KB before parsing;
+stderr remains separately bounded and cannot corrupt the JSON response. Existing
+root ownership, writable-bit, executable, operation, identifier and object-response
+checks remain unchanged.
+
+Focused regression coverage demonstrates the failure before the fix and covers both
+operations, durable snapshot/rollback journal recording and the oversized-response
+guard. Exact-final-head static, SQLite, four MySQL shards, browser, SSH/RPM,
+Docker/TLS/proxy and GCP checks remain the merge gate. Version **v1.35.37** follows
+active allocations through v1.35.36; major remains 1 and no Git tag or Docker
+publication is included.
+
+Final integration refresh: main advanced to `8fd8d49` (v1.35.29) after all twelve
+checks passed on the earlier head. Preserve PR #212's durable recovery coverage and
+PR #208's deleted-server read authorization, including their tests, recovery format
+and delivery records. The combined v1.35.37 head requires a fresh full local run and
+all twelve exact-head checks; the earlier green run does not authorize merge.
+
+Second final integration refresh: all twelve jobs passed on combined head
+`7b0cb3d54f56452ba6e054ab8db863550c2820f8`, and its local tree passed 1,670 tests,
+11 skips and 9 subtests. Main then advanced to `db7871e` (v1.35.30) through PR #203.
+Preserve its uncertain ordinary-patch outcome hold, remote-start classification,
+receipts, audit records and regression suite unchanged. The new combined head again
+requires the full local and twelve-job exact-head gates; neither earlier green run
+authorizes merge.
+
+Third final integration refresh: all twelve jobs passed on head
+`0243975481869722bb39a3ae102779dea5b12ee3`, and its local tree passed 1,682 tests,
+11 skips and 9 subtests. Main then advanced to `115e3bd` (v1.35.35) through PR #217,
+and open PR #218 allocated v1.35.36. This fix is reallocated to **v1.35.37** and
+preserves #217's sanitized, rate-limited rejected-SSO logging/auditing and tests.
+The changed version/integration head must pass the full local and twelve-job exact-head
+gates again; earlier results do not authorize merge.
 
 Integration continuation — Codex `integration-6eac54918b34`, PR #208, 2026-10-31.
 Accepted the explicit #118 handoff and retained the same branch. Reproduced again
