@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.40 — 2026-10-31
+
+1. [PR #209](https://github.com/StealthCat/MrPatchy/pull/209): report flushed offline migration progress, stage/role/table context, sanitized error categories and safe driver/OS codes with actionable next checks. Add bounded, redacted cause-chain and stack-location details with `--verbose`.
+2. Preserve JSON-only stdout and report progress and completion on stderr. Identify destination write/commit state honestly, including a failed fresh connection after commit; preserve offline locking, read-only source checks, verification and explicit activation.
+3. Compatibility: scripts reading the former trailing completion notice from stdout must read stderr. The reported Apollo deployment cause remains unverified; diagnostics now identify the failing phase. Major remains 1.
+
 ## 1.35.39 — 2026-10-31
 
 1. [PR #221](https://github.com/StealthCat/MrPatchy/pull/221): allow two independent implementation streams with isolated issue ownership and explicit ready handoffs to a single integration/version/merge coordinator.
