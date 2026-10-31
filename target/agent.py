@@ -262,7 +262,7 @@ def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
     # Read through one descriptor: pathname replacement cannot change the inode
     # between validation and hashing. O_NONBLOCK prevents FIFO substitution hangs.
     deadline=min(deadline if deadline is not None else float('inf'),time.monotonic()+2)
-    if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
+    # The budget applies only when a cache miss needs the file read (checked per chunk).
     fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as stream:
         info=os.fstat(stream.fileno())

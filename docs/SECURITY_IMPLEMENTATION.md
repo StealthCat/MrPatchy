@@ -5506,3 +5506,7 @@ failed` with issuer, hashed subject prefix and reason, rate-limited per
 reason/subject per five minutes. Responses keep the generic 400 message; no
 raw provider text, token or plain subject is recorded. Roles, successful-login
 audit and response-authorization boundaries are unchanged.
+
+## v1.35.38 — Cached artifact hashes survive the collection deadline (#166)
+
+`hash_artifact` previously checked the deadline before the cache lookup, so processes later in PID order were marked `identity_verified: False` after the shared 10-second deadline even when their hash was cached. The deadline now gates only reading uncached files (per chunk); the file identity re-check on cache hits is unchanged. Roles, audit history and response authorization are untouched.

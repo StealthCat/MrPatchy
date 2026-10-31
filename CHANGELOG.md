@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.38 — 2026-10-31
+
+- Fix #166: the target agent's `hash_artifact` no longer rejects already-cached hashes once the shared collection deadline has passed. The deadline now applies only when a cache miss needs the file read (still checked per chunk), so later PIDs are no longer marked unverified without real budget pressure. The identity re-check (dev, inode, mtime, ctime, size) on cache hits is unchanged. No compatibility impact; major stays 1.
+
 ## 1.35.37 — 2026-10-31
 
 - Parse successful rollback-adapter JSON exclusively from stdout, keeping stderr warnings separate so snapshot and rollback side effects are not misreported as failures (issue #150).
