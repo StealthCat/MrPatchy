@@ -1,10 +1,20 @@
 # Changelog
 
-## 1.35.18 — 2026-10-31
+## 1.35.19 — 2026-10-31
 
 - Skip identical Debian version comparisons during refresh and inventory reconciliation; reuse up to 512 native comparison results per inventory.
 - Bound each remaining dpkg comparison to ten seconds and fail closed on native errors, preserving Debian epochs, revisions and tilde ordering.
 - Cover native version edge cases, inventory process counts, candidate/hold/architecture semantics and comparison cache limits.
+
+## 1.35.18 — 2026-10-31
+
+- Preserve significant integral zeros in every AI budget amount, so a configured $10 cap and remaining budget display as $10.
+- Validate and normalize omitted daily-cap defaults consistently in both settings APIs, with Decimal, API and visible settings regressions.
+
+## 1.35.17 — 2026-10-31
+
+- Fix populated SBOM exports by retaining the resolved host for Debian/RPM package URL selection (#121).
+- Cover populated, empty and missing-host exports, package identity/version/architecture, host isolation and existing role/lifecycle access boundaries.
 
 ## 1.35.16 — 2026-10-31
 

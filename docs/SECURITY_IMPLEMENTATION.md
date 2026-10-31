@@ -5071,7 +5071,76 @@ fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #1
 Main advanced to v1.35.11 while initial integration CI was running. Combined PR #195 preserves that eBPF diagnostic lifecycle update and all original PR heads as ancestors, synchronizes source metadata at v1.35.16 (above pending v1.35.15), and carries the enrollment hardening, failed-login audit and CI runtime maintenance together. The connector cannot write the contributor fork, so the maintainer explicitly approved upstream publication. All nine applicable checks must pass on the exact final integration commit before merge. Verify original PRs and issues #136/#98 close after the tested merge. No Git tags or Docker publication.
 
 
-## v1.35.18 — Debian comparison process reuse (#128)
+## v1.35.17 — Populated SBOM export repair (#121)
+
+Codex session `gfr-sbom-20261031` claimed issue #121 after reading current main
+`3635d0a` (v1.35.6), all open issues and open PRs. No related PR or overlapping
+claim existed. Pending #115/#116 require version reconciliation; #137 proposes
+v1.35.7. This focused update proposes v1.35.17, subject to refreshing main before
+merge and rerunning affected checks if integration changes the final head.
+
+The current-main SBOM handler reproduced `NameError: name 'h' is not defined`
+with a populated package result using its actual AST-extracted function and stub
+session. Local full-app tests could not start because Windows application control
+blocked a downloaded SQLAlchemy extension. Full application validation is delegated
+to exact-final-head CI, not claimed as a local pass.
+
+The endpoint now retains the resolved host for the existing Debian/RPM package URL
+selection. Regression tests exercise populated Debian and RPM JSON exports, escaped
+versions and architecture, host isolation, empty/missing hosts, unauthenticated
+access and existing administrator/operator/viewer access for active, disabled and
+deleted hosts. Existing permission and lifecycle decisions remain in force.
+
+Source, README and changelog synchronize at v1.35.17, major fixed at 1. The linked
+PR must record exact-head checks and merge evidence; #121 closes only after that
+tested merge is verified. No schema change, target update or Docker publication is
+included.
+
+Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (SQLite 1450 passed/129 skipped; MySQL 1445 passed/134 skipped). Main then advanced to 491df9e (v1.35.11). This merge preserves PR #183 diagnostics and all prior history, allocates v1.35.17 above pending versions through v1.35.15, and requires fresh exact-head CI before merge.
+
+Dependency checkpoint: PR #138 now includes exact PR #195 head 0824d084 as an ancestor and depends on its tested merge first. Enrollment hardening, failed-login auditing and CI action upgrades remain owned by #195; all are preserved here. Fresh exact-head CI validates their combination with the SBOM repair. If #195 changes, refresh/reassess before merge.
+
+## v1.35.18 — Accurate AI budget amounts
+
+Codex session `grab-issue-2-20261031` claims issue #124 in isolated branch
+`fix/budget-money-124`. Claim timestamp correction: the claim was posted before
+19:21:27 UTC on 2026-10-31; its manually entered 19:24 timestamp was inaccurate.
+Issue-first reconciliation listed all open reports and PRs #115, #116 and #137;
+#121 was already actively claimed, so this work takes independent unclaimed #124.
+Current main was v1.35.6 (`3635d0a`). Proposed v1.35.15 reserves room for pending
+v1.35.7/v1.35.8 work and must be reassessed with main immediately before merge.
+
+Executing the actual formatter extracted from current-main source reproduced
+`10 -> 1`, `100 -> 1` and `1000000 -> 1`, while `10.000000` remained `10`.
+The correction strips zeros only after a decimal point. Both settings request
+models validate their float default cap. Regressions cover integral/fractional
+and Numeric-style Decimal exponents, signed zero, omitted-cap persistence through
+both settings APIs, and the real browser input/remaining-budget amount.
+
+The local Windows host cannot import the Linux-only application's fcntl locking.
+Local validation therefore covers the extracted formatter regressions, compilation,
+JavaScript syntax, whitespace and version consistency. Exact-final-head Linux
+SQLite/MySQL, browser, recovery, SSH/RPM, Docker and GCP checks remain mandatory
+before merge. No schema, provider-call, admission-policy or operational authorization
+change is included. Source, README and changelog synchronize at v1.35.15; no Git tag
+or Docker publication is implied. The linked PR and final validation/merge receipt
+are recorded in the issue checkpoints; close #124 only after tested merge verification.
+
+Integration update: current main advanced to v1.35.11 in PR #183 while earlier
+PRs remained pending. This merge preserves that diagnostics fix and allocates
+v1.35.15 above main and pending v1.35.12/v1.35.13/v1.35.14 proposals.
+All nine checks passed on original head 67b5f2e; full exact-head CI must pass
+again on this integration commit before merge.
+
+Dependency integration update: v1.35.18 stacks on exact PR #138 head
+2bf15092 (v1.35.17), which includes PR #195 head 0824d084 (v1.35.16).
+Preserve their SBOM, login-audit, enrollment and CI updates as actual ancestors.
+Merge #195 then #138 before this PR. Full exact-final-head checks are required
+again; the original budget implementation passed all nine checks. The earlier
+v1.35.15 proposal is superseded by this explicit dependency order.
+
+
+## v1.35.19 — Debian comparison process reuse (#128)
 
 Codex session `grab-issue-3-20261031` claimed unowned issue #128 after checking
 open issues, claims and related PRs against main 3635d0a (v1.35.6). An instrumented
@@ -5103,3 +5172,12 @@ for PR #138. Preserve enrollment temp-file hardening, failed-login auditing and
 CI runtime modernization. Original v1.35.12 validation remains historical; all
 applicable checks must pass again on this combined head. Hold merge until #195
 is tested/merged and its owner releases the integration hold.
+
+Dependency checkpoint: preserve PR #138 exact head 2bf15092 and reserve
+v1.35.19 after #139 planned v1.35.18. Await #139 stable combined head before
+publishing final integration and restarting all exact-head checks.
+
+Final combined dependency: PR #139 exact 914c6b83 includes #138 2bf15092
+and #195 0824d084. Current source v1.35.19 follows those planned merges.
+Retain the budget Decimal/default validation fix and SBOM host binding, then run
+all exact-head checks before merge. No changes to dependency branches.
