@@ -4961,6 +4961,76 @@ upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap prior
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
 
+
+## v1.35.7 — Failed sign-in and lockout auditing
+
+Delivery record: version **v1.35.7**, branch `fix/failed-login-audit-v1.35.7`, which
+addresses [issue #136](https://github.com/StealthCat/MrPatchy/issues/136); the PR
+number and tested final commit are recorded on the pull request. Proposed merge order:
+after PR #115 and PR #116 (both claim v1.35.5); PR #113 (v1.35.6) has merged and `main`
+was merged into this branch. The version must be re-checked against current `main`
+immediately before merging.
+
+Before this change `POST /api/login` audited only successful sign-ins (`login`) and
+authenticated state-changing requests. Failed passwords, unknown or disabled accounts,
+bad MFA codes and rate-limit rejections left no audit history, so password spraying and
+credential guessing were invisible to administrators. This was found by code review of
+v1.35.3 and is a detection gap, not an authentication bypass.
+
+Failed password sign-ins now record `login failed` with `<username> <address> <reason>`
+where the reason is `unknown or disabled account`, `bad password` or `bad MFA code`.
+The username is already restricted to `[A-Za-z0-9_.-]{1,64}` by the request model, so
+it cannot inject log lines; the submitted password and one-time code are never
+recorded. Rate-limit rejections record `login throttled` with the reason `account limit`,
+`address limit` or `global limit`, once per limit and five-minute window, so rejected
+requests cannot flood the audit table. The audit entries are written outside the global
+login lock.
+
+Unchanged: HTTP status codes and response bodies (a client still cannot distinguish an
+unknown account from a wrong password), the 10-per-account / 50-per-address / 10,000
+global thresholds, scrypt parameters, sessions, roles, CSRF and SSO. Audit reasons are
+visible to administrators only. SSO (OIDC) failures are not covered by this change.
+Known remaining items from the same review, deliberately separate: per-account
+throttling for distributed guessing, the global 10,000-bucket lockout, serialising
+logins on one lock during hashing, and purging expired sessions.
+
+
+## v1.35.13 — Enrollment command temporary-file hardening
+
+Delivery record: version **v1.35.13**, branch `fix/enrollment-temp-file-v1.35.5`; the
+PR number and tested final commit are recorded on the pull request. User-directed integration follows PR #137, preserves merged advisory recovery, and allocates v1.35.13 above pending v1.35.12. Exact-final-head CI is required before merge.
+
+The one-line enrollment command issued by `POST /api/hosts/{id}/enrollment-link`
+previously downloaded the personalized installer to the fixed path
+`/tmp/mrpatchy-enroll.sh` and then ran it with `sudo bash`. A fixed, predictable path
+in a sticky world-writable directory lets a local user on the target pre-create or
+swap the file before the administrator runs the command. Default Ubuntu/Debian
+kernels (`fs.protected_symlinks=1`, `fs.protected_regular=2`) block the symlink and
+pre-created-file variants, leaving a denial of service; targets with those protections
+disabled remain exposed to execution of attacker-controlled content as root. This was
+assessed by code reading and a sysctl check, not by a working exploit.
+
+The command now creates an unpredictable owner-only (0600) file with `mktemp`,
+downloads into it, runs it, and removes it:
+`f=$(mktemp) && curl -fsSL '<url>' -o "$f" && sudo bash "$f"; rm -f "$f"`. The URL
+remains shell-quoted. The downloaded installer content, token lifetime (one hour,
+reusable), authentication, roles, audit and the manual download path are unchanged.
+Making enrollment tokens single-use is deliberately not part of this change because a
+partial download would then require issuing a new link.
+
+Tests assert the command shape, that no fixed `/tmp/` path appears, that the URL
+remains a single shell argument, and execute the generated command in a real shell
+with stubbed `curl`/`sudo` to confirm a pre-existing `mrpatchy-enroll.sh` is ignored,
+the file used is mode 0600, and it is removed afterwards. The browser fixture in
+`tests/ui_enrollment.cjs` carries the new command string; it was updated but not
+executed locally because Playwright and a supported Node version were not installed.
+
+
+## v1.35.14 — CI runtime maintenance integration
+
+User-directed integration of PR #115 / issue #98 preserves PR #137 login auditing and PR #116 enrollment hardening. All checkout/setup-python/setup-node actions use v7 and the browser job uses Node 26. Source, README and changelog agree at v1.35.14. Exact-final-head full CI is required before merge; no Git tag or Docker publication.
+
+
 ## v1.35.11 eBPF diagnostic lifecycle (#123)
 
 A single bpftrace stderr warning previously persisted in `ebpf-diagnostic.json`
@@ -4995,7 +5065,42 @@ Source, README, changelog and UI/API metadata synchronize at v1.35.11 with major
 fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #121,
 #117, #131 and #124).
 
-## v1.35.15 — Accurate AI budget amounts
+
+## v1.35.16 — User-directed integration of PRs #116, #137 and #115
+
+Main advanced to v1.35.11 while initial integration CI was running. Combined PR #195 preserves that eBPF diagnostic lifecycle update and all original PR heads as ancestors, synchronizes source metadata at v1.35.16 (above pending v1.35.15), and carries the enrollment hardening, failed-login audit and CI runtime maintenance together. The connector cannot write the contributor fork, so the maintainer explicitly approved upstream publication. All nine applicable checks must pass on the exact final integration commit before merge. Verify original PRs and issues #136/#98 close after the tested merge. No Git tags or Docker publication.
+
+
+## v1.35.17 — Populated SBOM export repair (#121)
+
+Codex session `gfr-sbom-20261031` claimed issue #121 after reading current main
+`3635d0a` (v1.35.6), all open issues and open PRs. No related PR or overlapping
+claim existed. Pending #115/#116 require version reconciliation; #137 proposes
+v1.35.7. This focused update proposes v1.35.17, subject to refreshing main before
+merge and rerunning affected checks if integration changes the final head.
+
+The current-main SBOM handler reproduced `NameError: name 'h' is not defined`
+with a populated package result using its actual AST-extracted function and stub
+session. Local full-app tests could not start because Windows application control
+blocked a downloaded SQLAlchemy extension. Full application validation is delegated
+to exact-final-head CI, not claimed as a local pass.
+
+The endpoint now retains the resolved host for the existing Debian/RPM package URL
+selection. Regression tests exercise populated Debian and RPM JSON exports, escaped
+versions and architecture, host isolation, empty/missing hosts, unauthenticated
+access and existing administrator/operator/viewer access for active, disabled and
+deleted hosts. Existing permission and lifecycle decisions remain in force.
+
+Source, README and changelog synchronize at v1.35.17, major fixed at 1. The linked
+PR must record exact-head checks and merge evidence; #121 closes only after that
+tested merge is verified. No schema change, target update or Docker publication is
+included.
+
+Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (SQLite 1450 passed/129 skipped; MySQL 1445 passed/134 skipped). Main then advanced to 491df9e (v1.35.11). This merge preserves PR #183 diagnostics and all prior history, allocates v1.35.17 above pending versions through v1.35.15, and requires fresh exact-head CI before merge.
+
+Dependency checkpoint: PR #138 now includes exact PR #195 head 0824d084 as an ancestor and depends on its tested merge first. Enrollment hardening, failed-login auditing and CI action upgrades remain owned by #195; all are preserved here. Fresh exact-head CI validates their combination with the SBOM repair. If #195 changes, refresh/reassess before merge.
+
+## v1.35.18 — Accurate AI budget amounts
 
 Codex session `grab-issue-2-20261031` claims issue #124 in isolated branch
 `fix/budget-money-124`. Claim timestamp correction: the claim was posted before
@@ -5026,3 +5131,10 @@ PRs remained pending. This merge preserves that diagnostics fix and allocates
 v1.35.15 above main and pending v1.35.12/v1.35.13/v1.35.14 proposals.
 All nine checks passed on original head 67b5f2e; full exact-head CI must pass
 again on this integration commit before merge.
+
+Dependency integration update: v1.35.18 stacks on exact PR #138 head
+2bf15092 (v1.35.17), which includes PR #195 head 0824d084 (v1.35.16).
+Preserve their SBOM, login-audit, enrollment and CI updates as actual ancestors.
+Merge #195 then #138 before this PR. Full exact-final-head checks are required
+again; the original budget implementation passed all nine checks. The earlier
+v1.35.15 proposal is superseded by this explicit dependency order.
