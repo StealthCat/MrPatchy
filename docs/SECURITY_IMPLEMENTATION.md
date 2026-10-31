@@ -4675,3 +4675,48 @@ APP_VERSION/README/changelog/UI/API synchronize at v1.34.0 with major fixed at 1
 Rebuild the controller first so `update_scores.next_at` is added before matching
 workers start. No target-helper/agent update, Docker publication, Git tag or schedule
 change is included.
+
+
+## v1.35.0 — Durable incident/startup advisory-plan deferral
+
+Issue-first reconciliation read merged v1.34.0 main, repository instructions, this
+checkpoint and PR #94. The first 100 open-issue and open-PR results were empty, so no
+actionable report or unfinished fix competed with this roadmap batch. The separately
+reported database-migration refusal remains blocked on categorized schema mismatch
+output or a reviewed inventory; no unknown database object is guessed or ignored.
+
+This faster-triage milestone makes the existing durable `security-plan` and
+`startup-plan` jobs survive controlled shared-AI waits. A shared smooth-rate,
+daily-spend or provider-backoff refusal stores the exact next eligibility in the job
+instead of ending it as failed. A global or per-server administrator pause retains
+the job with an explicit indefinite resume wait. The scheduler excludes future and
+paused plan jobs rather than occupying a worker slot or hot-looping provider policy.
+
+Resume is never an authorization bypass. The normal host lifecycle/revision gate,
+global and per-server AI state, current incident identity/evidence, data-sharing
+policy, finite worker concurrency, provider floor, budget and rate admission all run
+again. Pre-send refusal creates no provider receipt, rate start or spend reservation.
+A transmitted transient failure retains its existing call receipt and settled or
+uncertain reservation outcome; there is no immediate HTTP replay. Its sanitized run
+is reclassified as deferred and the durable job becomes eligible for a later
+scheduler attempt at the shared floor. Activity and AI worker status show the
+retained plan count and exact next time or resume requirement without exposing raw
+evidence or provider bodies.
+
+Regression coverage first reproduced the defect: both a shared-rate refusal before
+transport and a policy wait became terminal failed jobs. Focused acceptance then
+covered zero provider transport, exact eligibility, early-execution refusal,
+administrator pause, retained run diagnostics, successful resume, status/API/UI
+visibility and pooled-schema upgrade. Exact-final-head SQLite, MySQL, browser and
+full-suite checks remain mandatory before merge.
+
+This does not make multi-stage release planning resumable. A release plan can perform
+several paid calls without per-stage durable results; replaying the whole job could
+duplicate a completed stage, so it remains safely terminal until stage-level
+persistence exists. Interactive connection tests also remain non-durable. Pricing
+catalog lifecycle, provider-invoice reconciliation, long-horizon spend reports and
+complete multi-controller failover/reset acceptance remain planned.
+APP_VERSION/README/changelog/UI/API synchronize at v1.35.0 with major fixed at 1.
+Rebuild the controller first so `jobs.next_at` is added before matching workers
+start. No target-helper/agent update, Docker publication, Git tag or schedule change
+is included.

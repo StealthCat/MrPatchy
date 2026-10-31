@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.34.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.35.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -579,8 +579,28 @@ retaining the shared provider floor for later scoring work.
 Before a resumed result is accepted, scoring rechecks current package evidence and
 server policy. Changed evidence supersedes the old deferred identity, removed updates
 drop out of the queue count, and pause/lifecycle/global controls continue to apply.
-Manual incident/release/startup plans and connection tests still reject safely rather
-than becoming durable resumable jobs, so the complete deferral program remains open.
+At v1.34.0, manual incident/release/startup plans and connection tests still rejected
+safely rather than becoming durable resumable jobs. The next milestone narrows that
+remaining gap for the two single-call advisory plan paths.
+
+### Durable advisory-plan deferral (v1.35.0)
+
+Incident-response and startup-change AI plan jobs now remain queued when a shared
+rate, daily-spend or provider-backoff boundary refuses their single provider call.
+Timed waits retain the exact shared eligibility; administrator-controlled global or
+per-server pause waits retain the job without inventing a retry time. Activity and AI
+worker status show the retained plan and its next start or resume requirement.
+
+Every resume revalidates the current host lifecycle, AI pause and incident evidence,
+then follows the normal admission, budget and provider boundaries. A pre-send refusal
+creates no call receipt or charge. A transmitted transient failure is not replayed
+inside the HTTP request: its existing receipt and spend outcome remain, and the job
+becomes eligible for a later scheduler attempt at the shared provider floor.
+
+Release planning remains excluded because one release plan can make multiple paid
+calls without per-stage persistence; replaying the whole job could duplicate a
+successful earlier stage. Connection tests are interactive rather than durable jobs.
+Those paths, plus complete multi-controller failover acceptance, remain unfinished.
 
 For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
 create `ai_triage_claims`, then start matching workers. Mixed old/new active workers

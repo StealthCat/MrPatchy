@@ -72,6 +72,7 @@ class Job(Base):
     state: Mapped[str] = mapped_column(String(30), default='queued')
     output: Mapped[str] = mapped_column(Text, default='')
     created: Mapped[float] = mapped_column(Double, default=time.time)
+    next_at: Mapped[float] = mapped_column(Double, default=0, server_default='0')
 class Audit(Base):
     __tablename__ = 'audit'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -129,6 +130,9 @@ def init():
         score_columns={c['name'] for c in inspect(connection).get_columns('update_scores')}
         if 'next_at' not in score_columns:
             connection.execute(text('ALTER TABLE update_scores ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
+        job_columns={c['name'] for c in inspect(connection).get_columns('jobs')}
+        if 'next_at' not in job_columns:
+            connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):
