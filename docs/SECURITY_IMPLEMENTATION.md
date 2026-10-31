@@ -5339,3 +5339,10 @@ No roadmap work started. Current open-issue listing returned all 78 reports;
 remains actionable independent work for a later cycle after this integration.
 Final local validation and all twelve applicable exact-head CI jobs are required;
 no issue closure is claimed until the tested merge is verified. Keep schedule unchanged.
+
+
+Before merge, main advanced to `6589f4d` (v1.35.25, PR #207 checkbox CSS).
+Preserve that exact main and its stylesheet regression. The combined final tree
+requires fresh exact-head CI and local focused authorization/CSS/lifecycle checks;
+the preceding full local suite passed 1647 tests / 9 skipped / 9 subtests on the
+pre-CSS integration tree. Earlier-head CI does not authorize this final integration.

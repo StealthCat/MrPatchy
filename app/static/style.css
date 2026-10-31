@@ -151,7 +151,7 @@ input:hover, select:hover, textarea:hover { border-color: #80a4ac; }input:focus,
 input::placeholder, textarea::placeholder { color: #94aab7; opacity: 1; }
 input[type=checkbox] { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--mint); }
 label { display: grid; gap: 8px; color: #c2d4dd; font-size: 12px; margin-bottom: 18px; line-height: 1.6; }
-label.check { display: flex; align-items: flex-start; gap: 10px; }.check input { margin-top: 2px; }
+label.check, label.inline-check { display: flex; align-items: flex-start; gap: 10px; }.check input, .inline-check input { margin-top: 2px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }.form-grid .full { grid-column: 1/-1; }
 textarea { min-height: 150px; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
 select option { background: #142630; color: var(--text); }
