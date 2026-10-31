@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.29.0 — 2026-10-31
+
+- Add administrator-confirmed, reasoned fleet invalidation for exact known-good entries, serialized with AI-state mutations and protected by existing role and CSRF controls.
+- Block future reuse immediately while retaining original source and reuse assessments, observations and provenance without rewriting historical results.
+- Mark every linked Assessment detail for review with escaped actor/time/reason context and retain explicit Re-triage as the current-policy refresh path.
+- Validate stale versions, duplicate revocation, active investigation locks, role isolation, responsive confirmation and untrusted-text rendering; native complete evidence and automatic contradiction invalidation remain planned.
+
 ## 1.28.0 — 2026-10-31
 
 - Revalidate active fleet safe candidates against exact complete context, model, policy, original retained AI assessment and isolated observation before reuse.

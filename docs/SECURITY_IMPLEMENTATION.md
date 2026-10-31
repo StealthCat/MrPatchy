@@ -4387,3 +4387,51 @@ No schema, target-helper/agent update, Docker publication, Git tag or schedule c
 is introduced. Versioned commit, PR, exact-final-head checks and merge references are
 recorded in the completion report after publication; no earlier or failed head may be
 merged.
+
+
+## v1.29.0 — Audited fleet candidate invalidation and linked review
+
+Issue-first reconciliation read current main `05c46912`, repository instructions,
+this checkpoint and merged PR #88. The first 100-item open-issue and open-PR pages
+were empty, so no actionable GitHub report or unfinished delivery competed with this
+roadmap batch. The chat-reported database-migration refusal remains blocked on its
+v1.23.1 categorized mismatch list or a separately reviewed schema inventory; no
+database object is ignored or guessed away and no closure is claimed.
+
+This dependency-ordered exact-known-good milestone adds an administrator-only fleet
+invalidation mutation to Assessment detail. A meaningful reason and explicit UI
+confirmation are required. The API reuses existing CSRF/role enforcement, validates
+the fingerprint and expected contract version, and serializes with the distributed
+`ai-triage` lock used by worker lookup/result persistence. A successful mutation
+stores actor, time and reason, audits only registry identifiers plus that reviewed
+reason, and makes every later lookup miss immediately. Stale, duplicate, missing or
+concurrently changing entries fail without partially updating registry state.
+
+Revocation never rewrites an Assessment result or its isolated observation. The
+source assessment and every exact-reuse assessment remain linked to the inactive
+entry and now report `review_required`, linked count and revocation provenance.
+Assessment history renders this state with escaped text, preserves the original
+source deep link and directs administrators to explicit Re-triage for fresh provider
+work. It does not confer or withdraw a host-specific approval, authorize a response,
+suppress deterministic protection or claim a host is clean.
+
+Focused SQLite acceptance covers immediate lookup denial, original/reused linked
+review, audit provenance, role/CSRF enforcement, stale versions, duplicate requests,
+AI-state lock conflict and malformed fingerprints. Browser acceptance covers the
+confirmation workflow, 320/768/1440 responsive layouts, escaped actor/reason text and
+the post-revocation history state. The local workspace could not download Playwright's
+Chromium artifact, so exact-final-head CI browser acceptance remains mandatory before
+merge.
+
+Current native runtime collection still declares configuration, effective-behavior
+and complete-coverage gaps and therefore publishes/hits nothing. Automatic
+contradiction-triggered invalidation, administrator-origin classifications, native
+complete-context collection, broader SQLite/MySQL concurrency/revocation acceptance,
+same-server fairness and shared throttle/daily-spend/unthrottled controls remain
+planned.
+
+APP_VERSION/README/changelog/UI/API synchronize at v1.29.0 with major fixed at 1.
+No schema, target-helper/agent update, Docker publication, Git tag or schedule change
+is introduced. Versioned commit, PR, exact-final-head checks and merge references are
+recorded in the completion report after publication; no earlier or failed head may be
+merged.

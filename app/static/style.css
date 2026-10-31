@@ -458,3 +458,4 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 @media(max-width:600px){.activity-detail .server-facts{grid-template-columns:minmax(0,1fr)}}
 
 .assessment-policy code, .assessment-summary code, .assessment-artifact { overflow-wrap:anywhere; }
+.known-good-fingerprint { overflow-wrap:anywhere;word-break:break-all; }
