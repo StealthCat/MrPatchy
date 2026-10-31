@@ -1758,6 +1758,38 @@ local management identity and verify that another identity still reaches the sam
 remote agent. Browser tests cover list/workspace controls and retained security data.
 
 
+## Planned: distribution and major-version upgrade availability indicators
+
+Requested 2026-10-31 and tracked by issue #96; **planned, not implemented by the
+v1.35.1 roadmap update**. Detect supported Linux distribution or major-version
+upgrade offers independently from routine package candidates. The initial families
+are Debian/Ubuntu and Fedora/RHEL-compatible systems. A newer release existing is
+not sufficient: use the distribution's supported upgrade path and distinguish an
+offered upgrade from supported-but-not-offered, unsupported, stale, unreachable and
+failed/unknown detection states. Inventory and explicit refresh record the checked
+time, current distribution/version, offered target and bounded diagnostic evidence.
+Detection is read-only and never authorizes or starts a release upgrade.
+
+Use one backend/API source of truth. A current verified offer produces a prominent
+but unobtrusive notification card on the server Overview front page with current and
+target versions plus a deep link to release-upgrade details. Show the same accessible
+icon/badge beside that server in the standard directory, fleet cards/search results
+and other reusable server references. The icon has a text alternative/tooltip and
+must not rely on color alone. Stale, unavailable, failed or unsupported checks never
+create a false upgrade-available badge. Clear the status only after refreshed
+evidence shows no eligible offer, including after a completed upgrade.
+
+Integrate with the planned durable notification/event identity so an unchanged
+offer does not flood global alerts, while a newly offered, changed, cleared or
+reopened status can produce the appropriate revision. Respect current server/role
+visibility, escape distribution-controlled text, preserve Back/Forward and view
+context, and retain the existing explicit reviewed GO workflow for any actual
+upgrade. Acceptance requires backend detection fixtures for each supported family,
+stale/error/unsupported cases, synchronization and permissions, plus inspected
+mobile/tablet/desktop renders for Overview and every standard server-reference
+component. Issue #96 remains open until end-to-end detection and UI acceptance land.
+
+
 ## Execution-triggered scoped scanning
 
 Security now offers an independent **Execution-triggered scans** policy. It is off
@@ -4720,3 +4752,45 @@ APP_VERSION/README/changelog/UI/API synchronize at v1.35.0 with major fixed at 1
 Rebuild the controller first so `jobs.next_at` is added before matching workers
 start. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
+
+
+## v1.35.1 — Linux zero-tick process identity compatibility
+
+Issue-first reconciliation read merged v1.35.0 main, repository instructions, this
+checkpoint and merged PR #95. The first 100 open issues contained #97, a reported
+fleet-wide collector identity failure, and roadmap issue #96; the first 100 open PRs
+were empty. Neither issue had comments or a related open/merged fix. Issue #97 took
+priority over the unfinished faster-AI roadmap. Issue #96's distribution/major OS
+upgrade indicator is now tracked above and in `docs/UI_DESIGN.md`, but remains open
+until its detection and UI acceptance are implemented.
+
+Current main reproduced #97 by passing a valid Linux process identity with
+`start_ticks=0`: `response_proc_identity`, collector validation and controller
+ingestion all required every integer field to be strictly positive. Linux records
+process start time in clock ticks after boot, so a process created during the first
+tick may legitimately report zero; native PID 1 commonly exposes the boundary. The
+collector caught the resulting `ValueError`, omitted the otherwise bound identity
+and stored the fleet-visible generic finding.
+
+The identity contract now permits zero only for `start_ticks`. PID, PID namespace,
+procfs device and procfs inode remain strictly positive; negative, malformed,
+changed or incomplete identities still fail closed. Collector validation,
+controller ingestion, exact follow-up context, known-good eligibility and bounded
+process-reference receipts share the corrected boundary. This does not authorize a
+PID 1 response: the existing explicit `pid > 1` destructive-response rule remains.
+Collector diagnostics now emit bounded reason/errno categories without copying raw
+procfs content, paths or exception messages into alerts.
+
+Regression coverage first failed on v1.35.0 for a PID 1-style zero-tick identity and
+then verifies collector retention, controller acceptance, exact follow-up binding,
+negative rejection and diagnostic redaction. Applicable target/controller, known-
+good, response and full SQLite/MySQL/browser/SSH checks remain mandatory on the
+exact final commit before merge. Deploy the controller/workers and use the existing
+reviewed **Finish / verify installation** flow to update collectors. No database
+schema change, Docker publication, Git tag or schedule change is included. Source,
+README, changelog, UI/API metadata synchronize at v1.35.1 with major fixed at 1.
+
+After this issue fix, priority returns to the faster-AI program's multi-stage release
+plan persistence, remaining billable-path controls, pricing lifecycle and complete
+multi-controller failover/reset acceptance. The database-migration refusal remains
+blocked pending categorized mismatch output or a reviewed schema inventory.

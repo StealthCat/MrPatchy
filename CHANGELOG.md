@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.1 — 2026-10-31
+
+- Accept Linux's valid zero process start tick when binding collector, controller, follow-up and reference identities, fixing fleet-wide PID 1 `Process identity unverified` findings without weakening the remaining identity fields.
+- Replace raw exception-class-only collector output with bounded, evidence-safe identity diagnostic codes and retain fail-closed rejection of negative or malformed identities.
+- Track distribution/major-version upgrade availability cards and server-reference badges as planned read-only work; detection and UI delivery are not implemented in this patch.
+
 ## 1.35.0 — 2026-10-31
 
 - Retain incident-response and startup-change advisory AI plan jobs across shared rate, daily-spend, provider-backoff and administrator-pause refusals instead of marking them terminally failed.

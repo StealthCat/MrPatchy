@@ -162,9 +162,10 @@ def _followup_binding(details, path, checksum):
     if not isinstance(context, dict) or set(context) != FOLLOWUP_CONTEXT_KEYS or context.get('version') != CONTEXT_VERSION:
         return None
     process = context.get('process')
-    integer_identity = ('pid', 'start_ticks', 'pid_namespace', 'proc_device', 'proc_inode')
-    if (not isinstance(process, dict) or set(process) != {*integer_identity, 'boot_id'} or
-            any(type(process.get(field)) is not int or process[field] <= 0 for field in integer_identity) or
+    positive_identity = ('pid', 'pid_namespace', 'proc_device', 'proc_inode')
+    if (not isinstance(process, dict) or set(process) != {*positive_identity, 'start_ticks', 'boot_id'} or
+            any(type(process.get(field)) is not int or process[field] <= 0 for field in positive_identity) or
+            type(process.get('start_ticks')) is not int or process['start_ticks'] < 0 or
             not isinstance(process.get('boot_id'), str) or
             not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', process['boot_id'])):
         return None

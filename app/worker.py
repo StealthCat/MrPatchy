@@ -134,8 +134,8 @@ def behavior_evidence(p):
     if p.get('capture')=='ebpf' or 'identity_verified' in p:
         evidence['identity_verified']=p.get('identity_verified') is True
     identity=p.get('process_identity')
-    integers=('pid','start_ticks','pid_namespace','proc_device','proc_inode')
-    if isinstance(identity,dict) and set(identity)=={*integers,'boot_id'} and all(type(identity[key]) is int and identity[key]>0 for key in integers) and isinstance(identity['boot_id'],str) and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',identity['boot_id']):
+    positive=('pid','pid_namespace','proc_device','proc_inode')
+    if isinstance(identity,dict) and set(identity)=={*positive,'start_ticks','boot_id'} and all(type(identity[key]) is int and identity[key]>0 for key in positive) and type(identity['start_ticks']) is int and identity['start_ticks']>=0 and isinstance(identity['boot_id'],str) and re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',identity['boot_id']):
         evidence['process_identity']={key:identity[key] for key in ('pid','start_ticks','pid_namespace','boot_id','proc_device','proc_inode')}
     return evidence
 

@@ -89,6 +89,25 @@ def test_recorded_process_identity_removes_only_that_coverage_gap(context_files)
     assert data['coverage']['cache_eligible'] is False
 
 
+def test_zero_start_tick_is_a_valid_recorded_identity(context_files):
+    process,_=context_files
+    raw=(process.proc/'stat').read_text()
+    (process.proc/'stat').write_text(raw.replace('12345 0\n','0 0\n'))
+    identity=recorded_identity(process)
+    assert identity['pid']==process.pid and identity['start_ticks']==0
+    facts,data=inspect_context(process,identity)
+    assert facts['process']==identity==data['process']
+    assert data['coverage']['scope']=='recorded_process_identity'
+
+
+def test_negative_start_tick_and_untrusted_diagnostic_are_rejected(context_files):
+    process,_=context_files;identity=recorded_identity(process);identity['start_ticks']=-1
+    with pytest.raises(ValueError,match='observed process identity'):
+        agent.triage_observation_identity(identity)
+    diagnostic=agent.process_identity_diagnostic(ValueError('secret procfs content'))
+    assert diagnostic=='invalid observed identity' and 'secret' not in diagnostic
+
+
 @pytest.mark.parametrize('field',('pid','start_ticks','pid_namespace','boot_id','proc_device','proc_inode'))
 def test_recorded_process_identity_changes_fail_closed(context_files,field):
     process,_=context_files;identity=recorded_identity(process)

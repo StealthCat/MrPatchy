@@ -78,7 +78,7 @@ def main():
             'import os,json,hashlib; d="/proc/'+value+'"; p=d+"/exe"; raw=open(d+"/stat").read(); end=raw.rfind(") "); info=os.stat(d); print(json.dumps({"executable":os.readlink(p),"sha256":hashlib.sha256(open(p,"rb").read()).hexdigest(),"process_identity":{"pid":'+value+',"start_ticks":int(raw[end+2:].split()[19]),"pid_namespace":os.stat(d+"/ns/pid").st_ino,"boot_id":open("/proc/sys/kernel/random/boot_id").read().strip(),"proc_device":info.st_dev,"proc_inode":info.st_ino}}))'))
         triage=ssh.call(host,{'action':'evidence',**triage_identity,'checks':['executable','package','service']},timeout=90)
         assert triage['identity_verified'] and triage['version']==2,triage
-        assert triage['context']['process']['boot_id'] and triage['context']['process']['start_ticks']>0
+        assert triage['context']['process']['boot_id'] and triage['context']['process']['start_ticks']>=0
         assert not triage['coverage']['cache_eligible'] and 'package_authentication_missing' in triage['coverage']['gaps']
         assert triage['context']['process']==triage_identity['process_identity']
         assert triage['coverage']['scope']=='recorded_process_identity'
