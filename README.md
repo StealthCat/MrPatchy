@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.29.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.30.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -487,9 +487,9 @@ interrupted attempts retain the existing recovery delay and finite retry limits.
 A lease cannot cancel an already sent request or guarantee exactly-once billing.
 The full model, evidence and conditional SSH/follow-up flow remain unchanged.
 Same-server parallel investigations, broader fairness, native complete-context
-collection, contradiction-triggered invalidation and shared rate/daily-spend/
-unthrottled controls remain unfinished. v1.29.0 adds administrator invalidation and
-linked review for the complete exact candidates described below.
+collection and shared rate/daily-spend/unthrottled controls remain unfinished.
+v1.30.0 adds exact-context contradiction invalidation and linked review for the
+complete exact candidates described below.
 
 The Investigations/AI activity views report active claims, queued work and fresh
 reported AI capacity. Workers report actual active task counts and configured
@@ -685,10 +685,11 @@ provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and th
 reuse is validated; this is not a production speed or parallel-throughput promise.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
-an entry fleet-wide and flag its linked history for review. Native completeness,
-automatic contradiction handling and shared throttle/daily-spend/unthrottled controls
-remain planned. Existing hourly limits, model, evidence, follow-ups, approval and AI
-pause behavior remain in force.
+an entry fleet-wide and a retained final non-low provider result for the identical
+model, policy and verified context invalidates it automatically. Linked history is
+flagged for review. Native completeness and shared throttle/daily-spend/unthrottled
+controls remain planned. Existing hourly limits, model, evidence, follow-ups, approval
+and AI pause behavior remain in force.
 
 
 ### Pooled SQLite initialization (v1.18.1)
@@ -744,9 +745,10 @@ revoke that approval to resume it. Inactive/deleted servers offer read-only hist
 Only a fully complete canonical match can use the fleet registry. Current native
 receipts still declare evidence gaps and therefore contact the provider under existing
 policy. Complete synthetic acceptance covers publication, zero-call lookup, explicit
-Re-triage bypass and administrator invalidation; native complete evidence, automatic
-contradiction handling and shared rate/spend modes remain planned. New assessment,
-refresh and registry tables require controller-first startup, then matched workers.
+Re-triage bypass, administrator invalidation and final exact-context contradiction
+invalidation; native complete evidence and shared rate/spend modes remain planned.
+New assessment, refresh and registry tables require controller-first startup, then
+matched workers.
 No target-helper upgrade is required. Retained evidence is sensitive; history has no
 automatic deletion or immutable external storage yet.
 
@@ -840,9 +842,9 @@ boundary without weakening those gaps.
 
 Lookup currently runs after the existing process-triage claim, AI enablement/pause,
 key/model and rolling-hour admission gates. Complete native evidence collection,
-automatic contradiction invalidation, administrator-origin classifications, shared
-rate/spend admission and broader SQLite/MySQL runtime acceptance remain planned. No
-schema, target-helper or endpoint-agent update is introduced after v1.27.0.
+administrator-origin classifications, shared rate/spend admission and broader
+SQLite/MySQL runtime acceptance remain planned. No schema, target-helper or
+endpoint-agent update is introduced after v1.27.0.
 
 ### Fleet candidate invalidation (v1.29.0)
 
@@ -855,8 +857,23 @@ administrator-role enforcement remain server-side.
 Source and reused assessments are never rewritten. Every linked detail instead shows
 **review required**, the escaped revocation reason and retained original provenance;
 Re-triage remains the explicit way to request fresh provider work. Revocation does not
-approve remediation, suppress scanners or infer that a host is clean. Automatic
-invalidation when a fresh result contradicts an entry remains planned.
+approve remediation, suppress scanners or infer that a host is clean.
+
+### Automatic contradiction invalidation (v1.30.0)
+
+After an explicit Re-triage or other fresh provider investigation, a retained final
+medium/high/unknown result automatically invalidates an active candidate only when
+its verified canonical context, model and policy digest match exactly. Partial results
+that still request evidence, provider failures and changed or incomplete context do
+nothing. The invalidation is retained and audited with the contradictory assessment
+identity; every already-linked source/reuse assessment shows review-required state and
+a deep link to the new advisory result.
+
+The contradictory result does not rewrite the earlier assessments, grant or withdraw
+a host approval, authorize containment, suppress deterministic protection or create
+an arbitrary response action. Current native evidence remains ineligible, so this is
+a strict complete-contract boundary validated with synthetic acceptance. No schema,
+target-helper or endpoint-agent update is introduced.
 
 
 ### Identity-bound follow-up context (v1.21.0)

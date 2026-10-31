@@ -444,6 +444,25 @@ Back/reload/server scope, administrator isolation and phone/tablet/desktop layou
 Fleet revocation and contradiction-review controls remain planned surfaces.
 
 
+### v1.29.0 — Fleet invalidation review on assessment detail
+
+Published and reused candidates offer an administrator-only, reasoned confirmation
+dialog. A successful fleet invalidation preserves the original assessment and replaces
+the active state with an escaped **review required** notice, linked count and retained
+provenance. Phone/tablet/desktop acceptance covers the dialog, long fingerprints and
+untrusted actor/reason text. This mutation does not approve or execute a response.
+
+
+### v1.30.0 — Contradictory assessment review link
+
+When a final provider result automatically invalidates the same exact verified
+candidate, every linked source/reuse detail keeps its original advisory result and
+adds a clearly labelled link to the contradictory assessment. The notice identifies
+the new risk without turning it into authorization, and all values remain escaped.
+The link uses the retained subject/assessment identities and works from both fleet and
+server history views; responsive browser acceptance covers the new state.
+
+
 ### v1.19.0 — Explained process retry eligibility
 
 The existing glass Investigations cards and AI worker status now distinguish
