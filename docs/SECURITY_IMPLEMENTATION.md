@@ -1,20 +1,31 @@
 # Security implementation checkpoint
 
-## Version policy: major fixed at 1
+## Development and integration policy
 
-User instruction (2026-10-30): use **1.MINOR.PATCH** and keep the major number at
-**1** until the user explicitly instructs otherwise. The initial transition is
-`0.17.0` to `1.17.0`, preserving the existing minor/patch numbers. Subsequent
-completed updates retain the existing patch/minor increment criteria and full
-version monotonicity. This overrides automatic major bumps, including for breaking
-changes; record compatibility impacts while keeping major 1.
+User instructions (2026-10-30 and 2026-10-31): keep the application major at **1**;
+allow independent concurrent implementation with one coordinator responsible for
+final version allocation, integration, merging and verified issue closure. Start
+with at most two active implementation streams. Existing schedules are unchanged.
 
-All other versioning instructions remain in force: authoritative `APP_VERSION`,
-synchronized README/changelog/UI/API metadata, versioned development and merge
-commit subjects and PR titles/labels, exact-final-commit checks and skipped Git
-tags. `AGENTS.md`, the source version checker and the scheduled development task
-carry this policy. Roadmap completion remains governed by the existing completion
-gate and issue-first workflow.
+Workers use isolated issue-owned branches and leave APP_VERSION, README.md and
+CHANGELOG.md unchanged. They document reproduction, delivered behavior, compatibility impacts
+and validation in the PR, then explicitly hand the exact ready commit to the
+coordinator. Development commits/PRs need no version prefix. The coordinator owns
+all README/changelog notes and updates based on the PR description, and adds
+the final version, a numbered PR-linked changelog entry and versioned integration/
+merge subjects only when integrating that PR. README no longer tracks a source
+version. Runtime UI/API/health/identity still derive from APP_VERSION. Preserve
+historical commits/changelog entries and skip Git tags. A source bump does not
+publish a Docker image.
+
+Development metadata checks permit unchanged release metadata against main. The
+separate `integration-version` gate requires a newer version and this PR's link in
+the newest changelog entry; all applicable checks must pass on the exact final
+integrated commit before merge. Reconcile/retest when main or the head changes.
+Only the coordinator merges and verifies fully delivered issues close. Read
+[AGENTS.md](../AGENTS.md) and [the coordinator guide](DEVELOPMENT_COORDINATOR.md)
+for ownership, handoff, transition and the copyable coordinator prompt. Historical
+delivery records below describe the policy in force when they were written.
 
 ## Scheduled development completion gate
 
@@ -23,10 +34,10 @@ Before each scheduled development cycle, assess the current roadmap against curr
 implementation checkpoint and any unfinished related PR. This is a read-only
 assessment before any implementation, UI polishing, versioning or repository write.
 
-- If the explicitly requested roadmap is feature complete and no unfinished in-scope implementation remains, stop that cycle without working on the code. Do not invent additional features, refactor, polish the UI or begin speculative bug hunts to fill the cycle.
+- After issue-first triage, if the requested roadmap is feature complete and neither actionable issue fixes nor unfinished in-scope implementation remains, stop that cycle without working on the code. Do not invent additional features, refactor, polish the UI or begin speculative bug hunts to fill the cycle.
 - A completed cycle with no work must not change source, tests, documentation or the checkpoint; it must not bump a version or create commits, tags or PRs merely to record that nothing needs doing.
 - Report briefly that no development is needed, citing this roadmap and the latest merged PR/commit used for the assessment. Keep the development schedule enabled; later cycles may resume when a new roadmap requirement or unfinished in-scope milestone is present.
-- Proceed only when the assessment identifies a concrete outstanding roadmap requirement or unfinished related implementation. State the remaining work before starting it. Review/polish, versioning, testing, PR/merge and checkpoint requirements apply when there is actual work to deliver.
+- Proceed when the assessment identifies an actionable issue fix, a concrete outstanding roadmap requirement or unfinished related implementation. State the remaining work before starting it. Workers own implementation/testing/checkpoints; the coordinator owns final versioning, integration and merge checks.
 - Missing, contradictory or blocked evidence is not proof of completion. Report the uncertainty or blocker and stop without speculative code changes; retain honest outstanding requirements and limitations.
 
 This gate takes precedence over instructions to always continue development or
@@ -42,9 +53,9 @@ validation and PR completion. A large milestone may fill the batch; combine
 several small related items when appropriate.
 
 - State the selected items and intended outcome before implementation, respecting dependency order and unfinished work from earlier runs.
-- Reserve roughly the final 10–15 minutes for review, applicable tests/checks, version/changelog consistency, PR/merge handling and the checkpoint.
+- Reserve roughly the final 10–15 minutes for review, applicable tests/checks, the PR ready handoff and the checkpoint. Final version/changelog preparation and merging belong to the coordinator.
 - If a small item finishes early and roadmap work remains, take the next coherent item only when it can reasonably be completed and validated within the remaining budget. Do not stop merely because one small milestone is finished.
-- Preserve reviewable scope and passing checks on the exact final commit. Avoid risky late additions or overlapping development runs; leave a precise checkpoint and unfinished PR state if safe completion is not possible.
+- Preserve reviewable scope and applicable checks on the exact worker commit. Independent development may overlap within the two-stream limit; overlapping ownership and concurrent final integration are prohibited. Avoid risky late additions and leave a precise checkpoint when a safe handoff is not possible.
 - This is a sizing target, not a mandatory minimum. Stop early for roadmap completion or a genuine blocker. Do not invent work, wait, repeat successful checks or change completed code simply to fill time.
 
 The completion gate takes priority, and the development schedule is unchanged.

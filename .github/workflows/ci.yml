@@ -31,7 +31,11 @@ jobs:
         run: |
           if [ -n "$VERSION_BASE" ] && [ "$VERSION_BASE" != "0000000000000000000000000000000000000000" ]; then
             git fetch --no-tags --depth=1 origin "$VERSION_BASE"
-            python tools/check_version.py --base-ref "$VERSION_BASE"
+            version_args=(--base-ref "$VERSION_BASE")
+            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+              version_args+=(--allow-unversioned)
+            fi
+            python tools/check_version.py "${version_args[@]}"
           else
             python tools/check_version.py
           fi
@@ -46,6 +50,25 @@ jobs:
         run: |
           docker compose --env-file .env.example config --quiet
           GCP_PROJECT=ci-project GCP_ZONE=us-central1-a docker compose --env-file .env.example -f compose.yaml -f compose.gcp.yaml config --quiet
+
+  # Development PRs may retain main's version. This separate merge gate stays red
+  # until the coordinator adds a newer version and this PR's changelog entry.
+  integration-version:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Coordinator version and PR traceability
+        env:
+          VERSION_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$VERSION_BASE"
+          python tools/check_version.py --base-ref "$VERSION_BASE" --pr-number "$PR_NUMBER"
 
   tests:
     runs-on: ubuntu-24.04
