@@ -4960,3 +4960,28 @@ spool reliability/observability work, #98 remains CI maintenance, #96 remains th
 upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap priority
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
+
+## v1.35.8 — Populated SBOM export repair (#121)
+
+Codex session `gfr-sbom-20261031` claimed issue #121 after reading current main
+`3635d0a` (v1.35.6), all open issues and open PRs. No related PR or overlapping
+claim existed. Pending #115/#116 require version reconciliation; #137 proposes
+v1.35.7. This focused update proposes v1.35.8, subject to refreshing main before
+merge and rerunning affected checks if integration changes the final head.
+
+The current-main SBOM handler reproduced `NameError: name 'h' is not defined`
+with a populated package result using its actual AST-extracted function and stub
+session. Local full-app tests could not start because Windows application control
+blocked a downloaded SQLAlchemy extension. Full application validation is delegated
+to exact-final-head CI, not claimed as a local pass.
+
+The endpoint now retains the resolved host for the existing Debian/RPM package URL
+selection. Regression tests exercise populated Debian and RPM JSON exports, escaped
+versions and architecture, host isolation, empty/missing hosts, unauthenticated
+access and existing administrator/operator/viewer access for active, disabled and
+deleted hosts. Existing permission and lifecycle decisions remain in force.
+
+Source, README and changelog synchronize at v1.35.8, major fixed at 1. The linked
+PR must record exact-head checks and merge evidence; #121 closes only after that
+tested merge is verified. No schema change, target update or Docker publication is
+included.

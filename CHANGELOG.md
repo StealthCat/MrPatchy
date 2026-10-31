@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.8 — 2026-10-31
+
+- Fix populated SBOM exports by retaining the resolved host for Debian/RPM package URL selection (#121).
+- Cover populated, empty and missing-host exports, package identity/version/architecture, host isolation and existing role/lifecycle access boundaries.
+
 ## 1.35.6 — 2026-10-31
 
 - Detect orphaned running incident/startup advisory-plan jobs under the elected scheduler and each server's distributed worker lock, while leaving live workers untouched.
