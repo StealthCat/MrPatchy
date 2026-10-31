@@ -5261,6 +5261,36 @@ intact and this update's entries reapplied.
 
 Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
 
+## v1.35.29 — Deleted-server indirect read authorization
+
+Owner: Codex `issue118-a53dc732a02d`, branch
+`codex/deleted-host-read-boundary`, issue #118. Read current main `128704f`
+(v1.35.21), AGENTS/CONTRIBUTING, checkpoint, 78 open issues and open PRs
+#203/#206/#207. #119 and #205 are actively owned; #120 is a separate recovery
+scope and #204 depends on active #203. No unrelated roadmap/UI changes selected.
+The issue claim's initially written 21:25Z timestamp was inaccurate; the actual
+run/checkpoint is 2026-10-31T21:19Z.
+
+Reproduced on unmodified main using disposable SQLite and the real authenticated
+FastAPI application: 14 failures / 12 passes in the new regression suite. Viewers
+and operators received 200 for deleted-server query-scoped jobs, job output,
+investigations and package history; global job/package pages included deleted
+records. Direct host paths already returned 403. The cause was URL-only lifecycle
+read authorization, without resolved-host checks in query/indirect endpoints.
+
+The fix checks the resolved host before returning query-scoped records or job-ID
+output. Job/package list filtering occurs in SQL before pagination. Retained
+administrator access, disabled-server read policy, active-only default fleet
+investigations, missing/mismatched scope responses and hostless jobs are preserved.
+No response authority, schema, helper, audit policy or route-role changes.
+
+Focused validation: 44 passed (26 new authorization cases plus lifecycle suite).
+Full Python suite and exact-final-head CI remain required before merge. Source,
+README and changelog use v1.35.29 above pending .22/.23/.24 allocations; integration
+must recheck main/version order and preserve #206's independently owned role work.
+No tags or Docker publication. Issue #118 stays open until a tested merge is
+verified. All wider roadmap requirements remain tracked above.
+
 ## CI pipeline review (v1.35.24)
 
 The owner requested a full CI review, committed directly to `main`. Changes are
@@ -5295,6 +5325,27 @@ Check names change: `static` and `mysql (1)`–`mysql (4)` are added, and `mysql
 records should list the twelve resulting jobs rather than nine. Action references
 remain major-version tags; SHA pinning belongs to supply-chain issue #201.
 
+
+Integration continuation — Codex `integration-6eac54918b34`, PR #208, 2026-10-31.
+Accepted the explicit #118 handoff and retained the same branch. Reproduced again
+on current main `fa5d933` (v1.35.24): 14 failed / 12 passed in
+`tests/test_deleted_host_reads.py`. Merged that main into this branch, preserving
+all CI pipeline review/sharding changes and both delivery entries. Allocated
+v1.35.29 above pending proposals through .28; other owners retain their work and
+must reconcile against final main when integrating. This independently scoped P1
+read-boundary fix has no dependency on the separate route-role refactor #206.
+No roadmap work started. Current open-issue listing returned all 78 reports;
+#119/#120/#198/#205 have existing owned fixes, #204 depends on #203, and #140
+remains actionable independent work for a later cycle after this integration.
+Final local validation and all twelve applicable exact-head CI jobs are required;
+no issue closure is claimed until the tested merge is verified. Keep schedule unchanged.
+
+
+Before merge, main advanced to `6589f4d` (v1.35.25, PR #207 checkbox CSS).
+Preserve that exact main and its stylesheet regression. The combined final tree
+requires fresh exact-head CI and local focused authorization/CSS/lifecycle checks;
+the preceding full local suite passed 1647 tests / 9 skipped / 9 subtests on the
+pre-CSS integration tree. Earlier-head CI does not authorize this final integration.
 
 ## v1.35.27 — Durable controller recovery coverage (#120)
 
@@ -5363,3 +5414,13 @@ and will refresh its .29 work if #212 integrates first. Current next-integration
 proposal is #212 at .27; preserve other independently owned fixes and recheck
 main immediately before merge. The earlier blanket hold was superseded by
 PR #212's integration discussion. No issue closure before verified tested merge.
+
+
+Coordinated P1 integration: preserve exact #212 head
+`8253159beb1799986dec5f1644e67cd08174f4eb` (v1.35.27) as an explicit dependency
+of #208 v1.35.29. Serial merge order agreed in PR discussions: #212, #208,
+#203, then later versions. Recovery code, native validation and every delivery
+entry remain intact. The combined final source receives fresh full local and
+all twelve exact-head CI checks. Do not merge #208 before #212's tested merge is
+verified; if its head changes, refresh/reassess this candidate. No other branch
+ownership or schedule changes.
