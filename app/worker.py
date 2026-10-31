@@ -201,6 +201,25 @@ def spool_loss_issue(current,previous):
     if details:message+=': '+', '.join(details)
     return message+'; '+str(counter(current.get('dropped')))+' cumulative batches retained in telemetry'
 
+def ebpf_diagnostic_current(status,diagnostic):
+    """Whether a delivered eBPF diagnostic still describes the collector's current state.
+
+    Retired diagnostics, an intentionally disabled collector, a later collector
+    run and a warning that predates the current run's recovery are history. A
+    malformed or unattributable diagnostic stays visible (fail closed)."""
+    if not diagnostic:return False
+    if not isinstance(diagnostic,dict):return True
+    if diagnostic.get('state')=='historical':return False
+    status=status if isinstance(status,dict) else {}
+    if status.get('state')=='disabled':return False
+    current=status.get('instance')
+    if not current:return True
+    # A tagged status comes from a collector that tags every warning it records.
+    if diagnostic.get('instance')!=current:return False
+    at,since=diagnostic.get('at'),status.get('since')
+    numeric=lambda value:isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
+    return not (status.get('state')=='active' and numeric(at) and numeric(since) and at<since)
+
 def ingest(s,h,snapshot,include_inventory=True):
     if include_inventory and 'inventory' in snapshot and snapshot['inventory'].get('collected',0)>h.inventory.get('collected',0): save_inventory(s,h,snapshot['inventory'])
     t=snapshot.get('telemetry',{})
@@ -229,7 +248,9 @@ def ingest(s,h,snapshot,include_inventory=True):
     spool_issue=spool_loss_issue(snapshot.get('spool',{}),h.telemetry.get('spool',{}) if isinstance(h.telemetry,dict) else {})
     if spool_issue:issues.append({'path':'event spool','issue':spool_issue})
     t=dict(t);t['spool']=snapshot.get('spool',{})
-    if snapshot.get('ebpf-diagnostic'):issues.append({'path':'eBPF diagnostics','issue':str(snapshot['ebpf-diagnostic'])})
+    diagnostic=snapshot.get('ebpf-diagnostic')
+    if ebpf_diagnostic_current(snapshot.get('ebpf-status'),diagnostic):issues.append({'path':'eBPF diagnostics','issue':str(diagnostic)})
+    if isinstance(diagnostic,dict) and diagnostic:t['ebpf_diagnostic']=diagnostic
     if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''

@@ -4961,14 +4961,48 @@ upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap prior
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
 
-## v1.35.10 — Accurate AI budget amounts
+## v1.35.11 eBPF diagnostic lifecycle (#123)
+
+A single bpftrace stderr warning previously persisted in `ebpf-diagnostic.json`
+forever, and controller ingestion treated any nonempty diagnostic as a current
+integrity issue regardless of its age or the collector state. A recovered or
+intentionally disabled collector therefore kept the host in **attention**.
+
+The collector now tags every recorded warning with the identifier of the bpftrace
+run that emitted it, writes that run's `starting` status before its stderr reader
+can record anything, and stores the time of the last state transition (`since`) in
+`ebpf-status.json`. Under one lock shared with the stderr reader, a warning is
+retired (state `historical`, with `retired_at`, `retired_reason` and the recovering
+run) when the run delivers its first event, when eBPF is disabled and when the
+collector restarts. Retirement preserves the original warning text and time; a later
+warning from the current run is recorded as current again, so a persisting or new
+fault is not suppressed.
+
+Ingestion independently treats a diagnostic as history when it is retired, when the
+collector is disabled, when it belongs to an earlier run than the current status, or
+when it predates the current run's transition to active. A current-run warning,
+a malformed or non-numeric diagnostic, and status from an older untagged collector
+continue to raise the finding (fail closed) until the collector is upgraded through
+normal agent maintenance. The delivered diagnostic is retained in host telemetry as
+`ebpf_diagnostic`. eBPF status findings (`error`/`warning`/`unavailable`) are
+unchanged.
+
+Regressions drive the real collector loop with a fake bpftrace through failure,
+recovery, a post-recovery warning, process exit, disable and restart, then deliver
+the files through the bridge snapshot to controller ingestion. No schema, role,
+audit, response-authorization, Docker publication or Git tag change is included.
+Source, README, changelog and UI/API metadata synchronize at v1.35.11 with major
+fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #121,
+#117, #131 and #124).
+
+## v1.35.15 — Accurate AI budget amounts
 
 Codex session `grab-issue-2-20261031` claims issue #124 in isolated branch
 `fix/budget-money-124`. Claim timestamp correction: the claim was posted before
 19:21:27 UTC on 2026-10-31; its manually entered 19:24 timestamp was inaccurate.
 Issue-first reconciliation listed all open reports and PRs #115, #116 and #137;
 #121 was already actively claimed, so this work takes independent unclaimed #124.
-Current main was v1.35.6 (`3635d0a`). Proposed v1.35.10 reserves room for pending
+Current main was v1.35.6 (`3635d0a`). Proposed v1.35.15 reserves room for pending
 v1.35.7/v1.35.8 work and must be reassessed with main immediately before merge.
 
 Executing the actual formatter extracted from current-main source reproduced
@@ -4983,6 +5017,12 @@ Local validation therefore covers the extracted formatter regressions, compilati
 JavaScript syntax, whitespace and version consistency. Exact-final-head Linux
 SQLite/MySQL, browser, recovery, SSH/RPM, Docker and GCP checks remain mandatory
 before merge. No schema, provider-call, admission-policy or operational authorization
-change is included. Source, README and changelog synchronize at v1.35.10; no Git tag
+change is included. Source, README and changelog synchronize at v1.35.15; no Git tag
 or Docker publication is implied. The linked PR and final validation/merge receipt
 are recorded in the issue checkpoints; close #124 only after tested merge verification.
+
+Integration update: current main advanced to v1.35.11 in PR #183 while earlier
+PRs remained pending. This merge preserves that diagnostics fix and allocates
+v1.35.15 above main and pending v1.35.12/v1.35.13/v1.35.14 proposals.
+All nine checks passed on original head 67b5f2e; full exact-head CI must pass
+again on this integration commit before merge.

@@ -1,9 +1,15 @@
 # Changelog
 
-## 1.35.10 — 2026-10-31
+## 1.35.15 — 2026-10-31
 
 - Preserve significant integral zeros in every AI budget amount, so a configured $10 cap and remaining budget display as $10.
 - Validate and normalize omitted daily-cap defaults consistently in both settings APIs, with Decimal, API and visible settings regressions.
+
+## 1.35.11 — 2026-10-31
+
+- Give eBPF collector diagnostics an explicit current/historical lifecycle: each bpftrace run is tagged with a run identifier and the collector status records its last state-transition time.
+- Retire (keep as history, with reason and time) a warning when the collector recovers on its first delivered event, is intentionally disabled or restarts, so a superseded warning no longer keeps a host in attention indefinitely.
+- Raise the `eBPF diagnostics` finding only for a warning from the current run that is not superseded by its recovery; warnings after recovery, malformed diagnostics and older untagged collectors still fail closed. Retained diagnostics remain visible in host telemetry.
 
 ## 1.35.6 — 2026-10-31
 
