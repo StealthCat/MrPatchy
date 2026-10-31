@@ -5517,3 +5517,71 @@ failed` with issuer, hashed subject prefix and reason, rate-limited per
 reason/subject per five minutes. Responses keep the generic 400 message; no
 raw provider text, token or plain subject is recorded. Roles, successful-login
 audit and response-authorization boundaries are unchanged.
+
+## v1.35.32 — Independent periodic scheduler producers (#140)
+
+Owner: Codex `scheduler-6eac54918b34`, branch
+`codex/scheduler-tick-isolation`. Issue-first triage selected #140 after accepting
+#118/#208's explicit integration handoff. Current main `fa5d933` reproduced all
+seven injected producer failures in a disposable real application/SQLite loop:
+queued-job dispatch was skipped and failing tasks retried each iteration. Cause:
+a single outer exception boundary surrounded all producers and the rest of the
+loop, with the shared schedule timestamp advanced only after every task succeeded.
+
+Each leader producer now has its own deadline and failure count. A named failure
+is logged and backed off at 30/60/120/240 seconds, capped at 300 seconds, without
+skipping the remaining producers, polling, dispatch, cleanup, notification or AI
+admission. Success restores 30-second cadence. Worker identity loss propagates
+to the existing stop path rather than being treated as a retriable policy error.
+Deadlines are process-local scheduling safeguards, not durable job claims or a
+replacement for existing coordinator election, drain, leases and per-host locks.
+No additional response authority, automatic replay or provider call is introduced.
+
+Focused new loop/backoff/identity-loss and existing advisory restart, drain/control
+and worker registry tests: 67 passed. Full final-tree local suite and all twelve
+applicable exact-head GitHub jobs are required before merge. No UI changes were
+made. The runtime pipeline remains a priority, but unrelated roadmap work waits
+behind actionable issues. Wider issues/roadmap are not claimed complete.
+
+Version/source/README/changelog use v1.35.32, major fixed at 1. Depends on the exact
+#208 final integration head `a16688690e2a2486cfe3e281ddbae7dce2c09507` (v1.35.29),
+which includes current main `6589f4d` (v1.35.25, #207). Merge #208 first after its
+own exact-head checks; preserve other owners' mutation, recovery and route-role
+work. Re-read main/open PR versions before integration, rerun affected checks if
+head or integration changes, and verify #140 closes only after tested merge.
+No Git tags, Docker publication or schedule changes.
+
+Version allocation correction: another active owner had reserved v1.35.30 for
+#203, and #213 reserves v1.35.31. Reassigned this update to v1.35.32 after the
+fresh open-PR check. Preserve #203's independently owned worker mutation changes;
+coordinate #208 then #203 integration before this later version. Earlier .30
+candidate metadata/CI is superseded; final version metadata receives fresh CI.
+
+Final review extended the same per-producer exception/backoff boundary to module
+loading, so an unavailable optional producer dependency cannot skip healthy tasks
+or the rest of the loop. A focused import-failure regression joins the seven real
+loop failures and backoff/identity checks (67 focused tests pass). Superseded local
+suite/CI results do not authorize this final runtime revision; rerun the full suite
+and all applicable exact-head jobs on the final published tree.
+
+
+Continuation integration (Codex scheduler-85a36b0d8f8a, 2026-10-31): SAME PR #214
+accepts the released handoff after #212/#208/#203 merged. Current main db7871e
+(v1.35.30) reproduces all seven producer-position failures: queued dispatch is
+skipped and the failed producer retries every loop. Preserve all recovery,
+read-authorization and ordinary-patch uncertainty implementation, regressions,
+CI and delivery records while retaining independent periodic producers. No new
+roadmap or unrelated UI scope. This run retrieved 73 open issues (under the
+100-result limit) and nine open PRs; prior run's initial count was 77, not the
+copied historical 78. Keep source v1.35.32 pending coordinated .31/#213 order;
+refresh main and version allocations before merge. The earlier candidate's green
+checks do not authorize this changed integration: require combined focused/full
+local validation and all twelve exact-final-head CI jobs. No issue closure before
+tested merge; no tags, Docker publication or schedule changes.
+
+Coordinator integration v1.35.41 (2026-10-31): the historical candidate versions and
+reservations above are superseded by the maintainer-directed batch in #222. PR #214
+preserves current main through #221/#209, including rollback/SSO/recovery/patch-safety
+and all delivery history. README has no source-version field. Final major-1 version
+and the numbered changelog entry are allocated by the sole coordinator; all 13
+applicable checks must pass on the final integrated head before merge.
