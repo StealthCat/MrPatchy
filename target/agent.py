@@ -141,6 +141,8 @@ def sockets(base=Path('/proc/net')):
 
 def collect(hash_cache):
     errors=[]; processes=[]; namespaces={};deadline=time.monotonic()+10
+    try:boot=response_service_boot()
+    except (OSError,ValueError):boot=None
     for p in Path('/proc').iterdir():
         if not p.name.isdigit(): continue
         try:
@@ -162,7 +164,10 @@ def collect(hash_cache):
                 except FileNotFoundError: pass
                 except OSError as e: errors.append({'pid':p.name,'error':str(e)})
             uid = next(x.split()[2] for x in read(p/'status').splitlines() if x.startswith('Uid:'))
-            processes.append({'pid':int(p.name),'executable':exe,'sha256':sha,'identity_verified':verified,'uid':uid,'network_namespace':namespace,'connections':connections,'provenance':provenance(p,hash_cache,deadline=deadline)})
+            process={'pid':int(p.name),'executable':exe,'sha256':sha,'identity_verified':verified,'uid':uid,'network_namespace':namespace,'connections':connections,'provenance':provenance(p,hash_cache,deadline=deadline)}
+            try:process['process_identity']=triage_observation_identity(observe_process_identity(p,int(p.name),boot))
+            except (OSError,ValueError) as error:errors.append({'pid':p.name,'error':'Process identity unverified: '+type(error).__name__})
+            processes.append(process)
         except FileNotFoundError: pass # short-lived process / kernel thread
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
     return processes, errors
@@ -365,8 +370,11 @@ def ebpf_loop():
                             if os.readlink(proc/'exe')==filename:sha=hash_artifact(proc/'exe',{})
                         except (OSError,ValueError):pass
                         # Exited processes remain events even when their executable is no longer readable.
-                        spool([{'pid':int(pid),'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
-                                'connections':[],'capture':'ebpf','identity_verified':sha is not None}],time.time())
+                        event_process={'pid':int(pid),'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
+                                       'connections':[],'capture':'ebpf','identity_verified':sha is not None}
+                        try:event_process['process_identity']=triage_observation_identity(observe_process_identity(proc,int(pid)))
+                        except (OSError,ValueError):pass
+                        spool([event_process],time.time())
                         atomic(ROOT/'ebpf-status.json',{'state':'active','last_event':time.time()})
             selector.close()
             try:process.wait(timeout=5)
@@ -1288,6 +1296,26 @@ def response_proc_identity(directory,pid):
     return {'pid':pid,'start_ticks':ticks,'pid_namespace':namespace}
 
 
+def triage_observation_identity(value):
+    """Validate a stable read-only process identity supplied by the collector."""
+    integers=('pid','start_ticks','pid_namespace','proc_device','proc_inode')
+    if not isinstance(value,dict) or set(value)!={*integers,'boot_id'} or any(type(value[key]) is not int or value[key]<=0 for key in integers):
+        raise ValueError('Invalid observed process identity')
+    if not isinstance(value['boot_id'],str) or not re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value['boot_id']):
+        raise ValueError('Invalid observed process identity')
+    return {key:value[key] for key in ('pid','start_ticks','pid_namespace','boot_id','proc_device','proc_inode')}
+
+
+def observe_process_identity(proc,pid,boot=None):
+    """Pin a proc directory while recording the collector's observation identity."""
+    directory=os.open(proc,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        identity=response_proc_identity(directory,pid);info=os.fstat(directory)
+        identity.update(boot_id=boot or response_service_boot(),proc_device=info.st_dev,proc_inode=info.st_ino)
+        return identity
+    finally:os.close(directory)
+
+
 TRIAGE_CONTEXT_GAPS=('original_observation_process_not_identified','package_authentication_missing',
     'configuration_not_collected','startup_not_collected','network_history_not_collected',
     'arguments_and_environment_not_collected','script_execution_not_attested','memory_not_attested')
@@ -1322,15 +1350,18 @@ def triage_process_facts(directory,pid):
         'maps':maps,'cgroup':cgroup}
 
 
-def triage_process_context(directory,pid,path,expected,deadline):
+def triage_process_context(directory,pid,path,expected,deadline,observed=None):
     """Recheck all sampled facts; this is not an atomic snapshot or cache approval."""
+    observed=triage_observation_identity(observed) if observed is not None else None
     before=triage_process_facts(directory,pid)
+    if observed is not None and before['process']!=observed:raise ValueError('Observed process identity changed')
     if before['executable_path']!=path:raise ValueError('Executable path changed')
     proc=Path('/proc/self/fd')/str(directory)
     metadata={};checksum=hash_artifact(proc/'exe',{},deadline=deadline,metadata=metadata)
     if checksum!=expected:raise ValueError('Executable bytes changed')
     artifacts=provenance(proc,{},deadline=deadline,maps=before['maps'],include_metadata=True)
     gaps=list(TRIAGE_CONTEXT_GAPS)
+    if observed is not None:gaps.remove('original_observation_process_not_identified')
     if not artifacts or any(item.get('identity_verified') is not True for item in artifacts):gaps.append('artifact_coverage_incomplete')
     after=triage_process_facts(directory,pid)
     if time.monotonic()>deadline or before!=after:raise ValueError('Process context changed or collection budget expired')
@@ -1338,7 +1369,7 @@ def triage_process_context(directory,pid,path,expected,deadline):
         'namespaces':before['namespaces'],'maps_sha256':hashlib.sha256(before['maps'].encode()).hexdigest(),
         'cgroup_sha256':hashlib.sha256(before['cgroup']).hexdigest(),'artifacts':artifacts,
         'executable':{'sha256':checksum,**metadata},
-        'coverage':{'cache_eligible':False,'gaps':sorted(gaps),'scope':'one_current_matching_executable',
+        'coverage':{'cache_eligible':False,'gaps':sorted(gaps),'scope':'recorded_process_identity' if observed is not None else 'one_current_matching_executable',
             'consistency':'matching_before_after_samples','trust':'target_kernel_and_local_files'}}
 
 

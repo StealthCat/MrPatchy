@@ -95,9 +95,12 @@ def test_collect_keeps_unverified_executables_and_continues(tmp_path,monkeypatch
     real=Path.iterdir
     monkeypatch.setattr(Path,'iterdir',lambda p:real(tmp_path) if str(p)=='/proc' else real(p))
     monkeypatch.setattr(agent,'sockets',lambda p:({},[]));monkeypatch.setattr(agent,'provenance',lambda *a,**kw:[])
+    identity={'pid':1,'start_ticks':2,'pid_namespace':3,'boot_id':'11111111-1111-1111-1111-111111111111','proc_device':4,'proc_inode':5}
+    monkeypatch.setattr(agent,'observe_process_identity',lambda p,pid,boot=None:{**identity,'pid':pid})
     processes,errors=agent.collect({});processes.sort(key=lambda p:p['pid'])
     assert [p['identity_verified'] for p in processes]==[False,True]
     assert processes[0]['sha256']=='unavailable' and errors
+    assert processes[1]['process_identity']=={**identity,'pid':2}
     assert worker.behavior_evidence(processes[0])['identity_verified'] is False
 
 

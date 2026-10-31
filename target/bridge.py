@@ -112,6 +112,7 @@ def repo_path(name):
 def process_evidence(req):
     path=req.get('executable','');expected=req.get('sha256','')
     expected_uid=req.get('uid')
+    observed=req.get('process_identity')
     checks=req.get('checks',[])
     if not isinstance(path,str) or not path.startswith('/') or len(path)>4096 or not re.fullmatch('[a-f0-9]{64}',expected):
         raise ValueError('Invalid executable identity')
@@ -121,13 +122,15 @@ def process_evidence(req):
     sys.path.insert(0,'/usr/local/lib/mrpatchy')
     try:import agent
     except ImportError:from target import agent
+    if observed is not None:observed=agent.triage_observation_identity(observed)
     result={'version':2,'identity_verified':False,'checks':checks,
-        'coverage':{'cache_eligible':False,'scope':'one_current_matching_executable',
+        'coverage':{'cache_eligible':False,'scope':'recorded_process_identity' if observed is not None else 'one_current_matching_executable',
                     'gaps':['no_stable_matching_process']}}
     deadline=time.monotonic()+10;overall_deadline=time.monotonic()+80
     root=agent.response_proc_root()
     try:
-        for index,name in enumerate(os.listdir(root)):
+        names=[str(observed['pid'])] if observed is not None else os.listdir(root)
+        for index,name in enumerate(names):
             if time.monotonic()>deadline or index>=4096:
                 result['coverage']['gaps'].append('process_search_budget_exceeded');break
             if not name.isdigit():continue
@@ -135,7 +138,7 @@ def process_evidence(req):
             try:
                 directory=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root)
                 if os.readlink('exe',dir_fd=directory)!=path:continue
-                before,context=agent.triage_process_context(directory,int(name),path,expected,deadline)
+                before,context=agent.triage_process_context(directory,int(name),path,expected,deadline,observed)
                 if expected_uid is not None and before['credentials']['Uid'][1]!=expected_uid:continue
                 candidate={'version':2,'identity_verified':True,'checks':checks,'context':context,
                     'coverage':context['coverage']}
@@ -152,7 +155,7 @@ def process_evidence(req):
                         candidate['service'].append(run(['systemctl','show',unit,'--property=Id,LoadState,ActiveState,SubState,FragmentPath,User,Group,NoNewPrivileges,ProtectSystem'],timeout=15)[:8000])
                 # Package/service reads can outlast the hash budget. Recheck the
                 # same descriptor after them; never return a mixed-PID result.
-                final,fresh=agent.triage_process_context(directory,int(name),path,expected,min(overall_deadline,time.monotonic()+10))
+                final,fresh=agent.triage_process_context(directory,int(name),path,expected,min(overall_deadline,time.monotonic()+10),observed)
                 if before!=final or context!=fresh:
                     raise ValueError('Process changed during follow-up collection')
                 return candidate
@@ -161,7 +164,8 @@ def process_evidence(req):
             finally:
                 if directory is not None:os.close(directory)
     finally:os.close(root)
-    result['reason']='No stable running process matches the recorded executable path and SHA-256; identity or context is unavailable, changed, or outside the collection budget'
+    result['reason']=('The recorded process identity is no longer running or its path, bytes, account or context changed' if observed is not None else
+        'No stable running process matches the recorded executable path and SHA-256; identity or context is unavailable, changed, or outside the collection budget')
     return result
 
 def recovery_hook(operation,identifier):

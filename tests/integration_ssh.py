@@ -75,17 +75,17 @@ def main():
             time.sleep(.1)
         assert value and value.isdigit()
         triage_identity=json.loads(run('docker','exec',name,'python3','-c',
-            'import os,json,hashlib; p="/proc/'+value+'/exe"; print(json.dumps({"executable":os.readlink(p),"sha256":hashlib.sha256(open(p,"rb").read()).hexdigest()}))'))
+            'import os,json,hashlib; d="/proc/'+value+'"; p=d+"/exe"; raw=open(d+"/stat").read(); end=raw.rfind(") "); info=os.stat(d); print(json.dumps({"executable":os.readlink(p),"sha256":hashlib.sha256(open(p,"rb").read()).hexdigest(),"process_identity":{"pid":'+value+',"start_ticks":int(raw[end+2:].split()[19]),"pid_namespace":os.stat(d+"/ns/pid").st_ino,"boot_id":open("/proc/sys/kernel/random/boot_id").read().strip(),"proc_device":info.st_dev,"proc_inode":info.st_ino}}))'))
         triage=ssh.call(host,{'action':'evidence',**triage_identity,'checks':['executable','package','service']},timeout=90)
         assert triage['identity_verified'] and triage['version']==2,triage
         assert triage['context']['process']['boot_id'] and triage['context']['process']['start_ticks']>0
         assert not triage['coverage']['cache_eligible'] and 'package_authentication_missing' in triage['coverage']['gaps']
-        # More than one matching Python process may be visible. The returned
-        # process is explicitly a current equivalent, never the historical PID.
-        assert 'original_observation_process_not_identified' in triage['coverage']['gaps']
+        assert triage['context']['process']==triage_identity['process_identity']
+        assert triage['coverage']['scope']=='recorded_process_identity'
+        assert 'original_observation_process_not_identified' not in triage['coverage']['gaps']
         assert 'DO-NOT-EXPORT' not in json.dumps(triage) and triage_source not in json.dumps(triage)
         run('docker','exec',name,'python3','-c','import os,signal; os.kill('+value+',signal.SIGTERM)')
-        print('Native triage context passed: pinned process, rechecked artifacts/privileges, explicit gaps and no raw arguments')
+        print('Native triage context passed: recorded process identity, pinned/rechecked artifacts and no raw arguments')
         original=ssh.call(host,{'action':'patch-inspect'},timeout=120)
         assert original['version']==1 and original['configs']
         assert ssh.call(host,{'action':'patch-restored','original':original},timeout=120)['original_state_verified']

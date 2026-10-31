@@ -50,11 +50,15 @@ def opened(process):
     finally:os.close(fd)
 
 
-def inspect_context(process):
+def recorded_identity(process):
+    return agent.observe_process_identity(getattr(process,'proc',Path('/proc')/str(process.pid)),process.pid)
+
+
+def inspect_context(process,observed=None):
     with opened(process) as fd:
         path=os.readlink('exe',dir_fd=fd)
         checksum=agent.hash_artifact(Path('/proc/self/fd')/str(fd)/'exe',{})
-        return agent.triage_process_context(fd,process.pid,path,checksum,time.monotonic()+10)
+        return agent.triage_process_context(fd,process.pid,path,checksum,time.monotonic()+10,observed)
 
 
 def test_real_interpreter_script_and_credentials_are_bound_without_secrets(live_script):
@@ -73,6 +77,23 @@ def test_real_interpreter_script_and_credentials_are_bound_without_secrets(live_
     assert 'original_observation_process_not_identified' in data['coverage']['gaps']
     text=json.dumps(data)
     assert 'DO-NOT-EXPORT' not in text and 'import time' not in text and 'maps' not in data
+
+
+def test_recorded_process_identity_removes_only_that_coverage_gap(context_files):
+    process,_=context_files;identity=recorded_identity(process)
+    facts,data=inspect_context(process,identity)
+    assert facts['process']==identity==data['process']
+    assert data['coverage']['scope']=='recorded_process_identity'
+    assert 'original_observation_process_not_identified' not in data['coverage']['gaps']
+    assert 'package_authentication_missing' in data['coverage']['gaps']
+    assert data['coverage']['cache_eligible'] is False
+
+
+@pytest.mark.parametrize('field',('pid','start_ticks','pid_namespace','boot_id','proc_device','proc_inode'))
+def test_recorded_process_identity_changes_fail_closed(context_files,field):
+    process,_=context_files;identity=recorded_identity(process)
+    identity[field]=('22222222-2222-2222-2222-222222222222' if field=='boot_id' else identity[field]+1)
+    with pytest.raises(ValueError,match='identity changed'):inspect_context(process,identity)
 
 
 @pytest.mark.parametrize('change',['process','credentials','namespaces','maps','executable_identity','cgroup'])
@@ -109,13 +130,14 @@ def test_bridge_rechecks_files_after_optional_commands_and_never_returns_mixed_c
     original=bridge.os.listdir
     monkeypatch.setattr(bridge.os,'listdir',lambda directory:[str(process.pid)] if isinstance(directory,int) else original(directory))
     request={'executable':os.readlink(process.proc/'exe'),
-        'sha256':agent.hash_artifact(process.proc/'exe',{}),'checks':['package','executable']}
+        'sha256':agent.hash_artifact(process.proc/'exe',{}),'process_identity':recorded_identity(process),'checks':['package','executable']}
     monkeypatch.setattr(bridge,'run',lambda *a,**k:'fixture: owner only, not authenticated')
     result=bridge.process_evidence(request)
     assert result['identity_verified'] and result['version']==2
     assert result['context']['process']['pid']==process.pid
     assert 'Uid:\t0\t0\t0\t0' in result['executable']['status']
     assert 'package_authentication_missing' in result['coverage']['gaps']
+    assert 'original_observation_process_not_identified' not in result['coverage']['gaps']
     def mutate(*a,**k):script.write_text('changed after first hash\n');return 'fixture'
     monkeypatch.setattr(bridge,'run',mutate)
     failed=bridge.process_evidence(request)
@@ -162,6 +184,24 @@ def test_observed_uid_must_match_and_invalid_uid_is_rejected(context_files,monke
     request['uid']='0';assert bridge.process_evidence(request)['identity_verified']
     request['uid']='untrusted-account'
     with pytest.raises(ValueError,match='account'):bridge.process_evidence(request)
+
+
+def test_bridge_exact_identity_does_not_substitute_an_equivalent_process(context_files,monkeypatch):
+    process,_=context_files;original=bridge.os.listdir
+    monkeypatch.setattr(bridge.os,'listdir',lambda directory:[str(process.pid)] if isinstance(directory,int) else original(directory))
+    request={'executable':os.readlink(process.proc/'exe'),'sha256':agent.hash_artifact(process.proc/'exe',{}),
+        'process_identity':recorded_identity(process),'checks':['executable']}
+    request['process_identity']['start_ticks']+=1
+    result=bridge.process_evidence(request)
+    assert result['identity_verified'] is False and result['coverage']['scope']=='recorded_process_identity'
+    assert 'recorded process identity is no longer running' in result['reason']
+
+
+def test_invalid_recorded_process_identity_is_rejected(context_files):
+    process,_=context_files
+    request={'executable':os.readlink(process.proc/'exe'),'sha256':agent.hash_artifact(process.proc/'exe',{}),
+        'process_identity':{'pid':process.pid},'checks':['executable']}
+    with pytest.raises(ValueError,match='observed process identity'):bridge.process_evidence(request)
 
 
 def test_isolated_installed_bridge_can_load_the_trusted_collector(tmp_path):

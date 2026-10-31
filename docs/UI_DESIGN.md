@@ -483,5 +483,22 @@ worker controls and operator/viewer isolation:
 - AI queue: [phone](screenshots/ai-parallel-v1220-320.jpg), [tablet](screenshots/ai-parallel-v1220-768.jpg), [desktop](screenshots/ai-parallel-v1220-1440.jpg).
 - Worker counts: [phone](screenshots/worker-ai-v1220-320.jpg), [tablet](screenshots/worker-ai-v1220-768.jpg), [desktop](screenshots/worker-ai-v1220-1440.jpg).
 
+
+## v1.23.0 recorded process identity
+
+Assessment context now distinguishes an exact recorded-process match from the legacy
+current-equivalent sample. The same amber glass notice labels the recorded PID and
+states that boot/PID/start/proc identity was rechecked; legacy records continue to
+show that the original observation is unidentified. Neither state presents a safety
+certification or enables fleet reuse, and all remaining coverage gaps stay visible.
+
+Browser acceptance covers both states, escaped unknown gaps, administrator isolation,
+Back/reload and the retained 320/768/1440 overflow checks. This is a focused wording
+and evidence-scope migration using the existing component system, not a new action or
+completion of the AI workspace/application-wide redesign. Reviewed exact-identity
+fixtures: [phone](screenshots/triage-recorded-process-v1230-320.jpg),
+[tablet](screenshots/triage-recorded-process-v1230-768.jpg) and
+[desktop](screenshots/triage-recorded-process-v1230-1440.jpg).
+
 These are documentation fixtures, not production workers or live provider results.
 The worker table intentionally scrolls horizontally on narrow screens.

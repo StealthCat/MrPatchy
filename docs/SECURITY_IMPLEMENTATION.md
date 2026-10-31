@@ -4061,3 +4061,67 @@ its final source receives a fresh complete CI run, including browser acceptance.
 The corrected 426551c1 database run and any transient browser timeout/retry are
 retained in PR #81; only all-success checks on the final published commit permit
 merge. No checks or UI assertions are weakened to obtain a pass.
+
+
+## v1.23.0 — Bind follow-up evidence to the recorded process identity
+
+Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
+checkpoint and merged PR #81's actual changes and exact-head validation. The empty
+100-item open-issue page and open-PR page establish that no issue fix or unfinished
+delivery competes with this batch. PR #81 delivered bounded cross-server claims and
+threaded execution, but the faster-triage and exact-known-good programs remain
+unfinished. This batch selects the next dependency-ordered context milestone.
+
+New periodic process samples retain a validated identity containing boot ID, PID,
+start ticks, PID namespace and the pinned proc-directory device/inode. Execution-event
+samples retain the same identity when the process is still observable; an exited or
+unreadable process remains useful evidence without inventing identity. The behavior
+deduplication key deliberately excludes this observation-only identity. Pending/error
+work adopts a newer verified identity for the same behavior, while completed results
+and assessment history do not silently move to a different process. Missing or
+malformed identity never replaces a verified one.
+
+When a follow-up is requested, the controller supplies the saved identity to the
+allowlisted evidence action. The target opens only that PID and requires all identity
+fields, executable path/bytes and account/context to match before and after package or
+service reads. PID reuse, target restart, namespace change, proc-directory replacement,
+exit or any sampled context/artifact change refuses the entire receipt. Another process
+with identical path/hash/account is never substituted. The selector remains local and
+is removed from provider input while retained in the assessment snapshot. Older observations omit the
+identity and retain the prior bounded current-equivalent scan plus the explicit
+`original_observation_process_not_identified` gap.
+
+An exact match removes only that single gap and reports scope
+`recorded_process_identity`. It remains ineligible for fleet reuse. Authenticated
+package provenance, relevant configuration, startup/effective behavior, historical
+network coverage, arguments/environment, executed-script and memory attestation remain
+strict missing-context failures. No canonical fleet key, trusted-cache publication or
+hit, implicit approval, response authorization or provider-input expansion is added.
+
+Acceptance covers every identity-field mismatch, PID substitution refusal, before/
+after races, legacy fallback, malformed target data, behavior-key stability and
+pending-versus-completed identity updates. Native Linux SSH acceptance creates a live
+script process, records its exact identity and requires the returned context to match
+it. Assessment UI acceptance distinguishes recorded versus sampled scope with the
+existing responsive/escaped glass surface. Full local/browser and all nine exact-final-
+head CI results plus actual merge state are recorded in the delivery PR.
+
+Upgrade controller/workers together and use the reviewed Agent upgrade workflow to
+install both helper and collector. There is no schema change, target auto-upgrade,
+Docker publication or Git tag. APP_VERSION/README/changelog/UI/API synchronize at
+v1.23.0; major remains 1 and the schedule is unchanged.
+
+Remaining priority: complete authenticated package/configuration/startup/network and
+behavior coverage, then define the strict host-independent canonical fingerprint and
+deliver durable exact-known-good publication/hit/revocation/manual-refresh acceptance.
+Safe same-host scheduling/fairness, distributed pacing/daily reservations/uncertain-
+charge ledger/unthrottled controls and the other requested roadmap programs remain
+unfinished. This batch does not complete the finite faster-triage roadmap.
+
+Pre-publication validation on the selected source passed **1,459 tests / 8 skipped**
+plus nine version-policy subtests, the 186-case focused AI/context suite and the
+complete browser suite. The final 320/768/1440 exact-identity renders were inspected
+without horizontal overflow. The versioned delivery PR records the exact published
+head/tree, all nine final-head SQLite/MySQL/browser/native checks, completed workflow
+and actual merge SHA or a precise unfinished blocker. No earlier-head result permits
+merge, and a final source change requires applicable revalidation.
