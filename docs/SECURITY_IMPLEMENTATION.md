@@ -5259,3 +5259,33 @@ intact and this update's entries reapplied.
 
 
 Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
+
+## v1.35.25 — Deleted-server indirect read authorization
+
+Owner: Codex `issue118-a53dc732a02d`, branch
+`codex/deleted-host-read-boundary`, issue #118. Read current main `128704f`
+(v1.35.21), AGENTS/CONTRIBUTING, checkpoint, 78 open issues and open PRs
+#203/#206/#207. #119 and #205 are actively owned; #120 is a separate recovery
+scope and #204 depends on active #203. No unrelated roadmap/UI changes selected.
+The issue claim's initially written 21:25Z timestamp was inaccurate; the actual
+run/checkpoint is 2026-10-31T21:19Z.
+
+Reproduced on unmodified main using disposable SQLite and the real authenticated
+FastAPI application: 14 failures / 12 passes in the new regression suite. Viewers
+and operators received 200 for deleted-server query-scoped jobs, job output,
+investigations and package history; global job/package pages included deleted
+records. Direct host paths already returned 403. The cause was URL-only lifecycle
+read authorization, without resolved-host checks in query/indirect endpoints.
+
+The fix checks the resolved host before returning query-scoped records or job-ID
+output. Job/package list filtering occurs in SQL before pagination. Retained
+administrator access, disabled-server read policy, active-only default fleet
+investigations, missing/mismatched scope responses and hostless jobs are preserved.
+No response authority, schema, helper, audit policy or route-role changes.
+
+Focused validation: 44 passed (26 new authorization cases plus lifecycle suite).
+Full Python suite and exact-final-head CI remain required before merge. Source,
+README and changelog use v1.35.25 above pending .22/.23/.24 allocations; integration
+must recheck main/version order and preserve #206's independently owned role work.
+No tags or Docker publication. Issue #118 stays open until a tested merge is
+verified. All wider roadmap requirements remain tracked above.
