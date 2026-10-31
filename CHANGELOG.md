@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.25.0 — 2026-10-31
+
+- Retain controller-authenticated signed-package manifests with exact target artifact verification.
+- Bind an exact recorded-process executable path and SHA-256 to versioned artifact/provenance components while keeping server, PID, inspection and authentication-time observations local.
+- Revalidate persisted Debian/RPM manifests, signature provenance and target receipts; changed bytes, incomplete verification and malformed/tampered evidence remain hard cache misses.
+- Remove only the package-authentication gap and keep configuration, behavior, follow-up and coverage incomplete, so no fingerprint, cache hit, approval or provider-call bypass is introduced.
+
 ## 1.24.0 — 2026-10-31
 
 - Define a strict versioned canonical fingerprint contract for future fleet-wide exact known-good reuse.

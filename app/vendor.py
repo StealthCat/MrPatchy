@@ -2,6 +2,8 @@
 import email.utils
 import hashlib
 import io
+import json
+import math
 import os
 from pathlib import Path
 import re
@@ -185,8 +187,58 @@ def replacement(bundle_id,path):
 
 
 def authentication_digest(manifest,proof):
-    import json
-    return sha(json.dumps({'manifest':manifest,'authentication':{k:v for k,v in proof.items() if k!='authenticated_at'}},sort_keys=True,separators=(',',':')).encode())
+    return sha(json.dumps({'manifest':manifest,'authentication':{k:v for k,v in proof.items() if k!='authenticated_at'}},sort_keys=True,separators=(',',':'),allow_nan=False).encode())
+
+
+def validate_authenticated(manifest,proof,result):
+    """Revalidate persisted controller-authenticated package evidence."""
+    if not isinstance(manifest,dict) or not isinstance(proof,dict) or not isinstance(result,dict):raise ValueError('Authenticated vendor manifest is missing')
+    expected={'package','version','architecture','entries'}|({'package_manager'} if manifest.get('package_manager')=='rpm' else set())
+    if set(manifest)!=expected or any(not isinstance(manifest.get(k),str) or not manifest[k] or len(manifest[k])>200 for k in ('package','version','architecture')):
+        raise ValueError('Invalid authenticated vendor package identity')
+    entries=manifest.get('entries')
+    if not isinstance(entries,list) or not 1<=len(entries)<=200:raise ValueError('Invalid authenticated vendor file manifest')
+    seen=set()
+    for entry in entries:
+        if (not isinstance(entry,dict) or set(entry)!= {'path','sha256','size'} or not isinstance(entry.get('path'),str)
+            or not entry['path'].startswith('/') or entry['path'].startswith('//') or str(Path(entry['path']))!=entry['path']
+            or entry['path'] in seen or len(entry['path'])>4096 or any(ord(c)<32 for c in entry['path'])
+            or not re.fullmatch('[a-f0-9]{64}',entry.get('sha256','')) or type(entry.get('size')) is not int
+            or not 0<=entry['size']<=32*1024*1024):raise ValueError('Invalid authenticated vendor file identity')
+        seen.add(entry['path'])
+    try:encoded=json.dumps(proof,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+    except (TypeError,ValueError):raise ValueError('Invalid vendor authentication provenance') from None
+    if len(encoded)>32000:raise ValueError('Authentication provenance exceeds preparation budget')
+    if not re.fullmatch('[A-Za-z0-9_-]{1,64}',proof.get('bundle_id','')) or not all(re.fullmatch('[a-f0-9]{64}',proof.get(k,'')) for k in ('artifact_sha256','keyring_sha256')):
+        raise ValueError('Invalid vendor authentication provenance')
+    authenticated=proof.get('authenticated_at')
+    if type(authenticated) not in (int,float) or not math.isfinite(authenticated) or not authenticated>0:raise ValueError('Invalid vendor authentication time')
+    if manifest.get('package_manager')=='rpm':
+        signers=proof.get('signature_key_ids')
+        if proof.get('authentication')!='native_rpm_signature_and_sha256_digests' or not isinstance(signers,list) or not signers or any(not re.fullmatch('[a-f0-9]{8,64}',s) for s in signers):
+            raise ValueError('Invalid RPM authentication provenance')
+    else:
+        signers=proof.get('signers')
+        if not all(re.fullmatch('[a-f0-9]{64}',proof.get(k,'')) for k in ('release_sha256','index_sha256')) or not isinstance(signers,list) or not signers or any(not re.fullmatch('[A-Fa-f0-9]{16,64}',s) for s in signers):
+            raise ValueError('Invalid Debian authentication provenance')
+    validate_receipt(manifest,result)
+    return {'manifest_sha256':sha(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()),
+        'proof_sha256':authentication_digest(manifest,proof),'authenticated_at':float(authenticated)}
+
+
+def known_good_binding(manifest,proof,result,path,checksum):
+    """Bind one exact path/hash to signed package evidence without target trust."""
+    verified=validate_authenticated(manifest,proof,result)
+    if result.get('state')!='matches_artifact_bytes':raise ValueError('Vendor inspection did not verify all authenticated regular files')
+    entries=[entry for entry in manifest['entries'] if entry['path']==path and entry['sha256']==checksum]
+    if len(entries)!=1:raise ValueError('Executable is not an exact authenticated vendor artifact match')
+    entry=entries[0];basis=trust_basis(manifest)
+    artifact={'version':1,'verified':True,'kind':'vendor-package-regular-file','path':path,'sha256':checksum,
+        'size':entry['size'],'manifest_sha256':sha(json.dumps(entry,sort_keys=True,separators=(',',':')).encode())}
+    provenance={'version':1,'verified':True,'scheme':basis,'subject':manifest['package'],'release':manifest['version'],
+        'architecture':manifest['architecture'],'manifest_sha256':verified['manifest_sha256'],'proof_sha256':verified['proof_sha256'],
+        'scope':'authenticated signed package artifact bytes; not current repository membership, support status, key revocation or a clean-host verdict'}
+    return artifact,provenance,verified['authenticated_at']
 
 
 def replacement_payload(bundle_id,path):

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import io
 import json
@@ -189,6 +190,7 @@ def test_vendor_api_and_worker_retains_controller_provenance(admin,monkeypatch,b
         job=s.get(Job,queued.json()['job_id']);assert job.state=='complete',job.output
         receipt=s.get(incidents.Inspection,job.id).report
         assert receipt['vendor_authentication']['signers'] and receipt['vendor_verification']['state']=='matches_artifact_bytes'
+        assert receipt['vendor_manifest']['entries'][0]['path']=='/usr/share/patchy-test'
     for role in ('operator','viewer'):
         with Session() as s:s.get(User,'admin').role=role;s.commit()
         assert admin.post(path,json={'bundle_id':'fixture'}).status_code==403
@@ -210,6 +212,27 @@ def test_controller_rejects_contradictory_or_unscoped_receipts(patch):
     item=manifest(Path('/fixture'))
     receipt={'trust_basis':'controller_authenticated_debian_artifact','package':'patchy-test','version':'1.0-1','architecture':'amd64','state':'matches_artifact_bytes','scope_files':1,'examined':1,'findings':[],'gaps':[]}
     with pytest.raises(ValueError):vendor.validate_receipt(item,{**receipt,**patch})
+
+
+def test_persisted_authenticated_receipt_tampering_fails_closed(bundle):
+    manifest,proof=vendor.authenticate('fixture')
+    receipt={'trust_basis':'controller_authenticated_debian_artifact','package':manifest['package'],
+        'version':manifest['version'],'architecture':manifest['architecture'],'scope_files':1,
+        'examined':1,'state':'matches_artifact_bytes','gaps':[],'findings':[]}
+    report={'version':1,'trust_basis':'controller_authenticated_debian_artifact','state':'collected',
+        'packages':[],'persistence':None,'vendor_manifest':manifest,
+        'vendor_authentication':proof,'vendor_verification':receipt}
+    changed=[]
+    for section,key,value in (
+        ('vendor_manifest','version','tampered'),
+        ('vendor_authentication','keyring_sha256','not-a-digest'),
+        ('vendor_authentication','authenticated_at',float('inf')),
+        ('vendor_verification','examined',0),
+    ):
+        item=copy.deepcopy(report);item[section][key]=value;changed.append(item)
+    with Session() as s:
+        for index,item in enumerate(changed):
+            with pytest.raises(ValueError):incidents.record_inspection(s,'host','tampered-'+str(index),item,vendor_authenticated=True)
 
 
 def test_target_cannot_label_local_receipt_as_controller_authenticated():

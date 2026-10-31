@@ -388,7 +388,8 @@ def execute_locked(job_id):
                 result=ssh.call(h,{'action':'vendor-inspect','manifest':manifest},timeout=150)
                 vendor.validate_receipt(manifest,result)
                 report={'version':1,'trust_basis':vendor.trust_basis(manifest),'state':'collected' if result['state']!='incomplete' else 'incomplete',
-                        'packages':[],'persistence':None,'vendor_verification':result,'vendor_authentication':provenance}
+                        'packages':[],'persistence':None,'vendor_manifest':manifest,
+                        'vendor_verification':result,'vendor_authentication':provenance}
                 incidents.record_inspection(s,h.id,job.id,report,vendor_authenticated=True)
                 job.output=json.dumps({'state':result['state'],'bundle_id':job.payload['bundle_id'],'examined':result.get('examined')})
             elif job.action=='security-inspect':
@@ -606,7 +607,9 @@ def _assess_active_behavior(s,row,cfg,secret):
             except ai_claims.Lost:raise
             except Exception as error:raise ai.AIError('SSH evidence collection failed ('+type(error).__name__+'). Verify target connectivity, host pinning and helper installation.') from None
         with ai_runs.measure('evidence_persistence'):
-            updated={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
+            collected=time.time();updated={**row.evidence,'investigation':{'collected':collected,'details':evidence}}
+            from . import known_good
+            with Session() as provenance_read:updated=known_good.bind_vendor_provenance(provenance_read,row.host_id,updated,collected)
             if lease:
                 with lease.mutation() as (write,saved):saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)

@@ -245,6 +245,9 @@ def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
         raise ValueError('Unsupported inspection receipt; update target helpers')
     if not vendor_authenticated and ('vendor_authentication' in report or 'vendor_verification' in report):
         raise ValueError('Vendor authentication must originate on the controller')
+    if vendor_authenticated:
+        from . import vendor
+        vendor.validate_authenticated(report.get('vendor_manifest'),report.get('vendor_authentication'),report.get('vendor_verification'))
     packages=report.get('packages')
     if not isinstance(packages,list) or len(packages)>16:raise ValueError('Invalid inspection package list')
     total=0

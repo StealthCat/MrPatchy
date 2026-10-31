@@ -119,7 +119,9 @@ def test_rpm_target_checks_exact_epoch_and_architecture_before_and_after_hashing
 
 def test_rpm_worker_retains_provenance_and_rejects_target_trust_forgery(admin,monkeypatch):
     manifest,_=vendor_rpm.metadata_manifest(metadata())
-    proof={'signature_key_ids':['0123456789abcdef'],'artifact_sha256':'b'*64}
+    proof={'bundle_id':'fixture','signature_key_ids':['0123456789abcdef'],'artifact_sha256':'b'*64,
+        'keyring_sha256':'c'*64,'authenticated_at':123,
+        'authentication':'native_rpm_signature_and_sha256_digests'}
     monkeypatch.setattr(vendor,'authenticate',lambda *args:(manifest,proof))
     with Session() as s:s.add(Host(id='rpm-vendor',name='rpm',address='192.0.2.1',fingerprint='test'));s.commit()
     receipt={'trust_basis':'controller_authenticated_rpm_artifact','package':manifest['package'],'version':manifest['version'],'architecture':manifest['architecture'],'scope_files':1,'examined':1,'state':'matches_artifact_bytes','gaps':[],'findings':[]}

@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.24.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.25.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -761,6 +761,24 @@ approval, suppresses deterministic protection, or avoids a provider call. Durabl
 publication, concurrent cross-server lookup/hits, revocation/contradiction review and
 zero-call SQLite/MySQL acceptance remain the next known-good milestones. This update
 adds no database schema or target-helper change.
+
+### Authenticated artifact provenance (v1.25.0)
+
+Completed offline vendor inspections now retain the controller-authenticated package
+manifest alongside its signature proof and exact target verification. When a later
+AI follow-up is bound to the exact recorded process, Mr Patchy can reuse a same-server
+inspection only if that executable path and SHA-256 match a fully verified signed
+package regular file. This removes only the authenticated-package coverage gap and
+records versioned artifact/provenance components for the future exact-match key.
+
+The package proof is revalidated before storage and again before binding. A changed
+artifact hash, incomplete target verification, malformed receipt or target-local
+package ownership is a hard miss. Authentication time, inspection ID and server/process
+identity remain local observations and are excluded from both the canonical components
+and AI provider input. Configuration, effective behavior, required follow-up and
+complete coverage are still explicit misses, so this milestone creates no fingerprint,
+cache publication/hit, approval, detector suppression or provider-call bypass. It adds
+no database schema or target-helper change.
 
 
 ### Identity-bound follow-up context (v1.21.0)
