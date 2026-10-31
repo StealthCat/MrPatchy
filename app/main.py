@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.31.0'
+APP_VERSION='1.32.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -598,9 +598,11 @@ def audit_detail(entry_id:int,user=Depends(auth)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(auth)):
+    from . import ai_budget
     with Session() as s:
         cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
         return cfg|{'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
+            'ai_budget':ai_budget.status(s),
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
 class ConfigInput(BaseModel):
@@ -611,16 +613,20 @@ class ConfigInput(BaseModel):
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_updates_enabled:bool=True
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
-    ai_control_mode:str=Field(default='rate',pattern='^(legacy|rate|unthrottled)$')
+    ai_control_mode:str=Field(default='rate',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
+    ai_daily_cap_usd:float=Field(default=10,gt=0,le=1_000_000)
+    ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
 @app.put('/api/settings')
 def settings_save(body:ConfigInput,user=Depends(auth)):
+    from . import ai_budget
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()): raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
     body.ai_model=body.ai_model.strip();body.api_key=body.api_key.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
+    if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     with Session() as s:
         if body.ai_enabled and (not body.ai_model or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
         s.merge(Setting(key='config',value=body.model_dump(exclude={'api_key'})))
@@ -638,8 +644,10 @@ class AISettingsInput(BaseModel):
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_updates_enabled:bool=True
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
-    ai_control_mode:str=Field(default='legacy',pattern='^(legacy|rate|unthrottled)$')
+    ai_control_mode:str=Field(default='legacy',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
+    ai_daily_cap_usd:float=Field(default=10,gt=0,le=1_000_000)
+    ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
 
 class AIKeyInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -663,6 +671,10 @@ def save_settings_section(values,section):
             detail='Saved '+section+' configuration; no provider test was performed'
             if section=='ai' and previous['ai_control_mode']!=values['ai_control_mode']:
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
+            if section=='ai' and previous['ai_daily_cap_usd']!=values['ai_daily_cap_usd']:
+                detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
+            if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
+                detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             audit(s,'update '+section+' settings',detail)
             s.commit()
             return {'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
@@ -681,9 +693,11 @@ def ai_key_save(body:AIKeyInput,user=Depends(auth)):
 
 @app.put('/api/settings/ai')
 def ai_settings_save(body:AISettingsInput,user=Depends(auth)):
+    from . import ai_budget
     body.ai_model=body.ai_model.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):
         raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
+    if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     return save_settings_section(body.model_dump(),'ai')
 
 @app.put('/api/settings/patching')

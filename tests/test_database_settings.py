@@ -3,9 +3,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from decimal import Decimal
 
 import pytest
-from sqlalchemy import Boolean, Double, Integer, JSON, create_engine, select
+from sqlalchemy import Boolean, Double, Integer, JSON, Numeric, create_engine, select
 from sqlalchemy.engine import make_url
 
 from app import database_config as settings, database_migrate as migration
@@ -82,6 +83,7 @@ def seed_all(engine):
                     if isinstance(col.type, Boolean): value=bool(i)
                     elif isinstance(col.type, Integer): value=41+i
                     elif isinstance(col.type, Double): value=1770000000.123456+i
+                    elif isinstance(col.type, Numeric): value=Decimal('1.234567')+i
                     elif isinstance(col.type, JSON): value={'unicode':'raccoon 🦝 café','items':[None,True,False,1.25,{'id':'host-1'}]}
                     else: value='fixture-'+str(i)
                     row[col.name]=value

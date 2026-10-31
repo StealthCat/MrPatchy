@@ -124,20 +124,27 @@ def list_models(key):
 
 
 def request(payload,key,timeout=60):
-    from . import ai_policy,ai_admission
+    from . import ai_policy,ai_admission,ai_budget
     # Invalid local configuration must not consume a shared rate reservation.
     if not key.strip() or not re.fullmatch(r'[!-~]{1,1000}',key.strip()):
         raise AIError('The saved API key contains invalid characters. Replace it in Settings.')
     if not isinstance(payload.get('model'),str) or not payload['model'].strip():
         raise AIError('Save an API model ID in Settings before testing.')
     with ExitStack() as stack:
-        with ai_runs.measure('provider_admission'):
-            stack.enter_context(ai_policy.provider())
-            ai_admission.admit(payload.get('model',''))
-        return _request(payload,key,timeout)
+        reservation=None
+        try:
+            with ai_runs.measure('provider_admission'):
+                stack.enter_context(ai_policy.provider())
+                reservation=ai_budget.reserve(payload)
+                ai_admission.admit(payload.get('model',''))
+            return _request(payload,key,timeout,reservation)
+        except Exception:
+            ai_budget.release_unsent(reservation,'No provider request was sent.')
+            raise
 
 
-def _request(payload,key,timeout=60):
+def _request(payload,key,timeout=60,reservation=None):
+    from . import ai_budget
     key=key.strip()
     if not key or not re.fullmatch(r'[!-~]{1,1000}',key):raise AIError('The saved API key contains invalid characters. Replace it in Settings.')
     payload={**payload,'model':payload['model'].strip()}
@@ -145,17 +152,23 @@ def _request(payload,key,timeout=60):
     try:
         with ai_runs.measure('receipt_persistence'):
             call_id=ai_runs.request_started(payload['model'])
+        ai_budget.mark_sent(reservation,call_id)
         with ai_runs.measure('provider'):
             response=transport.post(URL,headers={'Authorization':'Bearer '+key},json=payload,timeout=timeout)
         ai_runs.response_received(response)
         try:data=response.json()
         except (ValueError,UnicodeDecodeError):data=None
-        if isinstance(data,dict):
-            with ai_runs.measure('usage_persistence'):ai_runs.record_usage(call_id,data,payload)
+        with ai_runs.measure('usage_persistence'):
+            values=ai_runs.record_usage(call_id,data if isinstance(data,dict) else {},payload)
+            ai_budget.reconcile(reservation,values)
         response.raise_for_status()
     except httpx.HTTPStatusError as error:raise http_error(error.response) from None
-    except httpx.TimeoutException:raise AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.',transient=True) from None
-    except httpx.RequestError as error:raise AIError('Could not reach the OpenAI API. Check central-server DNS, outbound HTTPS, proxy settings and trusted CA certificates.',transient=not isinstance(error,(httpx.LocalProtocolError,httpx.UnsupportedProtocol))) from None
+    except httpx.TimeoutException:
+        ai_budget.mark_uncertain(reservation,'Provider outcome is unknown after a timeout; the full reservation remains counted.')
+        raise AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.',transient=True) from None
+    except httpx.RequestError as error:
+        ai_budget.mark_uncertain(reservation,'Provider outcome is unknown after a transport failure; the full reservation remains counted.')
+        raise AIError('Could not reach the OpenAI API. Check central-server DNS, outbound HTTPS, proxy settings and trusted CA certificates.',transient=not isinstance(error,(httpx.LocalProtocolError,httpx.UnsupportedProtocol))) from None
     if data is None:raise AIError('OpenAI returned invalid JSON. Check any HTTPS proxy or gateway between Mr Patchy and the API.')
     if not isinstance(data,dict):raise AIError('OpenAI returned an unexpected response format.')
     if data.get('status')!='completed':
