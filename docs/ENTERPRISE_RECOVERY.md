@@ -72,6 +72,38 @@ Stop **all** web and worker replicas before taking a coordinated backup. Backups
 - encryption key and entire SSH identity/rotation directory (an explicit empty directory for a deployment with no servers yet; a private key must be present for every server that is not deleted, or backup and activation stop);
 - TLS configuration, Caddy certificate/private-CA data and Caddy configuration.
 
+Format-2 bundles also retain `DATA_DIR/evidence-archive`, `vendor-packages`,
+`yara-rules` (including operator-managed trusted keyrings and replacement bytes),
+and `gcloud` (the standard GCP credential/configuration location). The manifest
+records each present tree's exact filenames, byte lengths and SHA-256 digests;
+missing directories are explicitly recorded and reported, rather than claimed as
+covered. Records marked verified in the evidence archive table require both
+content and receipt files before a backup can succeed. Restore and activation
+revalidate tree coverage; activation does so before writing destination state.
+Files/directories in these private trees restore as 0600/0700 and app service
+ownership. Symlinks, hardlinks and special files are refused, never dereferenced.
+Keep all replicas stopped and staging private throughout recovery.
+
+Format-1 backups remain readable, with an explicit warning that evidence, trust
+and GCP filesystem coverage is absent/unverified. Recover those dependencies
+separately before relying on retained investigation/response records. Older
+recovery scripts cannot read format 2: use the updated script to restore it.
+Restoration does not approve an action, refresh an expired signature, modify
+custody receipts or attest a target-side file; normal archive/signature checks
+still apply after restart.
+
+| Filesystem state | Recovery treatment |
+|---|---|
+| Active database; secret.key; ssh identities and rotation journals | Snapshot/dump and original key/SSH state retained; enrolled keys required |
+| Evidence archive bytes, receipts and partial acquisition files | Retained exactly; verify restored archives through the existing status workflow |
+| Vendor and YARA bundles, keyrings, staged replacement bytes | Retained exactly; normal signatures/expiry checks still apply |
+| DATA_DIR/gcloud configuration, credentials and local CLI state | Retained privately; external credential/config paths need separate recovery |
+| TLS directory; Caddy data/config | Retained, including uploaded keys, ACME configuration and local CA |
+| database-active.json / database-target.json | Retained in staging for reference; not automatically activated at old paths/URLs |
+| apt/ and rpm/ metadata/workspaces; locks; temporary requests | Reconstructible caches/runtime state, excluded; rebuild metadata and regenerate unexecuted plans |
+| Compose/.env, external MySQL CA/client files, external GCP/IdP/restic credentials | Explicit external dependency; recover/remount through infrastructure procedures |
+| Target-side evidence/quarantine, agent spools, external DB server/storage | Separate target/infrastructure recovery; controller backup does not cover them |
+
 For remote MySQL connections set MYSQL_SSL_CA; verification is mandatory. Store the restic password separately from the repository and test recovery credentials.
 
 ```bash

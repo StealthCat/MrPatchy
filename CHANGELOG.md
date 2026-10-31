@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.35.27 — 2026-10-31
+
+1. Fix complete recovery omitting controller evidence archives, vendor packages/trusted keys, YARA rules/trusted keys and local GCP credential state (#120). Format-2 manifests record exact file coverage and hashes; backup, restore and activation validate this state. Verified archive records require their content and receipt files.
+2. Restore durable directories/files with private permissions and service ownership; reject links and special files. Continue accepting format-1 bundles with an explicit missing-coverage warning. Report absent directories and external infrastructure/credential dependencies honestly.
+3. Add SQLite evidence verification, signed vendor/YARA authentication, tamper/link/legacy regressions and native encrypted SQLite/MySQL recovery drills. Install native restic/MySQL clients in MySQL CI.
+4. Compatibility: older script versions cannot read format-2 bundles; update the recovery script before restoring. Unsafe linked/special filesystem state or missing verified evidence now blocks publication/activation. Major stays 1. No Docker image publication or Git tag.
+
 ## 1.35.24 — 2026-10-31
 
 - Stop pushes to `main` cancelling each other's CI runs. The shared concurrency group had cancelled the main runs for v1.35.16–v1.35.20 before they finished. Only superseded pull request runs are cancelled now, and pull requests are grouped by number so a fork branch named `main` cannot collide with `main`.
