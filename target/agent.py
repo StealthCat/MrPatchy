@@ -166,7 +166,7 @@ def collect(hash_cache):
             uid = next(x.split()[2] for x in read(p/'status').splitlines() if x.startswith('Uid:'))
             process={'pid':int(p.name),'executable':exe,'sha256':sha,'identity_verified':verified,'uid':uid,'network_namespace':namespace,'connections':connections,'provenance':provenance(p,hash_cache,deadline=deadline)}
             try:process['process_identity']=triage_observation_identity(observe_process_identity(p,int(p.name),boot))
-            except (OSError,ValueError) as error:errors.append({'pid':p.name,'error':'Process identity unverified: '+type(error).__name__})
+            except (OSError,ValueError) as error:errors.append({'pid':p.name,'error':'Process identity unverified: '+process_identity_diagnostic(error)})
             processes.append(process)
         except FileNotFoundError: pass # short-lived process / kernel thread
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
@@ -1289,17 +1289,32 @@ def response_proc_read(directory,name,limit=4096):
 
 def response_proc_identity(directory,pid):
     value=response_proc_read(directory,'stat');end=value.rfind(b') ')
-    if end<0 or value.split(b' ',1)[0]!=str(pid).encode():raise ValueError('Invalid process identity')
-    ticks=int(value[end+2:].split()[19])
+    try:
+        if end<0 or value.split(b' ',1)[0]!=str(pid).encode():raise ValueError
+        ticks=int(value[end+2:].split()[19])
+    except (IndexError,ValueError):raise ValueError('Invalid process stat identity') from None
     namespace=os.stat('ns/pid',dir_fd=directory).st_ino
-    if ticks<=0 or namespace<=0:raise ValueError('Invalid process identity')
+    # A task created within the first kernel clock tick has a legitimate zero
+    # start time. PID 1 commonly exposes that identity on native Linux hosts.
+    if ticks<0 or namespace<=0:raise ValueError('Invalid process stat identity')
     return {'pid':pid,'start_ticks':ticks,'pid_namespace':namespace}
+
+
+def process_identity_diagnostic(error):
+    """Return one bounded diagnostic code without copying procfs data."""
+    if isinstance(error,PermissionError):return 'permission denied (errno '+str(error.errno)+')'
+    if isinstance(error,OSError):return 'operating-system error (errno '+str(error.errno)+')'
+    if str(error)=='Boot identity unavailable':return 'boot identity unavailable'
+    if str(error)=='Invalid process stat identity':return 'invalid process stat identity'
+    return 'invalid observed identity'
 
 
 def triage_observation_identity(value):
     """Validate a stable read-only process identity supplied by the collector."""
-    integers=('pid','start_ticks','pid_namespace','proc_device','proc_inode')
-    if not isinstance(value,dict) or set(value)!={*integers,'boot_id'} or any(type(value[key]) is not int or value[key]<=0 for key in integers):
+    positive=('pid','pid_namespace','proc_device','proc_inode')
+    if (not isinstance(value,dict) or set(value)!={*positive,'start_ticks','boot_id'} or
+            any(type(value[key]) is not int or value[key]<=0 for key in positive) or
+            type(value['start_ticks']) is not int or value['start_ticks']<0):
         raise ValueError('Invalid observed process identity')
     if not isinstance(value['boot_id'],str) or not re.fullmatch('[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value['boot_id']):
         raise ValueError('Invalid observed process identity')
@@ -1555,7 +1570,7 @@ def process_executable(plan,info):
 def process_prepare(quarantine_id,quarantine_plan,expected,boot,namespace):
     import signal
     if not hasattr(signal,'pidfd_send_signal'):raise ValueError('Kernel/Python pidfd signalling is required')
-    if not isinstance(quarantine_id,str) or not re.fullmatch('[a-f0-9-]{36}',quarantine_id) or not isinstance(expected,dict) or set(expected)!={'pid','start_ticks','pid_namespace'} or any(type(v) is not int or v<=0 for v in expected.values()):raise ValueError('Invalid process preparation identity')
+    if not isinstance(quarantine_id,str) or not re.fullmatch('[a-f0-9-]{36}',quarantine_id) or not isinstance(expected,dict) or set(expected)!={'pid','start_ticks','pid_namespace'} or type(expected['start_ticks']) is not int or expected['start_ticks']<0 or any(type(expected[k]) is not int or expected[k]<=0 for k in ('pid','pid_namespace')):raise ValueError('Invalid process preparation identity')
     plan={'version':1,'quarantine_id':quarantine_id,'quarantine_plan':quarantine_plan,'process':expected,'boot_id':boot,'pid_namespace':namespace}
     with process_held(plan):
         root=response_proc_root()
@@ -1606,7 +1621,7 @@ def process_response(identifier,plan,approval=None,status_only=False,resume=Fals
     import signal,fcntl
     if not isinstance(identifier,str) or not re.fullmatch('[a-f0-9-]{36}',identifier):raise ValueError('Invalid process response ID')
     if not isinstance(plan,dict) or set(plan)!={'version','quarantine_id','quarantine_plan','process','boot_id','pid_namespace'} or type(plan['version']) is not int or plan['version']!=1 or len(json.dumps(plan).encode())>52000:raise ValueError('Invalid process response plan')
-    if not isinstance(plan['quarantine_id'],str) or not re.fullmatch('[a-f0-9-]{36}',plan['quarantine_id']) or not isinstance(plan['process'],dict) or set(plan['process'])!={'pid','start_ticks','pid_namespace','proc_device','proc_inode'} or any(type(v) is not int or v<=0 for v in plan['process'].values()) or plan['process']['pid']<=1 or type(plan['pid_namespace']) is not int or plan['pid_namespace']!=plan['process']['pid_namespace']:raise ValueError('Invalid process response scope')
+    if not isinstance(plan['quarantine_id'],str) or not re.fullmatch('[a-f0-9-]{36}',plan['quarantine_id']) or not isinstance(plan['process'],dict) or set(plan['process'])!={'pid','start_ticks','pid_namespace','proc_device','proc_inode'} or type(plan['process']['start_ticks']) is not int or plan['process']['start_ticks']<0 or any(type(plan['process'][k]) is not int or plan['process'][k]<=0 for k in ('pid','pid_namespace','proc_device','proc_inode')) or plan['process']['pid']<=1 or type(plan['pid_namespace']) is not int or plan['pid_namespace']!=plan['process']['pid_namespace']:raise ValueError('Invalid process response scope')
     digest=hashlib.sha256(json.dumps(plan,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     def expires():
         if not isinstance(approval,dict) or approval.get('action')!=('resume' if resume else 'suspend') or not isinstance(approval.get('id'),str) or not re.fullmatch('[a-f0-9-]{36}',approval['id']) or type(approval.get('expires')) not in (float,int) or not time.time()<approval['expires']<=time.time()+300:raise ValueError('Process response approval expired or invalid')

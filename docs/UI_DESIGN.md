@@ -69,6 +69,24 @@ actual desktop/tablet/mobile screenshots and verify critical workflows through t
 new pages, tabs and menus before declaring the full rework complete. Finished UI
 work remains subject to the scheduled development completion gate.
 
+### Planned distribution-upgrade status treatment
+
+Issue #96 adds a read-only server status to the finite UI inventory. When backend
+evidence confirms an offered distribution or major-version upgrade, show a clear
+card on that server's Overview Summary and the same compact icon/badge beside its
+name in every standard server directory, card, search result and reusable reference.
+The card identifies current and target versions and links to the existing reviewed
+release-upgrade workflow; neither the card nor icon starts an upgrade.
+
+Reuse one escaped API status and shared component so views cannot disagree. Pair
+the amber attention treatment with visible text, accessible naming and a tooltip;
+preserve the glass palette and mascot without obscuring version information. Do not
+show an available badge for stale, unreachable, failed, unsupported or merely known
+new releases. The state clears only after a fresh check. Integrate changed/reopened
+offers with the planned notification center without repeating unchanged alerts.
+Desktop, tablet, mobile, keyboard, role visibility, deep-link and stale-state renders
+remain required before this planned item can be marked complete.
+
 
 ## Implemented server workbench navigation (v0.6.0)
 
