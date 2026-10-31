@@ -17,7 +17,7 @@ module.exports=async function enrollmentUI(page,apiPath,capture){
     const {endpoint}=route.request().postDataJSON();submitted.push(endpoint);
     if(endpoint==='external'&&slowExternal){markExternal();await delayed;}
     const url=endpoints.find(item=>item.id===endpoint).url+'/enroll/fixture';
-    await route.fulfill({json:{url,endpoint,expires_in:3600,command:`curl -fsSL ${url} -o /tmp/mrpatchy-enroll.sh && sudo bash /tmp/mrpatchy-enroll.sh`}});
+    await route.fulfill({json:{url,endpoint,expires_in:3600,command:`f=$(mktemp) && curl -fsSL ${url} -o "$f" && sudo bash "$f"; rm -f "$f"`}});
   });
   await page.locator('#install-mode').selectOption('offline');
   await page.locator('#install-mode').selectOption('curl');
