@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.17 — 2026-10-31
+
+- Fix populated SBOM exports by retaining the resolved host for Debian/RPM package URL selection (#121).
+- Cover populated, empty and missing-host exports, package identity/version/architecture, host isolation and existing role/lifecycle access boundaries.
+
 ## 1.35.16 — 2026-10-31
 
 - Integrate PR #116 enrollment temporary-file hardening, PR #137 failed-login auditing and PR #115 CI runtime maintenance against current main, preserving the v1.35.11 eBPF diagnostic lifecycle fix and all original commit histories.
