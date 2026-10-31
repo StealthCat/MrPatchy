@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.24'
+APP_VERSION='1.35.40'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -120,6 +120,20 @@ def host_or_404(s,host_id):
     h=s.get(Host,host_id)
     if not h: raise HTTPException(404,'Server not found')
     return h
+
+def require_host_read(s,host_id,user):
+    """Apply retained-record policy after resolving query/indirect resource scope."""
+    host=s.get(Host,host_id) if host_id else None
+    if host and host.deleted_at and user['role']!='admin':
+        raise HTTPException(403,'Deleted server records require administrator access')
+
+
+def readable_host_records(query,host_column,user):
+    # Filter in SQL before pagination; disabled servers retain their read policy.
+    if user['role']!='admin':
+        query=query.where(host_column.not_in(select(Host.id).where(Host.deleted_at>0)))
+    return query
+
 
 def object_dict(obj,exclude=()): return {c.name:getattr(obj,c.name) for c in obj.__table__.columns if c.name not in exclude}
 def public_job(job):
@@ -480,7 +494,9 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(auth))
     if offset<0 or not 1<=limit<=500:raise HTTPException(400,'Invalid investigation pagination')
     with Session() as s:
         stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
-        if host_id: host_or_404(s,host_id);stmt=stmt.where(Behavior.host_id==host_id)
+        if host_id:
+            host_or_404(s,host_id);require_host_read(s,host_id,user)
+            stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
         from . import ai_retry,ai_policy,ai_claims
         rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
@@ -606,8 +622,10 @@ def control_worker(body:WorkerControlInput,user=Depends(auth)):
 def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):
     if offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid operation pagination')
     with Session() as s:
-        query=select(Job)
-        if host_id:host_or_404(s,host_id);query=query.where(Job.host_id==host_id)
+        query=readable_host_records(select(Job),Job.host_id,user)
+        if host_id:
+            host_or_404(s,host_id);require_host_read(s,host_id,user)
+            query=query.where(Job.host_id==host_id)
         return [public_job(x) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
 def audit_log(offset:int=0,limit:int=200,user=Depends(auth)):
@@ -839,6 +857,7 @@ def job_detail(job_id:str,host_id:str="",user=Depends(auth)):
     with Session() as s:
         job=s.get(Job,job_id)
         if not job or (host_id and job.host_id!=host_id): raise HTTPException(404,'Operation not found')
+        require_host_read(s,job.host_id,user)
         return public_job(job)
 
 @app.get('/api/hosts/{host_id}/history')
@@ -1374,8 +1393,10 @@ def retry_investigation(behavior_id:str,user=Depends(auth)):
 def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user=Depends(auth)):
     if offset<0 or not 1<=limit<=200:raise HTTPException(400,'Invalid history pagination')
     with Session() as s:
-        query=select(package_history.PackageEvent)
-        if host_id:host_or_404(s,host_id);query=query.where(package_history.PackageEvent.host_id==host_id)
+        query=readable_host_records(select(package_history.PackageEvent),package_history.PackageEvent.host_id,user)
+        if host_id:
+            host_or_404(s,host_id);require_host_read(s,host_id,user)
+            query=query.where(package_history.PackageEvent.host_id==host_id)
         if q:query=query.where(package_history.PackageEvent.name.contains(q[:200],autoescape=True))
         rows=list(s.scalars(query.order_by(package_history.PackageEvent.recorded.desc(),package_history.PackageEvent.id.desc()).offset(offset).limit(limit+1)))
         saved=update_scores.historical_cache(s,[(r.host_id,r.name,v) for r in rows[:limit] if r.action=='version_changed' for v in r.after])

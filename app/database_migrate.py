@@ -337,7 +337,8 @@ def migrate(source_url, target_url, dry_run=False, progress=None):
                     progress.enter('verify-transaction','Verifying uncommitted table '+table.name,role='destination',table=table.name)
                     if fingerprint(dst, table) != expected[table.name]:
                         raise MigrationError('Destination content verification failed in ' + table.name)
-            # Verify committed data using a fresh connection before activation.
+            # The commit completed before this reconnect; report that state even if connecting fails.
+            progress.enter('verify-committed','Connecting to destination for committed verification',role='destination')
             with target.connect() as dst:
                 for table in meta.sorted_tables:
                     progress.enter('verify-committed','Verifying committed table '+table.name,role='destination',table=table.name)

@@ -186,6 +186,24 @@ def wrap(orig):
     except Exception as outer:return outer
 '''
 CASES={
+ 'committed-reconnect':(NESTED+'''
+real_enter=m.Progress.enter
+real_connect_url=m.connect_url
+state={'verifying_copy':False}
+def enter(self,stage,*args,**kwargs):
+    real_enter(self,stage,*args,**kwargs)
+    if stage=='verify-transaction':state['verifying_copy']=True
+def connect_url(value,source=False):
+    engine=real_connect_url(value,source)
+    if not source:
+        real_connect=engine.connect
+        def reconnect(*args,**kwargs):
+            if state['verifying_copy']:raise wrap(pymysql.err.OperationalError(2013,LEAK))
+            return real_connect(*args,**kwargs)
+        engine.connect=reconnect
+    return engine
+m.Progress.enter=enter
+m.connect_url=connect_url''',[],'verify-committed','connection','mysql 2013'),
  'auth':(NESTED+'''
 def boom(*a,**k):raise wrap(pymysql.err.OperationalError(1045,LEAK))
 m.validate_destination=boom''',[],'destination-validate','authentication','mysql 1045'),
@@ -225,6 +243,9 @@ def test_cli_failures_report_stage_cause_and_redact_nested_driver_text(initializ
     for leaked in (SECRET,'secret-row-value','INSERT INTO','second line','\x1b','leak'):
         assert leaked not in done.stderr
     assert ('Stack:' in done.stderr)==verbose
+    if stage=='verify-committed':
+        assert 'copy was committed' in done.stderr and 'NOT activated' in done.stderr
+        assert 'uncommitted transaction' not in done.stderr
     if stage=='copy':assert 'rows may have been inserted' in done.stderr and 'table "' in done.stderr
 
 
