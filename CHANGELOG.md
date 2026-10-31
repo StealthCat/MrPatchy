@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.35.0 — 2026-10-31
+
+- Retain incident-response and startup-change advisory AI plan jobs across shared rate, daily-spend, provider-backoff and administrator-pause refusals instead of marking them terminally failed.
+- Persist exact timed eligibility or an explicit resume wait, refuse early execution, and recheck lifecycle, pause, evidence and every shared control before a later scheduler attempt.
+- Preserve sent-call receipts and spend outcomes without immediate HTTP replay; pre-send refusals create no provider call, rate start or budget charge.
+- Expose deferred plan count and next eligibility in AI worker status and Activity, with regression coverage for zero-transport refusal, pause, resume, pooled-schema upgrade and successful completion; multi-stage release planning remains deliberately excluded until per-stage persistence exists.
+
 ## 1.34.0 — 2026-10-31
 
 - Retain update-scoring work refused by shared rate, spend or provider-backoff controls as a durable deferral with its exact next eligibility instead of a generic one-hour error delay.

@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from contextlib import contextmanager
 from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_
 from sqlalchemy.orm import Mapped, mapped_column
-from .db import Base, Session, Setting, Behavior, Package, config
+from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
 
 log = logging.getLogger('uvicorn.error')
@@ -288,7 +288,13 @@ def status(s):
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
     scoring_deferred=s.scalar(select(func.count()).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
     scoring_next=s.scalar(select(func.min(UpdateScore.next_at)).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
+    plan_rows=list(s.scalars(select(Job).where(Job.action.in_(('security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()))))
+    plan_rows=[row for row in plan_rows if row.payload.get('_ai_deferred') is True]
+    plan_deferred=len(plan_rows)
+    plan_next=min((row.next_at for row in plan_rows if row.next_at>now),default=None)
+    plan_ready=any(row.next_at<=now and row.host_id not in paused_ids for row in plan_rows)
     if scoring_next and scoring_next>now:retry=min([value for value in (retry,scoring_next) if value is not None])
+    if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
     if provider_backoff['blocked']:
         retry=min([value for value in (retry,provider_backoff['next_at']) if value is not None])
     if admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now:
@@ -301,6 +307,9 @@ def status(s):
     elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min(recent+([oldest_run] if oldest_run else []))+3600
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
     elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
+    elif not rows and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
+    elif not rows and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
+    elif not rows and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
     elif not rows and scoring_deferred and scoring_next>now:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
     elif not rows and scoring_deferred:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
     elif not rows: reason='idle'; message='No unapproved pending behaviors. Collectors must report observations before triage can run.'
@@ -313,4 +322,5 @@ def status(s):
             'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
-            'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next}
+            'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
+            'plan_deferred':plan_deferred,'plan_next_at':plan_next}

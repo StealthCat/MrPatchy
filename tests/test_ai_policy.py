@@ -116,6 +116,7 @@ def test_queued_security_plan_rechecks_pause_at_worker_execution(managed,monkeyp
     worker.execute(job_id)
     with Session() as s:
         job=s.get(Job,job_id)
-        assert job.state=='failed',job.output
-        assert 'paused' in job.output
+        assert job.state=='queued',job.output
+        assert job.next_at==0 and job.payload['_ai_deferred'] is True
+        assert 'resumed' in job.output
         assert not list(s.scalars(select(incidents.Plan)))
