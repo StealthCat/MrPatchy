@@ -1,9 +1,10 @@
 """Strict candidate fingerprints for future fleet-wide known-good reuse.
 
-This module deliberately does not publish, look up, or trust a cached verdict.
-It only creates a host-independent candidate when a completed low-risk AI
+This module publishes, but does not look up or trust, a safe candidate. It
+creates a host-independent candidate only when a completed low-risk AI
 assessment carries an explicit, fully verified evidence-manifest contract.
-Current partial follow-up receipts therefore remain cache misses.
+Current partial follow-up receipts therefore remain cache misses, and a
+published candidate never implies approval or skips provider work.
 """
 from __future__ import annotations
 
@@ -12,7 +13,12 @@ import hashlib
 import json
 import math
 import re
+import time
 
+from sqlalchemy import Boolean, Double, Integer, JSON, String, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Mapped, mapped_column
+from .db import Base, audit
 
 FINGERPRINT_VERSION = 1
 CONTEXT_VERSION = 1
@@ -34,6 +40,36 @@ FOLLOWUP_CONTEXT_KEYS = {
     'version', 'process', 'credentials', 'namespaces', 'maps_sha256',
     'cgroup_sha256', 'artifacts', 'executable', 'coverage',
 }
+
+
+class Entry(Base):
+    """Minimal durable safe-candidate provenance; never an approval."""
+    __tablename__ = 'ai_known_good_entries'
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer)
+    created: Mapped[float] = mapped_column(Double, default=time.time)
+    classification_source: Mapped[str] = mapped_column(String(30))
+    model: Mapped[str] = mapped_column(String(100))
+    policy_hash: Mapped[str] = mapped_column(String(64))
+    assessment_id: Mapped[str] = mapped_column(String(36), index=True)
+    source_host_id: Mapped[str] = mapped_column(String(36), index=True)
+    contract: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict] = mapped_column(JSON)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default='1')
+    revoked_at: Mapped[float] = mapped_column(Double, default=0, server_default='0')
+    revoked_by: Mapped[str] = mapped_column(String(64), default='', server_default='')
+    revoked_reason: Mapped[str] = mapped_column(String(1000), default='', server_default='')
+
+
+class Observation(Base):
+    """Per-assessment/host provenance linked to one canonical candidate."""
+    __tablename__ = 'ai_known_good_observations'
+    assessment_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    host_id: Mapped[str] = mapped_column(String(36), index=True)
+    subject: Mapped[str] = mapped_column(String(64), index=True)
+    created: Mapped[float] = mapped_column(Double, default=time.time)
+    observation: Mapped[dict] = mapped_column(JSON)
 
 REASON_TEXT = {
     'source_not_ai': 'Only a recorded AI assessment can become an automatic safe candidate.',
@@ -279,8 +315,96 @@ def evaluate(snapshot, model, policy_hash, result, source):
         'fingerprint': fingerprint, 'reasons': []}
 
 
-def assessment(row):
-    return evaluate(row.snapshot, row.model, row.policy_hash, row.result, row.source)
+def _canonical_contract(snapshot):
+    details = snapshot['investigation']['details']
+    value = details['known_good_context']
+    return {'version': value['version'],
+        **{name: copy.deepcopy(value[name]) for name in COMPONENTS}}
+
+
+def _insert_once(s, row, model, key):
+    """Insert under a savepoint so a uniqueness race cannot poison the unit of work."""
+    existing = s.get(model, key)
+    if existing is not None:
+        return existing, False
+    try:
+        with s.begin_nested():
+            s.add(row)
+            s.flush()
+        return row, True
+    except IntegrityError:
+        # MySQL's default repeatable-read snapshot may predate the winning
+        # transaction. A locking read is a current read and sees that winner;
+        # SQLite safely ignores FOR UPDATE.
+        primary_key = model.__mapper__.primary_key[0]
+        existing = s.scalar(select(model).where(primary_key == key).with_for_update())
+        if existing is None:
+            raise
+        return existing, False
+
+
+def _same_entry(row, expected):
+    return (row.version == expected.version and
+        row.classification_source == expected.classification_source and
+        row.model == expected.model and row.policy_hash == expected.policy_hash and
+        row.contract == expected.contract)
+
+
+def _same_observation(row, expected):
+    return (row.fingerprint == expected.fingerprint and row.host_id == expected.host_id and
+        row.subject == expected.subject and row.observation == expected.observation)
+
+
+def publish(s, row):
+    """Durably record an eligible candidate and its isolated host observation.
+
+    The fingerprint is the uniqueness boundary. A conflicting durable row is
+    treated as corruption/collision and fails closed; an inactive row is never
+    reactivated by a later assessment.
+    """
+    status = assessment(row)
+    if not status['eligible']:
+        return status
+    # The retained assessment is the durable provenance anchor. Flush it first
+    # so generated timestamps/identities are available before candidate rows.
+    s.flush()
+    contract = _canonical_contract(row.snapshot)
+    candidate = Entry(fingerprint=status['fingerprint'], version=status['version'],
+        created=row.created, classification_source=row.source, model=row.model,
+        policy_hash=row.policy_hash, assessment_id=row.id, source_host_id=row.host_id,
+        contract=contract, result=copy.deepcopy(row.result))
+    saved, created = _insert_once(s, candidate, Entry, candidate.fingerprint)
+    if not _same_entry(saved, candidate):
+        raise RuntimeError('Known-good fingerprint collision or stored candidate corruption')
+    observation_value = copy.deepcopy(
+        row.snapshot['investigation']['details']['known_good_context']['observation'])
+    if observation_value.get('host_id', row.host_id) != row.host_id:
+        raise RuntimeError('Known-good observation host conflicts with its retained assessment')
+    observation = Observation(assessment_id=row.id, fingerprint=status['fingerprint'],
+        host_id=row.host_id, subject=row.subject, created=row.created,
+        observation=observation_value)
+    linked, linked_now = _insert_once(s, observation, Observation, observation.assessment_id)
+    if not _same_observation(linked, observation):
+        raise RuntimeError('Known-good assessment observation conflicts with its stored identity')
+    if created:
+        audit(s, 'publish known-good candidate',
+            f'{candidate.fingerprint} {candidate.assessment_id} {candidate.source_host_id}')
+    if linked_now:
+        audit(s, 'link known-good observation',
+            f'{observation.fingerprint} {observation.assessment_id} {observation.host_id}')
+    return {**status, 'published': bool(saved.active)}
+
+
+def assessment(row, s=None):
+    status = evaluate(row.snapshot, row.model, row.policy_hash, row.result, row.source)
+    if status['eligible'] and s is not None:
+        saved = s.get(Entry, status['fingerprint'])
+        valid = bool(saved and saved.active and saved.version == status['version'] and
+            saved.classification_source == row.source and saved.model == row.model and
+            saved.policy_hash == row.policy_hash and
+            saved.contract == _canonical_contract(row.snapshot))
+        status = {**status, 'published': valid}
+    return status
 
 
 def bind_vendor_provenance(s, host_id, evidence, collected):

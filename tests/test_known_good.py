@@ -1,8 +1,11 @@
 import copy
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import pytest
+from sqlalchemy import select
 
-from app import known_good
-from app.db import Session
+from app import ai_assessments, known_good
+from app.db import Audit, Behavior, Host, Session
 from app.incidents import Inspection
 
 
@@ -51,6 +54,15 @@ def evaluate(snapshot=None, **overrides):
 
 def codes(result):
     return [reason['code'] for reason in result['reasons']]
+
+
+def retained(id='assessment-one',host='host-one',subject='behavior-one',snapshot=None,
+        result=None,source='ai'):
+    return ai_assessments.Assessment(id=id,subject=subject,host_id=host,source=source,
+        model='gpt-fixture',policy_hash=sha('9'),state_hash=sha('0'),
+        result=result or {'risk':'low','explanation':'Safe with complete evidence',
+            'recommended_checks':'Continue deterministic monitoring'},
+        snapshot=snapshot or complete(),inputs=[])
 
 
 def test_complete_contract_creates_non_published_candidate():
@@ -127,6 +139,120 @@ def test_model_and_policy_are_part_of_the_exact_match_contract():
     baseline = evaluate()['fingerprint']
     assert evaluate(model='other-model')['fingerprint'] != baseline
     assert evaluate(policy_hash=sha('0'))['fingerprint'] != baseline
+
+
+def test_eligible_assessment_is_published_with_minimal_isolated_provenance(client):
+    with Session() as s:
+        row=retained();s.add(row)
+        status=known_good.publish(s,row);s.commit()
+        entry=s.get(known_good.Entry,status['fingerprint'])
+        observation=s.get(known_good.Observation,row.id)
+        actions=list(s.scalars(select(Audit.action).where(
+            Audit.action.in_(['publish known-good candidate','link known-good observation']))))
+    assert status['eligible'] and status['published']
+    assert entry.assessment_id==row.id and entry.source_host_id=='host-one'
+    assert set(entry.contract)=={'version',*known_good.COMPONENTS}
+    assert 'observation' not in entry.contract and 'host_id' not in str(entry.contract)
+    assert observation.observation==complete()['investigation']['details']['known_good_context']['observation']
+    assert sorted(actions)==['link known-good observation','publish known-good candidate']
+
+
+def test_assessment_api_reports_only_an_active_durable_publication(admin):
+    with Session() as s:
+        s.add(Host(id='host-one',name='Fixture',address='192.0.2.10',fingerprint=''))
+        s.add(Behavior(id='behavior-one',host_id='host-one',evidence=complete(),verdict='low'))
+        row=retained();s.add(row);status=known_good.publish(s,row);s.commit()
+    response=admin.get('/api/investigations/behavior-one/history/'+row.id)
+    assert response.status_code==200
+    assert response.json()['known_good']==status
+
+
+def test_ineligible_assessment_does_not_publish_any_durable_candidate(client):
+    snapshot=complete();snapshot['investigation']['details']['known_good_context']['coverage']['complete']=False
+    with Session() as s:
+        row=retained(snapshot=snapshot);s.add(row)
+        status=known_good.publish(s,row);s.commit()
+        assert s.scalar(select(known_good.Entry)) is None
+        assert s.scalar(select(known_good.Observation)) is None
+    assert not status['eligible'] and not status['published']
+
+
+def test_exact_cross_host_matches_deduplicate_entry_but_retain_each_observation(client):
+    second=complete();second['host_id']='host-two'
+    second['investigation']['details']['context']['process']={'pid':99,'start_ticks':88}
+    second['investigation']['details']['known_good_context']['observation']={
+        'host_id':'host-two','pid':99,'start_ticks':88,'collected':900}
+    with Session() as s:
+        first=retained();other=retained('assessment-two','host-two','behavior-two',second)
+        s.add_all([first,other]);left=known_good.publish(s,first);right=known_good.publish(s,other)
+        # Publishing the same assessment again is idempotent as well.
+        repeated=known_good.publish(s,other);s.commit()
+        entries=list(s.scalars(select(known_good.Entry)))
+        observations=list(s.scalars(select(known_good.Observation)))
+    assert left['fingerprint']==right['fingerprint']==repeated['fingerprint']
+    assert left['published'] and right['published'] and repeated['published']
+    assert len(entries)==1 and len(observations)==2
+    assert {row.host_id for row in observations}=={'host-one','host-two'}
+
+
+def test_concurrent_exact_matches_atomically_deduplicate_the_candidate(client):
+    barrier=threading.Barrier(2)
+    snapshots=[]
+    for number in (1,2):
+        value=complete();value['host_id']=f'host-{number}'
+        value['investigation']['details']['known_good_context']['observation']={
+            'host_id':f'host-{number}','pid':number,'start_ticks':number+10,'collected':100+number}
+        snapshots.append(value)
+    def run(number):
+        with Session() as s:
+            row=retained(f'assessment-{number}',f'host-{number}',f'behavior-{number}',snapshots[number-1])
+            s.add(row);barrier.wait(timeout=5)
+            result=known_good.publish(s,row);s.commit();return result
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(run,(1,2)))
+    with Session() as s:
+        assert len(list(s.scalars(select(known_good.Entry))))==1
+        assert len(list(s.scalars(select(known_good.Observation))))==2
+    assert all(result['published'] for result in results)
+
+
+def test_changed_canonical_context_publishes_a_distinct_entry(client):
+    changed=complete();changed['host_id']='host-two'
+    changed['investigation']['details']['known_good_context']['observation']['host_id']='host-two'
+    changed['investigation']['details']['known_good_context']['behavior']['network_sha256']=sha('0')
+    with Session() as s:
+        first=retained();other=retained('assessment-two','host-two','behavior-two',changed)
+        s.add_all([first,other]);left=known_good.publish(s,first);right=known_good.publish(s,other);s.commit()
+        assert len(list(s.scalars(select(known_good.Entry))))==2
+    assert left['fingerprint']!=right['fingerprint']
+
+
+def test_inactive_candidate_is_never_reactivated_by_a_later_assessment(client):
+    with Session() as s:
+        first=retained();s.add(first);published=known_good.publish(s,first)
+        entry=s.get(known_good.Entry,published['fingerprint']);entry.active=False
+        second=complete();second['host_id']='host-two'
+        second['investigation']['details']['known_good_context']['observation']['host_id']='host-two'
+        other=retained('assessment-two','host-two','behavior-two',second);s.add(other)
+        status=known_good.publish(s,other);s.commit()
+        assert not s.get(known_good.Entry,published['fingerprint']).active
+        assert not known_good.assessment(other,s)['published']
+    assert status['eligible'] and not status['published']
+
+
+def test_conflicting_stored_fingerprint_identity_fails_closed(client):
+    row=retained();fingerprint=known_good.assessment(row)['fingerprint']
+    with Session() as s:
+        s.add(known_good.Entry(fingerprint=fingerprint,version=1,
+            classification_source='ai',model='different-model',policy_hash=sha('9'),
+            assessment_id='other',source_host_id='host-two',contract={'version':1},
+            result={'risk':'low'}))
+        s.add(row);s.commit()
+        with pytest.raises(RuntimeError,match='collision'):
+            known_good.publish(s,row)
+        s.rollback()
+        assert s.get(known_good.Observation,row.id) is None
+        assert not known_good.assessment(row,s)['published']
 
 
 def vendor_report(path='/usr/bin/fixture',checksum=None,state='matches_artifact_bytes'):

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.27.0 — 2026-10-31
+
+- Publish only fully validated low-risk exact-match candidates into a durable fingerprint-keyed registry.
+- Atomically deduplicate concurrent identical candidates while retaining every assessment/server observation in an isolated linked row.
+- Preserve model, policy, canonical-contract and AI-classification provenance independently of diagnostic pruning; conflicting stored identity fails closed and inactive entries are not reactivated.
+- Show durable publication status in Assessment detail without adding lookup, provider-call bypass, approval, response authorization or detector suppression; current incomplete runtime evidence remains ineligible.
+- Register and preserve the two new tables across current-schema offline database migration; start the current controller first to initialize them.
+
 ## 1.26.0 — 2026-10-31
 
 - Canonically bind complete authenticated v2 follow-up receipts into versioned requirements and evidence digests.

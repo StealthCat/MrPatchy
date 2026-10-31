@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.26.0'
+APP_VERSION='1.27.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -534,7 +534,7 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
         behavior=s.get(Behavior,behavior_id);row=s.get(ai_assessments.Assessment,assessment_id)
         if host_id:host_or_404(s,host_id)
         if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
-        result=object_dict(row);result['known_good']=known_good.assessment(row)
+        result=object_dict(row);result['known_good']=known_good.assessment(row,s)
         return result
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(auth)):
