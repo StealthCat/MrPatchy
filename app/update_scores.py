@@ -1,6 +1,7 @@
 """Advisory AI importance scores bound to exact installed/candidate versions."""
 import hashlib
 import json
+import math
 import time
 from sqlalchemy import String, Text, Integer, Double, select, func, tuple_
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,6 +26,7 @@ class UpdateScore(Base):
     limitations: Mapped[str]=mapped_column(Text,default='')
     model: Mapped[str]=mapped_column(String(100),default='')
     attempted: Mapped[float]=mapped_column(Double,default=0)
+    next_at: Mapped[float]=mapped_column(Double,default=0,server_default='0')
     completed: Mapped[float]=mapped_column(Double,default=0)
     run_id: Mapped[str]=mapped_column(String(36),default='')
 
@@ -45,7 +47,7 @@ def identity(host,package):
 
 def public(row,enabled=True):
     if not row:return {'state':'pending' if enabled else 'disabled','score':None,'explanation':'Awaiting an AI assessment.' if enabled else 'Enable AI update scoring in Settings.'}
-    return {k:getattr(row,k) for k in ('state','score','confidence','explanation','limitations','model','attempted','completed','run_id')}
+    return {k:getattr(row,k) for k in ('state','score','confidence','explanation','limitations','model','attempted','next_at','completed','run_id')}
 
 SCHEMA={'type':'object','properties':{'assessments':{'type':'array','items':{'type':'object','properties':{
     'id':{'type':'string'},'score':{'type':'integer','minimum':0,'maximum':100},
@@ -70,18 +72,29 @@ def run_one():
                 if package.host_id not in host_cache:host_cache[package.host_id]=s.get(Host,package.host_id)
                 host=host_cache[package.host_id]
                 if not host:continue
-                key=identity(host,package);row=s.get(UpdateScore,key)
-                if row and (row.state=='complete' or row.attempted>now-3600):continue
+                key=identity(host,package)
+                for stale in s.scalars(select(UpdateScore).where(UpdateScore.host_id==host.id,
+                        UpdateScore.name==package.name,UpdateScore.state=='deferred',UpdateScore.id!=key)):
+                    stale.state='superseded';stale.next_at=0
+                    stale.explanation='Package evidence changed while scoring was deferred; a new assessment will be requested.'
+                row=s.get(UpdateScore,key)
+                if row and row.state=='complete':continue
+                if row and row.state=='deferred' and row.next_at>now:continue
+                if row and row.state!='deferred' and row.attempted>now-3600:continue
                 if not row:
                     row=UpdateScore(id=key,host_id=host.id,name=package.name,installed=package.installed,candidate=package.candidate);s.add(row)
-                row.state='running';row.attempted=now;row.model=cfg['ai_model'];row.score=None
+                row.state='running';row.attempted=now;row.next_at=0;row.model=cfg['ai_model'];row.score=None
                 batch.append({'id':key,**evidence(host,package)})
                 if len(batch)>=5:break
-            if not batch:return
+            if not batch:
+                # Persist stale deferred identities even when current exact evidence
+                # is already complete and no provider batch needs to start.
+                s.commit();return
             s.commit();encrypted=secret.value['encrypted']
         ids=[item['id'] for item in batch]
         with Session() as s:
             host_ids=list(s.scalars(select(UpdateScore.host_id).where(UpdateScore.id.in_(ids)).distinct()))
+        run_id=None
         try:
             ai_policy.require(host_ids)
             with host_lifecycle.activity(host_ids,'ai'):
@@ -103,14 +116,21 @@ def run_one():
                         for item in rows:
                             row=s.get(UpdateScore,item['id']);package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
                             if not package or not host or not package.candidate or identity(host,package)!=row.id:
-                                row.state='superseded';row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
-                            row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.completed=time.time()
+                                row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
+                            row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()
                         s.commit()
         except Exception as error:
+            delay=getattr(error,'retry_after',0) if isinstance(error,ai.AIError) else 0
+            deferred=(isinstance(delay,(int,float)) and math.isfinite(delay) and delay>0 and
+                (error.policy_wait or error.transient))
+            next_at=time.time()+delay if deferred else 0
             with Session() as s:
                 for identifier in ids:
-                    row=s.get(UpdateScore,identifier);row.state='error';row.explanation=ai_runs.safe_error(error)
+                    row=s.get(UpdateScore,identifier)
+                    row.state='deferred' if deferred else 'error';row.next_at=next_at
+                    row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else ai_runs.safe_error(error))
                 s.commit()
+            if deferred:ai_runs.defer(run_id,next_at)
     finally:lock.release()
 
 

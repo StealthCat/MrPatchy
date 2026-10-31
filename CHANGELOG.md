@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.34.0 — 2026-10-31
+
+- Retain update-scoring work refused by shared rate, spend or provider-backoff controls as a durable deferral with its exact next eligibility instead of a generic one-hour error delay.
+- Resume eligible scoring through the full current pause, lifecycle, admission, budget and provider checks without charging a pre-send refusal or automatically replaying a transmitted request.
+- Supersede deferred identities when package evidence changes, exclude removed or changed packages from queue status, and expose the retained state and next time in Packages and AI worker status.
+- Add regression coverage for pre-send rate refusal, transmitted Retry-After failure, exact resume and stale-evidence invalidation; durable jobs for manual plan and connection-test paths remain planned.
+
 ## 1.33.0 — 2026-10-31
 
 - Add one durable fleet-wide provider backoff boundary before rate and budget admission for every current billable AI request path.

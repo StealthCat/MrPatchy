@@ -6,7 +6,7 @@ from sqlalchemy import inspect,select,text
 from app.db import engine,Session,Setting,Host,init
 
 
-@pytest.mark.parametrize('table,column',[('packages','dpkg_state'),('hosts','enabled'),('hosts','deleted_at'),('hosts','lifecycle_revision')])
+@pytest.mark.parametrize('table,column',[('packages','dpkg_state'),('hosts','enabled'),('hosts','deleted_at'),('hosts','lifecycle_revision'),('update_scores','next_at')])
 def test_initialization_after_pooled_schema_change(admin,table,column):
     if engine.dialect.name!='sqlite':pytest.skip('SQLite per-connection schema cache regression')
     with Session() as s:
@@ -23,6 +23,7 @@ def test_initialization_after_pooled_schema_change(admin,table,column):
         with engine.connect() as connection:
             assert 'dpkg_state' in {c['name'] for c in inspect(connection).get_columns('packages')}
             assert 'lifecycle_revision' in {c['name'] for c in inspect(connection).get_columns('hosts')}
+            assert 'next_at' in {c['name'] for c in inspect(connection).get_columns('update_scores')}
         hosts=admin.get('/api/hosts')
         assert hosts.status_code==200 and hosts.json()[0]['name']=='Preserved host'
     finally:engine.dispose()
