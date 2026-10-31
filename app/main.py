@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.28.0'
+APP_VERSION='1.29.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -486,6 +486,11 @@ class RetriageInput(BaseModel):
     withdraw_approval:bool=False
 
 
+class RevokeKnownGoodInput(BaseModel):
+    expected_version:int=Field(ge=1,le=1_000_000,strict=True)
+    reason:str=Field(min_length=10,max_length=1000)
+
+
 @app.post('/api/investigations/{behavior_id}/retriage')
 def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(auth)):
     from . import ai_assessments,ai_claims
@@ -510,6 +515,26 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(auth)
                 except ValueError as error:raise HTTPException(409,str(error)) from None
                 s.commit()
                 return {'ok':True,'request_id':refresh.id,'detail':'Fresh triage queued. Prior assessment retained; AI pause, model settings and admission limits still apply.'}
+    finally:lock.release()
+
+
+@app.post('/api/ai/known-good/{fingerprint}/revoke')
+def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(auth)):
+    from . import known_good
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    reason=body.reason.strip()
+    if len(reason)<10:raise HTTPException(400,'Provide a meaningful revocation reason')
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):
+        raise HTTPException(409,'An investigation is updating known-good state. Reopen the assessment when it finishes.')
+    try:
+        with Session() as s:
+            try:result=known_good.revoke(s,fingerprint,body.expected_version,user['username'],reason)
+            except LookupError as error:raise HTTPException(404,str(error)) from None
+            except ValueError as error:raise HTTPException(409,str(error)) from None
+            s.commit()
+            return {**result,'detail':f'Candidate revoked across the fleet. {result["linked_assessments"]} linked assessment(s) require review.'}
     finally:lock.release()
 
 

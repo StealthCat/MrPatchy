@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.28.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.29.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -487,9 +487,9 @@ interrupted attempts retain the existing recovery delay and finite retry limits.
 A lease cannot cancel an already sent request or guarantee exactly-once billing.
 The full model, evidence and conditional SSH/follow-up flow remain unchanged.
 Same-server parallel investigations, broader fairness, native complete-context
-collection, cache revocation/contradiction review and shared rate/daily-spend/
-unthrottled controls remain unfinished. v1.28.0 adds strict zero-provider lookup only
-for the complete exact candidates described below.
+collection, contradiction-triggered invalidation and shared rate/daily-spend/
+unthrottled controls remain unfinished. v1.29.0 adds administrator invalidation and
+linked review for the complete exact candidates described below.
 
 The Investigations/AI activity views report active claims, queued work and fresh
 reported AI capacity. Workers report actual active task counts and configured
@@ -684,8 +684,9 @@ provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and th
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
 reuse is validated; this is not a production speed or parallel-throughput promise.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
-reuse is available only for fully complete candidates; native completeness,
-revocation/contradiction handling and shared throttle/daily-spend/unthrottled controls
+reuse is available only for fully complete candidates; administrators can invalidate
+an entry fleet-wide and flag its linked history for review. Native completeness,
+automatic contradiction handling and shared throttle/daily-spend/unthrottled controls
 remain planned. Existing hourly limits, model, evidence, follow-ups, approval and AI
 pause behavior remain in force.
 
@@ -740,13 +741,14 @@ requests from the web handler or bypass pause, saved model, data-sharing, lifecy
 provider delay or hourly controls. If a later manual approval holds queued work,
 revoke that approval to resume it. Inactive/deleted servers offer read-only history.
 
-These are prerequisites for the planned exact-match fleet known-good cache, not
-cross-server verdict reuse. Each current investigation still contacts the provider
-under existing policy. Canonical verified context, cache lookup/publication,
-fleet revocation and linked review, threaded execution and shared rate/spend modes
-remain planned. New assessment/refresh tables require controller-first startup,
-then matched workers. No target-helper upgrade is required. Retained evidence is
-sensitive; history has no automatic deletion or immutable external storage yet.
+Only a fully complete canonical match can use the fleet registry. Current native
+receipts still declare evidence gaps and therefore contact the provider under existing
+policy. Complete synthetic acceptance covers publication, zero-call lookup, explicit
+Re-triage bypass and administrator invalidation; native complete evidence, automatic
+contradiction handling and shared rate/spend modes remain planned. New assessment,
+refresh and registry tables require controller-first startup, then matched workers.
+No target-helper upgrade is required. Retained evidence is sensitive; history has no
+automatic deletion or immutable external storage yet.
 
 ### Canonical known-good readiness (v1.24.0)
 
@@ -837,10 +839,24 @@ does not yet publish or hit this cache; complete synthetic acceptance proves the
 boundary without weakening those gaps.
 
 Lookup currently runs after the existing process-triage claim, AI enablement/pause,
-key/model and rolling-hour admission gates. Fleet revocation controls,
-contradiction-linked review, complete native evidence collection, shared rate/spend
-admission and broader SQLite/MySQL runtime acceptance remain planned. No schema,
-target-helper or endpoint-agent update is introduced after v1.27.0.
+key/model and rolling-hour admission gates. Complete native evidence collection,
+automatic contradiction invalidation, administrator-origin classifications, shared
+rate/spend admission and broader SQLite/MySQL runtime acceptance remain planned. No
+schema, target-helper or endpoint-agent update is introduced after v1.27.0.
+
+### Fleet candidate invalidation (v1.29.0)
+
+From any published or reused Assessment detail, an administrator can revoke the exact
+candidate across the fleet with a reviewed reason and explicit confirmation. The
+mutation uses the shared AI-state lock, checks the fingerprint version, records the
+actor/time/reason and linked count, and immediately prevents later reuse. CSRF and
+administrator-role enforcement remain server-side.
+
+Source and reused assessments are never rewritten. Every linked detail instead shows
+**review required**, the escaped revocation reason and retained original provenance;
+Re-triage remains the explicit way to request fresh provider work. Revocation does not
+approve remediation, suppress scanners or infer that a host is clean. Automatic
+invalidation when a fresh result contradicts an entry remains planned.
 
 
 ### Identity-bound follow-up context (v1.21.0)

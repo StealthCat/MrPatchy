@@ -172,7 +172,10 @@ def test_assessment_api_reports_only_an_active_durable_publication(admin):
         row=retained();s.add(row);status=known_good.publish(s,row);s.commit()
     response=admin.get('/api/investigations/behavior-one/history/'+row.id)
     assert response.status_code==200
-    assert response.json()['known_good']==status
+    reported=response.json()['known_good']
+    assert all(reported[key]==value for key,value in status.items())
+    assert reported['active'] and not reported['review_required']
+    assert reported['linked_assessments']==1
 
 
 def test_lookup_revalidates_exact_context_policy_and_active_state(client):
@@ -220,6 +223,65 @@ def test_worker_exact_match_reuses_without_provider_call_and_retains_host_proven
     assert run.state=='complete' and run.calls==0
     assert observation.host_id=='host-two' and status['reused'] and status['published']
     assert event and published['fingerprint'] in event.detail
+
+
+def test_admin_revocation_blocks_reuse_and_marks_every_linked_assessment_for_review(admin):
+    current=complete();current['host_id']='host-two'
+    current['investigation']['details']['known_good_context']['observation']={
+        'host_id':'host-two','pid':99,'start_ticks':88,'collected':900}
+    source=retained()
+    behavior_one=Behavior(id='behavior-one',host_id='host-one',evidence=complete(),verdict='low')
+    behavior_two=Behavior(id='behavior-two',host_id='host-two',evidence=current,verdict='low')
+    with Session() as s:
+        s.add_all([Host(id='host-one',name='Source',address='192.0.2.1',fingerprint=''),
+            Host(id='host-two',name='Current',address='192.0.2.2',fingerprint=''),
+            behavior_one,behavior_two,source])
+        published=known_good.publish(s,source);s.flush()
+        hit=known_good.lookup(s,current,'gpt-fixture',[sha('9')])
+        reused=ai_assessments.record_reuse(s,behavior_two,hit);s.flush()
+        known_good.link_reuse(s,reused,hit);s.commit()
+
+    reason='A new deterministic detector requires fleet review'
+    response=admin.post('/api/ai/known-good/'+published['fingerprint']+'/revoke',json={
+        'expected_version':1,'reason':reason})
+    assert response.status_code==200
+    assert response.json()['linked_assessments']==2 and response.json()['review_required']
+    with Session() as s:
+        entry=s.get(known_good.Entry,published['fingerprint'])
+        event=s.scalar(select(Audit).where(Audit.action=='revoke known-good candidate'))
+        assert not entry.active and entry.revoked_by=='admin' and entry.revoked_reason==reason
+        assert event and reason in event.detail and 'linked=2' in event.detail
+        assert known_good.lookup(s,current,'gpt-fixture',[sha('9')]) is None
+
+    original=admin.get('/api/investigations/behavior-one/history/'+source.id).json()['known_good']
+    linked=admin.get('/api/investigations/behavior-two/history/'+reused.id).json()['known_good']
+    for status in (original,linked):
+        assert status['eligible'] and not status['published'] and not status['active']
+        assert status['review_required'] and status['linked_assessments']==2
+        assert status['revoked_by']=='admin' and status['revoked_reason']==reason
+    assert linked['reused'] and linked['source_assessment_id']==source.id
+
+
+def test_revocation_enforces_role_csrf_lock_version_reason_and_current_state(admin):
+    from app.identity import User
+    row=retained()
+    with Session() as s:
+        s.add(row);published=known_good.publish(s,row);s.commit()
+    path='/api/ai/known-good/'+published['fingerprint']+'/revoke'
+    body={'expected_version':1,'reason':'Review this candidate across the fleet'}
+
+    assert admin.post(path,json=body,headers={'X-CSRF-Token':'wrong'}).status_code==403
+    with Session() as s:s.get(User,'admin').role='viewer';s.commit()
+    assert admin.post(path,json=body).status_code==403
+    with Session() as s:s.get(User,'admin').role='admin';s.commit()
+    assert admin.post(path,json={**body,'expected_version':2}).status_code==409
+    assert admin.post(path,json={**body,'reason':' short '}).status_code==422
+    lock=worker.Lock('ai-triage');assert lock.acquire(False)
+    try:assert admin.post(path,json=body).status_code==409
+    finally:lock.release()
+    assert admin.post('/api/ai/known-good/not-a-fingerprint/revoke',json=body).status_code==400
+    assert admin.post(path,json=body).status_code==200
+    assert admin.post(path,json=body).status_code==409
 
 
 def test_explicit_retriage_bypasses_exact_match_and_calls_provider(client,monkeypatch):

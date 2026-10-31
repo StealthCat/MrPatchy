@@ -15,7 +15,7 @@ import math
 import re
 import time
 
-from sqlalchemy import Boolean, Double, Integer, JSON, String, select
+from sqlalchemy import Boolean, Double, Integer, JSON, String, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
@@ -475,21 +475,55 @@ def publish(s, row):
     return {**status, 'published': bool(saved.active)}
 
 
+def revoke(s, fingerprint, version, actor, reason, revoked_at=None):
+    """Invalidate one exact candidate without rewriting linked assessment history."""
+    saved = s.scalar(select(Entry).where(
+        Entry.fingerprint == fingerprint).with_for_update())
+    if saved is None:
+        raise LookupError('Known-good candidate not found')
+    if saved.version != version:
+        raise ValueError('Known-good candidate version changed; reopen the assessment before submitting')
+    if not saved.active:
+        raise ValueError('Known-good candidate is already revoked; reopen the assessment to review its current state')
+    linked = s.scalar(select(func.count(Observation.assessment_id)).where(
+        Observation.fingerprint == fingerprint)) or 0
+    saved.active = False
+    saved.revoked_at = revoked_at or time.time()
+    saved.revoked_by = actor
+    saved.revoked_reason = reason
+    audit(s, 'revoke known-good candidate',
+        f'{actor} {fingerprint} linked={linked} reason={reason}')
+    return {'fingerprint': fingerprint, 'version': saved.version,
+        'active': False, 'review_required': True, 'linked_assessments': linked,
+        'revoked_at': saved.revoked_at, 'revoked_by': saved.revoked_by,
+        'revoked_reason': saved.revoked_reason}
+
+
 def assessment(row, s=None):
     source = 'ai' if row.source == 'known_good' else row.source
     status = evaluate(row.snapshot, row.model, row.policy_hash, row.result, source)
     if status['eligible'] and s is not None:
         saved = s.get(Entry, status['fingerprint'])
-        valid = bool(saved and saved.active and saved.version == status['version'] and
+        valid = bool(saved and saved.version == status['version'] and
             saved.classification_source == source and saved.model == row.model and
             saved.policy_hash == row.policy_hash and
             saved.contract == _canonical_contract(row.snapshot))
-        status = {**status, 'published': valid}
+        active = bool(valid and saved.active)
+        status = {**status, 'published': active}
+        if valid:
+            linked = s.scalar(select(func.count(Observation.assessment_id)).where(
+                Observation.fingerprint == saved.fingerprint)) or 0
+            status = {**status, 'active': active,
+                'review_required': not active,
+                'linked_assessments': linked,
+                'revoked_at': saved.revoked_at if not active else 0,
+                'revoked_by': saved.revoked_by if not active else '',
+                'revoked_reason': saved.revoked_reason if not active else ''}
         if row.source == 'known_good':
             metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None
             local_observation = s.get(Observation, row.id)
             origin_observation = s.get(Observation, saved.assessment_id) if saved else None
-            valid = bool(valid and isinstance(metadata, dict) and
+            reused = bool(valid and isinstance(metadata, dict) and
                 metadata.get('fingerprint') == status['fingerprint'] and
                 metadata.get('source_assessment_id') == saved.assessment_id and
                 metadata.get('source_host_id') == saved.source_host_id and
@@ -500,11 +534,11 @@ def assessment(row, s=None):
                 local_observation and local_observation.fingerprint == saved.fingerprint and
                 local_observation.host_id == row.host_id and
                 local_observation.subject == row.subject)
-            status = {**status, 'published': valid, 'reused': valid,
-                'source_assessment_id': saved.assessment_id if valid else '',
-                'source_subject': metadata.get('source_subject', '') if valid else '',
-                'source_host_id': saved.source_host_id if valid else '',
-                'source_created': saved.created if valid else 0}
+            status = {**status, 'published': bool(reused and active), 'reused': reused,
+                'source_assessment_id': saved.assessment_id if reused else '',
+                'source_subject': metadata.get('source_subject', '') if reused else '',
+                'source_host_id': saved.source_host_id if reused else '',
+                'source_created': saved.created if reused else 0}
     return status
 
 
