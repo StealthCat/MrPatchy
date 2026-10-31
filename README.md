@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.33.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.34.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -564,8 +564,23 @@ and the next eligible time.
 
 Already concurrent in-flight calls cannot be recalled after another call discovers a
 provider floor. Exact durable queue/resume for every manual plan and connection-test
-request, scoring-specific next-start persistence and full multi-controller failover
-acceptance remain unfinished.
+request and full multi-controller failover acceptance remain unfinished.
+
+### Durable update-scoring deferral (v1.34.0)
+
+An update-scoring batch refused by the shared rate, spend or provider-backoff boundary
+now remains durably deferred at its exact next eligibility rather than becoming a
+generic error subject to an unrelated one-hour retry delay. The Packages assessment
+and AI worker status explain that retained state and show its next eligible time. No
+provider request, rate start or budget reservation is created by a pre-send refusal;
+a transmitted transient failure keeps the existing receipt and spend outcome while
+retaining the shared provider floor for later scoring work.
+
+Before a resumed result is accepted, scoring rechecks current package evidence and
+server policy. Changed evidence supersedes the old deferred identity, removed updates
+drop out of the queue count, and pause/lifecycle/global controls continue to apply.
+Manual incident/release/startup plans and connection tests still reject safely rather
+than becoming durable resumable jobs, so the complete deferral program remains open.
 
 For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
 create `ai_triage_claims`, then start matching workers. Mixed old/new active workers

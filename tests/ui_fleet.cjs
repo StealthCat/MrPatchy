@@ -3,7 +3,7 @@ module.exports=async(page,capture)=>{
  const now=Date.now()/1000;
  const fixture=[
   {name:'openssl:amd64',installed:'3.0.1',candidate:'3.0.2',held:false,dpkg_state:'install ok installed',priority:'high',priority_manual:false,due:now+86400,assessment:{state:'complete',score:72,confidence:'low',model:'fixture-model',explanation:'Security repository classification merits timely review.',limitations:'Metadata-only estimate; no verified CVE or changelog.',completed:now},installation:{state:'scheduled',at:now+7200,schedule:'Evening maintenance',reason:'Expected start after repository refresh.'}},
-  {name:'curl:amd64',installed:'1',candidate:'2',held:false,dpkg_state:'install ok installed',priority:'normal',due:now+86400,assessment:{state:'error',explanation:'OpenAI HTTP 429; review API quota.'},installation:{state:'unscheduled',at:null,reason:'No matching schedule.'}},
+  {name:'curl:amd64',installed:'1',candidate:'2',held:false,dpkg_state:'install ok installed',priority:'normal',due:now+86400,assessment:{state:'deferred',next_at:now+1200,explanation:'Queued until shared AI eligibility; no evidence was discarded.'},installation:{state:'unscheduled',at:null,reason:'No matching schedule.'}},
   {name:'held:amd64',installed:'1',candidate:'2',held:true,dpkg_state:'hold ok installed',priority:'normal',installation:{state:'blocked',at:null,reason:'Held by target policy.'}},
   {name:'broken:amd64',installed:'1',candidate:'2',held:false,dpkg_state:'install ok unpacked',priority:'normal'},
   {name:'installed:amd64',installed:'2',candidate:'',held:false,dpkg_state:'install ok installed',priority:'normal',assessment:{state:'complete',score:67,historical:true,from_version:'1',to_version:'2',explanation:'Saved installation assessment',completed:now}},
@@ -16,6 +16,7 @@ module.exports=async(page,capture)=>{
   await page.locator('#select-all-updates').click();assert.equal(await page.locator('.pkg-check:checked').count(),2);
   await page.locator('#clear-updates').click();assert.equal(await page.locator('.pkg-check:checked').count(),0);
   await page.locator('.package-assessment summary').first().click();await page.getByText('Security repository classification merits timely review.').waitFor();
+  await page.locator('.package-assessment summary').nth(1).click();await page.getByText('Next eligible scoring attempt:',{exact:false}).waitFor();
   await page.getByText('Not scheduled',{exact:true}).waitFor();
   await page.getByText('Historical AI score',{exact:true}).click();await page.getByText('Saved installation assessment',{exact:true}).waitFor();
   await capture('update-importance');
@@ -23,12 +24,12 @@ module.exports=async(page,capture)=>{
   assert.match(await page.locator('#confirm-patch').innerText(),/2 selected updates/);
   assert.equal(await page.locator('#modal-body pre').innerText(),'openssl:amd64\ncurl:amd64');await page.keyboard.press('Escape');
  }finally{await page.unroute('**/api/hosts/*/packages?*',packages);}
- const status=route=>route.fulfill({json:{pending:4,ready:0,hourly_limit:20,recent_attempts:2,worker_seen:now,reason:'backoff',message:'Failed investigations are waiting for the retry interval.',retry_at:now+1200,last_error:'OpenAI API HTTP 429 (insufficient_quota)'}});
+ const status=route=>route.fulfill({json:{pending:4,ready:0,hourly_limit:20,recent_attempts:2,worker_seen:now,reason:'backoff',message:'Failed investigations are waiting for the retry interval.',retry_at:now+1200,scoring_deferred:1,scoring_next_at:now+1200,last_error:'OpenAI API HTTP 429 (insufficient_quota)'}});
  const runs=route=>route.fulfill({json:{items:[{id:'fixture-run',purpose:'triage',state:'error',stage:'failed',started:now,model:'fixture-model',calls:1,message:'OpenAI API HTTP 429 (insufficient_quota); request ID req_fixture'}],more:false}});
  const run=route=>route.fulfill({json:{id:'fixture-run',purpose:'triage',state:'error',model:'fixture-model',calls:1,events:[{stage:'api_request',created:now,message:'Sending structured request.'},{stage:'api_response',created:now,message:'OpenAI HTTP 429; request ID req_fixture'},{stage:'failed',created:now,message:'Check API billing and limits.'}]}});
  await page.route('**/api/investigation-status',status);await page.route('**/api/ai/runs?*',runs);await page.route('**/api/ai/runs/fixture-run',run);
  try{
-  await page.locator('[data-nav=ai-logs]').click();await page.getByRole('link',{name:'Inspect run',exact:true}).click();await page.getByRole('link',{name:'Timeline',exact:true}).click();await page.getByText('Check API billing and limits.',{exact:true}).waitFor();await capture('ai-run-detail');await page.getByRole('link',{name:'← AI activity',exact:true}).click();await page.locator('#ai-log-table').waitFor();await capture('ai-run-logs');
+  await page.locator('[data-nav=ai-logs]').click();await page.getByText('1 scoring deferred',{exact:false}).waitFor();await page.getByRole('link',{name:'Inspect run',exact:true}).click();await page.getByRole('link',{name:'Timeline',exact:true}).click();await page.getByText('Check API billing and limits.',{exact:true}).waitFor();await capture('ai-run-detail');await page.getByRole('link',{name:'← AI activity',exact:true}).click();await page.locator('#ai-log-table').waitFor();await capture('ai-run-logs');
  }finally{await page.unroute('**/api/investigation-status',status);await page.unroute('**/api/ai/runs?*',runs);await page.unroute('**/api/ai/runs/fixture-run',run);}
  const history=route=>route.fulfill({json:{items:[{id:1,host_id:'fixture-host',name:'openssl:amd64',action:'version_changed',before:['3.0.1'],after:['3.0.2'],state_before:'install ok installed',state_after:'install ok installed',observed:now,recorded:now,source:'job_observation',actor:'operator',job_id:'',assessment:{state:'complete',score:72,historical:true,from_version:'3.0.1',to_version:'3.0.2',explanation:'Original patch importance',completed:now}}],more:false}});
  await page.route('**/api/package-history?*',history);

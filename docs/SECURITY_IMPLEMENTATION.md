@@ -4633,3 +4633,45 @@ APP_VERSION/README/changelog/UI/API synchronize at v1.33.0 with major fixed at 1
 Rebuild the controller first to create the provider-backoff table, then matching
 workers. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
+
+
+## v1.34.0 — Durable update-scoring deferral and exact resume
+
+Issue-first reconciliation read merged v1.33.0 main, repository instructions, this
+checkpoint and PR #93. The first 100 open-issue and open-PR results were empty, so no
+actionable report or unfinished fix competed with this roadmap batch. The separately
+reported database-migration refusal remains blocked on categorized schema mismatch
+output or a reviewed inventory; no unknown database object is guessed or ignored.
+
+This faster-triage milestone gives update scoring its own durable eligibility state.
+A batch refused before provider transmission by shared rate, daily-spend or provider
+backoff remains `deferred` with the exact shared next time rather than becoming
+`error` and waiting for the former generic one-hour attempted-time guard. A transient
+sent failure, including a valid Retry-After response, keeps its existing provider
+receipt and spend reservation outcome and saves the resulting shared floor for the
+next scheduler pass. Controlled deferral reclassifies the redacted run record without
+copying provider bodies, headers, keys or package evidence into diagnostics.
+
+An eligible pass does not bypass policy: global/per-server AI pause, host lifecycle,
+data sharing, finite concurrency, provider backoff, spend and rate controls are all
+rechecked. Changed package/distribution evidence creates a new exact identity and
+supersedes the deferred one; removed updates and version/context changes do not remain
+in the reported queue. Successful and superseded rows clear their saved eligibility.
+Packages exposes the retained assessment time, while worker status reports scoring
+deferred count and earliest next start alongside the shared controls.
+
+Regression coverage first reproduced both defects: a pre-send shared-rate refusal
+and a transmitted 503 with Retry-After each produced `error` instead of `deferred`.
+Focused acceptance then covered zero transport for the rate refusal, exact provider
+floor reuse, resume earlier than one hour, successful completion, stale-evidence
+supersession, API/status visibility and pooled-schema upgrade behavior. Exact-head
+SQLite, MySQL, browser and full-suite checks remain mandatory before merge.
+
+This is not complete durable scheduling. Manual connection tests and incident,
+startup and release plans still reject safely rather than becoming stored resumable
+jobs. Pricing-catalog lifecycle, provider-invoice reconciliation, long-horizon spend
+reports and complete multi-controller failover/reset acceptance remain planned.
+APP_VERSION/README/changelog/UI/API synchronize at v1.34.0 with major fixed at 1.
+Rebuild the controller first so `update_scores.next_at` is added before matching
+workers start. No target-helper/agent update, Docker publication, Git tag or schedule
+change is included.

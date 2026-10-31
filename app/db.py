@@ -126,6 +126,9 @@ def init():
         columns={c['name'] for c in inspect(connection).get_columns('packages')}
         if 'dpkg_state' not in columns:
             connection.execute(text("ALTER TABLE packages ADD COLUMN dpkg_state VARCHAR(80) NOT NULL DEFAULT 'install ok installed'"))
+        score_columns={c['name'] for c in inspect(connection).get_columns('update_scores')}
+        if 'next_at' not in score_columns:
+            connection.execute(text('ALTER TABLE update_scores ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):
