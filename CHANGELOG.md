@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.23.1 — 2026-10-31
+
+- Explain database-migration schema refusals with bounded, escaped lists of missing tables, unexpected tables and unexpected views.
+- Preserve strict source validation, read-only dry runs and unknown-object refusal; no database object is ignored, removed or automatically accepted.
+- Verify that current startup initialization repairs a missing current table before migration and that standalone current-schema copy remains complete.
+
 ## 1.23.0 — 2026-10-30
 
 - Retain boot/PID/start/proc identities for new process observations without changing behavior deduplication keys.

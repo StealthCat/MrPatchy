@@ -4125,3 +4125,32 @@ without horizontal overflow. The versioned delivery PR records the exact publish
 head/tree, all nine final-head SQLite/MySQL/browser/native checks, completed workflow
 and actual merge SHA or a precise unfinished blocker. No earlier-head result permits
 merge, and a final source change requires applicable revalidation.
+
+
+## v1.23.1 — Actionable database migration schema diagnostics
+
+Issue-first reconciliation read main `d1df85e3`, repository instructions, this
+checkpoint, merged migration fix PR #79 and latest merged PR #82. The first 100-item
+open issue and PR pages were empty. The chat-reported generic source-schema refusal
+was reproduced by removing the v1.22.0 `ai_triage_claims` table from an otherwise
+current disposable source. A fully initialized v1.23.0 source passed standalone
+dry-run/copy coverage, and current startup initialization restored the missing table
+before a successful dry run. Without the deployment's schema inventory, the report
+cannot establish whether its cause is a missed upgrade, a custom table/view or a
+different mismatch; no source object may be guessed away.
+
+The strict refusal now includes bounded, terminal-escaped lists of missing tables,
+unexpected tables and unexpected views. Current startup remains the only supported
+repair for missing current objects. Unexpected objects still require separate review;
+the copier does not ignore, delete, rename or accept them, and source reads remain
+read-only. Fresh-process regressions demonstrate the old generic message before the
+change and distinguish all three categories afterward. APP_VERSION/README/changelog/
+UI/API synchronize at v1.23.1; major remains 1. No schema, endpoint helper, Docker
+publication, Git tag or schedule change is introduced.
+
+The user's actual refusal remains open until its new diagnostic or an independently
+reviewed schema inventory identifies the category and the documented repair succeeds.
+The faster-triage priority remains unchanged: complete verified context and the
+host-independent exact-known-good cache, then safe same-host fairness and shared
+throttle/daily-spend/unthrottled controls. Notifications and the broader security,
+deployment and UI roadmaps also remain unfinished.
