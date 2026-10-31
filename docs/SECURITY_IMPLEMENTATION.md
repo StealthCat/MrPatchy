@@ -5201,6 +5201,66 @@ Retain the budget Decimal/default validation fix and SBOM host binding, then run
 all exact-head checks before merge. No changes to dependency branches.
 
 
+## v1.35.21 — Zero-server recovery backup
+
+Delivery record: version **v1.35.21** (initially proposed as v1.35.9) on branch `claude/mr-patchy-issue-fix-e7s51r`,
+addressing [issue #131](https://github.com/StealthCat/MrPatchy/issues/131) (Claude Code
+session `session_01AfdfYaRTCpQyx5noPLyT4L`). The issue may close only after every
+applicable check passes on the exact final PR head and that commit is merged.
+
+Triage read v1.35.6 main, all open issues and the open PRs #115, #116 and #137. This
+session first claimed #124 but released it, because a Codex session had claimed it
+seconds earlier. #131 had no claim or related PR. It is separate from #120, which
+concerns evidence and trust state omitted from successful backups.
+
+Reproduction: a valid application-schema SQLite deployment with secret, TLS and Caddy
+state but no `ssh/`, with only restic stubbed, raised `FileNotFoundError` in
+`recovery.backup()` before restic was invoked. Enrollment creates `ssh/` lazily.
+
+`scripts/recovery.py` now derives the servers that require an SSH identity (every
+`hosts` row with `deleted_at=0`) from the bundled SQLite snapshot, or from a read-only
+query alongside the MySQL dump. An absent `ssh/` becomes an explicit empty `0700`
+bundle directory. A symlinked `ssh/` is still refused. Each required server must have
+a regular, non-empty, non-linked `<id>.key` in the bundle, and server identifiers must
+match the application's identifier pattern. Otherwise backup stops before restic runs.
+The manifest stays format 1 and adds `ssh_hosts`. Activation applies the same check
+before mutating any destination, using the union of the manifest list and, for SQLite,
+the bundled database, so an edited manifest cannot hide an enrolled server. Bundles
+written before this version, which lack the list, remain accepted. Activation sets
+`ssh/` to `0700`.
+
+Compatibility impact: a deployment with a non-deleted server whose key is missing,
+which earlier versions backed up without any warning, now fails loudly until the key is
+restored or the server is deleted. Major version stays 1.
+
+Coverage: `tests/test_recovery_ssh.py` uses the real application schema to cover:
+- zero-server backup and activation;
+- a populated fleet, including rotation state;
+- deleted servers that need no key;
+- missing keys with and without `ssh/`;
+- empty or symlinked keys and a symlinked directory;
+- activation refusing a bundle without an enrolled key before any mutation, even with
+  an edited manifest;
+- malformed identifiers;
+- legacy manifests.
+
+`tests/test_final_features.py` adds a real restic empty-fleet backup, restore and
+activation drill, which runs in the recovery CI job. Exact-final-head SQLite, MySQL,
+browser, SSH/RPM and remaining CI checks are the merge gate. No schema, role, audit,
+target helper, Docker publication, Git tag or response-authorization change is
+included.
+
+Integration: while PR #196 waited, the combined #116/#137/#115 integration (#195) and
+#183 merged, moving main to v1.35.16; #138 then merged as v1.35.17, and #174 had also
+used v1.35.9. This session respected the #195 integration hold, merged the resulting
+main and re-allocated **v1.35.20**, newer than main and the pending #139 (v1.35.18) and
+#168 (v1.35.19). Only shared version metadata conflicted; main's entries were kept
+intact and this update's entries reapplied.
+
+
+Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
+
+
 ## v1.35.22 — Uncertain ordinary patch outcomes (#119)
 
 MrPatchy hourly development, Claude Code session `session_01AfdfYehh8Cf5AJiiyGRkCf`,
@@ -5228,7 +5288,8 @@ Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malforme
 replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
 inventory failure, verified target failure, inactive and unreachable servers
 (using the real `ssh.call`), the remote-start marker, structured-failure parsing
-and a later queued job. Version v1.35.22 follows main v1.35.20 (PR #174 merged
-during this work and is preserved), the v1.35.20 still on PR #196 and the v1.35.21
-proposed for #198; it must be rechecked before merge. No schema, target helper or Git tag change; source versioning
+and a later queued job. Version v1.35.22 follows main v1.35.21; PRs #174 (v1.35.20)
+and #196 (v1.35.21) merged during this work and are preserved. Pending PRs #207
+(v1.35.23) and #208 (v1.35.25) are higher; #206 still shows v1.35.21 and must
+re-version. Recheck before merge. No schema, target helper or Git tag change; source versioning
 publishes no Docker image.

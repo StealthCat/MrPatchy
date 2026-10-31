@@ -7,6 +7,12 @@
 - Preserve the target's patch receipt in the operation output whenever a later step fails, and audit uncertain outcomes as `uncertain patch` with the operation ID.
 - Compatibility: an ordinary patch that loses its SSH reply now pauses the server until an administrator reviews it, instead of releasing the queue. Major version stays 1.
 
+## 1.35.21 — 2026-10-31
+
+- Fix full recovery backups of a valid zero-server deployment, which failed with `FileNotFoundError` because `ssh/` is created only when the first server is added. The bundle now carries an explicit empty owner-only SSH directory that activation restores.
+- Distinguish that optional absence from damaged key state: backup and activation require a non-empty, non-linked private key for every server that is not deleted, checked against the database snapshot. They fail before restic runs or any destination changes. The manifest lists the required server identifiers. Bundles from earlier versions remain accepted.
+- Compatibility: a deployment that has a non-deleted server without its private key, which previously backed up silently, now fails until the key is restored or the server is deleted. Major version stays 1.
+
 ## 1.35.20 — 2026-10-31
 
 - Emit native eBPF execution UIDs as canonical non-negative integers and validate the collector record before durable spooling.
