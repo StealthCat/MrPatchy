@@ -1,10 +1,34 @@
 # Changelog
 
-## 1.35.32 — Isolate periodic scheduler failures
+## 1.35.41 — 2026-10-31
 
-- A failure in one leader producer no longer skips other periodic tasks, host polling, queued-job dispatch, cleanup, notifications or AI admission. Each task has a separate retry deadline and a named exception log.
-- Failed producers retry after 30, 60, 120, 240 and at most 300 seconds; success restores the normal 30-second cadence. Worker identity loss still stops admission. Leadership, drain, queue claims and target mutation authorization are unchanged.
-- Regression tests reproduce each of seven failing producer positions on current main, verify independent work continues, and cover bounded backoff, recovery cadence and identity-loss propagation. No schema, target helper, UI, Git tag or Docker publication changes. Major stays 1.
+1. [PR #214](https://github.com/StealthCat/MrPatchy/pull/214): isolate each periodic leader producer so a failed schedule, scanner, monitoring or AI-plan tick cannot stop other producers, polling, queued-job dispatch, cleanup or notifications.
+2. Log named failures and retry independently at 30/60/120/240 seconds, capped at 300 seconds; successful producers retain a 30-second cadence. Module-loading failures share the same isolation, while worker identity loss still stops admission.
+3. Preserve election, drain, leases, host locks, audit and response authorization. Retry deadlines are process-local; no schema, target-helper or UI changes. Major remains 1.
+
+## 1.35.40 — 2026-10-31
+
+1. [PR #209](https://github.com/StealthCat/MrPatchy/pull/209): report flushed offline migration progress, stage/role/table context, sanitized error categories and safe driver/OS codes with actionable next checks. Add bounded, redacted cause-chain and stack-location details with `--verbose`.
+2. Preserve JSON-only stdout and report progress and completion on stderr. Identify destination write/commit state honestly, including a failed fresh connection after commit; preserve offline locking, read-only source checks, verification and explicit activation.
+3. Compatibility: scripts reading the former trailing completion notice from stdout must read stderr. The reported Apollo deployment cause remains unverified; diagnostics now identify the failing phase. Major remains 1.
+
+## 1.35.39 — 2026-10-31
+
+1. [PR #221](https://github.com/StealthCat/MrPatchy/pull/221): allow two independent implementation streams with isolated issue ownership and explicit ready handoffs to a single integration/version/merge coordinator.
+2. Reserve all README.md and CHANGELOG.md notes and updates for the coordinator. Workers leave those files and APP_VERSION unchanged, proposing documentation and change notes in PR descriptions. Remove the current-version field and synchronization requirement from README; runtime metadata still derives from APP_VERSION.
+3. Separate development validation from strict integration readiness. Unversioned worker checks reject README/changelog changes; the new integration-version CI job requires a newer major-1 version and the exact PR's changelog link, preserving historical entries. Cover worker handoffs, malformed/decreasing versions, PR binding and history preservation with real Git-history tests.
+4. Reconcile repository guidance and all four development-task prompts, retaining their roadmap requirements, schedules and enabled states. Add the copyable coordinator prompt and legacy-PR transition procedure. Compatibility: worker commits/PR titles no longer require version prefixes, and unversioned PRs intentionally await coordinator preparation at the new integration-version check. Existing versioned PRs are retained for handoff. No runtime authorization changes, Docker publication or Git tags.
+
+## 1.35.37 — 2026-10-31
+
+- Parse successful rollback-adapter JSON exclusively from stdout, keeping stderr warnings separate so snapshot and rollback side effects are not misreported as failures (issue #150).
+- Reject adapter stdout larger than 20 KB before JSON parsing. Invalid or non-object responses still fail closed; the adapter trust, operation and identifier checks are unchanged. No compatibility impact for conforming adapters; major version stays 1.
+
+## 1.35.35 — Log and audit rejected SSO callbacks
+
+- Fix #170: the SSO callback no longer discards every validation failure silently. The server logs the exception class and a fixed-vocabulary sanitized reason (discovery/endpoint, issuer or subject mismatch, unbound subject, missing ID token, token exchange) and writes an `SSO login failed` audit entry with issuer, truncated hashed subject and reason.
+- Audit entries are rate-limited to one per reason/subject per five minutes (bounded table) so unauthenticated callers cannot flood the audit log. The user-facing 400 message is unchanged, so there is no enumeration signal; raw provider error text and subjects are never recorded.
+- Add regressions for misconfigured discovery, unassigned subject and rate limiting. No schema changes; major remains 1.
 
 ## 1.35.30 — 2026-10-31
 
