@@ -5350,6 +5350,14 @@ PR #208's deleted-server read authorization, including their tests, recovery for
 and delivery records. The combined v1.35.33 head requires a fresh full local run and
 all twelve exact-head checks; the earlier green run does not authorize merge.
 
+Second final integration refresh: all twelve jobs passed on combined head
+`7b0cb3d54f56452ba6e054ab8db863550c2820f8`, and its local tree passed 1,670 tests,
+11 skips and 9 subtests. Main then advanced to `db7871e` (v1.35.30) through PR #203.
+Preserve its uncertain ordinary-patch outcome hold, remote-start classification,
+receipts, audit records and regression suite unchanged. The new combined head again
+requires the full local and twelve-job exact-head gates; neither earlier green run
+authorizes merge.
+
 Integration continuation — Codex `integration-6eac54918b34`, PR #208, 2026-10-31.
 Accepted the explicit #118 handoff and retained the same branch. Reproduced again
 on current main `fa5d933` (v1.35.24): 14 failed / 12 passed in
@@ -5448,3 +5456,38 @@ entry remain intact. The combined final source receives fresh full local and
 all twelve exact-head CI checks. Do not merge #208 before #212's tested merge is
 verified; if its head changes, refresh/reassess this candidate. No other branch
 ownership or schedule changes.
+
+
+## v1.35.30 — Uncertain ordinary patch outcomes (#119)
+
+MrPatchy hourly development, Claude Code session `session_01AfdfYehh8Cf5AJiiyGRkCf`,
+claimed unowned issue #119 after reviewing all open issues, comments and PRs at
+main 56d4eb7 (v1.35.19). Reproduced on that main: with reboot/rollback off, an
+injected `RemoteProtocolError` on the patch send left the job `failed` and the
+host unquarantined, so the next queued mutation ran.
+
+The worker now tracks ordinary patch progress (not sent, sent, receipt received,
+inventory observed). After the request is sent, a failure is held as
+`recovery_required` unless `ssh.call` proves the remote command never started or
+the bridge returned its own structured JSON failure (`ssh.RemoteFailure`). A
+bridge exit without that receipt, a lost/truncated/invalid reply, a timeout, a
+transport error after `exec_command`, and a failed post-patch inventory read are
+all uncertain. Held jobs keep the receipt, the error and the operation identity
+in output and audit (`uncertain patch <job id>`), block later queued work through
+the existing quarantine states and are released only through the existing
+reconciliation path; nothing is replayed. Once the post-patch inventory is
+observed, a later health regression stays a terminal `failed` rollout stage.
+Protected-patch, release-upgrade, role, response-authorization and audit
+boundaries are unchanged. `repository`, `key` and `repair` mutations keep their
+existing classification; tracked in follow-up issue #204.
+
+Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malformed
+replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
+inventory failure, verified target failure, inactive and unreachable servers
+(using the real `ssh.call`), the remote-start marker, structured-failure parsing
+and a later queued job. First proposed as v1.35.22. While this PR waited, main
+advanced through PRs #174 (v1.35.20), #196 (v1.35.21), the CI review (v1.35.24),
+#207 (v1.35.25), #212 (v1.35.27) and #208 (v1.35.29), in the order agreed on
+#203/#208/#212; all are preserved. v1.35.30 is newer than main and below the
+later #213-#215 allocations. No schema, target helper or Git tag change; source versioning
+publishes no Docker image.
