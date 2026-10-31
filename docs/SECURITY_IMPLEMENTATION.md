@@ -5204,7 +5204,7 @@ reconciliation path; nothing is replayed. Once the post-patch inventory is
 observed, a later health regression stays a terminal `failed` rollout stage.
 Protected-patch, release-upgrade, role, response-authorization and audit
 boundaries are unchanged. `repository`, `key` and `repair` mutations keep their
-existing classification; see the follow-up issue recorded on #119.
+existing classification; tracked in follow-up issue #204.
 
 Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malformed
 replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
