@@ -5348,3 +5348,18 @@ tested tree. Active integration/version holds were posted on #203/#206/#207/#208
 #209 because main's direct CI update is already v1.35.24. Do not merge ahead of
 that coordinated issue-fix sequence or reuse lower versions. Keep #120 open until
 the tested final merge is verified; continue the same PR if this cycle ends first.
+
+
+Final integration refresh (2026-10-31T21:54Z): all twelve checks passed on PR #212
+head e4ea3714a60ad06139ea9c6cd9e95849831d8788 (run 41244989750). SQLite CI:
+1521 passed / 129 skipped / 9 subtests. MySQL shards combined: 1517 passed /
+133 skipped / 9 subtests; the native encrypted MySQL archive recovery drill is
+included in successful shard 1. Browser, both SSH and RPM legs, GCP runtime and
+static checks passed. Main advanced just before merge to 6589f4d (PR #207,
+v1.35.25). Preserve its checkbox CSS/regression and delivery entry; retain
+v1.35.27 and rerun ALL checks on this new merged final commit. No stale-combination
+merge was attempted. #208's owner explicitly confirmed independent integration
+and will refresh its .29 work if #212 integrates first. Current next-integration
+proposal is #212 at .27; preserve other independently owned fixes and recheck
+main immediately before merge. The earlier blanket hold was superseded by
+PR #212's integration discussion. No issue closure before verified tested merge.
