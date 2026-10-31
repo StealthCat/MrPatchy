@@ -4848,6 +4848,12 @@ resumes only after these higher-priority actionable fixes.
 
 ## v1.35.3 — Deferred advisory-plan contract and status corrections
 
+Delivery record: version **v1.35.3**, implementation commit
+[`8adc1765`](https://github.com/StealthCat/MrPatchy/commit/8adc1765a786b01393cf9682edb0a4d8894bd90a)
+and [PR #110](https://github.com/StealthCat/MrPatchy/pull/110). The PR may merge only
+after all applicable checks pass on its exact final head; the completion report records
+that final head and merge commit.
+
 Issue-first reconciliation read merged v1.35.2 main, repository instructions, this
 checkpoint and merged PR #109. The first 100 open issues contained #96, #98,
 #100–#104 and #106–#108; no open PR existed. Issues #100–#102 are three confirmed,
