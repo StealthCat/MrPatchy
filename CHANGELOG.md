@@ -1,8 +1,17 @@
 # Changelog
 
-## 1.35.23 — 2026-10-31
+## 1.35.25 — 2026-10-31
 
-- Style `.inline-check` like `label.check` so the response-monitoring, response-watch and service-watch checkboxes render inline with their labels (issue #175). A regression test requires every `class="...check"` label in the UI to have a matching stylesheet rule. No compatibility impact; major version stays 1.
+- Style `.inline-check` like `label.check` so the response-monitoring, response-watch and service-watch checkboxes render inline with their labels (issue #175). A regression test requires every `check`/`inline-check` label in the UI to have a matching stylesheet rule. No compatibility impact; major version stays 1.
+
+## 1.35.24 — 2026-10-31
+
+- Stop pushes to `main` cancelling each other's CI runs. The shared concurrency group had cancelled the main runs for v1.35.16–v1.35.20 before they finished. Only superseded pull request runs are cancelled now, and pull requests are grouped by number so a fork branch named `main` cannot collide with `main`.
+- Fix the shell syntax check: `bash -n a b c` checks only its first operand, so six of the seven scripts had never been checked. Every tracked `*.sh`, JavaScript and browser-test file is now checked, and `scripts/`, `tools/` and `tests/` are byte-compiled.
+- Pin all CI runners to `ubuntu-24.04` ahead of the `ubuntu-latest` move to Ubuntu 26 (#197).
+- Shorten the critical path. The ~21-minute MySQL suite is split by test file across four isolated jobs (`MRPATCHY_TEST_SHARD`), and fast static checks run in their own job instead of after the full SQLite suite.
+- Remove duplicated work. The recovery job, which re-ran one test file to get restic coverage, is folded into `tests`. Target-independent native RPM unit tests run once instead of in every RPM leg. Pip and npm downloads are cached.
+- Compatibility: the CI check names change (`static` is added, `mysql (1)`–`mysql (4)` replace `mysql`, `recovery` is removed). Update any branch-protection required checks. No application behaviour changes. Major version stays 1.
 
 ## 1.35.21 — 2026-10-31
 
