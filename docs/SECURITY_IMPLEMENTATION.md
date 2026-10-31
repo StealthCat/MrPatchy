@@ -4960,3 +4960,53 @@ spool reliability/observability work, #98 remains CI maintenance, #96 remains th
 upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap priority
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
+
+
+## v1.35.9 — Zero-server recovery backup
+
+Delivery record: version **v1.35.9** on branch `claude/mr-patchy-issue-fix-e7s51r`,
+addressing [issue #131](https://github.com/StealthCat/MrPatchy/issues/131) (Claude Code
+session `session_01AfdfYaRTCpQyx5noPLyT4L`). The issue may close only after every
+applicable check passes on the exact final PR head and that commit is merged.
+
+Triage read v1.35.6 main, all open issues and the open PRs #115, #116 and #137. This
+session first claimed #124 but released it, because a Codex session had claimed it
+seconds earlier. #131 had no claim or related PR. It is separate from #120, which
+concerns evidence and trust state omitted from successful backups.
+
+Reproduction: a valid application-schema SQLite deployment with secret, TLS and Caddy
+state but no `ssh/`, with only restic stubbed, raised `FileNotFoundError` in
+`recovery.backup()` before restic was invoked. Enrollment creates `ssh/` lazily.
+
+`scripts/recovery.py` now derives the servers that require an SSH identity (every
+`hosts` row with `deleted_at=0`) from the bundled SQLite snapshot, or from a read-only
+query alongside the MySQL dump. An absent `ssh/` becomes an explicit empty `0700`
+bundle directory. A symlinked `ssh/` is still refused. Each required server must have
+a regular, non-empty, non-linked `<id>.key` in the bundle, and server identifiers must
+match the application's identifier pattern. Otherwise backup stops before restic runs.
+The manifest stays format 1 and adds `ssh_hosts`. Activation applies the same check
+before mutating any destination, using the union of the manifest list and, for SQLite,
+the bundled database, so an edited manifest cannot hide an enrolled server. Bundles
+written before this version, which lack the list, remain accepted. Activation sets
+`ssh/` to `0700`.
+
+Compatibility impact: a deployment with a non-deleted server whose key is missing,
+which earlier versions backed up without any warning, now fails loudly until the key is
+restored or the server is deleted. Major version stays 1.
+
+Coverage: `tests/test_recovery_ssh.py` uses the real application schema to cover:
+- zero-server backup and activation;
+- a populated fleet, including rotation state;
+- deleted servers that need no key;
+- missing keys with and without `ssh/`;
+- empty or symlinked keys and a symlinked directory;
+- activation refusing a bundle without an enrolled key before any mutation, even with
+  an edited manifest;
+- malformed identifiers;
+- legacy manifests.
+
+`tests/test_final_features.py` adds a real restic empty-fleet backup, restore and
+activation drill, which runs in the recovery CI job. Exact-final-head SQLite, MySQL,
+browser, SSH/RPM and remaining CI checks are the merge gate. No schema, role, audit,
+target helper, Docker publication, Git tag or response-authorization change is
+included.

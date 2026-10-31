@@ -117,6 +117,31 @@ def test_encrypted_recovery_round_trip(tmp_path,monkeypatch):
     with sqlite3.connect(tmp_path/'restored-data/mrpatchy.db') as db:assert db.execute('SELECT value FROM example').fetchone()[0]=='restored'
     assert (tmp_path/'restored-caddy-data/fixture').read_text()=='caddy-data'
 
+def test_encrypted_recovery_round_trip_for_empty_fleet(tmp_path,monkeypatch):
+    """A fresh deployment has no ssh/ directory until its first server is added (#131)."""
+    import importlib.util,sqlite3,shutil,stat
+    if not shutil.which('restic'):pytest.skip('restic is exercised in recovery CI')
+    spec=importlib.util.spec_from_file_location('recovery',Path(__file__).parents[1]/'scripts/recovery.py')
+    recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
+    data=tmp_path/'data';data.mkdir();(data/'secret.key').write_text('encryption fixture')
+    with sqlite3.connect(data/'mrpatchy.db') as db:
+        for name in ('settings','hosts','packages','jobs'):db.execute('CREATE TABLE '+name+' (id TEXT)')
+    dirs=[]
+    for name in ['tls','caddy-data','caddy-config']:
+        path=tmp_path/name;path.mkdir();(path/'fixture').write_text(name);dirs.append(path)
+    password=tmp_path/'restic-password';password.write_text('long-random-test-password')
+    monkeypatch.setenv('RESTIC_PASSWORD_FILE',str(password));monkeypatch.setenv('RESTIC_REPOSITORY',str(tmp_path/'repository'))
+    monkeypatch.setenv('DATABASE_URL','sqlite:///'+str(data/'mrpatchy.db'))
+    monkeypatch.setattr(recovery,'remote',lambda:None) # Local transport fixture; real restic encryption/verification.
+    recovery.run(['restic','init'])
+    recovery.backup(data,*dirs)
+    assert not (data/'ssh').exists()
+    bundle=recovery.restore('latest',tmp_path/'staging')
+    assert (bundle/'ssh').is_dir() and not any((bundle/'ssh').iterdir())
+    recovery.activate(bundle,tmp_path/'restored-data',tmp_path/'restored-tls',tmp_path/'restored-caddy-data',tmp_path/'restored-caddy-config',uid=os.getuid())
+    restored=tmp_path/'restored-data/ssh'
+    assert restored.is_dir() and not any(restored.iterdir()) and stat.S_IMODE(restored.stat().st_mode)==0o700
+
 def test_remote_recovery_refuses_local_repository(monkeypatch):
     import importlib.util
     spec=importlib.util.spec_from_file_location('recovery',Path(__file__).parents[1]/'scripts/recovery.py')

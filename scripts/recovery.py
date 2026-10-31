@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -22,6 +23,20 @@ def open_sqlite(path):
         return db
     except Exception:
         db.close();raise
+HOST_ID=re.compile('[A-Za-z0-9-]{1,64}')
+def sqlite_key_hosts(db):
+    """Servers whose SSH identity must exist: every server not deleted."""
+    columns={row[1] for row in db.execute('PRAGMA table_info(hosts)')}
+    query='SELECT id FROM hosts'+(' WHERE deleted_at=0' if 'deleted_at' in columns else '')
+    return {row[0] for row in db.execute(query)}
+def check_ssh(folder,hosts):
+    """Distinguish an empty fleet from missing credentials for enrolled servers."""
+    folder=Path(folder);missing=[]
+    for host in sorted(hosts):
+        if not isinstance(host,str) or not HOST_ID.fullmatch(host):raise ValueError('Invalid server identifier in recovery state')
+        key=folder/(host+'.key')
+        if key.is_symlink() or not key.is_file() or not key.stat().st_size:missing.append(host)
+    if missing:raise ValueError('Missing SSH private key for enrolled server(s): '+', '.join(missing)+'. Restore the key or delete the server before recovery')
 def remote():
     repo=os.environ.get('RESTIC_REPOSITORY','')
     if not repo.startswith(('sftp:','s3:','rest:https://','b2:','azure:','gs:')):raise ValueError('Configure an off-host RESTIC_REPOSITORY')
@@ -63,11 +78,14 @@ def backup(data,tls,caddy_data,caddy_config):
         if url.get_backend_name()=='sqlite':
             from contextlib import closing
             with closing(open_sqlite(url.database)) as source,sqlite3.connect(bundle/'database.sqlite') as destination:source.backup(destination)
+            with closing(sqlite3.connect(bundle/'database.sqlite')) as snapshot:hosts=sqlite_key_hosts(snapshot)
             backend='sqlite'
         elif url.get_backend_name()=='mysql':
             options=mysql_options(url,root)
             with open(bundle/'database.sql','wb') as stream:
                 run(['mysqldump','--defaults-extra-file='+str(options),'--single-transaction','--routines','--events','--triggers','--hex-blob',url.database],stdout=stream)
+            listed=subprocess.check_output(['mysql','--defaults-extra-file='+str(options),'--batch','--skip-column-names','--execute=SELECT id FROM hosts WHERE deleted_at=0',url.database],text=True)
+            hosts={line.strip() for line in listed.splitlines() if line.strip()}
             backend='mysql'
         else:raise ValueError('Unsupported database')
         shutil.copy2(data/'secret.key',bundle/'secret.key')
@@ -75,9 +93,14 @@ def backup(data,tls,caddy_data,caddy_config):
         # A restore explicitly selects a new destination and may use new paths.
         for name in ('database-active.json','database-target.json'):
             if (data/name).is_file():shutil.copy2(data/name,bundle/name)
-        copy_tree(data/'ssh',bundle/'ssh');copy_tree(tls,bundle/'tls')
+        # A fresh deployment has no ssh/ until its first server is added. Only
+        # that zero-server state may be backed up as an explicit empty folder.
+        if os.path.lexists(data/'ssh'):copy_tree(data/'ssh',bundle/'ssh')
+        else:(bundle/'ssh').mkdir(mode=0o700)
+        check_ssh(bundle/'ssh',hosts)
+        copy_tree(tls,bundle/'tls')
         copy_tree(caddy_data,bundle/'caddy-data');copy_tree(caddy_config,bundle/'caddy-config')
-        (bundle/'manifest.json').write_text(json.dumps({'format':1,'database':backend}))
+        (bundle/'manifest.json').write_text(json.dumps({'format':1,'database':backend,'ssh_hosts':sorted(hosts)}))
         # Stable relative archive path independent of temporary directory.
         run(['restic','backup','--tag','mrpatchy','bundle'],cwd=root)
         run(['restic','check','--read-data'])
@@ -109,7 +132,13 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
     for name in ('ssh','tls','caddy-data','caddy-config'):
         folder=bundle/name
         if not folder.is_dir() or folder.is_symlink() or any(p.is_symlink() for p in folder.rglob('*')):raise ValueError('Missing or unsafe bundle directory: '+name)
-    if manifest['database']=='sqlite':open_sqlite(bundle/'database.sqlite').close()
+    hosts=manifest.get('ssh_hosts',[])
+    if not isinstance(hosts,list):raise ValueError('Unsupported backup format')
+    hosts=set(hosts)
+    if manifest['database']=='sqlite':
+        from contextlib import closing
+        with closing(open_sqlite(bundle/'database.sqlite')) as db:hosts|=sqlite_key_hosts(db)
+    check_ssh(bundle/'ssh',hosts)
     data.mkdir(mode=0o700,parents=True,exist_ok=True)
     if manifest['database']=='mysql':
         url=make_url(os.environ['DATABASE_URL'])
@@ -119,7 +148,7 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
             if existing.strip():raise ValueError('Restore requires an empty MySQL database')
             with open(bundle/'database.sql','rb') as stream:run(['mysql','--defaults-extra-file='+str(options),url.database],stdin=stream)
     else:shutil.copy2(bundle/'database.sqlite',data/'mrpatchy.db')
-    shutil.copy2(bundle/'secret.key',data/'secret.key');copy_tree(bundle/'ssh',data/'ssh')
+    shutil.copy2(bundle/'secret.key',data/'secret.key');copy_tree(bundle/'ssh',data/'ssh');(data/'ssh').chmod(0o700)
     if tls.exists():tls.rmdir()
     copy_tree(bundle/'tls',tls)
     for name,location in (('caddy-data',caddy_data),('caddy-config',caddy_config)):
