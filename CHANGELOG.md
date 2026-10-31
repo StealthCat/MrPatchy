@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.5 — 2026-10-31
+
+- Recover incident-response and startup-change advisory AI plan jobs left `running` by a lost worker: the scheduler coordinator marks them `interrupted` only after acquiring the server's execution lock, releasing the blocked server queue (#104).
+- Never replay an interrupted plan automatically; mark its matching plan run receipt interrupted with an audit record and keep sent or uncertain daily-spend reservations counted at their full ceiling.
+- Add deterministic crash regression coverage before and after provider transmission, live lock-holder protection and action scoping that leaves release planning and upgrade recovery unchanged.
+
 ## 1.35.3 — 2026-10-31
 
 - Project a sanitized `ai_deferred` Boolean from operation APIs so Activity list/detail views show timed eligibility and administrator-resume waits without exposing internal job payloads.

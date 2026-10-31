@@ -314,6 +314,48 @@ def submit_job(pool,job,active,busy):
     return True
 
 
+ADVISORY_PLAN_ACTIONS=('security-plan','startup-plan')
+INTERRUPTED_PLAN=('The worker stopped before this advisory AI plan finished. It was not replayed automatically: '
+    'a provider request may already have been sent and may be billable. Review the AI run and spending receipts, '
+    'then queue a new plan if it is still needed.')
+
+
+def reconcile_advisory_plans():
+    """Fence advisory AI plans left running by a lost worker; never replay them.
+
+    execute() holds the host lock from claim to final commit, and the lock ends
+    with its process (file lock) or database connection (MySQL named lock).
+    Acquiring it while a plan job is still running therefore means no worker is
+    executing that job. A live, slow or hung worker keeps the lock and is left
+    alone. Spending reservations are not changed: transmitted calls without a
+    usage receipt stay counted at their full reserved ceiling."""
+    from . import ai_runs
+    with Session() as s:
+        candidates=list(s.execute(select(Job.id,Job.host_id).where(Job.state=='running',Job.action.in_(ADVISORY_PLAN_ACTIONS))))
+    recovered=[]
+    for job_id,host_id in candidates:
+        lock=host_lock(host_id)
+        if not lock.acquire(False):continue
+        try:
+            with Session() as s:
+                fenced=s.execute(update(Job).where(Job.id==job_id,Job.state=='running',Job.action.in_(ADVISORY_PLAN_ACTIONS))
+                    .values(state='interrupted',next_at=0,output=INTERRUPTED_PLAN)).rowcount
+                if fenced!=1:s.rollback();continue
+                job=s.get(Job,job_id)
+                job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
+                # Plan runs execute only inside plan jobs holding this host lock.
+                runs=select(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='security_plan',ai_runs.AIRun.state=='running',
+                    ai_runs.AIRun.host_id==host_id,ai_runs.AIRun.subject==str(job.payload.get('incident_id','')))
+                for run in s.scalars(runs):
+                    run.state='interrupted';run.stage='interrupted';run.finished=time.time()
+                    run.message='Plan worker stopped before completion. Any sent provider call may be billable; the request was not replayed.'
+                    s.add(ai_runs.AIEvent(run_id=run.id,stage=run.stage,message=run.message))
+                audit(s,'interrupted '+job.action,host_id+' '+job_id+' worker lost before completion; not replayed')
+                s.commit();recovered.append(job_id)
+        finally:lock.release()
+    return recovered
+
+
 def execute(job_id,reserved_lock=None):
     lock=reserved_lock
     if lock is None:
@@ -745,6 +787,8 @@ def _loop(reporter):
                     continue
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
                 if is_leader and now-last_schedule>=30:
+                    try:reconcile_advisory_plans()
+                    except Exception:log.exception('Advisory plan recovery failed')
                     scheduling.tick(now); incidents.schedule_tick(now);
                     from .persistence import schedule_tick as persistence_tick
                     from .response_monitor import schedule_tick as response_tick

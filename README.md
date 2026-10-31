@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.35.3** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.35.5** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -607,6 +607,29 @@ Release planning remains excluded because one release plan can make multiple pai
 calls without per-stage persistence; replaying the whole job could duplicate a
 successful earlier stage. Connection tests are interactive rather than durable jobs.
 Those paths, plus complete multi-controller failover acceptance, remain unfinished.
+
+### Interrupted advisory-plan recovery (v1.35.5)
+
+An incident-response or startup-change plan job that a worker claimed but never
+finished (process kill, container restart, lost MySQL lock connection) no longer stays
+`running` indefinitely and blocks every other operation queued for that server. The
+scheduler coordinator checks such jobs every 30 seconds. Each execution holds the
+server's cross-process lock from claim to final commit, and that lock ends with its
+process or database connection. When the coordinator can take that lock while a plan
+job is still `running`, no worker is executing it, so the job becomes `interrupted`
+with operator guidance, the server queue is released, and the matching plan run
+receipt is marked interrupted with an audit record. A live, slow or hung worker keeps
+its lock and is left alone.
+
+Interrupted plans are never replayed automatically, because a provider request may
+already have been sent and billed. Daily-spend reservations are not changed: a
+transmitted call without a usage receipt stays counted at its full reserved ceiling,
+and automatic incident planning keeps its one-attempt-per-evidence-revision limit.
+Queue a new plan from the incident when it is still needed. Release planning and
+release upgrades keep their existing target-aware resume and manual reconciliation
+paths. Recovery assumes a lock loss means the executor is gone; a worker whose MySQL
+lock connection drops while it keeps running is an existing unsupported condition for
+all job types.
 
 For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
 create `ai_triage_claims`, then start matching workers. Mixed old/new active workers
