@@ -5200,12 +5200,72 @@ and #195 0824d084. Current source v1.35.19 follows those planned merges.
 Retain the budget Decimal/default validation fix and SBOM host binding, then run
 all exact-head checks before merge. No changes to dependency branches.
 
-## v1.35.21 — Per-route role declarations (#198)
+
+## v1.35.21 — Zero-server recovery backup
+
+Delivery record: version **v1.35.21** (initially proposed as v1.35.9) on branch `claude/mr-patchy-issue-fix-e7s51r`,
+addressing [issue #131](https://github.com/StealthCat/MrPatchy/issues/131) (Claude Code
+session `session_01AfdfYaRTCpQyx5noPLyT4L`). The issue may close only after every
+applicable check passes on the exact final PR head and that commit is merged.
+
+Triage read v1.35.6 main, all open issues and the open PRs #115, #116 and #137. This
+session first claimed #124 but released it, because a Codex session had claimed it
+seconds earlier. #131 had no claim or related PR. It is separate from #120, which
+concerns evidence and trust state omitted from successful backups.
+
+Reproduction: a valid application-schema SQLite deployment with secret, TLS and Caddy
+state but no `ssh/`, with only restic stubbed, raised `FileNotFoundError` in
+`recovery.backup()` before restic was invoked. Enrollment creates `ssh/` lazily.
+
+`scripts/recovery.py` now derives the servers that require an SSH identity (every
+`hosts` row with `deleted_at=0`) from the bundled SQLite snapshot, or from a read-only
+query alongside the MySQL dump. An absent `ssh/` becomes an explicit empty `0700`
+bundle directory. A symlinked `ssh/` is still refused. Each required server must have
+a regular, non-empty, non-linked `<id>.key` in the bundle, and server identifiers must
+match the application's identifier pattern. Otherwise backup stops before restic runs.
+The manifest stays format 1 and adds `ssh_hosts`. Activation applies the same check
+before mutating any destination, using the union of the manifest list and, for SQLite,
+the bundled database, so an edited manifest cannot hide an enrolled server. Bundles
+written before this version, which lack the list, remain accepted. Activation sets
+`ssh/` to `0700`.
+
+Compatibility impact: a deployment with a non-deleted server whose key is missing,
+which earlier versions backed up without any warning, now fails loudly until the key is
+restored or the server is deleted. Major version stays 1.
+
+Coverage: `tests/test_recovery_ssh.py` uses the real application schema to cover:
+- zero-server backup and activation;
+- a populated fleet, including rotation state;
+- deleted servers that need no key;
+- missing keys with and without `ssh/`;
+- empty or symlinked keys and a symlinked directory;
+- activation refusing a bundle without an enrolled key before any mutation, even with
+  an edited manifest;
+- malformed identifiers;
+- legacy manifests.
+
+`tests/test_final_features.py` adds a real restic empty-fleet backup, restore and
+activation drill, which runs in the recovery CI job. Exact-final-head SQLite, MySQL,
+browser, SSH/RPM and remaining CI checks are the merge gate. No schema, role, audit,
+target helper, Docker publication, Git tag or response-authorization change is
+included.
+
+Integration: while PR #196 waited, the combined #116/#137/#115 integration (#195) and
+#183 merged, moving main to v1.35.16; #138 then merged as v1.35.17, and #174 had also
+used v1.35.9. This session respected the #195 integration hold, merged the resulting
+main and re-allocated **v1.35.20**, newer than main and the pending #139 (v1.35.18) and
+#168 (v1.35.19). Only shared version metadata conflicted; main's entries were kept
+intact and this update's entries reapplied.
+
+
+Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
+
+## v1.35.22 — Per-route role declarations (#198)
 
 Claude Code session `012YQAphimPkYCq5KWgr1sGh` claimed issue #198 after reading main
 `1328a82` (v1.35.17), all open issues and open PRs. Pending #139, #168, #174 and #196
 hold versions up to v1.35.20 and also edit `app/main.py`; this update proposes
-v1.35.21, subject to refreshing main before merge.
+v1.35.22, subject to refreshing main before merge.
 
 `auth()` used to decide roles by testing the request path (`'/security' in path`,
 `path.endswith('/patch')`, prefix lists), so a new route defaulted to viewer-readable

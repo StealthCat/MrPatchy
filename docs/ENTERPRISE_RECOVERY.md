@@ -69,7 +69,7 @@ scripts/recovery.py uses restic for encrypted, content-verified off-host storage
 
 Stop **all** web and worker replicas before taking a coordinated backup. Backups contain:
 - SQLite snapshot or consistent MySQL dump, including routines/events/triggers;
-- encryption key and entire SSH identity/rotation directory;
+- encryption key and entire SSH identity/rotation directory (an explicit empty directory for a deployment with no servers yet; a private key must be present for every server that is not deleted, or backup and activation stop);
 - TLS configuration, Caddy certificate/private-CA data and Caddy configuration.
 
 For remote MySQL connections set MYSQL_SSL_CA; verification is mandatory. Store the restic password separately from the repository and test recovery credentials.
