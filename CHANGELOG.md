@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.4 — 2026-10-31
+
+- Detect orphaned running incident/startup advisory-plan jobs under the elected scheduler and each server's distributed worker lock, while leaving live workers untouched.
+- Surface interrupted paid work as an explicit recovery hold without automatically replaying a provider request, preserving AI run, call-usage and spend-reservation records for review.
+- Require an administrator to review retained AI/spend records before releasing the server queue, without performing an unrelated target SSH status query.
+
 ## 1.35.3 — 2026-10-31
 
 - Project a sanitized `ai_deferred` Boolean from operation APIs so Activity list/detail views show timed eligibility and administrator-resume waits without exposing internal job payloads.
