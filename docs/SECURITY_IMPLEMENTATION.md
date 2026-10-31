@@ -4435,3 +4435,50 @@ No schema, target-helper/agent update, Docker publication, Git tag or schedule c
 is introduced. Versioned commit, PR, exact-final-head checks and merge references are
 recorded in the completion report after publication; no earlier or failed head may be
 merged.
+
+
+## v1.30.0 — Exact-context contradiction invalidation and linked review
+
+Issue-first reconciliation read current main `85c4abc8`, repository instructions,
+this checkpoint and merged PR #89. The first 100-item open-issue and open-PR pages
+were empty, so no actionable GitHub report or unfinished delivery competed with this
+roadmap batch. The chat-reported database-migration refusal remains blocked on its
+v1.23.1 categorized mismatch list or a separately reviewed schema inventory; no
+database object is ignored or guessed away and no closure is claimed.
+
+This dependency-ordered exact-known-good milestone closes the automatic contradiction
+boundary. After a normal fresh provider path persists a final medium/high/unknown
+assessment, the worker derives the candidate identity using a non-authorizing low-risk
+probe and reuses the existing strict lookup validation. Only an active entry with the
+identical complete canonical context, requested model and policy digest is locked and
+invalidated. Results with outstanding requested checks, provider failures, incomplete
+evidence, changed context, model or policy do nothing.
+
+The entry records the retained contradictory assessment identity, timestamp and a
+bounded system reason. Audit includes only registry/assessment identifiers, risk and
+linked count, never raw evidence. Source and exact-reuse observations remain immutable;
+their authenticated detail status revalidates the contradiction against the same
+fingerprint before exposing its subject/host/risk and a deep link. Every linked result
+is marked review-required, but the new advisory output does not confer or withdraw a
+host approval, authorize containment, suppress deterministic protection or invent a
+response action.
+
+Focused acceptance first reproduced that a high-risk Re-triage left the old active
+entry reusable. It now covers a real worker provider call, retained refresh provenance,
+immediate reuse denial, source/reuse review state, identity-checked contradiction links,
+redacted audit provenance, partial-result refusal and contextual misses. Browser
+acceptance covers the escaped deep link and advisory boundary on existing responsive
+Assessment history. SQLite/MySQL and browser jobs remain mandatory on the exact final
+commit before merge.
+
+Current native runtime collection still declares configuration, effective-behavior
+and complete-coverage gaps and therefore publishes/hits nothing. Administrator-origin
+classifications, native complete-context collection, broader SQLite/MySQL concurrency
+and revocation acceptance, same-server fairness and shared throttle/daily-spend/
+unthrottled controls remain planned.
+
+APP_VERSION/README/changelog/UI/API synchronize at v1.30.0 with major fixed at 1.
+No schema, target-helper/agent update, Docker publication, Git tag or schedule change
+is introduced. Versioned commit, PR, exact-final-head checks and merge references are
+recorded in the completion report after publication; no earlier or failed head may be
+merged.

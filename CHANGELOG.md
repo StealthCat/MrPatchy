@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.30.0 — 2026-10-31
+
+- Automatically invalidate an active fleet safe candidate when a retained final non-low provider assessment contradicts the identical verified context, model and policy.
+- Ignore partial follow-up requests, failures and contextual/model/policy misses; invalidation changes reuse eligibility only and never authorizes a response.
+- Retain and audit the contradictory assessment identity while preserving every earlier result and marking all linked source/reuse assessments for review.
+- Add an escaped deep link from responsive Assessment history to the contradictory advisory result; native complete evidence and shared rate/spend controls remain planned.
+
 ## 1.29.0 — 2026-10-31
 
 - Add administrator-confirmed, reasoned fleet invalidation for exact known-good entries, serialized with AI-state mutations and protected by existing role and CSRF controls.

@@ -313,6 +313,98 @@ def test_explicit_retriage_bypasses_exact_match_and_calls_provider(client,monkey
     assert len(calls)==1 and saved.source=='ai' and saved.refresh['id']=='refresh-two'
 
 
+def test_fresh_provider_contradiction_invalidates_exact_candidate_and_links_review(client,monkeypatch):
+    current=complete();current['host_id']='host-two'
+    current['investigation']['details']['known_good_context']['observation']['host_id']='host-two'
+    policy_hash=ai_assessments.digest([ai.investigation_policy()])
+    source=retained(snapshot=complete());source.policy_hash=policy_hash
+    source_behavior=Behavior(id='behavior-one',host_id='host-one',evidence=complete(),
+        verdict='low',approved=True)
+    behavior=Behavior(id='behavior-two',host_id='host-two',evidence=current,verdict='low')
+    with Session() as s:
+        s.add_all([Host(id='host-one',name='Source',address='192.0.2.1',fingerprint=''),
+            Host(id='host-two',name='Current',address='192.0.2.2',fingerprint=''),
+            source,source_behavior,behavior])
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'gpt-fixture'}))
+        s.merge(Setting(key='openai_key',value={'encrypted':seal('private-key')}))
+        published=known_good.publish(s,source);s.flush()
+        hit=known_good.lookup(s,current,'gpt-fixture',[policy_hash])
+        reused=ai_assessments.record_reuse(s,behavior,hit);s.flush()
+        known_good.link_reuse(s,reused,hit)
+        s.add(ai_assessments.Refresh(subject=behavior.id,id='refresh-two',actor='admin',
+            reason='Verify conflicting deterministic evidence',previous=reused.id,
+            withdrew_approval=False))
+        behavior.verdict='pending';s.commit()
+    calls=[]
+    monkeypatch.setattr(ai,'investigate',lambda *args,**kwargs: calls.append(args) or {
+        'risk':'high','explanation':'Fresh evidence contradicts the safe classification',
+        'recommended_checks':'Review the retained evidence','requested_checks':[]})
+
+    worker.investigate_one()
+
+    with Session() as s:
+        contradiction=s.scalar(select(ai_assessments.Assessment).where(
+            ai_assessments.Assessment.subject=='behavior-two',
+            ai_assessments.Assessment.source=='ai').order_by(ai_assessments.Assessment.created.desc()))
+        entry=s.get(known_good.Entry,published['fingerprint'])
+        original_status=known_good.assessment(source,s)
+        reuse_status=known_good.assessment(reused,s)
+        event=s.scalar(select(Audit).where(
+            Audit.action=='invalidate contradicted known-good candidate'))
+        behavior=s.get(Behavior,'behavior-two')
+        source_approval=s.get(Behavior,'behavior-one').approved
+    assert len(calls)==1 and behavior.verdict=='high'
+    assert contradiction.result['risk']=='high' and contradiction.refresh['id']=='refresh-two'
+    assert not entry.active and entry.revoked_by=='assessment:'+contradiction.id
+    assert event and contradiction.id in event.detail and published['fingerprint'] in event.detail
+    assert source_approval
+    for status in (original_status,reuse_status):
+        assert status['review_required'] and status['linked_assessments']==2
+        assert status['revoked_by']=='AI assessment'
+        assert status['contradiction_assessment_id']==contradiction.id
+        assert status['contradiction_subject']=='behavior-two'
+        assert status['contradiction_host_id']=='host-two'
+        assert status['contradiction_risk']=='high'
+
+    with Session() as s:
+        assert known_good.lookup(s,current,'gpt-fixture',[policy_hash]) is None
+
+
+def test_incomplete_or_contextually_different_result_does_not_invalidate_candidate(client):
+    source=retained();different=complete()
+    different['investigation']['details']['known_good_context']['behavior']['network_sha256']=sha('0')
+    rows=[
+        retained('partial','host-two','partial',complete(),{
+            'risk':'high','explanation':'More evidence is required',
+            'recommended_checks':'Collect evidence','requested_checks':['executable']}),
+        retained('different','host-two','different',different,{
+            'risk':'high','explanation':'Different exact context is unsafe',
+            'recommended_checks':'Review evidence','requested_checks':[]}),
+    ]
+    with Session() as s:
+        s.add_all([source,*rows]);published=known_good.publish(s,source);s.flush()
+        assert known_good.invalidate_contradiction(s,rows[0]) is None
+        assert known_good.invalidate_contradiction(s,rows[1]) is None
+        assert s.get(known_good.Entry,published['fingerprint']).active
+
+
+def test_contradiction_link_is_exposed_only_after_exact_identity_revalidation(client):
+    source=retained();changed=complete()
+    changed['investigation']['details']['known_good_context']['configuration']['manifest_sha256']=sha('0')
+    other=retained('33333333-3333-3333-3333-333333333333','host-two','behavior-two',changed,{
+        'risk':'high','explanation':'Different context is unsafe',
+        'recommended_checks':'Review evidence','requested_checks':[]})
+    with Session() as s:
+        s.add_all([source,other]);published=known_good.publish(s,source);s.flush()
+        entry=s.get(known_good.Entry,published['fingerprint'])
+        entry.active=False;entry.revoked_at=123
+        entry.revoked_by='assessment:'+other.id
+        entry.revoked_reason='Untrusted contradiction marker fixture'
+        s.flush();status=known_good.assessment(source,s)
+    assert status['review_required'] and status['revoked_by']=='assessment:'+other.id
+    assert 'contradiction_assessment_id' not in status
+
+
 def test_ineligible_assessment_does_not_publish_any_durable_candidate(client):
     snapshot=complete();snapshot['investigation']['details']['known_good_context']['coverage']['complete']=False
     with Session() as s:

@@ -640,6 +640,7 @@ def _assess_active_behavior(s,row,cfg,secret):
         def save(write,saved):
             saved.verdict=result['risk'];saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
             assessment=ai_assessments.record(write,saved,cfg['ai_model'],result,inputs)
+            known_good.invalidate_contradiction(write,assessment)
             known_good.publish(write,assessment)
             ai_retry.clear(write,saved)
         if lease:

@@ -358,6 +358,13 @@ def _same_observation(row, expected):
         row.subject == expected.subject and row.observation == expected.observation)
 
 
+def _safe_probe(snapshot, model, policy_hash):
+    """Derive an exact candidate identity without treating a new result as safe."""
+    return evaluate(snapshot, model, policy_hash,
+        {'risk': 'low', 'explanation': 'Exact-match identity probe',
+            'recommended_checks': '', 'requested_checks': []}, 'ai')
+
+
 def lookup(s, snapshot, model, policy_hashes, bypass=False):
     """Return one fully revalidated active exact match, or ``None``.
 
@@ -369,9 +376,7 @@ def lookup(s, snapshot, model, policy_hashes, bypass=False):
     if bypass or not isinstance(policy_hashes, (list, tuple)):
         return None
     for policy_hash in dict.fromkeys(policy_hashes):
-        status = evaluate(snapshot, model, policy_hash,
-            {'risk': 'low', 'explanation': 'Exact-match lookup',
-                'recommended_checks': '', 'requested_checks': []}, 'ai')
+        status = _safe_probe(snapshot, model, policy_hash)
         if not status['eligible']:
             continue
         saved = s.get(Entry, status['fingerprint'])
@@ -475,8 +480,7 @@ def publish(s, row):
     return {**status, 'published': bool(saved.active)}
 
 
-def revoke(s, fingerprint, version, actor, reason, revoked_at=None):
-    """Invalidate one exact candidate without rewriting linked assessment history."""
+def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action):
     saved = s.scalar(select(Entry).where(
         Entry.fingerprint == fingerprint).with_for_update())
     if saved is None:
@@ -491,12 +495,69 @@ def revoke(s, fingerprint, version, actor, reason, revoked_at=None):
     saved.revoked_at = revoked_at or time.time()
     saved.revoked_by = actor
     saved.revoked_reason = reason
-    audit(s, 'revoke known-good candidate',
+    audit(s, action,
         f'{actor} {fingerprint} linked={linked} reason={reason}')
     return {'fingerprint': fingerprint, 'version': saved.version,
         'active': False, 'review_required': True, 'linked_assessments': linked,
         'revoked_at': saved.revoked_at, 'revoked_by': saved.revoked_by,
         'revoked_reason': saved.revoked_reason}
+
+
+def revoke(s, fingerprint, version, actor, reason, revoked_at=None):
+    """Invalidate one exact candidate without rewriting linked assessment history."""
+    return _invalidate(s, fingerprint, version, actor, reason, revoked_at,
+        'revoke known-good candidate')
+
+
+def invalidate_contradiction(s, row, revoked_at=None):
+    """Invalidate an exact active candidate after a retained final AI contradiction.
+
+    This is deliberately conservative: only a complete non-low provider result
+    for the identical model, policy and verified canonical context can revoke a
+    candidate. Incomplete follow-up requests and merely similar context do
+    nothing. Revocation changes reuse eligibility only; it authorizes no
+    response and never rewrites either assessment.
+    """
+    result = row.result if isinstance(row.result, dict) else {}
+    risk = result.get('risk')
+    if (row.source != 'ai' or risk not in {'medium', 'high', 'unknown'} or
+            result.get('requested_checks') != [] or
+            not isinstance(result.get('explanation'), str) or
+            not isinstance(result.get('recommended_checks'), str)):
+        return None
+    hit = lookup(s, row.snapshot, row.model, [row.policy_hash])
+    if not hit:
+        return None
+    reason = (f'Retained AI assessment {row.id} classified the same exact '
+        f'verified context as {risk}; every linked assessment requires review.')
+    return _invalidate(s, hit['fingerprint'], hit['version'],
+        'assessment:'+row.id, reason, revoked_at,
+        'invalidate contradicted known-good candidate')
+
+
+def _contradiction(s, saved):
+    marker = saved.revoked_by or ''
+    if not marker.startswith('assessment:'):
+        return None
+    assessment_id = marker.removeprefix('assessment:')
+    if not re.fullmatch(r'[0-9a-f-]{36}', assessment_id):
+        return None
+    from .ai_assessments import Assessment
+    row = s.get(Assessment, assessment_id)
+    result = row.result if row and isinstance(row.result, dict) else {}
+    if (not row or row.source != 'ai' or row.model != saved.model or
+            row.policy_hash != saved.policy_hash or
+            result.get('risk') not in {'medium', 'high', 'unknown'} or
+            result.get('requested_checks') != []):
+        return None
+    status = _safe_probe(row.snapshot, row.model, row.policy_hash)
+    if not status['eligible'] or status['fingerprint'] != saved.fingerprint:
+        return None
+    return {'contradiction_assessment_id': row.id,
+        'contradiction_subject': row.subject,
+        'contradiction_host_id': row.host_id,
+        'contradiction_risk': result['risk'],
+        'contradiction_created': row.created}
 
 
 def assessment(row, s=None):
@@ -513,12 +574,15 @@ def assessment(row, s=None):
         if valid:
             linked = s.scalar(select(func.count(Observation.assessment_id)).where(
                 Observation.fingerprint == saved.fingerprint)) or 0
+            contradiction = _contradiction(s, saved) if not active else None
             status = {**status, 'active': active,
                 'review_required': not active,
                 'linked_assessments': linked,
                 'revoked_at': saved.revoked_at if not active else 0,
-                'revoked_by': saved.revoked_by if not active else '',
+                'revoked_by': ('AI assessment' if contradiction else saved.revoked_by) if not active else '',
                 'revoked_reason': saved.revoked_reason if not active else ''}
+            if contradiction:
+                status = {**status, **contradiction}
         if row.source == 'known_good':
             metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None
             local_observation = s.get(Observation, row.id)
