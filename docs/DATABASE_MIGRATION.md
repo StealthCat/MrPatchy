@@ -37,6 +37,10 @@ Sign in and check Settings, users, hosts, package history, schedules and AI logs
 
 For direct Python installations, run `python -m app.database_migrate` with the same arguments and `DATA_DIR`/deployment environment after stopping your services.
 
+## Progress and failure diagnostics
+
+The command writes readable stage progress to stderr and only the JSON result to stdout. A failure names the stage (for example `destination-connect`, `copy` or `verify-committed`), the source/destination role and table, a sanitized category and exception class with a safe code (MySQL error number, SQLite result name, errno or SQLSTATE), a specific next check, and whether the destination may have been written. Passwords, connection-string secrets, rows, SQL parameters and raw driver messages are never printed. Add `--verbose` to also print the sanitized exception-class chain and bounded stack locations when asking for help. Stages skipped by `--dry-run` are marked as skipped.
+
 ## Validation and failure behavior
 
 The copier registers all current application models, requires the source schema to match, rejects unknown tables/views, and refuses nonempty destinations. SQLite sources are opened read-only and checked for integrity and foreign-key violations. MySQL sources must use transactional InnoDB tables and are read through a consistent read-only snapshot. Data is copied in bounded batches inside a destination transaction; IDs, nullable values, JSON, timestamps, authentication state and encrypted values are copied directly.

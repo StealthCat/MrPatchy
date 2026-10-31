@@ -126,3 +126,119 @@ assert 'ai_triage_claims' in result
 '''.replace('DESTINATION',str(root/'destination.db')),env)
     assert repaired.returncode==0,repaired.stderr
     assert not (root/'destination.db').exists()
+
+
+SECRET='s3cret-Passw0rd-VALUE'
+
+
+def stage_target(env,root,backend='sqlite'):
+    values={'backend':backend,'host':'127.0.0.1','port':1,'database':'mrpatchy','username':'migrator','password':SECRET if backend=='mysql' else '','tls':False,'ca_file':'','sqlite_file':'destination.db'}
+    done=child('from app import database_config as s;s.write_profile("target",%r)'%values,env)
+    assert done.returncode==0,done.stderr
+
+
+def cli(env,args,patch=''):
+    code='import sys\nfrom app import database_migrate as m\n'+patch+'\nsys.exit(m.main(%r))'%(['--confirm-offline']+args,)
+    return child(code,env)
+
+
+def test_cli_dry_run_reports_stages_on_stderr_and_keeps_stdout_json(initialized_source):
+    env,tables,root=initialized_source
+    stage_target(env,root)
+    done=cli(env,['--dry-run'])
+    assert done.returncode==0,done.stderr
+    assert set(json.loads(done.stdout)['tables'])==tables
+    for marker in ('Taking the offline maintenance lock','Connecting to source','Validating source schema','Fingerprinting source table jobs','skipped (dry run)'):
+        assert marker in done.stderr
+    assert not (root/'destination.db').exists()
+    copied=cli(env,[])
+    assert copied.returncode==0,copied.stderr
+    assert json.loads(copied.stdout)['dry_run'] is False
+    assert 'Creating destination schema' in copied.stderr and 'Copying table jobs' in copied.stderr
+    assert 'Verifying committed table jobs' in copied.stderr and 'Verified copy complete' in copied.stderr
+
+
+def test_cli_unreachable_mysql_destination_names_stage_category_and_code_without_secrets(initialized_source):
+    env,_,root=initialized_source
+    stage_target(env,root,'mysql')
+    done=cli(env,['--dry-run'])
+    assert done.returncode==1 and done.stdout==''
+    assert 'failed at stage destination-connect (destination)' in done.stderr
+    assert 'Category: connection' in done.stderr and 'code: mysql 2003' in done.stderr and 'OperationalError' in done.stderr
+    assert 'Destination: nothing has been written' in done.stderr and 'Active database unchanged' in done.stderr
+    assert 'Check database access, TLS, schema and free space' not in done.stderr
+    assert SECRET not in done.stderr and '127.0.0.1' not in done.stderr.split('Next check')[1]
+    assert 'Stack:' not in done.stderr and '--verbose' in done.stderr
+    verbose=cli(env,['--dry-run','--verbose'])
+    assert 'Cause chain:' in verbose.stderr and 'Stack:' in verbose.stderr and 'database_migrate.py:' in verbose.stderr
+    assert SECRET not in verbose.stderr
+
+
+NESTED='''
+import errno,ssl,sqlite3
+import pymysql.err
+from sqlalchemy import exc
+LEAK="secret-row-value password=s3cret-Passw0rd-VALUE INSERT INTO t VALUES ('leak')\\nsecond line \\x1b[31m"
+def wrap(orig):
+    try:
+        try:raise orig
+        except Exception as inner:raise exc.OperationalError('INSERT INTO jobs VALUES (:p)',{'p':LEAK},inner) from inner
+    except Exception as outer:return outer
+'''
+CASES={
+ 'auth':(NESTED+'''
+def boom(*a,**k):raise wrap(pymysql.err.OperationalError(1045,LEAK))
+m.validate_destination=boom''',[],'destination-validate','authentication','mysql 1045'),
+ 'tls':(NESTED+'''
+def boom(*a,**k):raise wrap(ssl.SSLCertVerificationError(1,LEAK))
+m.validate_destination=boom''',[],'destination-validate','tls','ssl'),
+ 'source-read':(NESTED+'''
+def boom(*a,**k):
+    error=sqlite3.OperationalError(LEAK);error.sqlite_errorname='SQLITE_CANTOPEN'
+    raise wrap(error)
+m.fingerprint=boom''',['--dry-run'],'source-fingerprint','permissions','SQLITE_CANTOPEN'),
+ 'copy-storage':(NESTED+'''
+from sqlalchemy import Table
+def boom(*a,**k):raise OSError(errno.ENOSPC,LEAK)
+Table.insert=boom''',[],'copy','storage','ENOSPC'),
+ 'verify':(NESTED+'''
+real=m.fingerprint;state={'n':0}
+def boom(connection,table):
+    state['n']+=1
+    if state['n']>len(m.metadata().tables):raise wrap(pymysql.err.OperationalError(2013,LEAK))
+    return real(connection,table)
+m.fingerprint=boom''',[],'verify-transaction','connection','mysql 2013'),
+}
+
+
+@pytest.mark.parametrize('name',sorted(CASES))
+@pytest.mark.parametrize('verbose',[False,True])
+def test_cli_failures_report_stage_cause_and_redact_nested_driver_text(initialized_source,name,verbose):
+    env,_,root=initialized_source
+    stage_target(env,root)
+    patch,args,stage,category,code=CASES[name]
+    done=cli(env,args+(['--verbose'] if verbose else []),patch)
+    assert done.returncode==1 and done.stdout==''
+    assert 'failed at stage '+stage in done.stderr
+    assert 'Category: '+category in done.stderr and 'code: '+code in done.stderr
+    assert 'Active database unchanged' in done.stderr
+    for leaked in (SECRET,'secret-row-value','INSERT INTO','second line','\x1b','leak'):
+        assert leaked not in done.stderr
+    assert ('Stack:' in done.stderr)==verbose
+    if stage=='copy':assert 'rows may have been inserted' in done.stderr and 'table "' in done.stderr
+
+
+def test_cli_controlled_refusals_keep_stage_and_message(initialized_source):
+    env,_,root=initialized_source
+    stage_target(env,root)
+    from_dir=child('''
+from sqlalchemy import create_engine
+import os
+with create_engine(os.environ['DATABASE_URL']).begin() as c:c.exec_driver_sql('CREATE TABLE unrelated (id INTEGER)')''',env)
+    assert from_dir.returncode==0,from_dir.stderr
+    done=cli(env,['--dry-run'])
+    assert done.returncode==1 and done.stdout==''
+    assert 'Migration refused at stage source-validate (source)' in done.stderr and 'unexpected tables' in done.stderr
+    assert 'nothing has been written' in done.stderr
+    missing=child('import sys\nfrom app import database_migrate as m\nsys.exit(m.main([]))',env)
+    assert missing.returncode==1 and 'Pass --confirm-offline' in missing.stderr

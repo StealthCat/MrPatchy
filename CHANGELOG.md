@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.35.24 — 2026-10-31
+
+- Make offline database migration failures actionable (#205). `python -m app.database_migrate` now prints flushed stage progress to stderr (lock/profile, source connect, validation, per-table fingerprinting, destination connect/validation, schema creation, per-table copy, transactional and committed verification, activation) and marks stages a dry run skips.
+- A failure reports the stage, source/destination role and table, a sanitized category (connection, authentication, permissions, TLS, storage, locking, data, corruption), the exception class, a safe driver/OS code (MySQL error number, SQLite result name, errno, SQLSTATE), a specific next check, and what may have been written to the destination. Driver messages, SQL parameters, rows and credentials are never printed; output is escaped and bounded. `--verbose` adds the sanitized exception-class chain and bounded stack locations.
+- The "Verified copy complete" notice moved to stderr so stdout carries only the JSON result. Exit status, offline locking, read-only source access, empty-destination checks and explicit activation are unchanged.
+- Compatibility: scripts that parsed the trailing notice from stdout must read stderr. Major version stays 1.
+
 ## 1.35.21 — 2026-10-31
 
 - Fix full recovery backups of a valid zero-server deployment, which failed with `FileNotFoundError` because `ssh/` is created only when the first server is added. The bundle now carries an explicit empty owner-only SSH directory that activation restores.
