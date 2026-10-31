@@ -4961,6 +4961,40 @@ upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap prior
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
 
+## v1.35.11 eBPF diagnostic lifecycle (#123)
+
+A single bpftrace stderr warning previously persisted in `ebpf-diagnostic.json`
+forever, and controller ingestion treated any nonempty diagnostic as a current
+integrity issue regardless of its age or the collector state. A recovered or
+intentionally disabled collector therefore kept the host in **attention**.
+
+The collector now tags every recorded warning with the identifier of the bpftrace
+run that emitted it, writes that run's `starting` status before its stderr reader
+can record anything, and stores the time of the last state transition (`since`) in
+`ebpf-status.json`. Under one lock shared with the stderr reader, a warning is
+retired (state `historical`, with `retired_at`, `retired_reason` and the recovering
+run) when the run delivers its first event, when eBPF is disabled and when the
+collector restarts. Retirement preserves the original warning text and time; a later
+warning from the current run is recorded as current again, so a persisting or new
+fault is not suppressed.
+
+Ingestion independently treats a diagnostic as history when it is retired, when the
+collector is disabled, when it belongs to an earlier run than the current status, or
+when it predates the current run's transition to active. A current-run warning,
+a malformed or non-numeric diagnostic, and status from an older untagged collector
+continue to raise the finding (fail closed) until the collector is upgraded through
+normal agent maintenance. The delivered diagnostic is retained in host telemetry as
+`ebpf_diagnostic`. eBPF status findings (`error`/`warning`/`unavailable`) are
+unchanged.
+
+Regressions drive the real collector loop with a fake bpftrace through failure,
+recovery, a post-recovery warning, process exit, disable and restart, then deliver
+the files through the bridge snapshot to controller ingestion. No schema, role,
+audit, response-authorization, Docker publication or Git tag change is included.
+Source, README, changelog and UI/API metadata synchronize at v1.35.11 with major
+fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #121,
+#117, #131 and #124).
+
 
 ## v1.35.12 — Debian comparison process reuse (#128)
 
@@ -4981,3 +5015,9 @@ browser, recovery, Docker/TLS, SSH/RPM and GCP checks remain the exact-head merg
 gate. Version v1.35.12 follows pending allocations through v1.35.11 and must be
 rechecked against main before merge. Source versioning publishes no Docker image;
 no tags, schema, target helper or runtime authorization changes.
+
+Integration checkpoint: preserve main 491df9e v1.35.11 and its eBPF diagnostic
+lifecycle fix. Original head 611c6de passed all nine CI jobs, including MySQL
+(1446 passed, 134 skipped), SQLite (1451 passed, 129 skipped), native benchmarks,
+browser, recovery, SSH/RPM, Docker/TLS/proxy and GCP. Combined-head CI is required
+again before merge; existing agent integration hold remains in force.
