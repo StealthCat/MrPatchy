@@ -21,11 +21,11 @@ def test_invalid_audit_pages(admin,query):
 
 def test_job_detail_scope_and_payload_projection(admin):
     with Session() as s:
-        s.add(Job(id='detail-fixture',host_id='host-one',action='refresh',state='complete',payload={'private':'not returned'},output='stored'));s.commit()
+        s.add(Job(id='detail-fixture',host_id='host-one',action='refresh',state='complete',payload={'private':'not returned','_ai_deferred':True},output='stored'));s.commit()
     assert admin.get('/api/jobs/detail-fixture?host_id=host-two').status_code==404
     for query in ('','?host_id=host-one'):
         row=admin.get('/api/jobs/detail-fixture'+query).json()
-        assert row['host_id']=='host-one' and row['output']=='stored' and 'payload' not in row
+        assert row['host_id']=='host-one' and row['output']=='stored' and row['ai_deferred'] is True and 'payload' not in row
 
 
 @pytest.mark.parametrize('role',['viewer','operator'])

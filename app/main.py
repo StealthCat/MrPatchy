@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.2'
+APP_VERSION='1.35.3'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -122,6 +122,11 @@ def host_or_404(s,host_id):
     return h
 
 def object_dict(obj,exclude=()): return {c.name:getattr(obj,c.name) for c in obj.__table__.columns if c.name not in exclude}
+def public_job(job):
+    """Return operation metadata without exposing its internal execution payload."""
+    result=object_dict(job,('payload',))
+    result['ai_deferred']=isinstance(job.payload,dict) and job.payload.get('_ai_deferred') is True
+    return result
 @app.get('/')
 def index(): return FileResponse(static/'index.html')
 @app.get('/healthz')
@@ -584,7 +589,7 @@ def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):
     with Session() as s:
         query=select(Job)
         if host_id:host_or_404(s,host_id);query=query.where(Job.host_id==host_id)
-        return [object_dict(x,('payload',)) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
+        return [public_job(x) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
 def audit_log(offset:int=0,limit:int=200,user=Depends(auth)):
     if offset<0 or not 1<=limit<=200:raise HTTPException(400,'Invalid audit pagination')
@@ -815,7 +820,7 @@ def job_detail(job_id:str,host_id:str="",user=Depends(auth)):
     with Session() as s:
         job=s.get(Job,job_id)
         if not job or (host_id and job.host_id!=host_id): raise HTTPException(404,'Operation not found')
-        return object_dict(job,('payload',))
+        return public_job(job)
 
 @app.get('/api/hosts/{host_id}/history')
 def history(host_id:str,kind:str='inventory',offset:int=0,limit:int=50,user=Depends(auth)):
