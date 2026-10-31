@@ -4996,12 +4996,12 @@ fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #1
 #117, #131 and #124).
 
 
-## v1.35.16 — Populated SBOM export repair (#121)
+## v1.35.17 — Populated SBOM export repair (#121)
 
 Codex session `gfr-sbom-20261031` claimed issue #121 after reading current main
 `3635d0a` (v1.35.6), all open issues and open PRs. No related PR or overlapping
 claim existed. Pending #115/#116 require version reconciliation; #137 proposes
-v1.35.7. This focused update proposes v1.35.16, subject to refreshing main before
+v1.35.7. This focused update proposes v1.35.17, subject to refreshing main before
 merge and rerunning affected checks if integration changes the final head.
 
 The current-main SBOM handler reproduced `NameError: name 'h' is not defined`
@@ -5016,9 +5016,9 @@ versions and architecture, host isolation, empty/missing hosts, unauthenticated
 access and existing administrator/operator/viewer access for active, disabled and
 deleted hosts. Existing permission and lifecycle decisions remain in force.
 
-Source, README and changelog synchronize at v1.35.16, major fixed at 1. The linked
+Source, README and changelog synchronize at v1.35.17, major fixed at 1. The linked
 PR must record exact-head checks and merge evidence; #121 closes only after that
 tested merge is verified. No schema change, target update or Docker publication is
 included.
 
-Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (SQLite 1450 passed/129 skipped; MySQL 1445 passed/134 skipped). Main then advanced to 491df9e (v1.35.11). This merge preserves PR #183 diagnostics and all prior history, allocates v1.35.16 above pending versions through v1.35.15, and requires fresh exact-head CI before merge.
+Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (SQLite 1450 passed/129 skipped; MySQL 1445 passed/134 skipped). Main then advanced to 491df9e (v1.35.11). This merge preserves PR #183 diagnostics and all prior history, allocates v1.35.17 above pending versions through v1.35.15, and requires fresh exact-head CI before merge.

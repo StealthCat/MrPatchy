@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.35.16 — 2026-10-31
+## 1.35.17 — 2026-10-31
 
 - Fix populated SBOM exports by retaining the resolved host for Debian/RPM package URL selection (#121).
 - Cover populated, empty and missing-host exports, package identity/version/architecture, host isolation and existing role/lifecycle access boundaries.
