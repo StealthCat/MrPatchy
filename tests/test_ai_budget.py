@@ -23,6 +23,32 @@ def payload(model='gpt-6-luna', output=1000):
             'store': False, 'service_tier': 'default'}
 
 
+@pytest.mark.parametrize('value,expected', [
+    ('0', '0'), ('-0.000', '0'), ('1', '1'), ('10', '10'),
+    ('100', '100'), ('1000000', '1000000'), ('1E+6', '1000000'),
+    ('10.000000', '10'), ('100.000000000', '100'),
+    ('12.500000', '12.5'), ('0.000000010', '0.00000001'),
+    ('0E-9', '0'), ('-10', '-10'),
+])
+def test_money_preserves_integral_zeros(value, expected):
+    assert ai_budget._money(Decimal(value)) == expected
+
+
+@pytest.mark.parametrize('endpoint', ['/api/settings/ai', '/api/settings'])
+def test_default_cap_is_normalized_and_matches_budget_summary(admin, endpoint):
+    from app.main import AISettingsInput, ConfigInput
+    body={'ai_control_mode':'daily_cap'}
+    if endpoint == '/api/settings':
+        body.update(repo_minutes=60, deadlines={'critical':24,'high':72,'normal':168,'low':720})
+    model=AISettingsInput if endpoint.endswith('/ai') else ConfigInput
+    assert type(model(**body).ai_daily_cap_usd) is float
+    assert admin.put(endpoint, json=body).status_code == 200
+    state=admin.get('/api/settings').json()
+    assert state['ai_daily_cap_usd'] == 10
+    assert state['ai_budget']['cap_usd'] == '10'
+    assert state['ai_budget']['remaining_usd'] == '10'
+
+
 def test_capped_unknown_pricing_fails_before_rate_or_provider(admin, monkeypatch):
     configure(mode='rate_and_daily')
     sent=[]

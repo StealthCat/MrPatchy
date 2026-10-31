@@ -7,10 +7,10 @@ import os
 import pwd
 from pathlib import Path
 import re
-import subprocess
 import shutil
 from urllib.parse import urlsplit
 from .db import DATA
+from . import debian_versions
 from .repository_access import validate as validate_access, rewrite
 
 def paragraphs(text):
@@ -203,11 +203,15 @@ def refresh(host_id,inv,access=None):
     pkgs=installed(inv['status']); policies={}
     for offset in range(0,len(pkgs),150):
         policies.update(parse_policy(run(cfg,['apt-cache','policy',*[p['name'] for p in pkgs[offset:offset+150]]])))
+    pairs=[]
     for p in pkgs:
         policy=policies.get(p['name'],policies.get(p['name'].split(':')[0],{}))
         candidate=policy.get('candidate',''); p['origin']=policy.get('origin','')
-        # Native Debian comparison handles epochs, revisions and tildes correctly.
-        newer=candidate not in ('','(none)') and subprocess.run(['dpkg','--compare-versions',candidate,'gt',p['installed']]).returncode==0
+        p['candidate']=candidate
+        pairs.append((candidate,p['installed']) if candidate not in ('','(none)') else ('',''))
+    # Compare the whole inventory so shared version pairs reuse native results.
+    for p,newer in zip(pkgs,debian_versions.newer_flags(pairs)):
+        candidate=p['candidate']
         p['candidate']=candidate if newer else ''
         # Feed absence is not a severity rating. Origin is a scheduling heuristic only.
         p['priority']='high' if newer and ('-security' in p['origin'] or '/security' in p['origin']) else 'normal'

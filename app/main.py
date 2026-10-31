@@ -660,7 +660,7 @@ class ConfigInput(BaseModel):
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_control_mode:str=Field(default='rate',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
-    ai_daily_cap_usd:float=Field(default=10,gt=0,le=1_000_000)
+    ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
@@ -691,7 +691,7 @@ class AISettingsInput(BaseModel):
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_control_mode:str=Field(default='legacy',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
-    ai_daily_cap_usd:float=Field(default=10,gt=0,le=1_000_000)
+    ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
 
 class AIKeyInput(BaseModel):

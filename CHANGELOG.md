@@ -5,6 +5,23 @@
 - Declare the required role on every route (`viewer`, `operator`, `admin`, self-service or an allow-listed public route) instead of deciding roles from path substrings in `auth()`; a route that declares no role now stops the application from starting rather than defaulting to viewer-readable (#198).
 - Add a route inventory test that fails for any route missing from the expected-role table, and viewer/operator tests for every admin-only and operator route. Role assignments, CSRF, audit, host lifecycle and self-service behaviour are unchanged. Compatibility: a refused request names the required tier ("Administrator access required" or "This role cannot perform that operation") instead of the old path-dependent wording; status codes are unchanged. Major version stays 1.
 
+## 1.35.20 — 2026-10-31
+
+- Emit native eBPF execution UIDs as canonical non-negative integers and validate the collector record before durable spooling.
+- Normalize legacy decimal-string UIDs at controller intake so stored verified observations still create scoped execution-scan triggers.
+- Count malformed verified eBPF observations as explicit coverage loss, with a producer-shaped spool-to-queue regression for issue #117.
+
+## 1.35.19 — 2026-10-31
+
+- Skip identical Debian version comparisons during refresh and inventory reconciliation; reuse up to 512 native comparison results per inventory.
+- Bound each remaining dpkg comparison to ten seconds and fail closed on native errors, preserving Debian epochs, revisions and tilde ordering.
+- Cover native version edge cases, inventory process counts, candidate/hold/architecture semantics and comparison cache limits.
+
+## 1.35.18 — 2026-10-31
+
+- Preserve significant integral zeros in every AI budget amount, so a configured $10 cap and remaining budget display as $10.
+- Validate and normalize omitted daily-cap defaults consistently in both settings APIs, with Decimal, API and visible settings regressions.
+
 ## 1.35.17 — 2026-10-31
 
 - Fix populated SBOM exports by retaining the resolved host for Debian/RPM package URL selection (#121).

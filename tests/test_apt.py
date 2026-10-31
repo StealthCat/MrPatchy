@@ -44,3 +44,49 @@ def test_policy_parser_multiarch():
     r=apt.parse_policy('bash:arm64:\n  Installed: 1\n  Candidate: 2\n  Version table:\n     2 500\n        500 https://example.com noble-security/main arm64 Packages\n')
     assert r['bash:arm64']['candidate']=='2'
     assert 'noble-security' in r['bash:arm64']['origin']
+
+
+def test_refresh_reuses_comparisons_and_preserves_candidate_policy(tmp_path,monkeypatch):
+    from app import debian_versions, packages
+    from types import SimpleNamespace
+    rows=[('same','1','1'),('upgrade','1','2'),('held','1','2'),
+          ('older','3','2'),('missing','1','(none)'),('unknown','1','')]
+    status='\n\n'.join(f'Package: {name}\nStatus: {"hold" if name=="held" else "install"} ok installed\nArchitecture: arm64\nVersion: {old}' for name,old,new in rows)
+    policy=''.join(f'{name}:arm64:\n  Candidate: {new}\n  Version table:\n     {new} 500\n        500 https://example.com noble-security/main arm64 Packages\n' for name,old,new in rows)
+    monkeypatch.setattr(apt,'prepare',lambda *args:(tmp_path,tmp_path/'apt.conf'))
+    monkeypatch.setattr(apt,'run',lambda cfg,args: 'updated' if args[0]=='apt-get' else policy)
+    calls=[]
+    def native(args,**kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0 if args[2:]==['2','gt','1'] else 1)
+    monkeypatch.setattr(debian_versions.subprocess,'run',native)
+    result,log=apt.refresh('host',{'status':status})
+    assert len(calls)==2
+    assert [p['candidate'] for p in result]==['','2','2','','','']
+    assert result[2]['held'] and result[2]['priority']=='high'
+    assert result[0]['name']=='same:arm64' and log=='updated'
+    calls.clear()
+    assert packages.newer_flags({},[('1','1'),('2','1'),('2','1')])==[False,True,True]
+    assert len(calls)==1
+
+
+def test_native_inventory_comparison_benchmark(capsys,monkeypatch):
+    import time
+    from app import debian_versions
+    native=subprocess.run
+    for label,pairs in [('unchanged',[('1.0-1','1.0-1')]*1000),
+                        ('mixed',[('2:1.0-2','1.0'),('1.0~rc1','1.0'),('1','1')]*334)]:
+        start=time.perf_counter()
+        baseline=[native(['/usr/bin/dpkg','--compare-versions',a,'gt',b]).returncode==0 for a,b in pairs]
+        before=time.perf_counter()-start
+        calls=[]
+        def counted(*args,**kwargs):
+            calls.append(args)
+            return native(*args,**kwargs)
+        with monkeypatch.context() as patch:
+            patch.setattr(debian_versions.subprocess,'run',counted)
+            start=time.perf_counter();actual=debian_versions.newer_flags(pairs);after=time.perf_counter()-start
+        assert actual==baseline
+        assert len(calls)==(0 if label=='unchanged' else 2)
+        with capsys.disabled():
+            print(f'\nDebian {label} inventory: baseline {len(pairs)} processes/{before:.4f}s; optimized {len(calls)} processes/{after:.4f}s')
