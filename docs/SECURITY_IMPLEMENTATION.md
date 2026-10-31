@@ -4025,3 +4025,29 @@ tree, all nine applicable CI checks and completed overall workflow, and actual
 merge SHA (or precise unfinished blockers) are recorded in PR #81. Finish this
 delivery before beginning another roadmap batch. No earlier-head result authorizes
 a merge; source changes after final validation require applicable new checks.
+
+
+MySQL gate reconciliation: initial frozen head `5e674dba` passed eight checks,
+but MySQL's full suite failed the required two-stage completion regression
+(1,322 passed / 131 skipped; workflow 41155439850). Local SQLite full regression
+above had passed, so it did not authorize a merge. A deterministic DB-write
+normalization fixture then reproduced the same one-call rejection on unchanged
+code: the ORM retained an original numeric timestamp while stored JSON differed
+by one floating-point ULP; the next strict claim check rejected it.
+
+Fenced mutations now flush and refresh the row before hashing its stored revision.
+The follow-up model receives a copy of that same re-read evidence representation.
+No hash tolerance, rounding-based comparison, missing-evidence allowance or bypass
+is introduced. Native completion acceptance also compares supplied follow-up
+evidence to the stored observation and retains safe run diagnostics on failure.
+The deterministic regression fails before and passes after this correction;
+combined claims/history/retry/policy/completion acceptance passed **107 tests**
+on the corrected source, including the additional diagnostic/binding assertions. Final revalidation and the
+corrected final published head/tree/CI/actual merge are recorded in PR #81. All
+nine checks must pass on that corrected head; the prior freeze is superseded.
+
+The post-correction paired benchmark retains identical eight investigations and
+12 calls: 3.505s serial / 1.492s at four threads (about 2.35× throughput). Raw
+measurements replace the pre-correction sample in the linked report; neither
+measurement claims production performance. The complete local/browser/native
+validation is rerun on the corrected final source before delivery.

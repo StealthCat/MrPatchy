@@ -139,7 +139,11 @@ class Lease:
         with Lock('ai-triage'),host_lifecycle.activity([self.host_id],'queue'),Session() as s:
             claim,row=self.validate(s)
             yield s,row
-            s.flush();claim.revision=ai_assessments.revision(row);s.commit()
+            # Native JSON may normalize numeric representation on write. Bind
+            # the actual stored row, not a stale ORM copy, without relaxing any
+            # equality check or tolerating changed evidence on the next read.
+            s.flush();s.refresh(row)
+            claim.revision=ai_assessments.revision(row);s.commit()
 
     def renew(self):
         lock=Lock('ai-triage')

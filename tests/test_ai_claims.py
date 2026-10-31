@@ -1,5 +1,6 @@
 """Real threaded runtime acceptance; all provider/SSH work is disposable I/O."""
 import json
+import math
 import threading
 import time
 import subprocess
@@ -7,9 +8,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select,event
 from app import ai, ai_claims, ai_runs, ai_assessments, ai_retry, worker, worker_registry
-from app.db import Session, Host, Behavior, Setting
+from app.db import Session, Host, Behavior, Setting,engine
 from app.security import seal
 
 
@@ -241,3 +242,35 @@ def test_supported_serial_and_parallel_capacity_is_reported(admin,monkeypatch,va
         item=worker_registry.page()['items'][0]
         assert item['ai_capacity']==value and item['active_ai_tasks']==value
         assert admin.get('/api/investigation-status').json()['reported_capacity']==value
+
+
+def test_database_json_normalization_is_bound_before_followup(admin,monkeypatch):
+    if engine.dialect.name!='sqlite':pytest.skip('Deterministic DB-roundtrip simulation; native MySQL runs the complete pipeline separately')
+    seed(count=1);sent=[];normalized=[]
+    # Change only the bytes stored by the DB, leaving the ORM's in-memory value
+    # untouched, as native JSON numeric representation can do on MySQL. One ULP
+    # is enough to expose hashing an unrefreshed ORM value after a flush.
+    def storage(connection,cursor,statement,parameters,context,many):
+        if not statement.startswith('UPDATE behaviors SET') or 'evidence=' not in statement:return statement,parameters
+        values=list(parameters)
+        for n,value in enumerate(values):
+            if not isinstance(value,str):continue
+            try:data=json.loads(value)
+            except ValueError:continue
+            if not isinstance(data,dict) or not isinstance(data.get('investigation'),dict):continue
+            data['investigation']['collected']=math.nextafter(data['investigation']['collected'],math.inf)
+            normalized.append(data['investigation']['collected']);values[n]=json.dumps(data)
+        return statement,tuple(values)
+    def post(*a,**k):
+        sent.append(json.loads(k['json']['input']));return result(['executable'] if len(sent)==1 else [])
+    event.listen(engine,'before_cursor_execute',storage,retval=True)
+    monkeypatch.setattr(ai.transport,'post',post)
+    monkeypatch.setattr(worker.ssh,'call',lambda *a,**k:{'identity_verified':False,'reason':'exited'})
+    try:worker.investigate_one()
+    finally:event.remove(engine,'before_cursor_execute',storage)
+    with Session() as s:
+        runs=list(s.scalars(select(ai_runs.AIRun)))
+        assert len(sent)==2,[(r.state,r.message) for r in runs]
+        assert len(normalized)==1 and sent[1]['investigation']['collected']==normalized[0]
+        saved=s.scalar(select(ai_assessments.Assessment));assert saved and saved.inputs[1]['evidence']==sent[1]
+        assert s.get(Behavior,'subject-0').verdict=='low'

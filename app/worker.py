@@ -1,4 +1,5 @@
 import concurrent.futures
+import copy
 import hashlib
 import json
 import logging
@@ -599,7 +600,7 @@ def _assess_active_behavior(s,row,cfg,secret):
             updated={**row.evidence,'investigation':{'collected':time.time(),'details':evidence}}
             if lease:
                 with lease.mutation() as (write,saved):saved.evidence=updated
-                row.evidence=updated
+                row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
         result=assess(row.evidence)
     with ai_runs.measure('result_persistence'):
