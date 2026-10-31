@@ -584,12 +584,33 @@ def _assess_behavior(s,row,cfg,secret):
         return _assess_active_behavior(s,row,cfg,secret)
 
 def _assess_active_behavior(s,row,cfg,secret):
-    from . import ai_assessments,ai_claims
+    from . import ai_assessments,ai_claims,known_good
     lease=ai_claims.current.get()
+    policy=ai.investigation_policy()
+    policy_hashes=[ai_assessments.digest([policy]),ai_assessments.digest([policy,policy])]
+
+    def reuse(write,saved):
+        hit=known_good.lookup(write,saved.evidence,cfg['ai_model'],policy_hashes,
+            bypass=bool(write.get(ai_assessments.Refresh,saved.id)))
+        if not hit:return False
+        result=hit['result']
+        saved.verdict='low'
+        saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
+        assessment=ai_assessments.record_reuse(write,saved,hit)
+        known_good.link_reuse(write,assessment,hit)
+        ai_retry.clear(write,saved)
+        return True
+
+    with ai_runs.measure('known_good_lookup'):
+        if lease:
+            with lease.mutation() as (write,saved):
+                if reuse(write,saved):return
+        elif reuse(s,row):
+            s.commit();return
     inputs=[]
     def assess(evidence):
         prepared=ai.investigation_input(evidence)
-        inputs.append({'evidence':prepared,'policy':ai.investigation_policy()})
+        inputs.append({'evidence':prepared,'policy':policy})
         return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
     result=assess(row.evidence)
     checks=result.get('requested_checks',[])
@@ -619,7 +640,6 @@ def _assess_active_behavior(s,row,cfg,secret):
         def save(write,saved):
             saved.verdict=result['risk'];saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
             assessment=ai_assessments.record(write,saved,cfg['ai_model'],result,inputs)
-            from . import known_good
             known_good.publish(write,assessment)
             ai_retry.clear(write,saved)
         if lease:

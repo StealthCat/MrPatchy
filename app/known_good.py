@@ -1,10 +1,10 @@
-"""Strict candidate fingerprints for future fleet-wide known-good reuse.
+"""Strict candidate fingerprints and conservative fleet-wide safe-result reuse.
 
-This module publishes, but does not look up or trust, a safe candidate. It
-creates a host-independent candidate only when a completed low-risk AI
-assessment carries an explicit, fully verified evidence-manifest contract.
-Current partial follow-up receipts therefore remain cache misses, and a
-published candidate never implies approval or skips provider work.
+This module creates and looks up a host-independent candidate only when a
+completed low-risk AI assessment carries an explicit, fully verified evidence
+manifest. Current partial receipts remain misses. Reuse retains a new per-host
+assessment/observation and never implies approval, response authorization or
+deterministic-protection suppression.
 """
 from __future__ import annotations
 
@@ -237,7 +237,10 @@ def evaluate(snapshot, model, policy_hash, result, source):
     reasons = []
     if source != 'ai':
         reasons.append('source_not_ai')
-    if not isinstance(result, dict) or result.get('risk') != 'low' or not isinstance(result.get('explanation'), str):
+    if (not isinstance(result, dict) or result.get('risk') != 'low' or
+            not isinstance(result.get('explanation'), str) or
+            not isinstance(result.get('recommended_checks'), str) or
+            result.get('requested_checks') != []):
         reasons.append('result_not_safe')
     if not isinstance(model, str) or not model.strip():
         reasons.append('model_missing')
@@ -355,6 +358,83 @@ def _same_observation(row, expected):
         row.subject == expected.subject and row.observation == expected.observation)
 
 
+def lookup(s, snapshot, model, policy_hashes, bypass=False):
+    """Return one fully revalidated active exact match, or ``None``.
+
+    Callers supply every exact policy digest the unchanged pipeline could have
+    produced (currently the one- and two-stage variants). No nearest/similar
+    match is attempted and explicit administrator refresh always bypasses this
+    lookup.
+    """
+    if bypass or not isinstance(policy_hashes, (list, tuple)):
+        return None
+    for policy_hash in dict.fromkeys(policy_hashes):
+        status = evaluate(snapshot, model, policy_hash,
+            {'risk': 'low', 'explanation': 'Exact-match lookup',
+                'recommended_checks': '', 'requested_checks': []}, 'ai')
+        if not status['eligible']:
+            continue
+        saved = s.get(Entry, status['fingerprint'])
+        if not saved or not saved.active:
+            continue
+        from .ai_assessments import Assessment
+        origin = s.get(Assessment, saved.assessment_id)
+        origin_observation = s.get(Observation, saved.assessment_id)
+        if (not origin or origin.source != 'ai' or origin.host_id != saved.source_host_id or
+                origin.model != saved.model or origin.policy_hash != saved.policy_hash or
+                origin.result != saved.result or
+                not origin_observation or origin_observation.fingerprint != saved.fingerprint or
+                origin_observation.host_id != saved.source_host_id or
+                origin_observation.subject != origin.subject):
+            continue
+        expected = Entry(fingerprint=status['fingerprint'], version=status['version'],
+            classification_source='ai', model=model.strip(), policy_hash=policy_hash,
+            assessment_id=saved.assessment_id, source_host_id=saved.source_host_id,
+            contract=_canonical_contract(snapshot), result=copy.deepcopy(saved.result))
+        # Re-evaluate the retained result too: a corrupt/mutated low-risk row is
+        # never reusable merely because its primary key still matches.
+        retained = evaluate(snapshot, saved.model, saved.policy_hash, saved.result,
+            saved.classification_source)
+        if (not retained['eligible'] or retained['fingerprint'] != saved.fingerprint or
+                not _same_entry(saved, expected) or
+                not isinstance(saved.result.get('recommended_checks'), str)):
+            continue
+        return {'fingerprint': saved.fingerprint, 'version': saved.version,
+            'model': saved.model, 'policy_hash': saved.policy_hash,
+            'assessment_id': saved.assessment_id,
+            'source_subject': origin.subject,
+            'source_host_id': saved.source_host_id,
+            'created': saved.created, 'result': copy.deepcopy(saved.result)}
+    return None
+
+
+def link_reuse(s, row, hit):
+    """Link a retained cache-sourced assessment to its current observation."""
+    metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None
+    if (row.source != 'known_good' or not isinstance(metadata, dict) or
+            metadata.get('fingerprint') != hit.get('fingerprint') or
+            metadata.get('source_assessment_id') != hit.get('assessment_id')):
+        raise RuntimeError('Known-good reuse provenance is incomplete or inconsistent')
+    saved = s.get(Entry, hit['fingerprint'])
+    exact = lookup(s, row.snapshot, row.model, [row.policy_hash])
+    if not saved or not exact or exact['assessment_id'] != hit['assessment_id']:
+        raise RuntimeError('Known-good candidate changed before reuse was retained')
+    observation_value = copy.deepcopy(
+        row.snapshot['investigation']['details']['known_good_context']['observation'])
+    if observation_value.get('host_id', row.host_id) != row.host_id:
+        raise RuntimeError('Known-good reuse observation host conflicts with its assessment')
+    observation = Observation(assessment_id=row.id, fingerprint=hit['fingerprint'],
+        host_id=row.host_id, subject=row.subject, created=row.created,
+        observation=observation_value)
+    linked, linked_now = _insert_once(s, observation, Observation, observation.assessment_id)
+    if not _same_observation(linked, observation):
+        raise RuntimeError('Known-good reuse observation conflicts with stored identity')
+    if linked_now:
+        audit(s, 'reuse known-good candidate',
+            f'{observation.fingerprint} {observation.assessment_id} {observation.host_id}')
+    return exact
+
+
 def publish(s, row):
     """Durably record an eligible candidate and its isolated host observation.
 
@@ -396,14 +476,35 @@ def publish(s, row):
 
 
 def assessment(row, s=None):
-    status = evaluate(row.snapshot, row.model, row.policy_hash, row.result, row.source)
+    source = 'ai' if row.source == 'known_good' else row.source
+    status = evaluate(row.snapshot, row.model, row.policy_hash, row.result, source)
     if status['eligible'] and s is not None:
         saved = s.get(Entry, status['fingerprint'])
         valid = bool(saved and saved.active and saved.version == status['version'] and
-            saved.classification_source == row.source and saved.model == row.model and
+            saved.classification_source == source and saved.model == row.model and
             saved.policy_hash == row.policy_hash and
             saved.contract == _canonical_contract(row.snapshot))
         status = {**status, 'published': valid}
+        if row.source == 'known_good':
+            metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None
+            local_observation = s.get(Observation, row.id)
+            origin_observation = s.get(Observation, saved.assessment_id) if saved else None
+            valid = bool(valid and isinstance(metadata, dict) and
+                metadata.get('fingerprint') == status['fingerprint'] and
+                metadata.get('source_assessment_id') == saved.assessment_id and
+                metadata.get('source_host_id') == saved.source_host_id and
+                origin_observation and
+                metadata.get('source_subject') == origin_observation.subject and
+                origin_observation.fingerprint == saved.fingerprint and
+                origin_observation.host_id == saved.source_host_id and
+                local_observation and local_observation.fingerprint == saved.fingerprint and
+                local_observation.host_id == row.host_id and
+                local_observation.subject == row.subject)
+            status = {**status, 'published': valid, 'reused': valid,
+                'source_assessment_id': saved.assessment_id if valid else '',
+                'source_subject': metadata.get('source_subject', '') if valid else '',
+                'source_host_id': saved.source_host_id if valid else '',
+                'source_created': saved.created if valid else 0}
     return status
 
 

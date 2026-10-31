@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.28.0 — 2026-10-31
+
+- Revalidate active fleet safe candidates against exact complete context, model, policy, original retained AI assessment and isolated observation before reuse.
+- Complete exact cross-server matches with zero provider calls while retaining a new cache-sourced per-host assessment, observation and redacted audit record.
+- Make administrator Re-triage bypass reuse and follow the normal provider path; changed, incomplete, revoked, orphaned or mismatched candidates remain misses.
+- Explain reused provenance in responsive Assessment history without implying approval, response authorization, clean-host status or deterministic-protection suppression.
+- Keep current incomplete runtime evidence ineligible; fleet revocation, contradiction review, native complete-context collection and shared pacing/spend controls remain planned.
+
 ## 1.27.0 — 2026-10-31
 
 - Publish only fully validated low-risk exact-match candidates into a durable fingerprint-keyed registry.

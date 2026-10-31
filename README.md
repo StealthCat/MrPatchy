@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.27.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.28.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -486,8 +486,10 @@ purposes even with one AI slot. Claims expire after 120 seconds without renewal;
 interrupted attempts retain the existing recovery delay and finite retry limits.
 A lease cannot cancel an already sent request or guarantee exactly-once billing.
 The full model, evidence and conditional SSH/follow-up flow remain unchanged.
-Same-server parallel investigations, broader fairness, fleet known-good caching
-and shared rate/daily-spend/unthrottled controls remain unfinished.
+Same-server parallel investigations, broader fairness, native complete-context
+collection, cache revocation/contradiction review and shared rate/daily-spend/
+unthrottled controls remain unfinished. v1.28.0 adds strict zero-provider lookup only
+for the complete exact candidates described below.
 
 The Investigations/AI activity views report active claims, queued work and fresh
 reported AI capacity. Workers report actual active task counts and configured
@@ -681,9 +683,11 @@ loopback provider/SSH fixtures and SQLite; it never uses deployment state or a p
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
 reuse is validated; this is not a production speed or parallel-throughput promise.
-Threaded claims/leases, exact fleet known-good reuse, classified retries and shared
-throttle/daily-spend/unthrottled controls remain planned. Existing hourly limits,
-model, evidence, follow-ups, approval and AI pause behavior remain in force.
+Threaded claims/leases and classified retries are implemented. Strict exact fleet
+reuse is available only for fully complete candidates; native completeness,
+revocation/contradiction handling and shared throttle/daily-spend/unthrottled controls
+remain planned. Existing hourly limits, model, evidence, follow-ups, approval and AI
+pause behavior remain in force.
 
 
 ### Pooled SQLite initialization (v1.18.1)
@@ -814,6 +818,29 @@ gaps, so it remains ineligible and publishes nothing. Publication is storage onl
 there is no lookup, provider-call bypass, approval, response authorization or detector
 suppression. The new candidate/observation tables require current controller startup
 before an offline database migration or matched workers use this schema.
+
+### Exact safe-result reuse (v1.28.0)
+
+Before a process investigation sends evidence to the provider, the worker now checks
+the active durable registry for the exact complete canonical context, requested model
+and one- or two-stage policy digest. A hit is revalidated against the original retained
+AI assessment and its isolated observation. It then retains a new per-server
+**Exact-match reuse** assessment and observation with the original explanation and
+provenance, while the run records zero API calls.
+
+Administrator **Re-triage** explicitly bypasses this lookup and follows the normal
+provider path. Changed, incomplete, revoked, orphaned or mismatched context remains a
+miss. Reuse grants no approval, authorizes no response and suppresses no deterministic
+scanner or later threat evidence. Current runtime collection still declares
+configuration, effective-behavior and coverage gaps, so ordinary production evidence
+does not yet publish or hit this cache; complete synthetic acceptance proves the
+boundary without weakening those gaps.
+
+Lookup currently runs after the existing process-triage claim, AI enablement/pause,
+key/model and rolling-hour admission gates. Fleet revocation controls,
+contradiction-linked review, complete native evidence collection, shared rate/spend
+admission and broader SQLite/MySQL runtime acceptance remain planned. No schema,
+target-helper or endpoint-agent update is introduced after v1.27.0.
 
 
 ### Identity-bound follow-up context (v1.21.0)
