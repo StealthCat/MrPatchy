@@ -5459,3 +5459,10 @@ advanced through PRs #174 (v1.35.20), #196 (v1.35.21), the CI review (v1.35.24),
 #203/#208/#212; all are preserved. v1.35.30 is newer than main and below the
 later #213-#215 allocations. No schema, target helper or Git tag change; source versioning
 publishes no Docker image.
+
+Checkpoint v1.35.35 (#170): failed SSO callbacks are logged server-side with
+the exception class and a fixed sanitized reason, and audited as `SSO login
+failed` with issuer, hashed subject prefix and reason, rate-limited per
+reason/subject per five minutes. Responses keep the generic 400 message; no
+raw provider text, token or plain subject is recorded. Roles, successful-login
+audit and response-authorization boundaries are unchanged.
