@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.36 — 2026-10-31
+
+- Fix automatic AI plan starvation (#149): `auto_plan_tick` now excludes quarantined hosts up front and pages past YARA incidents (never planned automatically) instead of taking a fixed oldest-100 window, so 100+ open YARA incidents no longer block plans for newer ClamAV incidents. YARA exclusion, per-host pending checks and capacity limits are unchanged.
+- Compatibility: no API or schema change. Major version stays 1.
+
 ## 1.35.30 — 2026-10-31
 
 - Hold the server with `recovery_required` when an ordinary patch (reboot and rollback off) may have changed packages without a trustworthy outcome: a lost, truncated or invalid completion reply, a bridge exit without its own failure receipt, or a failed post-patch inventory read (#119). Later queued work waits for **Review interrupted operation**, and the patch is never replayed.
