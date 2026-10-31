@@ -22,6 +22,42 @@ stop=threading.Event()
 host_locks={}; locks_guard=threading.Lock()
 def host_lock(host_id):
     with locks_guard: return host_locks.setdefault(host_id,Lock("host:"+host_id))
+
+ADVISORY_PLAN_ACTIONS=('security-plan','startup-plan')
+
+def reconcile_interrupted_advisory_jobs():
+    """Surface orphaned paid advisory work without replaying a provider call."""
+    with Session() as s:
+        candidates=list(s.execute(select(Job.id,Job.host_id).where(
+            Job.state=='running',Job.action.in_(ADVISORY_PLAN_ACTIONS))))
+    reconciled=0
+    for job_id,host_id in candidates:
+        lock=host_lock(host_id)
+        if not lock.acquire(False):continue
+        try:
+            with Session() as s:
+                job=s.get(Job,job_id)
+                if not job or job.state!='running' or job.action not in ADVISORY_PLAN_ACTIONS:continue
+                subject=str(job.payload.get('incident_id',''))
+                run=s.scalar(select(ai_runs.AIRun).where(
+                    ai_runs.AIRun.purpose=='security_plan',ai_runs.AIRun.host_id==host_id,
+                    ai_runs.AIRun.subject==subject,ai_runs.AIRun.state=='running'
+                ).order_by(ai_runs.AIRun.started.desc()).limit(1)) if subject else None
+                now=time.time()
+                message=('The advisory worker stopped before completion. No AI call was replayed. '
+                    'Review the retained AI run, call usage, and spend reservation before releasing this server queue; '
+                    'a transmitted call without a receipt may still have incurred a charge.')
+                if run:
+                    run.state='interrupted';run.finished=now;run.stage='interrupted';run.message=message
+                    s.add(ai_runs.AIEvent(run_id=run.id,stage='interrupted',message=message,created=now))
+                job.state='recovery_required';job.next_at=0
+                job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
+                job.output=message
+                audit(s,'recover interrupted '+job.action,host_id+' '+job.id)
+                s.commit();reconciled+=1
+        finally:lock.release()
+    return reconciled
+
 def enqueue(s,host_id,action,payload=None):
     with host_lifecycle.activity([host_id],'queue') as revisions:
         body=dict(payload or {})
@@ -710,7 +746,7 @@ def _loop(reporter):
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0; next_ai='scoring'
+        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
@@ -729,7 +765,12 @@ def _loop(reporter):
                 draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
                 if draining and is_leader:leader.release();is_leader=False
                 if not draining and not is_leader:is_leader=leader.acquire(False)
-                if is_leader:ai_runs.heartbeat()
+                if is_leader:
+                    ai_runs.heartbeat()
+                    if now-last_advisory_reconcile>=5:
+                        try:reconcile_interrupted_advisory_jobs()
+                        except Exception:log.exception('Advisory plan recovery failed')
+                        last_advisory_reconcile=now
                 for future in list(ai_tasks):
                     if future.done():
                         try:future.result()

@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.35.5** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.35.8** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -607,6 +607,19 @@ Release planning remains excluded because one release plan can make multiple pai
 calls without per-stage persistence; replaying the whole job could duplicate a
 successful earlier stage. Connection tests are interactive rather than durable jobs.
 Those paths, plus complete multi-controller failover acceptance, remain unfinished.
+
+### Interrupted advisory-plan recovery (v1.35.4)
+
+After a controller or worker restart, the elected scheduler now checks each running
+incident/startup advisory job under that server's distributed worker lock. A job whose
+lock is still owned remains untouched. An orphan becomes recovery-required and its
+matching diagnostic run becomes interrupted; Mr Patchy never automatically replays
+the possibly billable provider request.
+
+Activity explains the retained review. An administrator must inspect the AI run,
+per-call usage receipt and durable spend reservation before releasing the server
+queue. Call and budget rows are not rewritten by restart recovery, and advisory-only
+reconciliation does not contact or mutate the managed server.
 
 For v1.22.0, drain/stop all old workers first, rebuild/start the controller to
 create `ai_triage_claims`, then start matching workers. Mixed old/new active workers

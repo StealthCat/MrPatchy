@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.5'
+APP_VERSION='1.35.8'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1183,22 +1183,28 @@ def observability(host_id:str,body:ObservabilityInput,user=Depends(auth)):
         audit(s,'configure eBPF',host_id+' '+str(body.ebpf));s.commit()
     return result
 
-class ReconcileInput(BaseModel): verified_target_state:bool=False
+class ReconcileInput(BaseModel):
+    verified_target_state:bool=False
+    verified_ai_receipts:bool=False
 @app.post('/api/operations/jobs/{job_id}/reconcile')
 def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
-    if not body.verified_target_state:raise HTTPException(400,'Review the target state before reconciling an interrupted worker')
     with Session() as s:
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
-        host_id=job.host_id
+        host_id=job.host_id;advisory=job.action in worker.ADVISORY_PLAN_ACTIONS
+    if advisory:
+        if not body.verified_ai_receipts:raise HTTPException(400,'Review the retained AI run, call usage, and spend reservation before reconciling an interrupted advisory plan')
+    elif not body.verified_target_state:raise HTTPException(400,'Review the target state before reconciling an interrupted worker')
     with host_change(host_id,allow_quarantined=True),Session() as s:
         job=s.get(Job,job_id);h=host_or_404(s,host_id)
         if job.state not in operations.QUARANTINE_STATES:raise HTTPException(409,'Only running or recovery-required jobs require reconciliation')
-        if ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
+        if not advisory and ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(worker.releases.ReleasePlan,job.payload.get('plan_id'))
             if plan:plan.state='interrupted'
-        job.state='interrupted';job.output='Operator reviewed target after worker interruption; operation was not automatically replayed'
+        job.state='interrupted'
+        job.output=('Operator reviewed retained AI run, call usage, and spend reservation after worker interruption; the advisory request was not replayed'
+            if advisory else 'Operator reviewed target after worker interruption; operation was not automatically replayed')
         audit(s,'reconcile job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
