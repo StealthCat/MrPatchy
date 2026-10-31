@@ -51,7 +51,7 @@ def test_unknown_codes_headers_and_non_json_provider_bodies_are_not_echoed():
 
 
 @pytest.mark.parametrize('exception',[httpx.ConnectError('secret DNS/proxy credentials'),httpx.ReadTimeout('secret timeout details')])
-def test_transport_errors_are_safe_and_useful(monkeypatch,exception):
+def test_transport_errors_are_safe_and_useful(client,monkeypatch,exception):
     def fail(*a,**kw):raise exception
     monkeypatch.setattr(ai.transport,'post',fail)
     with pytest.raises(ai.AIError) as error:ai.investigate({},'fixture','secret-test-key')
@@ -63,7 +63,7 @@ def test_transport_errors_are_safe_and_useful(monkeypatch,exception):
     {'status':'completed','output':[{'content':[{'type':'refusal','refusal':'private reflected content'}]}]},
     {'status':'completed','output':[{'content':[{'type':'output_text','text':'{"truncated":"private'}]}]},
     {'status':'completed','output':None}])
-def test_incomplete_refused_and_malformed_responses_are_not_accepted(monkeypatch,body):
+def test_incomplete_refused_and_malformed_responses_are_not_accepted(client,monkeypatch,body):
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:httpx.Response(200,json=body,request=httpx.Request('POST',ai.URL)))
     with pytest.raises(ai.AIError) as error:ai.investigate({},'fixture','secret-test-key')
     assert 'private' not in str(error.value)

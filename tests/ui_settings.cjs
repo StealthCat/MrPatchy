@@ -29,6 +29,7 @@ module.exports=async(page,capture)=>{
  assert.equal(aiState.ai_control_mode,'rate_and_daily');assert.equal(aiState.ai_daily_cap_usd,12.5);
  assert.equal(aiState.ai_budget_timezone,'America/New_York');
  assert.match(await page.locator('#ai-settings-form').textContent(),/uncertain.*remaining/s);
+ assert.match(await page.locator('#ai-settings-form').textContent(),/Provider Retry-After.*shared across workers/s);
  for(const width of [320,390,1440]){
   await page.setViewportSize({width,height:1000});
   for(const section of ['ai','patching','database','https','history']){

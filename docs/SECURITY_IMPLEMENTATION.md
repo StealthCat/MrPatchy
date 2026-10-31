@@ -4585,3 +4585,51 @@ long-horizon reports and full SQLite/MySQL reset/failover acceptance remain plan
 APP_VERSION/README/changelog/UI/API synchronize at v1.32.0 with major fixed at 1.
 Rebuild the controller first to create the ledger table, then matching workers. No
 target-helper/agent update, Docker publication, Git tag or schedule change is included.
+
+
+## v1.33.0 — Fleet-wide provider backoff and Retry-After admission
+
+Issue-first reconciliation read merged v1.32.0 main, repository instructions, this
+checkpoint and PR #92. The first 100 open-issue and open-PR results were empty, so no
+actionable report or unfinished fix competed with this roadmap batch. The separately
+reported database-migration refusal remains blocked on categorized schema mismatch
+output or a reviewed inventory; no database object is guessed or ignored.
+
+This safe-transport milestone closes the cross-purpose provider-floor gap. Before
+budget or rate admission, every current billable `ai.request` path reads one durable
+fleet-wide backoff row. A transient 408, recognized rate-limit 429, supported 5xx,
+timeout or connection failure updates that row under the distributed coordination
+lock. Valid numeric or HTTP-date Retry-After values are retained as a hard floor.
+Transient failures without one use bounded full-jitter exponential delay from 30
+seconds through 30 minutes. The row contains only failure count, timestamps and a
+fixed sanitized reason—never headers, provider bodies, keys, prompts or evidence.
+
+No HTTP request is automatically replayed. Each transmitted attempt retains its own
+call receipt and capped reservation; uncertain outcomes continue to count their full
+reservation. Work refused by shared backoff creates no provider receipt and consumes
+neither rate admission nor budget. Process-triage retries retain the shared next time,
+decrement the unsent attempt and remain durably queued; manual retry cannot bypass a
+provider floor. A successful response, or a completed non-transient provider error,
+clears stale transient escalation only when that request began after the latest
+failure; an older parallel success cannot erase a newer floor. Settings and AI worker
+status expose only whether the shared floor is active, its consecutive count and next
+eligibility.
+
+Regression acceptance first failed because no `ai_provider_backoff` module existed.
+Focused coverage spans cross-purpose refusal before rate/transport, restart-durable
+state, exact Retry-After, bounded jitter growth, parallel success/failure ordering,
+success/non-transient reset, process attempt preservation, manual-retry refusal and
+safe UI/status fields. Local validation passed 1,539 tests with 8 skipped, 3 warnings
+and 9 subtests, plus compile, JavaScript syntax, diff and version-consistency checks.
+Exact-head SQLite, MySQL, browser and remaining CI checks remain mandatory.
+
+This does not complete durable work scheduling. Calls already in flight when another
+request discovers a floor cannot be recalled. Manual incident/release plans and
+connection tests are safely rejected but are not yet stored as resumable work;
+update-scoring retains its existing scheduler cadence rather than an exact per-batch
+next time. Pricing-catalog lifecycle, invoice reconciliation, long-horizon spend
+reports and multi-controller failover acceptance also remain planned.
+APP_VERSION/README/changelog/UI/API synchronize at v1.33.0 with major fixed at 1.
+Rebuild the controller first to create the provider-backoff table, then matching
+workers. No target-helper/agent update, Docker publication, Git tag or schedule change
+is included.
