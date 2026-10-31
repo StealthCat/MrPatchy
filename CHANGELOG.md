@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.4 — 2026-10-31
+
+- Enable concurrent agent development coordinated through issue claims, linked draft PRs, explicit ownership/checkpoints, review and handoff records.
+- Require overlap checks, isolated branches and serialized version/integration checks while preserving existing operational authorization boundaries.
+
 ## 1.35.2 — 2026-10-31
 
 - Split large normal process-observation snapshots into durable 256 KiB batches instead of dropping the entire snapshot at the former 2 MB ceiling.
