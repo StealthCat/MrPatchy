@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.4 — 2026-10-31
+
+- Enable concurrent agent development coordinated through issue claims, linked draft PRs, explicit ownership/checkpoints, review and handoff records.
+- Require overlap checks, isolated branches and serialized version/integration checks while preserving existing operational authorization boundaries.
+
+
 ## 1.35.3 — 2026-10-31
 
 - Project a sanitized `ai_deferred` Boolean from operation APIs so Activity list/detail views show timed eligibility and administrator-resume waits without exposing internal job payloads.
