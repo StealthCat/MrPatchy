@@ -57,8 +57,9 @@ def failed(s,row,error,now):
     retry.reason='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
-        retry.state='deferred';retry.next_at=now
-        retry.reason='Waiting for AI policy resume; eligibility is rechecked before every provider call.'
+        retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
+        retry.reason=('Waiting for shared AI rate eligibility; no provider request was sent.' if error.retry_after else
+            'Waiting for AI policy resume; eligibility is rechecked before every provider call.')
     elif isinstance(error,AIError) and error.transient:
         retry.provider_until=now+error.retry_after if error.retry_after else 0
         if retry.attempts<MAX_ATTEMPTS:

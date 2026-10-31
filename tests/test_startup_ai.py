@@ -74,6 +74,7 @@ def test_shared_budget_roles_and_changed_job_prevent_provider_call(admin,monkeyp
     identifier=setup_incident(admin);path=BASE+'/persistence-incidents/'+identifier+'/plan'
     with Session() as s:
         row=s.get(incidents.PersistenceIncident,identifier);updated=row.updated
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'legacy'}
         for n in range(10):s.add(Job(id='limit'+str(n),host_id='other',action='security-plan',state='complete'))
         s.commit()
     assert admin.post(path,json={'expected_updated':updated}).status_code==429

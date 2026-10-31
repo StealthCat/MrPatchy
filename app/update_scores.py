@@ -62,8 +62,9 @@ def run_one():
         with Session() as s:
             cfg=config(s);secret=s.get(Setting,'openai_key');now=time.time()
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
-            count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
-            if count>=cfg['ai_update_hourly_limit']:return
+            if cfg['ai_control_mode']=='legacy':
+                count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
+                if count>=cfg['ai_update_hourly_limit']:return
             batch=[];host_cache={}
             for package in s.scalars(select(Package).where(Package.candidate!='',Package.host_id.not_in(ai_policy.paused_ids()),Package.host_id.in_(host_lifecycle.active_ids())).order_by(Package.available_since,Package.id)):
                 if package.host_id not in host_cache:host_cache[package.host_id]=s.get(Host,package.host_id)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.31.0 — 2026-10-31
+
+- Add one durable fleet-wide admission boundary to every current billable AI path, with smooth no-burst logical-work pacing and an explained next-start time.
+- Preserve legacy investigation/scoring/incident-plan allowances until an administrator explicitly saves an audited conservative migration; fresh installs default to shared rate mode.
+- Add a bounded unthrottled mode that removes only Mr Patchy's pacing while retaining provider, pause, role, lifecycle, data-sharing and finite-concurrency controls.
+- Serialize SQLite/MySQL admission before provider transport or call receipts, preserve admitted multi-stage follow-ups, and defer triage without consuming an attempt; daily USD reservations and complete durable deferral remain planned.
+
 ## 1.30.0 — 2026-10-31
 
 - Automatically invalidate an active fleet safe candidate when a retained final non-low provider assessment contradicts the identical verified context, model and policy.

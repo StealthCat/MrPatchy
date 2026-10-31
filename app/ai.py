@@ -124,10 +124,16 @@ def list_models(key):
 
 
 def request(payload,key,timeout=60):
-    from . import ai_policy
+    from . import ai_policy,ai_admission
+    # Invalid local configuration must not consume a shared rate reservation.
+    if not key.strip() or not re.fullmatch(r'[!-~]{1,1000}',key.strip()):
+        raise AIError('The saved API key contains invalid characters. Replace it in Settings.')
+    if not isinstance(payload.get('model'),str) or not payload['model'].strip():
+        raise AIError('Save an API model ID in Settings before testing.')
     with ExitStack() as stack:
         with ai_runs.measure('provider_admission'):
             stack.enter_context(ai_policy.provider())
+            ai_admission.admit(payload.get('model',''))
         return _request(payload,key,timeout)
 
 

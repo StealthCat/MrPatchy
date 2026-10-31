@@ -4482,3 +4482,56 @@ No schema, target-helper/agent update, Docker publication, Git tag or schedule c
 is introduced. Versioned commit, PR, exact-final-head checks and merge references are
 recorded in the completion report after publication; no earlier or failed head may be
 merged.
+
+
+## v1.31.0 — Shared smooth-rate AI provider admission
+
+Issue-first reconciliation read merged v1.30.0 main, repository instructions, this
+checkpoint and recent PR #90. The first 100 open-issue and open-PR results were empty,
+so no actionable issue or unfinished delivery competed with this roadmap batch. The
+chat-reported database-migration refusal remains blocked on its categorized v1.23.1
+schema mismatch output or a separately reviewed schema inventory; no unknown object
+is ignored and no closure is claimed.
+
+The selected faster-triage milestone replaces separate burst admission after explicit
+migration with one durable logical-work boundary. Every existing billable
+`ai.request` path—process triage and follow-ups, update scoring, connection tests,
+incident/startup plans and release configuration review—now reserves through the same
+distributed lock before transport or call-receipt creation. Rate mode advances one
+fleet-wide next-start timestamp by `3600 / configured work starts per hour`; idle time
+never accumulates a burst. Required follow-ups and multiple reviewed configuration
+calls within the same admitted run/job reuse only that bounded scope and still recheck
+pause/lifecycle policy. A crash or later retry requires a new reservation. Concurrent
+SQLite/MySQL workers can admit only one competing work item.
+Invalid local keys/models and policy-paused work fail before a reservation.
+
+Existing installations without a saved mode stay on their former investigation,
+scoring and hidden incident/startup-plan hourly allowances. Settings presents the
+lower former automatic allowance as the conservative migration preview. Only an
+administrator save changes modes, and the old/new mode is retained in audit; fresh
+installations default to shared rate. Shared mode disables the former purpose-specific
+pre-gates, while the central boundary covers their provider calls. Unthrottled mode
+removes only Mr Patchy's pacing and retains finite executor concurrency, provider
+limits, global/per-server pause, lifecycle, role and sharing controls.
+
+AI worker status reports the configured mode and durable next eligibility. A triage
+rate refusal is retained as a deferred item at that eligibility without consuming a
+retry attempt or sending a provider request. The admission row contains only bounded
+model metadata, count and timestamps—no key, request body or evidence—and is included
+in current-schema initialization and offline migration.
+
+Focused regression first failed because no shared module/provider boundary existed.
+Acceptance covers smooth spacing, restart-durable state, eight-thread atomic refusal,
+transport-not-called behavior, invalid-local-configuration non-consumption, explicit
+migration/status and legacy/unthrottled semantics. Exact-head SQLite, MySQL, browser
+and full-suite checks remain mandatory before merge.
+
+This is not the complete shared-controls program. Administrator-set USD/day caps,
+timezone/reset semantics, conservative multi-stage reservations, actual-usage
+reconciliation, uncertain-charge retention, pricing refusal, spend dashboards and
+exact durable defer/resume behavior for every manual/plan path remain planned.
+Same-server fairness, native complete context and administrator-origin exact-safe
+classifications also remain planned. APP_VERSION/README/changelog/UI/API synchronize
+at v1.31.0 with major fixed at 1. Rebuild the controller first to initialize the new
+table, then matching workers. No target-helper/agent update, Docker publication, Git
+tag or schedule change is included.
