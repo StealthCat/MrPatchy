@@ -12,6 +12,7 @@ import subprocess
 import time
 import sqlite3
 import tempfile
+import threading
 from contextlib import contextmanager
 import uuid
 import re
@@ -371,25 +372,54 @@ def decode_bpf_events(pending,chunk):
     if any(len(line)>65536 for line in lines):raise ValueError('Oversized bpftrace event')
     return [json.loads(line) for line in lines[:-1] if line],lines[-1]
 
+EBPF_DIAGNOSTIC_LOCK=threading.RLock()
+
+def record_ebpf_diagnostic(instance,line):
+    """Record one bpftrace stderr warning as current for the collector run that emitted it."""
+    with EBPF_DIAGNOSTIC_LOCK:
+        atomic(ROOT/'ebpf-diagnostic.json',{'state':'warning','error':line[-2000:].decode(errors='replace'),
+                                            'at':time.time(),'instance':instance})
+
+def retire_ebpf_diagnostic(reason,instance=None):
+    """Keep a superseded diagnostic as history instead of reporting it as a current failure."""
+    path=ROOT/'ebpf-diagnostic.json'
+    with EBPF_DIAGNOSTIC_LOCK:
+        try:current=json.loads(path.read_text())
+        except (OSError,ValueError):return
+        if not isinstance(current,dict) or current.get('state')=='historical':return
+        atomic(path,{**current,'state':'historical','retired_at':time.time(),'retired_reason':reason,
+                     **({'retired_by':instance} if instance else {})})
+
+class EbpfStatus:
+    """Write collector status with the time of its last state transition."""
+    def __init__(self):self.current=None;self.since=0
+    def __call__(self,state,instance=None,**extra):
+        if self.current!=(state,instance):self.current=(state,instance);self.since=time.time()
+        atomic(ROOT/'ebpf-status.json',{'state':state,**({'instance':instance} if instance else {}),'since':self.since,**extra})
+
 def ebpf_loop():
     """Optional kernel exec events. BPF attachment failures are visible, not silently ignored."""
     import shutil
-    import threading
     program='tracepoint:sched:sched_process_exec { printf("%d\\t%d\\t%s\\n", pid, uid, str(args->filename)); }'
+    # A restarted collector supersedes the previous process's warnings; a
+    # persisting fault is re-reported by the new run.
+    retire_ebpf_diagnostic('collector-restart')
+    status=EbpfStatus()
     while True:
         config_path=ROOT/'observability.json'
         config=json.loads(config_path.read_text()) if config_path.exists() else {}
         if not config.get('ebpf'):
-            atomic(ROOT/'ebpf-status.json',{'state':'disabled'});time.sleep(5);continue
+            retire_ebpf_diagnostic('disabled');status('disabled');time.sleep(5);continue
         if not shutil.which('bpftrace'):
-            atomic(ROOT/'ebpf-status.json',{'state':'unavailable','error':'Install bpftrace and kernel BPF support'});time.sleep(30);continue
+            status('unavailable',error='Install bpftrace and kernel BPF support');time.sleep(30);continue
+        instance=uuid.uuid4().hex
         try:
             process=subprocess.Popen(['bpftrace','-q','-f','json','-B','line','-e',program],stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0)
-            def diagnostics():
-                for line in process.stderr:
-                    atomic(ROOT/'ebpf-diagnostic.json',{'state':'warning','error':line[-2000:].decode(errors='replace'),'at':time.time()})
+            def diagnostics(stream=process.stderr,run=instance):
+                for line in stream:record_ebpf_diagnostic(run,line)
+            # Name the run before its first warning can be attributed to it.
+            status('starting',instance)
             threading.Thread(target=diagnostics,daemon=True).start()
-            atomic(ROOT/'ebpf-status.json',{'state':'starting'})
             import selectors
             selector=selectors.DefaultSelector();selector.register(process.stdout,selectors.EVENT_READ)
             pending=b'';ended=False
@@ -413,14 +443,18 @@ def ebpf_loop():
                         try:event_process['process_identity']=triage_observation_identity(observe_process_identity(proc,int(pid)))
                         except (OSError,ValueError):pass
                         spool([event_process],time.time())
-                        atomic(ROOT/'ebpf-status.json',{'state':'active','last_event':time.time()})
+                        with EBPF_DIAGNOSTIC_LOCK:
+                            # The first delivered event proves this run recovered; earlier
+                            # warnings become history, later ones remain current.
+                            if status.current!=('active',instance):retire_ebpf_diagnostic('recovered',instance)
+                            status('active',instance,last_event=time.time())
             selector.close()
             try:process.wait(timeout=5)
             except subprocess.TimeoutExpired:process.kill();process.wait()
-            if process.returncode:atomic(ROOT/'ebpf-status.json',{'state':'unavailable','error':'bpftrace exited '+str(process.returncode)})
+            if process.returncode:status('unavailable',instance,error='bpftrace exited '+str(process.returncode))
         except Exception as e:
             if 'process' in locals() and process.poll() is None:process.kill();process.wait()
-            atomic(ROOT/'ebpf-status.json',{'state':'error','error':str(e)[:2000]})
+            status('error',instance,error=str(e)[:2000])
         time.sleep(5)
 
 def main():
