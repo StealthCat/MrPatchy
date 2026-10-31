@@ -429,6 +429,21 @@ detail flow. Lookup/hit explanation, revocation, contradiction-linked review and
 broader AI workspace remain planned UI milestones.
 
 
+### v1.28.0 — Exact-match reuse provenance on assessment detail
+
+A retained zero-provider hit is labelled **Exact-match reuse** in Assessment history
+and **Reused exact-match assessment** on detail. The existing glass notice identifies
+the fingerprint, originating assessment/server and original recording time, while
+stating that no provider request was sent and no approval or response authorization
+was granted. The evidence disclosure distinguishes locally revalidated context from
+provider-supplied inputs and retains escaped recommended checks.
+
+The established Re-triage dialog continues to explain fresh provider charges and now
+corresponds to an enforced cache bypass. Browser acceptance covers escaped provenance,
+Back/reload/server scope, administrator isolation and phone/tablet/desktop layouts.
+Fleet revocation and contradiction-review controls remain planned surfaces.
+
+
 ### v1.19.0 — Explained process retry eligibility
 
 The existing glass Investigations cards and AI worker status now distinguish

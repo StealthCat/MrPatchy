@@ -76,7 +76,8 @@ def run_hosts(s, run_ids):
 # These diagnostic timings share ordinary run-history retention, not a budget or
 # cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
 TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
-                 'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age'}
+                 'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age',
+                 'known_good_lookup'}
 
 
 def timing(stage, seconds, outcome='complete'):

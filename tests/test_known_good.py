@@ -4,9 +4,10 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from sqlalchemy import select
 
-from app import ai_assessments, known_good
-from app.db import Audit, Behavior, Host, Session
+from app import ai, ai_assessments, ai_runs, known_good, worker
+from app.db import Audit, Behavior, Host, Session, Setting
 from app.incidents import Inspection
+from app.security import seal
 
 
 def sha(letter):
@@ -46,7 +47,8 @@ def complete():
 
 def evaluate(snapshot=None, **overrides):
     values = {'snapshot': snapshot or complete(), 'model': 'gpt-fixture',
-        'policy_hash': sha('9'), 'result': {'risk': 'low', 'explanation': 'Safe with complete evidence'},
+        'policy_hash': sha('9'), 'result': {'risk': 'low', 'explanation': 'Safe with complete evidence',
+            'recommended_checks':'Continue deterministic monitoring','requested_checks':[]},
         'source': 'ai'}
     values.update(overrides)
     return known_good.evaluate(**values)
@@ -61,7 +63,7 @@ def retained(id='assessment-one',host='host-one',subject='behavior-one',snapshot
     return ai_assessments.Assessment(id=id,subject=subject,host_id=host,source=source,
         model='gpt-fixture',policy_hash=sha('9'),state_hash=sha('0'),
         result=result or {'risk':'low','explanation':'Safe with complete evidence',
-            'recommended_checks':'Continue deterministic monitoring'},
+            'recommended_checks':'Continue deterministic monitoring','requested_checks':[]},
         snapshot=snapshot or complete(),inputs=[])
 
 
@@ -118,6 +120,12 @@ def test_assessment_provenance_and_policy_fail_closed(changes,reason):
     assert not result['eligible'] and reason in codes(result)
 
 
+def test_safe_candidate_requires_a_complete_final_provider_result():
+    result=evaluate(result={'risk':'low','explanation':'More evidence is required',
+        'recommended_checks':'Collect executable details','requested_checks':['executable']})
+    assert not result['eligible'] and codes(result)==['result_not_safe']
+
+
 def test_current_partial_receipt_is_a_miss_without_guessing_missing_context():
     snapshot = {'executable': '/usr/bin/fixture', 'sha256': sha('a'), 'identity_verified': True,
         'investigation': {'details': {'version': 2, 'identity_verified': True,
@@ -165,6 +173,82 @@ def test_assessment_api_reports_only_an_active_durable_publication(admin):
     response=admin.get('/api/investigations/behavior-one/history/'+row.id)
     assert response.status_code==200
     assert response.json()['known_good']==status
+
+
+def test_lookup_revalidates_exact_context_policy_and_active_state(client):
+    row=retained()
+    with Session() as s:
+        s.add(row);published=known_good.publish(s,row);s.commit()
+        hit=known_good.lookup(s,complete(),'gpt-fixture',[sha('0'),sha('9')])
+        assert hit['fingerprint']==published['fingerprint']
+        assert hit['assessment_id']==row.id and hit['source_host_id']=='host-one'
+        assert known_good.lookup(s,complete(),'other-model',[sha('9')]) is None
+        assert known_good.lookup(s,complete(),'gpt-fixture',[sha('9')],bypass=True) is None
+        changed=complete()
+        changed['investigation']['details']['known_good_context']['behavior']['network_sha256']=sha('0')
+        assert known_good.lookup(s,changed,'gpt-fixture',[sha('9')]) is None
+        s.get(known_good.Entry,published['fingerprint']).active=False;s.commit()
+        assert known_good.lookup(s,complete(),'gpt-fixture',[sha('9')]) is None
+
+
+def test_worker_exact_match_reuses_without_provider_call_and_retains_host_provenance(client,monkeypatch):
+    current=complete();current['host_id']='host-two'
+    current['investigation']['details']['context']['process']={'pid':99,'start_ticks':88}
+    current['investigation']['details']['known_good_context']['observation']={
+        'host_id':'host-two','pid':99,'start_ticks':88,'collected':900}
+    policy_hash=ai_assessments.digest([ai.investigation_policy()])
+    source=retained(snapshot=complete());source.policy_hash=policy_hash
+    with Session() as s:
+        s.add_all([Host(id='host-one',name='Source',address='192.0.2.1',fingerprint=''),
+            Host(id='host-two',name='Current',address='192.0.2.2',fingerprint=''),source,
+            Behavior(id='behavior-two',host_id='host-two',evidence=current,verdict='pending')])
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'gpt-fixture'}))
+        s.merge(Setting(key='openai_key',value={'encrypted':seal('private-key')}))
+        published=known_good.publish(s,source);s.commit()
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:pytest.fail('exact cache hit called provider'))
+    worker.investigate_one()
+    with Session() as s:
+        behavior=s.get(Behavior,'behavior-two')
+        saved=s.scalar(select(ai_assessments.Assessment).where(
+            ai_assessments.Assessment.subject=='behavior-two'))
+        run=s.scalar(select(ai_runs.AIRun).where(ai_runs.AIRun.subject=='behavior-two'))
+        observation=s.get(known_good.Observation,saved.id)
+        status=known_good.assessment(saved,s)
+        event=s.scalar(select(Audit).where(Audit.action=='reuse known-good candidate'))
+    assert behavior.verdict=='low' and saved.source=='known_good' and saved.inputs==[]
+    assert saved.result['known_good_reuse']['fingerprint']==published['fingerprint']
+    assert run.state=='complete' and run.calls==0
+    assert observation.host_id=='host-two' and status['reused'] and status['published']
+    assert event and published['fingerprint'] in event.detail
+
+
+def test_explicit_retriage_bypasses_exact_match_and_calls_provider(client,monkeypatch):
+    current=complete();current['host_id']='host-two'
+    current['investigation']['details']['known_good_context']['observation']['host_id']='host-two'
+    policy_hash=ai_assessments.digest([ai.investigation_policy()])
+    source=retained(snapshot=complete());source.policy_hash=policy_hash
+    behavior=Behavior(id='behavior-two',host_id='host-two',evidence=current,verdict='pending')
+    refresh=ai_assessments.Refresh(subject=behavior.id,id='refresh-two',actor='admin',
+        reason='Explicitly request a fresh provider assessment',previous=source.id,
+        withdrew_approval=False)
+    with Session() as s:
+        s.add_all([Host(id='host-one',name='Source',address='192.0.2.1',fingerprint=''),
+            Host(id='host-two',name='Current',address='192.0.2.2',fingerprint=''),
+            source,behavior,refresh])
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'gpt-fixture'}))
+        s.merge(Setting(key='openai_key',value={'encrypted':seal('private-key')}))
+        known_good.publish(s,source);s.commit()
+    calls=[]
+    monkeypatch.setattr(ai,'investigate',lambda *args,**kwargs: calls.append(args) or {
+        'risk':'low','explanation':'Fresh provider result',
+        'recommended_checks':'Continue deterministic monitoring','requested_checks':[]})
+    worker.investigate_one()
+    with Session() as s:
+        saved=s.scalar(select(ai_assessments.Assessment).where(
+            ai_assessments.Assessment.subject=='behavior-two'))
+        assert s.get(ai_assessments.Refresh,'behavior-two') is None
+        assert s.scalar(select(Audit).where(Audit.action=='reuse known-good candidate')) is None
+    assert len(calls)==1 and saved.source=='ai' and saved.refresh['id']=='refresh-two'
 
 
 def test_ineligible_assessment_does_not_publish_any_durable_candidate(client):

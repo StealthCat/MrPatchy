@@ -93,3 +93,20 @@ def record(s,row,model,result,inputs):
     s.add(saved)
     if request:s.delete(request)
     return saved
+
+
+def record_reuse(s, row, hit):
+    """Retain an exact cache hit without misrepresenting it as a provider call."""
+    if s.get(Refresh, row.id):
+        raise ValueError('Explicit Re-triage cannot reuse a known-good candidate')
+    result=copy.deepcopy(hit['result'])
+    result['known_good_reuse']={'fingerprint':hit['fingerprint'],
+        'source_assessment_id':hit['assessment_id'],
+        'source_subject':hit['source_subject'],
+        'source_host_id':hit['source_host_id'],'source_created':hit['created']}
+    saved=Assessment(id=str(uuid.uuid4()),subject=row.id,host_id=row.host_id,
+        source='known_good',model=hit['model'],run_id='',policy_hash=hit['policy_hash'],
+        state_hash=state_hash(row),result=result,snapshot=copy.deepcopy(row.evidence),
+        inputs=[],refresh={})
+    s.add(saved)
+    return saved

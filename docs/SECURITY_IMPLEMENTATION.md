@@ -1962,10 +1962,12 @@ work above remain unfinished.
 
 ## Planned: faster parallel AI triage and configurable spending controls
 
-Requested 2026-10-30; **the program remains unfinished**. v1.18.0 provides the baseline/transport/timing foundation. v1.22.0 adds bounded
-cross-server threaded process triage and renewable claims, as checkpointed below.
-Fleet known-good reuse, same-server parallelism, broader fairness and shared controls
-remain unfinished. The inspection baseline below is historical.
+Requested 2026-10-30; **the program remains unfinished**. v1.18.0 provides the baseline/transport/timing foundation, v1.22.0 adds bounded
+cross-server threaded process triage and renewable claims, and v1.28.0 adds the first
+strict zero-provider exact-candidate lookup as checkpointed below. Native complete-
+context collection, revocation/contradiction review, same-server parallelism, broader
+fairness and shared controls remain unfinished. The inspection baseline below is
+historical.
 Inspection baseline: main `8bee5b64`, source v0.16.0, latest merged PR #71.
 No live deployment timing or provider benchmark was available; the following are
 verified code constraints rather than a measured diagnosis of one deployment.
@@ -4333,3 +4335,55 @@ is published in [PR #87](https://github.com/StealthCat/MrPatchy/pull/87), target
 `main` with label `v1.27.0`. The exact final documentation head, all required workflow
 results and actual merge commit are recorded in the completion report; this reference
 does not permit merging an earlier or failed head.
+
+
+## v1.28.0 — Strict exact-match safe-result reuse
+
+Issue-first reconciliation read current main `10b8ca08`, repository instructions,
+this checkpoint and merged PR #87. The first 100-item open-issue and open-PR pages
+were empty, so no actionable GitHub report or unfinished delivery competed with this
+roadmap batch. The chat-reported database-migration refusal remains blocked on its
+v1.23.1 categorized mismatch list or a separately reviewed schema inventory; no
+database object is ignored or guessed away and no closure is claimed.
+
+This dependency-ordered milestone adds conservative lookup before a process-triage
+provider call. The worker derives the exact one- and two-stage policy digests from the
+current unchanged investigation policy and checks the complete host-independent
+fingerprint for the configured model. An active entry is usable only if its stored
+contract and safe result re-evaluate to the same fingerprint and its original retained
+AI assessment plus isolated observation still agree with the registry provenance.
+Missing, changed, inactive, orphaned or corrupt state fails closed and proceeds through
+the normal provider flow.
+
+On a hit, Mr Patchy sends no provider request and records an AI run with zero calls.
+It retains a new `known_good`-sourced Assessment, current server observation and
+redacted audit link to the original fingerprint/assessment/server. The original
+explanation and recommended checks remain visible; source provenance is not
+misrepresented as a fresh AI call. The current behavior remains unapproved, no
+response is authorized, and signatures, scanners, incident evidence and later changed
+observations continue normally.
+
+An existing explicit administrator Re-triage row is a mandatory lookup bypass. The
+fresh result retains the request and follows the normal AI pause, lifecycle, model,
+data-sharing, retry and admission path. Focused acceptance proves exact cross-server
+zero-call reuse, contextual/model/policy/inactive misses, original-provenance
+validation and a worker-level Re-triage provider call. Responsive Assessment history
+labels reused provenance and preserves escaped text, deep links, Back/reload and role
+boundaries.
+
+Current native runtime collection still declares configuration, effective-behavior
+and complete-coverage gaps, so it remains ineligible and publishes/hits nothing. This
+is a strict runtime boundary plus synthetic complete-contract acceptance, not a claim
+that ordinary production evidence is ready. Lookup also remains after the existing
+claim, global/server AI enablement/pause, key/model and rolling-hour gate; shared
+rate/spend admission is not implemented. Fleet revocation/invalidation UI,
+contradiction-linked review, native complete-context collection, concurrent
+revocation/MySQL end-to-end acceptance and administrator-origin classifications remain
+finite known-good work. Same-server parallelism, fairness and shared throttle/daily-
+spend/unthrottled controls remain planned.
+
+APP_VERSION/README/changelog/UI/API synchronize at v1.28.0 with major fixed at 1.
+No schema, target-helper/agent update, Docker publication, Git tag or schedule change
+is introduced. Versioned commit, PR, exact-final-head checks and merge references are
+recorded in the completion report after publication; no earlier or failed head may be
+merged.
