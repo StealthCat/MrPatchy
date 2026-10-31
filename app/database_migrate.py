@@ -16,6 +16,17 @@ class MigrationError(ValueError):
     pass
 
 
+def schema_object_summary(label, names, limit=8):
+    """Render bounded, terminal-safe schema identifiers for operator review."""
+    values=sorted(str(name) for name in names)
+    shown=[]
+    for name in values[:limit]:
+        if len(name)>120:name=name[:117]+'...'
+        shown.append(json.dumps(name,ensure_ascii=True))
+    suffix='' if len(values)<=limit else ', ... (+'+str(len(values)-limit)+' more)'
+    return label+': '+', '.join(shown)+suffix
+
+
 def metadata():
     # Startup and offline tools must use the same registry. A second list can
     # silently omit models when a fresh CLI process has not imported the web app.
@@ -47,8 +58,17 @@ def connect_url(value, source=False):
 
 def validate_source(connection, meta):
     inspector = inspect(connection)
-    if set(inspector.get_table_names()) != set(meta.tables) or inspector.get_view_names():
-        raise MigrationError('Source tables do not match this Mr Patchy version. Start the current version to upgrade its schema first; unknown tables/views must be reviewed separately')
+    source_tables=set(inspector.get_table_names())
+    expected_tables=set(meta.tables)
+    source_views=set(inspector.get_view_names())
+    missing=expected_tables-source_tables
+    unexpected=source_tables-expected_tables
+    if missing or unexpected or source_views:
+        differences=[]
+        if missing:differences.append(schema_object_summary('missing tables',missing))
+        if unexpected:differences.append(schema_object_summary('unexpected tables',unexpected))
+        if source_views:differences.append(schema_object_summary('unexpected views',source_views))
+        raise MigrationError('Source tables do not match this Mr Patchy version ('+'; '.join(differences)+'). Start the current version to upgrade missing tables first; unexpected tables/views must be reviewed separately')
     for table in meta.sorted_tables:
         if {c['name'] for c in inspector.get_columns(table.name)} != set(table.c.keys()):
             raise MigrationError('Source schema differs from this version in table ' + table.name)

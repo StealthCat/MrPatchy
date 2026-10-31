@@ -71,3 +71,12 @@ destination to work around this message. Genuine version/schema mismatches and
 unknown tables/views still require review; this fix does not automatically upgrade
 a source schema or relax the copier's safeguards. Source data is preserved, and a
 refused dry run does not activate a destination.
+
+Starting in v1.23.1, the refusal identifies a bounded list of missing tables,
+unexpected tables and unexpected views. Names are escaped before they are printed.
+Missing current tables mean the source has not completed current-version startup
+initialization; restart the current controller against the source, confirm startup
+completed, stop every writer again, and repeat the dry run. Unexpected tables or
+views remain a review blocker. The diagnostic does not delete, rename, copy around
+or silently accept any object. If more than eight objects occur in one category,
+the message reports the remaining count without producing unbounded output.

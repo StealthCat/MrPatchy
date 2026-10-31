@@ -87,7 +87,37 @@ with engine.begin() as c:c.exec_driver_sql(DDL)
 try:migrate(os.environ['DATABASE_URL'],'sqlite:///DESTINATION',dry_run=True)
 except MigrationError as error:
     assert 'Source tables' in str(error)
+    assert OBJECT_KIND in str(error)
+    assert 'unrelated' in str(error)
 else:raise AssertionError('Unrecognized source object was accepted')
-'''.replace('DDL',repr(ddl)).replace('DESTINATION',str(root/'destination.db')),env)
+'''.replace('DDL',repr(ddl)).replace('OBJECT_KIND',repr(object_kind)).replace('DESTINATION',str(root/'destination.db')),env)
     assert result.returncode==0,result.stderr
+    assert not (root/'destination.db').exists()
+
+
+def test_fresh_process_explains_missing_current_table_and_startup_repairs_it(initialized_source):
+    env,_,root=initialized_source
+    result=child('''
+import os
+from sqlalchemy import create_engine
+from app.database_migrate import migrate,MigrationError
+engine=create_engine(os.environ['DATABASE_URL'])
+with engine.begin() as connection:
+    connection.exec_driver_sql('DROP TABLE ai_triage_claims')
+try:migrate(os.environ['DATABASE_URL'],'sqlite:///DESTINATION',dry_run=True)
+except MigrationError as error:
+    assert 'missing tables' in str(error)
+    assert 'ai_triage_claims' in str(error)
+else:raise AssertionError('Outdated source schema was accepted')
+'''.replace('DESTINATION',str(root/'destination.db')),env)
+    assert result.returncode==0,result.stderr
+    repaired=child('''
+import os
+from app.db import init
+from app.database_migrate import migrate
+init()
+result=migrate(os.environ['DATABASE_URL'],'sqlite:///DESTINATION',dry_run=True)
+assert 'ai_triage_claims' in result
+'''.replace('DESTINATION',str(root/'destination.db')),env)
+    assert repaired.returncode==0,repaired.stderr
     assert not (root/'destination.db').exists()

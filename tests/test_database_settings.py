@@ -13,6 +13,14 @@ from app.db import DATA, Base
 from app.security import seal, unseal
 
 
+def test_schema_object_diagnostics_are_bounded_and_terminal_safe():
+    names={'table-'+str(index) for index in range(10)}|{'line\nbreak'}
+    summary=migration.schema_object_summary('unexpected tables',names)
+    assert 'line\\nbreak' in summary
+    assert 'line\nbreak' not in summary
+    assert '(+3 more)' in summary
+
+
 @pytest.fixture
 def isolated_profiles(monkeypatch, tmp_path):
     # Keep the running test app's DATA/key unchanged, isolate profile files only.
