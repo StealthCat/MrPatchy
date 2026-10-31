@@ -20,3 +20,23 @@ def admin(client):
     assert result.status_code==200
     client.headers['X-CSRF-Token']=result.json()['csrf']
     return client
+def pytest_collection_modifyitems(config,items):
+    """Split whole test files across CI jobs: MRPATCHY_TEST_SHARD=INDEX/TOTAL (1-based).
+
+    Files are balanced greedily by test count; every shard computes the same assignment
+    from the same collection, so each file runs in exactly one shard in its original order.
+    """
+    spec=os.getenv('MRPATCHY_TEST_SHARD','').strip()
+    if not spec:return
+    try:
+        index,total=(int(part) for part in spec.split('/'))
+        if not 1<=index<=total:raise ValueError
+    except ValueError:raise pytest.UsageError(f'MRPATCHY_TEST_SHARD must be INDEX/TOTAL with 1<=INDEX<=TOTAL, not {spec!r}')
+    files={}
+    for item in items:files.setdefault(item.nodeid.split('::',1)[0],[]).append(item)
+    loads=[0]*total;owner={}
+    for name in sorted(files,key=lambda name:(-len(files[name]),name)):
+        shard=min(range(total),key=lambda n:(loads[n],n));owner[name]=shard;loads[shard]+=len(files[name])
+    keep=[item for item in items if owner[item.nodeid.split('::',1)[0]]==index-1]
+    config.hook.pytest_deselected(items=[item for item in items if owner[item.nodeid.split('::',1)[0]]!=index-1])
+    items[:]=keep

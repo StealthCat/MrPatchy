@@ -168,7 +168,8 @@ avoids depending on GitHub's mutable host `base-files` package. SSH key-rotation
 checks assert the wrapped authentication exception and its underlying cause, so
 unrelated connection errors cannot count as successful key revocation. Both SSH
 matrix entries run even if one fails. CI supports manual dispatch and bounds each
-job to 30 minutes; PR and main-push triggers remain enabled.
+job to at most 30 minutes (see "CI pipeline review (v1.35.24)" for current limits);
+PR and main-push triggers remain enabled.
 
 ## Managed-agent health and maintenance
 
@@ -5260,7 +5261,7 @@ intact and this update's entries reapplied.
 
 Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
 
-## v1.35.25 — Deleted-server indirect read authorization
+## v1.35.29 — Deleted-server indirect read authorization
 
 Owner: Codex `issue118-a53dc732a02d`, branch
 `codex/deleted-host-read-boundary`, issue #118. Read current main `128704f`
@@ -5285,7 +5286,56 @@ No response authority, schema, helper, audit policy or route-role changes.
 
 Focused validation: 44 passed (26 new authorization cases plus lifecycle suite).
 Full Python suite and exact-final-head CI remain required before merge. Source,
-README and changelog use v1.35.25 above pending .22/.23/.24 allocations; integration
+README and changelog use v1.35.29 above pending .22/.23/.24 allocations; integration
 must recheck main/version order and preserve #206's independently owned role work.
 No tags or Docker publication. Issue #118 stays open until a tested merge is
 verified. All wider roadmap requirements remain tracked above.
+
+## CI pipeline review (v1.35.24)
+
+The owner requested a full CI review, committed directly to `main`. Changes are
+confined to `.github/workflows/ci.yml`, a test-sharding hook in `tests/conftest.py`
+and documentation. No application, role, audit, target helper, response-authorization
+or Docker publication change is included.
+
+- **Main verification.** The concurrency group was shared by every push to `main`,
+  with `cancel-in-progress`. Each merge therefore cancelled the previous main run:
+  runs 329, 331, 334, 335 and 337 (v1.35.16–v1.35.20) never completed on `main`.
+  Push and manual runs now get unique groups. Only an older run of the same pull
+  request (keyed by PR number, not branch name) is superseded.
+- **Shell syntax.** `bash -n a b c` parses only `a`, so only
+  `deploy/entrypoint.sh` had been checked. Each tracked `*.sh` is now checked on its
+  own, as is every tracked `*.js`/`*.cjs` file, and `scripts/`, `tools/` and `tests/`
+  are byte-compiled. All of them pass today.
+- **Runner image (#197).** Every job is pinned to `ubuntu-24.04`. Adopting Ubuntu 26.04
+  should be a separate, fully validated change.
+- **Critical path.** A `static` job (10-minute limit) runs version, syntax and
+  Compose checks without waiting for the SQLite suite. The serial MySQL suite took
+  about 21 of its 30 minutes. It now runs as four isolated jobs (20-minute limit),
+  each with its own MySQL 8.4 service. `MRPATCHY_TEST_SHARD=INDEX/TOTAL` assigns whole
+  test files greedily by test count, so file order and module fixtures are preserved.
+  Every file lands in exactly one shard, and an invalid specification is a usage error.
+- **Duplication.** The restic backup/restore drill now runs in the `tests` job by
+  installing restic, so the separate `recovery` job was removed. Native RPM unit tests
+  use the runner's libdnf/libRPM rather than the matrix target, so they run in the
+  `fedora:44` leg only. Pip and npm downloads are cached.
+
+Check names change: `static` and `mysql (1)`–`mysql (4)` are added, and `mysql` and
+`recovery` are removed. Branch-protection required checks must follow. Future exact-head
+records should list the twelve resulting jobs rather than nine. Action references
+remain major-version tags; SHA pinning belongs to supply-chain issue #201.
+
+
+Integration continuation — Codex `integration-6eac54918b34`, PR #208, 2026-10-31.
+Accepted the explicit #118 handoff and retained the same branch. Reproduced again
+on current main `fa5d933` (v1.35.24): 14 failed / 12 passed in
+`tests/test_deleted_host_reads.py`. Merged that main into this branch, preserving
+all CI pipeline review/sharding changes and both delivery entries. Allocated
+v1.35.29 above pending proposals through .28; other owners retain their work and
+must reconcile against final main when integrating. This independently scoped P1
+read-boundary fix has no dependency on the separate route-role refactor #206.
+No roadmap work started. Current open-issue listing returned all 78 reports;
+#119/#120/#198/#205 have existing owned fixes, #204 depends on #203, and #140
+remains actionable independent work for a later cycle after this integration.
+Final local validation and all twelve applicable exact-head CI jobs are required;
+no issue closure is claimed until the tested merge is verified. Keep schedule unchanged.

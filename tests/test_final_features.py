@@ -95,7 +95,7 @@ def test_provenance_does_not_export_arguments(tmp_path,monkeypatch):
 
 def test_encrypted_recovery_round_trip(tmp_path,monkeypatch):
     import importlib.util,sqlite3,shutil
-    if not shutil.which('restic'):pytest.skip('restic is exercised in recovery CI')
+    if not shutil.which('restic'):pytest.skip('restic is exercised in the CI tests job')
     spec=importlib.util.spec_from_file_location('recovery',Path(__file__).parents[1]/'scripts/recovery.py')
     recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
     data=tmp_path/'data';data.mkdir();(data/'ssh').mkdir();(data/'ssh/test.key').write_text('private fixture')
@@ -120,7 +120,7 @@ def test_encrypted_recovery_round_trip(tmp_path,monkeypatch):
 def test_encrypted_recovery_round_trip_for_empty_fleet(tmp_path,monkeypatch):
     """A fresh deployment has no ssh/ directory until its first server is added (#131)."""
     import importlib.util,sqlite3,shutil,stat
-    if not shutil.which('restic'):pytest.skip('restic is exercised in recovery CI')
+    if not shutil.which('restic'):pytest.skip('restic is exercised in the CI tests job')
     spec=importlib.util.spec_from_file_location('recovery',Path(__file__).parents[1]/'scripts/recovery.py')
     recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
     data=tmp_path/'data';data.mkdir();(data/'secret.key').write_text('encryption fixture')
