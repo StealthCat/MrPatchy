@@ -43,6 +43,8 @@ def test_refresh_preserves_legacy_with_no_invented_model_and_keeps_prior_approva
     legacy=admin.get('/api/investigations/subject/history/'+data['items'][0]['id']).json()
     assert legacy['source']=='legacy' and legacy['model']==legacy['run_id']==legacy['policy_hash']==''
     assert legacy['inputs']==[] and legacy['result']['saved_analysis']=='Original retained result'
+    assert not legacy['known_good']['eligible'] and not legacy['known_good']['published']
+    assert 'source_not_ai' in [reason['code'] for reason in legacy['known_good']['reasons']]
     assert queue(admin,withdraw_approval=True).status_code==409
     worker.investigate_one();assert len(calls)==1
     data=current(admin);assert data['current']['verdict']=='high' and not data['current']['approved']
@@ -69,6 +71,8 @@ def test_retained_complete_results_bound_to_exact_supplied_inputs_and_log_prunin
     data=current(admin);assert len(data['items'])==1
     id=data['items'][0]['id'];url='/api/investigations/subject/history/'+id
     record=admin.get(url).json();assert len(record['inputs'])==len(sent)==1+followup
+    assert not record['known_good']['eligible'] and record['known_good']['fingerprint']==''
+    assert 'known_good_context_missing' in [reason['code'] for reason in record['known_good']['reasons']]
     assert [i['evidence'] for i in record['inputs']]==[json.loads(x['input']) for x in sent]
     assert record['inputs'][0]['evidence']['omitted_connections']==1
     assert len(record['snapshot']['connections'])==101 and not data['current']['approved']

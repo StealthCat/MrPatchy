@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.23.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.24.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -743,6 +743,24 @@ fleet revocation and linked review, threaded execution and shared rate/spend mod
 remain planned. New assessment/refresh tables require controller-first startup,
 then matched workers. No target-helper upgrade is required. Retained evidence is
 sensitive; history has no automatic deletion or immutable external storage yet.
+
+### Canonical known-good readiness (v1.24.0)
+
+Assessment detail now evaluates a versioned, host-independent exact-match contract.
+It produces a candidate fingerprint only for a completed low-risk AI result with the
+recorded model/policy and explicit verified manifests for artifact bytes, authenticated
+provenance, configuration, effective behavior, required follow-up evidence and coverage.
+Host/PID/start/time and ephemeral-source-port observations remain in local evidence but
+are excluded from the key. If an observation-only field appears inside canonical
+evidence, or any required identity/manifest is missing or incomplete, evaluation fails
+closed and explains the cache miss.
+
+Existing receipts do not yet produce the complete manifest and therefore remain
+host-specific. The detail page never publishes or looks up a cache entry, grants an
+approval, suppresses deterministic protection, or avoids a provider call. Durable
+publication, concurrent cross-server lookup/hits, revocation/contradiction review and
+zero-call SQLite/MySQL acceptance remain the next known-good milestones. This update
+adds no database schema or target-helper change.
 
 
 ### Identity-bound follow-up context (v1.21.0)
