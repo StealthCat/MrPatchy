@@ -4900,10 +4900,12 @@ invoice reconciliation and full controller failover/reset acceptance remain plan
 
 ## v1.35.4 — Interrupted advisory-plan recovery
 
-Target version **v1.35.4** addresses [issue #104](https://github.com/StealthCat/MrPatchy/issues/104).
-The implementation commit and pull request are recorded here when the tested branch is
-published. The issue may close only after every applicable check passes on the exact
-final PR head and that commit is merged.
+Delivery record: version **v1.35.4**, implementation commit
+[`7abe6f1e`](https://github.com/StealthCat/MrPatchy/commit/7abe6f1e65e09bb05d0f77c8cd9eac99990041c1)
+and [PR #113](https://github.com/StealthCat/MrPatchy/pull/113), which addresses
+[issue #104](https://github.com/StealthCat/MrPatchy/issues/104). The issue may close
+only after every applicable check passes on the exact final PR head and that commit
+is merged.
 
 Issue-first reconciliation read merged v1.35.3 main, repository instructions, this
 checkpoint, merged PR #110, all open issues and the absence of an open PR. Issues
