@@ -618,7 +618,9 @@ def _assess_active_behavior(s,row,cfg,secret):
     with ai_runs.measure('result_persistence'):
         def save(write,saved):
             saved.verdict=result['risk'];saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
-            ai_assessments.record(write,saved,cfg['ai_model'],result,inputs)
+            assessment=ai_assessments.record(write,saved,cfg['ai_model'],result,inputs)
+            from . import known_good
+            known_good.publish(write,assessment)
             ai_retry.clear(write,saved)
         if lease:
             with lease.mutation() as (write,saved):save(write,saved)

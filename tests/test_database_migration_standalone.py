@@ -26,11 +26,14 @@ init()
 from app.ai_retry import TriageRetry
 from app.ai_assessments import Assessment,Refresh
 from app.ai_claims import Claim
+from app.known_good import Entry,Observation
 with Session() as s:
     s.add(TriageRetry(subject='subject',configuration='a'*64,attempts=2,state='deferred',next_at=1770000000.125,provider_until=1770000001.5,reason='Keep provider delay'))
     s.add(Assessment(id='assessment',subject='subject',host_id='host',source='ai',model='fixture-model',run_id='run',policy_hash='b'*64,state_hash='c'*64,result={'risk':'low','explanation':'retained result'},snapshot={'sha256':'d'*64},inputs=[{'evidence':{'uid':'1000'}}],refresh={}))
     s.add(Refresh(subject='subject',id='refresh',actor='admin',reason='Retain explicit refresh request',previous='assessment',withdrew_approval=True))
     s.add(Claim(subject='subject',host_id='host',token='old-token',worker_id='old-worker',boot_id='e'*32,run_id='run',revision='f'*64,configuration='a'*64,created=1770000000.125,renewed=1770000001.5,expires=1770000121.5))
+    s.add(Entry(fingerprint='1'*64,version=1,created=1770000002.25,classification_source='ai',model='fixture-model',policy_hash='b'*64,assessment_id='assessment',source_host_id='host',contract={'version':1,'artifact':{'sha256':'d'*64}},result={'risk':'low','explanation':'retained candidate'}))
+    s.add(Observation(assessment_id='assessment',fingerprint='1'*64,host_id='host',subject='subject',created=1770000002.25,observation={'pid':42,'start_ticks':101}))
     s.commit()
 assert 'app.main' not in sys.modules
 print(json.dumps(sorted(Base.metadata.tables)))
@@ -53,7 +56,7 @@ print(json.dumps(result,sort_keys=True))
     assert dry.returncode==0,dry.stderr
     result=json.loads(dry.stdout)
     assert set(result)==tables and not (root/'destination.db').exists()
-    assert all(result[name]['rows']==1 for name in ('ai_triage_retries','ai_behavior_assessments','ai_behavior_refreshes','ai_triage_claims'))
+    assert all(result[name]['rows']==1 for name in ('ai_triage_retries','ai_behavior_assessments','ai_behavior_refreshes','ai_triage_claims','ai_known_good_entries','ai_known_good_observations'))
     copied=child(code.replace('DRY_RUN','False'),env)
     assert copied.returncode==0,copied.stderr
     assert json.loads(copied.stdout)==result and (root/'source.db').exists()
@@ -68,6 +71,8 @@ with engine.connect() as c:
     assert c.execute(select(meta.tables['ai_behavior_refreshes'].c.withdrew_approval)).scalar_one() is True
     assert c.execute(select(meta.tables['ai_triage_claims'].c.token)).scalar_one()=='old-token'
     assert c.execute(select(meta.tables['ai_triage_claims'].c.expires)).scalar_one()==1770000121.5
+    assert c.execute(select(meta.tables['ai_known_good_entries'].c.contract)).scalar_one()=={'version':1,'artifact':{'sha256':'d'*64}}
+    assert c.execute(select(meta.tables['ai_known_good_observations'].c.observation)).scalar_one()=={'pid':42,'start_ticks':101}
     print(json.dumps({t.name:fingerprint(c,t) for t in meta.sorted_tables},sort_keys=True))
 '''.replace('DESTINATION',str(root/'destination.db')),env)
     assert verified.returncode==0,verified.stderr

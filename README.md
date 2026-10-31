@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.26.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.27.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -799,6 +799,21 @@ This milestone does not claim that application configuration or effective behavi
 has been fully collected. Those components and complete coverage remain ineligible,
 so there is still no cache publication/lookup, provider-call bypass, implicit approval
 or deterministic-protection suppression. It adds no schema or target-helper change.
+
+### Durable safe-candidate publication (v1.27.0)
+
+Completed low-risk AI assessments that satisfy the entire canonical exact-match
+contract now publish a durable safe candidate. One atomic fingerprint-keyed entry
+retains its model, assessment-policy binding, canonical components and original
+assessment provenance; separate assessment-keyed rows retain each server's isolated
+observation. Concurrent identical publications deduplicate without discarding either
+observation, and a previously inactive entry is never silently reactivated.
+
+Current runtime evidence still declares configuration, effective-behavior and coverage
+gaps, so it remains ineligible and publishes nothing. Publication is storage only:
+there is no lookup, provider-call bypass, approval, response authorization or detector
+suppression. The new candidate/observation tables require current controller startup
+before an offline database migration or matched workers use this schema.
 
 
 ### Identity-bound follow-up context (v1.21.0)

@@ -416,6 +416,19 @@ provider/evidence/reason text and phone/tablet/desktop assessment layouts. Durab
 publication/hits, revocation and contradiction-linked review remain planned surfaces.
 
 
+### v1.27.0 — Published candidate provenance on assessment detail
+
+When the authenticated API confirms that an eligible fingerprint has an active durable
+entry, the same notice now says **Published safe candidate** and explains that minimal
+provenance was retained. It also states prominently that the candidate has not been
+reused and grants no approval. Eligible-but-unpublished and ineligible states remain
+distinct; untrusted values stay escaped and the notice adds no mutation control.
+
+Browser acceptance covers the published state in the existing responsive Assessment
+detail flow. Lookup/hit explanation, revocation, contradiction-linked review and the
+broader AI workspace remain planned UI milestones.
+
+
 ### v1.19.0 — Explained process retry eligibility
 
 The existing glass Investigations cards and AI worker status now distinguish

@@ -4287,3 +4287,49 @@ durable safe-only publication and atomic cross-server zero-call lookup, audited
 invalidation/revocation, contradiction-linked review, explicit Re-triage bypass and
 SQLite/MySQL race/role acceptance. Shared pacing/spend modes and remaining roadmap
 programs follow under the existing priority.
+
+
+## v1.27.0 — Durable safe-candidate publication
+
+Issue-first reconciliation read current main `bda18815`, repository instructions,
+this checkpoint and merged PR #86. The first 100-item open-issue and open-PR pages
+were empty, so no actionable GitHub report or unfinished delivery competed with this
+roadmap batch. The chat-reported database-migration refusal remains blocked on its
+v1.23.1 mismatch category/list or a separately reviewed schema inventory; no object
+is ignored or guessed away and no closure is claimed.
+
+This dependency-ordered exact-known-good milestone adds durable publication after a
+retained AI Assessment is recorded. Only the existing complete low-risk canonical
+contract can publish. A fingerprint-keyed entry retains the contract version, exact
+model and policy binding, AI classification provenance, original assessment/server
+identity and result. Assessment-keyed observation rows retain host/PID/time fields
+separately, so host-specific evidence never enters the canonical contract.
+
+Publication uses a database uniqueness boundary and nested transaction savepoints.
+Concurrent exact candidates converge on one entry while retaining each observation;
+a fingerprint whose stored canonical/model/policy identity differs fails closed.
+Idempotent retries add nothing, and an inactive entry is not reactivated. Audit rows
+record only the fingerprint and assessment/server identifiers, not raw evidence.
+Assessment detail reports `published` only while an active durable entry exists.
+
+Current runtime receipts still lack complete configuration, effective-behavior and
+coverage components, so they remain ineligible and publish nothing. This milestone
+does not perform cache lookup, avoid a provider call, approve behavior, authorize a
+response or suppress deterministic protection. Explicit Re-triage bypass, audited
+revocation/invalidation, contradiction-linked review, role-scoped cache management
+and actual zero-call cross-server hits remain planned.
+
+The two new candidate/observation tables require current controller startup before
+offline database migration or matched workers use the schema. Standalone migration
+acceptance preserves both tables and keeps strict unknown-object refusal. Focused
+acceptance covers eligibility, nonpublication, idempotence, cross-host and concurrent
+deduplication, contextual misses, inactive entries, retained API state and published
+UI text. APP_VERSION/README/changelog/UI/API synchronize at v1.27.0; major remains 1.
+No Docker publication, Git tag or schedule change is introduced.
+
+Versioned implementation commit
+[`a630d669`](https://github.com/StealthCat/MrPatchy/commit/a630d6698d1a331bce26511974b9f17036cf6e55)
+is published in [PR #87](https://github.com/StealthCat/MrPatchy/pull/87), targeting
+`main` with label `v1.27.0`. The exact final documentation head, all required workflow
+results and actual merge commit are recorded in the completion report; this reference
+does not permit merging an earlier or failed head.
