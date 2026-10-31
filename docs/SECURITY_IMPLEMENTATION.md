@@ -4244,3 +4244,46 @@ publication and atomic cross-server zero-call lookup, audited invalidation/revoc
 contradiction-linked review, explicit Re-triage bypass and SQLite/MySQL race/role
 acceptance. Shared pacing/spend modes and remaining roadmap programs follow under the
 existing priority.
+
+
+## v1.26.0 — Exact authenticated follow-up evidence manifests
+
+Issue-first reconciliation read current main `ec0c046f`, repository instructions,
+this checkpoint and merged PR #85. The first 100-item open-issue and open-PR pages
+were empty, so no actionable GitHub report or unfinished delivery competed with this
+roadmap batch. The chat-reported database-migration refusal remains blocked on its
+v1.23.1 mismatch category or separately reviewed schema inventory; no object is
+ignored or guessed away and no closure is claimed.
+
+This dependency-ordered exact-known-good milestone completes only the canonical
+follow-up receipt component. After exact controller-authenticated artifact/provenance
+binding, Mr Patchy validates the full supported target v2 receipt and hashes its sorted
+requested checks, credentials/capabilities, executable and mapped/script artifact
+identities/metadata, maps and cgroup digests, optional package/service/executable
+results, declared gaps and collection-policy requirements. Unknown, missing,
+oversized, malformed or internally inconsistent fields fail closed and retain the
+original package-authentication gap.
+
+The evidence digest excludes only process-instance identity and namespace inode
+values. PID/start/boot/proc values remain in the isolated observation record, and the
+presence of all required namespace kinds remains bound. Check ordering is normalized;
+different check sets, credentials, artifact bytes/metadata, context hashes, optional
+results or coverage declarations produce different manifests. Cross-server tests use
+different process and namespace instances with otherwise exact receipts and produce
+identical canonical follow-up components.
+
+Configuration and effective-behavior components remain incomplete and the coverage
+component retains every disclosed gap. Current assessments therefore still produce no
+known-good fingerprint and always contact the provider. There is no cache table,
+publication/lookup/hit, implicit approval, response authorization, detector
+suppression, schema/helper change, Docker publication, Git tag or schedule change.
+APP_VERSION/README/changelog/UI/API synchronize at v1.26.0; major remains 1.
+
+Focused acceptance covers cross-host observation independence, security-context and
+requirements sensitivity, invalid-receipt gap preservation, retained assessment
+history and provider-input observation redaction. The finite program remains
+unfinished: collect complete configuration/behavior/coverage manifests, then add
+durable safe-only publication and atomic cross-server zero-call lookup, audited
+invalidation/revocation, contradiction-linked review, explicit Re-triage bypass and
+SQLite/MySQL race/role acceptance. Shared pacing/spend modes and remaining roadmap
+programs follow under the existing priority.

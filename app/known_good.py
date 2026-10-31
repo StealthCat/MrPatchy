@@ -28,6 +28,12 @@ FORBIDDEN_CANONICAL_FIELDS = OBSERVATION_FIELDS | {
     'local_ephemeral_port',
 }
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
+FOLLOWUP_POLICY_VERSION = 'process-followup-v2'
+FOLLOWUP_CHECKS = {'package', 'service', 'executable'}
+FOLLOWUP_CONTEXT_KEYS = {
+    'version', 'process', 'credentials', 'namespaces', 'maps_sha256',
+    'cgroup_sha256', 'artifacts', 'executable', 'coverage',
+}
 
 REASON_TEXT = {
     'source_not_ai': 'Only a recorded AI assessment can become an automatic safe candidate.',
@@ -85,6 +91,109 @@ def _manifest(value, fields):
 
 def _reason(code):
     return {'code': code, 'detail': REASON_TEXT[code]}
+
+
+def _digest(value):
+    """Hash one bounded JSON contract without accepting lossy coercions."""
+    if not _json_safe(value):
+        return None
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    except (TypeError, ValueError):
+        return None
+    if len(encoded) > MAX_CONTEXT_BYTES:
+        return None
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _followup_binding(details, path, checksum):
+    """Bind a complete v2 receipt while excluding only instance observations.
+
+    This completes the follow-up *receipt* component, not evidence coverage. The
+    declared configuration/behavior gaps remain authoritative cache misses.
+    """
+    if not isinstance(details, dict) or details.get('version') != 2 or details.get('identity_verified') is not True:
+        return None
+    checks = details.get('checks')
+    if (not isinstance(checks, list) or not checks or
+            any(not isinstance(check, str) or check not in FOLLOWUP_CHECKS for check in checks) or
+            len(checks) != len(set(checks))):
+        return None
+    expected_keys = {'version', 'identity_verified', 'checks', 'context', 'coverage', *checks}
+    if set(details) - {'known_good_context'} != expected_keys:
+        return None
+    context = details.get('context')
+    if not isinstance(context, dict) or set(context) != FOLLOWUP_CONTEXT_KEYS or context.get('version') != CONTEXT_VERSION:
+        return None
+    process = context.get('process')
+    integer_identity = ('pid', 'start_ticks', 'pid_namespace', 'proc_device', 'proc_inode')
+    if (not isinstance(process, dict) or set(process) != {*integer_identity, 'boot_id'} or
+            any(type(process.get(field)) is not int or process[field] <= 0 for field in integer_identity) or
+            not isinstance(process.get('boot_id'), str) or
+            not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', process['boot_id'])):
+        return None
+    credentials = context.get('credentials')
+    required_credentials = {'Uid', 'Gid', 'CapEff', 'NoNewPrivs', 'Seccomp'}
+    if (not isinstance(credentials, dict) or not required_credentials <= set(credentials) or
+            any(not isinstance(key, str) or not isinstance(values, list) or not values or
+                any(not isinstance(value, str) or not re.fullmatch(r'[0-9a-fA-F]{1,20}', value) for value in values)
+                for key, values in credentials.items())):
+        return None
+    namespaces = context.get('namespaces')
+    if (not isinstance(namespaces, dict) or set(namespaces) != {'pid', 'net', 'mnt', 'user'} or
+            any(type(value) is not int or value <= 0 for value in namespaces.values())):
+        return None
+    if not _sha(context.get('maps_sha256')) or not _sha(context.get('cgroup_sha256')):
+        return None
+    executable = context.get('executable')
+    if (not isinstance(executable, dict) or executable.get('sha256') != checksum or not _sha(checksum) or
+            not isinstance(path, str) or not path.startswith('/')):
+        return None
+    artifacts = context.get('artifacts')
+    if (not isinstance(artifacts, list) or not artifacts or
+            any(not isinstance(item, dict) or item.get('identity_verified') is not True or
+                not _sha(item.get('sha256')) or not isinstance(item.get('path'), str)
+                for item in artifacts)):
+        return None
+    coverage = context.get('coverage')
+    top_coverage = details.get('coverage')
+    gaps = coverage.get('gaps') if isinstance(coverage, dict) else None
+    if (not isinstance(coverage, dict) or coverage != top_coverage or
+            set(coverage) != {'cache_eligible', 'gaps', 'scope', 'consistency', 'trust'} or
+            coverage.get('cache_eligible') is not False or
+            coverage.get('scope') != 'recorded_process_identity' or
+            coverage.get('consistency') != 'matching_before_after_samples' or
+            coverage.get('trust') != 'target_kernel_and_local_files' or
+            not isinstance(gaps, list) or
+            any(not isinstance(gap, str) or not gap or len(gap) > 200 for gap in gaps) or
+            gaps != sorted(set(gaps))):
+        return None
+    if any(check not in details for check in checks):
+        return None
+
+    # Bind every supported receipt field. Only process identity and namespace
+    # inode values are observation-specific; namespace coverage is still bound.
+    evidence = copy.deepcopy({key: value for key, value in details.items() if key != 'known_good_context'})
+    evidence['checks'] = sorted(checks)
+    evidence['context'].pop('process')
+    evidence['context']['namespaces'] = sorted(namespaces)
+    evidence_sha = _digest(evidence)
+    requirements_sha = _digest({
+        'version': CONTEXT_VERSION,
+        'policy_version': FOLLOWUP_POLICY_VERSION,
+        'checks': sorted(checks),
+        'receipt_version': 2,
+        'context_version': CONTEXT_VERSION,
+        'scope': 'recorded_process_identity',
+        'consistency': 'matching_before_after_samples',
+        'trust': 'target_kernel_and_local_files',
+        'required_context': sorted(FOLLOWUP_CONTEXT_KEYS),
+    })
+    if not evidence_sha or not requirements_sha:
+        return None
+    return {'version': CONTEXT_VERSION, 'complete': True,
+        'requirements_sha256': requirements_sha, 'evidence_sha256': evidence_sha,
+        'policy_version': FOLLOWUP_POLICY_VERSION}
 
 
 def evaluate(snapshot, model, policy_hash, result, source):
@@ -183,9 +292,11 @@ def bind_vendor_provenance(s, host_id, evidence, collected):
     investigation=value.get('investigation');details=investigation.get('details') if isinstance(investigation,dict) else None
     context=details.get('context') if isinstance(details,dict) else None
     coverage=context.get('coverage') if isinstance(context,dict) else None
+    top_coverage=details.get('coverage') if isinstance(details,dict) else None
     gaps=coverage.get('gaps') if isinstance(coverage,dict) else None
     if (not isinstance(details,dict) or not isinstance(coverage,dict) or details.get('version')!=2
-        or details.get('identity_verified') is not True or not isinstance(gaps,list) or not all(isinstance(gap,str) for gap in gaps)
+        or details.get('identity_verified') is not True or coverage!=top_coverage
+        or not isinstance(gaps,list) or not all(isinstance(gap,str) for gap in gaps)
         or coverage.get('scope')!='recorded_process_identity' or 'package_authentication_missing' not in gaps):return value
     path=value.get('executable');checksum=value.get('sha256')
     if not isinstance(path,str) or not re.fullmatch(r'/[^\x00-\x1f]{0,4095}',path) or not _sha(checksum):return value
@@ -199,13 +310,16 @@ def bind_vendor_provenance(s, host_id, evidence, collected):
     if binding is None:return value
     artifact,provenance,authenticated_at=binding
     remaining=sorted(gap for gap in gaps if gap!='package_authentication_missing')
+    coverage['gaps']=remaining
+    top_coverage['gaps']=list(remaining)
+    followup=_followup_binding(details,path,checksum)
+    if followup is None:return copy.deepcopy(evidence)
     process=context.get('process') if isinstance(context.get('process'),dict) else {}
     observation={key:process[key] for key in ('pid','start_ticks','boot_id','proc_device','proc_inode') if key in process}
     observation.update(host_id=host_id,collected=collected,vendor_inspection_id=inspection_id,authenticated_at=authenticated_at)
     details['known_good_context']={'version':CONTEXT_VERSION,'artifact':artifact,'provenance':provenance,
         'configuration':{'version':CONTEXT_VERSION,'complete':False},
         'behavior':{'version':CONTEXT_VERSION,'complete':False},
-        'followup':{'version':CONTEXT_VERSION,'complete':False,'policy_version':'process-followup-v1'},
+        'followup':followup,
         'coverage':{'version':CONTEXT_VERSION,'complete':False,'gaps':remaining},'observation':observation}
-    coverage['gaps']=remaining
     return value

@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.25.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.26.0** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -779,6 +779,26 @@ and AI provider input. Configuration, effective behavior, required follow-up and
 complete coverage are still explicit misses, so this milestone creates no fingerprint,
 cache publication/hit, approval, detector suppression or provider-call bypass. It adds
 no database schema or target-helper change.
+
+### Exact follow-up evidence manifests (v1.26.0)
+
+An authenticated vendor match now also completes the canonical follow-up receipt
+component when the target returns the full supported v2 context. Mr Patchy binds the
+sorted requested checks, credentials/capabilities, executable and mapped/script file
+hashes and metadata, maps/cgroup digests, optional check results, declared gaps and
+the exact collection policy into versioned requirements and evidence digests.
+
+Only process-instance and namespace-inode identifiers are excluded from these digests;
+they remain retained observations. Identical verified receipts therefore stay stable
+across servers even when PID, boot, proc and namespace instances differ, while any
+credential, artifact, context hash, optional result, check set or coverage change is
+a miss. Partial, malformed, oversized or internally inconsistent receipts keep every
+gap and produce no binding.
+
+This milestone does not claim that application configuration or effective behavior
+has been fully collected. Those components and complete coverage remain ineligible,
+so there is still no cache publication/lookup, provider-call bypass, implicit approval
+or deterministic-protection suppression. It adds no schema or target-helper change.
 
 
 ### Identity-bound follow-up context (v1.21.0)

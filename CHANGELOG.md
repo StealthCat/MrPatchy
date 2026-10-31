@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.26.0 — 2026-10-31
+
+- Canonically bind complete authenticated v2 follow-up receipts into versioned requirements and evidence digests.
+- Include requested checks, privilege context, artifact identities, context hashes, optional results and declared coverage while excluding only process/namespace instance observations.
+- Keep cross-server identical receipts stable and make changed security context or requirements a hard miss; malformed/partial receipts preserve every declared gap.
+- Leave configuration, effective behavior and complete coverage ineligible, so no cache lookup, provider-call bypass, approval or response authorization is introduced.
+
 ## 1.25.0 — 2026-10-31
 
 - Retain controller-authenticated signed-package manifests with exact target artifact verification.

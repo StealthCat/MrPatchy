@@ -102,15 +102,30 @@ def test_followup_binds_authenticated_vendor_provenance_without_sharing_host_obs
     def post(*args,**kwargs):
         sent.append(kwargs['json'])
         return provider('low',['executable'] if len(sent)==1 else [])
-    followup={'version':2,'identity_verified':True,'context':{'version':1,
-        'process':{'pid':10,'start_ticks':20},'coverage':{'scope':'recorded_process_identity',
-        'gaps':['package_authentication_missing','configuration_not_collected']}}}
+    coverage={'cache_eligible':False,'scope':'recorded_process_identity',
+        'gaps':['configuration_not_collected','package_authentication_missing'],
+        'consistency':'matching_before_after_samples','trust':'target_kernel_and_local_files'}
+    context={'version':1,'process':{'pid':10,'start_ticks':20,'pid_namespace':30,
+            'boot_id':'11111111-1111-1111-1111-111111111111','proc_device':40,'proc_inode':50},
+        'credentials':{'Uid':['0','0','0','0'],'Gid':['0','0','0','0'],'Groups':['0'],
+            'CapEff':['0000000000000000'],'NoNewPrivs':['1'],'Seccomp':['2']},
+        'namespaces':{'pid':101,'net':102,'mnt':103,'user':104},
+        'maps_sha256':'b'*64,'cgroup_sha256':'c'*64,
+        'artifacts':[{'kind':'library','path':'/usr/lib/libfixture.so','identity_verified':True,
+            'sha256':'d'*64,'source':'mapped-file','metadata':{'uid':0,'gid':0,'mode':493,'size':12}}],
+        'executable':{'sha256':'a'*64,'uid':0,'gid':0,'mode':493,'size':12},
+        'coverage':copy.deepcopy(coverage)}
+    followup={'version':2,'identity_verified':True,'checks':['executable'],'context':context,
+        'coverage':copy.deepcopy(coverage),'executable':{**context['executable'],
+            'status':['Uid:\t0\t0\t0\t0','Gid:\t0\t0\t0\t0','CapEff:\t0000000000000000',
+                'NoNewPrivs:\t1','Seccomp:\t2']}}
     monkeypatch.setattr(ai.transport,'post',post)
     monkeypatch.setattr(worker.ssh,'call',lambda *args,**kwargs:copy.deepcopy(followup))
     worker.investigate_one();assert len(sent)==2
     record=admin.get('/api/investigations/subject/history/'+current(admin)['items'][0]['id']).json()
     contract=record['snapshot']['investigation']['details']['known_good_context']
     assert contract['artifact']['sha256']=='a'*64 and contract['provenance']['verified']
+    assert contract['followup']['complete'] and contract['followup']['policy_version']=='process-followup-v2'
     assert contract['observation']['host_id']=='one' and contract['observation']['vendor_inspection_id']=='vendor-provenance'
     assert 'package_authentication_missing' not in record['snapshot']['investigation']['details']['context']['coverage']['gaps']
     assert not record['known_good']['eligible'] and 'configuration_binding_invalid' in [row['code'] for row in record['known_good']['reasons']]
