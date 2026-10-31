@@ -4960,3 +4960,72 @@ spool reliability/observability work, #98 remains CI maintenance, #96 remains th
 upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap priority
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
+
+
+## v1.35.7 — Failed sign-in and lockout auditing
+
+Delivery record: version **v1.35.7**, branch `fix/failed-login-audit-v1.35.7`, which
+addresses [issue #136](https://github.com/StealthCat/MrPatchy/issues/136); the PR
+number and tested final commit are recorded on the pull request. Proposed merge order:
+after PR #115 and PR #116 (both claim v1.35.5); PR #113 (v1.35.6) has merged and `main`
+was merged into this branch. The version must be re-checked against current `main`
+immediately before merging.
+
+Before this change `POST /api/login` audited only successful sign-ins (`login`) and
+authenticated state-changing requests. Failed passwords, unknown or disabled accounts,
+bad MFA codes and rate-limit rejections left no audit history, so password spraying and
+credential guessing were invisible to administrators. This was found by code review of
+v1.35.3 and is a detection gap, not an authentication bypass.
+
+Failed password sign-ins now record `login failed` with `<username> <address> <reason>`
+where the reason is `unknown or disabled account`, `bad password` or `bad MFA code`.
+The username is already restricted to `[A-Za-z0-9_.-]{1,64}` by the request model, so
+it cannot inject log lines; the submitted password and one-time code are never
+recorded. Rate-limit rejections record `login throttled` with the reason `account limit`,
+`address limit` or `global limit`, once per limit and five-minute window, so rejected
+requests cannot flood the audit table. The audit entries are written outside the global
+login lock.
+
+Unchanged: HTTP status codes and response bodies (a client still cannot distinguish an
+unknown account from a wrong password), the 10-per-account / 50-per-address / 10,000
+global thresholds, scrypt parameters, sessions, roles, CSRF and SSO. Audit reasons are
+visible to administrators only. SSO (OIDC) failures are not covered by this change.
+Known remaining items from the same review, deliberately separate: per-account
+throttling for distributed guessing, the global 10,000-bucket lockout, serialising
+logins on one lock during hashing, and purging expired sessions.
+
+
+## v1.35.13 — Enrollment command temporary-file hardening
+
+Delivery record: version **v1.35.13**, branch `fix/enrollment-temp-file-v1.35.5`; the
+PR number and tested final commit are recorded on the pull request. User-directed integration follows PR #137, preserves merged advisory recovery, and allocates v1.35.13 above pending v1.35.12. Exact-final-head CI is required before merge.
+
+The one-line enrollment command issued by `POST /api/hosts/{id}/enrollment-link`
+previously downloaded the personalized installer to the fixed path
+`/tmp/mrpatchy-enroll.sh` and then ran it with `sudo bash`. A fixed, predictable path
+in a sticky world-writable directory lets a local user on the target pre-create or
+swap the file before the administrator runs the command. Default Ubuntu/Debian
+kernels (`fs.protected_symlinks=1`, `fs.protected_regular=2`) block the symlink and
+pre-created-file variants, leaving a denial of service; targets with those protections
+disabled remain exposed to execution of attacker-controlled content as root. This was
+assessed by code reading and a sysctl check, not by a working exploit.
+
+The command now creates an unpredictable owner-only (0600) file with `mktemp`,
+downloads into it, runs it, and removes it:
+`f=$(mktemp) && curl -fsSL '<url>' -o "$f" && sudo bash "$f"; rm -f "$f"`. The URL
+remains shell-quoted. The downloaded installer content, token lifetime (one hour,
+reusable), authentication, roles, audit and the manual download path are unchanged.
+Making enrollment tokens single-use is deliberately not part of this change because a
+partial download would then require issuing a new link.
+
+Tests assert the command shape, that no fixed `/tmp/` path appears, that the URL
+remains a single shell argument, and execute the generated command in a real shell
+with stubbed `curl`/`sudo` to confirm a pre-existing `mrpatchy-enroll.sh` is ignored,
+the file used is mode 0600, and it is removed afterwards. The browser fixture in
+`tests/ui_enrollment.cjs` carries the new command string; it was updated but not
+executed locally because Playwright and a supported Node version were not installed.
+
+
+## v1.35.14 — CI runtime maintenance integration
+
+User-directed integration of PR #115 / issue #98 preserves PR #137 login auditing and PR #116 enrollment hardening. All checkout/setup-python/setup-node actions use v7 and the browser job uses Node 26. Source, README and changelog agree at v1.35.14. Exact-final-head full CI is required before merge; no Git tag or Docker publication.

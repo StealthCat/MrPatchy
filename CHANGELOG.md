@@ -1,10 +1,20 @@
 # Changelog
 
-## 1.35.8 — 2026-10-31
+## 1.35.14 — 2026-10-31
 
 - Move every CI job from the deprecated Node.js 20 action runtime to Node 24 by upgrading `actions/checkout` (v4 to v7), `actions/setup-python` (v5 to v7) and `actions/setup-node` (v4 to v7), removing the `Node.js 20 is deprecated` warnings (#98).
 - Run the Playwright browser checks on Node.js 26, the current LTS line, instead of Node.js 22. Used inputs are unchanged, and no `registry-url`, `always-auth` or `packageManager` setting is affected by the new action majors' breaking changes.
 - Workflow-only update: application behaviour, schema and target helpers are unchanged.
+
+## 1.35.13 — 2026-10-31
+
+- Harden the generated enrollment command: the installer is downloaded to an unpredictable owner-only `mktemp` file and removed afterwards, instead of a fixed `/tmp/mrpatchy-enroll.sh` path that root then executes. Compatibility: operators copying a previously issued command keep working; new commands use the temporary file. No schema, helper, token-lifetime or authorization change.
+
+## 1.35.7 — 2026-10-31
+
+- Audit failed sign-ins: each rejected password login now records `login failed` with the submitted username, source address and a coarse reason (unknown or disabled account, bad password, bad MFA code). Submitted passwords and one-time codes are never recorded.
+- Audit sign-in lockouts: a rate-limit rejection records one `login throttled` entry per limit and five-minute window (account, address or global), so rejected requests cannot flood the audit history.
+- Compatibility: HTTP status codes and response bodies are unchanged, so account existence is still not revealed to the client. No schema, role, session or throttling-threshold change.
 
 ## 1.35.6 — 2026-10-31
 

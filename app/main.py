@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.8'
+APP_VERSION='1.35.14'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -135,29 +135,48 @@ class Login(BaseModel):
     username:str=Field(default='admin',pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     password:str=Field(max_length=1024)
     otp:str=Field(default='',max_length=6)
-login_attempts={}; login_lock=threading.Lock()
+login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+def audit_login_event(action,username,ip,reason):
+    # Usernames are pattern-restricted by Login; never record the submitted password or OTP.
+    with Session() as s:
+        audit(s,action,username+' '+ip+' '+reason); s.commit()
 @app.post('/api/login')
 def login(body:Login,request:Request,response:Response):
     ip=request.client.host; now=time.time()
     # Reserve an attempt before expensive password hashing; remove it only on success.
     bucket=ip+':'+body.username
+    throttled=None
     with login_lock:
         for key in list(login_attempts):
             login_attempts[key]=[x for x in login_attempts[key] if now-x<300]
             if not login_attempts[key]: del login_attempts[key]
+        for key in list(login_throttle_logged):
+            if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
         recent=login_attempts.get(bucket,[])
         ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
-        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000: raise HTTPException(429,'Too many attempts. Try again in five minutes.')
-        login_attempts[bucket]=recent+[now]
+        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000:
+            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit') if ip_attempts>=50 else ('global','global limit')
+            # One audit entry per limit and window, so rejected requests cannot flood the log.
+            throttled=reason if scope not in login_throttle_logged else ''
+            login_throttle_logged.setdefault(scope,now)
+        else: login_attempts[bucket]=recent+[now]
+    if throttled is not None:
+        if throttled: audit_login_event('login throttled',body.username,ip,throttled)
+        raise HTTPException(429,'Too many attempts. Try again in five minutes.')
+    failure=None
     with login_lock, Session() as s:
         identity=s.get(User,body.username)
-        if not identity or not identity.enabled or not verify(body.password,identity.password):
-            raise HTTPException(401,'Invalid credentials')
-        if identity.otp_secret and not consume_otp(identity,body.otp): raise HTTPException(401,'Invalid credentials or MFA code')
-        token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-        s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
-        audit(s,'login',identity.username+' '+ip); s.commit()
-        login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+        if not identity or not identity.enabled: failure='unknown or disabled account'
+        elif not verify(body.password,identity.password): failure='bad password'
+        elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
+        else:
+            token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
+            s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
+            audit(s,'login',identity.username+' '+ip); s.commit()
+            login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+    if failure:
+        audit_login_event('login failed',body.username,ip,failure)
+        raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
 @app.get('/api/session')
@@ -354,7 +373,7 @@ def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=No
         s.add(Setting(key='enroll:'+token_hash(token),value={'host_id':host_id,'expires':time.time()+3600})); s.commit()
         url=selected['url']+'/enroll/'+token
         return {'url':url,'endpoint':endpoint,'expires_in':3600,
-                'command':f'curl -fsSL {shlex.quote(url)} -o /tmp/mrpatchy-enroll.sh && sudo bash /tmp/mrpatchy-enroll.sh'}
+                'command':f'f=$(mktemp) && curl -fsSL {shlex.quote(url)} -o "$f" && sudo bash "$f"; rm -f "$f"'}
 @app.get('/enroll/{token}')
 def enroll(token:str):
     with Session() as s:
