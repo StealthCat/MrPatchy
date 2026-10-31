@@ -5065,6 +5065,24 @@ Source, README, changelog and UI/API metadata synchronize at v1.35.11 with major
 fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #121,
 #117, #131 and #124).
 
+## v1.35.20 — Canonical execution-scan UID protocol (#117)
+
+PR #174 fixes the native collector/controller UID type mismatch. Current main
+reproduced zero triggers for the collector's decimal-string UID and one trigger when
+only the UID became an integer; the rejected event also produced no coverage record.
+The collector now validates and emits a bounded integer UID. Intake normalizes legacy
+canonical decimal strings, while malformed verified records fail closed and increment
+the existing coverage-loss counter.
+
+Regression coverage drives the production parser through durable spooling, ingestion,
+trigger creation and scheduler queueing, plus legacy normalization and invalid identity
+accounting. Earlier exact-head checks passed after the first reconciliation; this
+v1.35.20 reconciliation also preserves v1.35.16 enrollment hardening, login auditing
+and CI maintenance, v1.35.17 populated SBOM repair, v1.35.18 AI-budget formatting and
+v1.35.19 native Debian comparisons. It must pass all checks again before merge. No
+schema, scope, role, response authority, policy default, Docker
+publication, Git tag or schedule change is included. P1 issues
+#118–#120 remain the next issue-first priority.
 
 ## v1.35.16 — User-directed integration of PRs #116, #137 and #115
 
@@ -5210,7 +5228,7 @@ Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malforme
 replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
 inventory failure, verified target failure, inactive and unreachable servers
 (using the real `ssh.call`), the remote-start marker, structured-failure parsing
-and a later queued job. Version v1.35.22 follows main v1.35.19, the v1.35.20 used
-by PRs #174 and #196 and the v1.35.21 proposed for #198; it must be rechecked
-before merge. No schema, target helper or Git tag change; source versioning
+and a later queued job. Version v1.35.22 follows main v1.35.20 (PR #174 merged
+during this work and is preserved), the v1.35.20 still on PR #196 and the v1.35.21
+proposed for #198; it must be rechecked before merge. No schema, target helper or Git tag change; source versioning
 publishes no Docker image.
