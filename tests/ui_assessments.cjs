@@ -13,7 +13,7 @@ module.exports=async(page,capture)=>{
  const revoke=async route=>{revocations++;const data=route.request().postDataJSON();assert.equal(data.expected_version,1);assert.equal(data.reason,'Review new deterministic detector evidence');revoked=true;await route.fulfill({json:{ok:true,detail:'Candidate revoked across the fleet. 2 linked assessment(s) require review.'}});};
  await page.route('**/api/investigations',rows);await page.route('**/api/investigations/'+id+'/history?*',history);await page.route('**/api/investigations/'+id+'/history',history);await page.route('**/api/investigations/'+id+'/history/'+record+'*',detail);await page.route('**/api/investigations/'+id+'/retriage',submit);await page.route('**/api/ai/known-good/*/revoke',revoke);
  try{
-  await page.goto(new URL('/#investigations',page.url()).href);await page.getByRole('link',{name:'Assessment history',exact:true}).click();await page.getByRole('heading',{name:'Assessment history',exact:true}).waitFor();
+  await page.goto(new URL('/#investigations',page.url()).href);const historyLink=page.locator(`a[href="#investigations/item/${id}/history"]`);await historyLink.waitFor();await historyLink.click();await page.getByRole('heading',{name:'Assessment history',exact:true}).waitFor();
   await page.getByRole('button',{name:'Next assessments',exact:true}).click();await page.getByRole('button',{name:'Next assessments',exact:true}).waitFor({state:'visible'});await page.waitForFunction(()=>document.querySelector('#assessment-next')?.disabled);
   await page.getByRole('link',{name:'Review assessment',exact:true}).click();await page.getByRole('heading',{name:'Recorded AI assessment',exact:true}).waitFor();
   await page.getByRole('heading',{name:'Fleet match unavailable',exact:true}).waitFor();
