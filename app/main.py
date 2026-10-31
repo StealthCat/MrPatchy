@@ -45,7 +45,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.5'
+APP_VERSION='1.35.13'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -135,29 +135,48 @@ class Login(BaseModel):
     username:str=Field(default='admin',pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     password:str=Field(max_length=1024)
     otp:str=Field(default='',max_length=6)
-login_attempts={}; login_lock=threading.Lock()
+login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+def audit_login_event(action,username,ip,reason):
+    # Usernames are pattern-restricted by Login; never record the submitted password or OTP.
+    with Session() as s:
+        audit(s,action,username+' '+ip+' '+reason); s.commit()
 @app.post('/api/login')
 def login(body:Login,request:Request,response:Response):
     ip=request.client.host; now=time.time()
     # Reserve an attempt before expensive password hashing; remove it only on success.
     bucket=ip+':'+body.username
+    throttled=None
     with login_lock:
         for key in list(login_attempts):
             login_attempts[key]=[x for x in login_attempts[key] if now-x<300]
             if not login_attempts[key]: del login_attempts[key]
+        for key in list(login_throttle_logged):
+            if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
         recent=login_attempts.get(bucket,[])
         ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
-        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000: raise HTTPException(429,'Too many attempts. Try again in five minutes.')
-        login_attempts[bucket]=recent+[now]
+        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000:
+            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit') if ip_attempts>=50 else ('global','global limit')
+            # One audit entry per limit and window, so rejected requests cannot flood the log.
+            throttled=reason if scope not in login_throttle_logged else ''
+            login_throttle_logged.setdefault(scope,now)
+        else: login_attempts[bucket]=recent+[now]
+    if throttled is not None:
+        if throttled: audit_login_event('login throttled',body.username,ip,throttled)
+        raise HTTPException(429,'Too many attempts. Try again in five minutes.')
+    failure=None
     with login_lock, Session() as s:
         identity=s.get(User,body.username)
-        if not identity or not identity.enabled or not verify(body.password,identity.password):
-            raise HTTPException(401,'Invalid credentials')
-        if identity.otp_secret and not consume_otp(identity,body.otp): raise HTTPException(401,'Invalid credentials or MFA code')
-        token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-        s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
-        audit(s,'login',identity.username+' '+ip); s.commit()
-        login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+        if not identity or not identity.enabled: failure='unknown or disabled account'
+        elif not verify(body.password,identity.password): failure='bad password'
+        elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
+        else:
+            token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
+            s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
+            audit(s,'login',identity.username+' '+ip); s.commit()
+            login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+    if failure:
+        audit_login_event('login failed',body.username,ip,failure)
+        raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
 @app.get('/api/session')
@@ -1183,22 +1202,28 @@ def observability(host_id:str,body:ObservabilityInput,user=Depends(auth)):
         audit(s,'configure eBPF',host_id+' '+str(body.ebpf));s.commit()
     return result
 
-class ReconcileInput(BaseModel): verified_target_state:bool=False
+class ReconcileInput(BaseModel):
+    verified_target_state:bool=False
+    verified_ai_receipts:bool=False
 @app.post('/api/operations/jobs/{job_id}/reconcile')
 def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
-    if not body.verified_target_state:raise HTTPException(400,'Review the target state before reconciling an interrupted worker')
     with Session() as s:
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
-        host_id=job.host_id
+        host_id=job.host_id;advisory=job.action in worker.ADVISORY_PLAN_ACTIONS
+    if advisory:
+        if not body.verified_ai_receipts:raise HTTPException(400,'Review the retained AI run, call usage, and spend reservation before reconciling an interrupted advisory plan')
+    elif not body.verified_target_state:raise HTTPException(400,'Review the target state before reconciling an interrupted worker')
     with host_change(host_id,allow_quarantined=True),Session() as s:
         job=s.get(Job,job_id);h=host_or_404(s,host_id)
         if job.state not in operations.QUARANTINE_STATES:raise HTTPException(409,'Only running or recovery-required jobs require reconciliation')
-        if ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
+        if not advisory and ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(worker.releases.ReleasePlan,job.payload.get('plan_id'))
             if plan:plan.state='interrupted'
-        job.state='interrupted';job.output='Operator reviewed target after worker interruption; operation was not automatically replayed'
+        job.state='interrupted'
+        job.output=('Operator reviewed retained AI run, call usage, and spend reservation after worker interruption; the advisory request was not replayed'
+            if advisory else 'Operator reviewed target after worker interruption; operation was not automatically replayed')
         audit(s,'reconcile job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
