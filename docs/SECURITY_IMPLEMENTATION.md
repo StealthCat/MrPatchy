@@ -5368,7 +5368,7 @@ replacement for existing coordinator election, drain, leases and per-host locks.
 No additional response authority, automatic replay or provider call is introduced.
 
 Focused new loop/backoff/identity-loss and existing advisory restart, drain/control
-and worker registry tests: 66 passed. Full final-tree local suite and all twelve
+and worker registry tests: 67 passed. Full final-tree local suite and all twelve
 applicable exact-head GitHub jobs are required before merge. No UI changes were
 made. The runtime pipeline remains a priority, but unrelated roadmap work waits
 behind actionable issues. Wider issues/roadmap are not claimed complete.
@@ -5386,3 +5386,10 @@ Version allocation correction: another active owner had reserved v1.35.30 for
 fresh open-PR check. Preserve #203's independently owned worker mutation changes;
 coordinate #208 then #203 integration before this later version. Earlier .30
 candidate metadata/CI is superseded; final version metadata receives fresh CI.
+
+Final review extended the same per-producer exception/backoff boundary to module
+loading, so an unavailable optional producer dependency cannot skip healthy tasks
+or the rest of the loop. A focused import-failure regression joins the seven real
+loop failures and backoff/identity checks (67 focused tests pass). Superseded local
+suite/CI results do not authorize this final runtime revision; rerun the full suite
+and all applicable exact-head jobs on the final published tree.

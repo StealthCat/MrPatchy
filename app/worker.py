@@ -1,6 +1,7 @@
 import concurrent.futures
 import copy
 import hashlib
+import importlib
 import json
 import logging
 import threading
@@ -764,18 +765,16 @@ def loop(role="embedded"):
 def periodic_ticks(now,state):
     """Isolate independent leader producers; retry failures without a hot loop."""
     from .worker_registry import IdentityLost
-    from .persistence import schedule_tick as persistence_tick
-    from .response_monitor import schedule_tick as response_tick
-    from .service_monitor import schedule_tick as service_tick
-    from .execution_scans import schedule_tick as execution_tick
-    callbacks=(('patch schedules',scheduling.tick),('scanner schedules',incidents.schedule_tick),
-               ('startup schedules',persistence_tick),('incident AI plans',incidents.auto_plan_tick),
-               ('response monitoring',response_tick),('service monitoring',service_tick),
-               ('execution scans',execution_tick))
-    for name,callback in callbacks:
+    callbacks=(('patch schedules','scheduling','tick'),('scanner schedules','incidents','schedule_tick'),
+               ('startup schedules','persistence','schedule_tick'),('incident AI plans','incidents','auto_plan_tick'),
+               ('response monitoring','response_monitor','schedule_tick'),('service monitoring','service_monitor','schedule_tick'),
+               ('execution scans','execution_scans','schedule_tick'))
+    for name,module,attribute in callbacks:
         due,failures=state.get(name,(0,0))
         if now<due:continue
-        try:callback(now)
+        try:
+            callback=getattr(importlib.import_module('.'+module,__package__),attribute)
+            callback(now)
         except IdentityLost:raise  # Control-plane identity loss must still stop admission.
         except Exception:
             failures=min(failures+1,5)

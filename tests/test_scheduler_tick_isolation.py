@@ -96,3 +96,22 @@ def test_identity_loss_is_not_treated_as_a_retriable_producer_failure(monkeypatc
     with pytest.raises(IdentityLost):
         worker.periodic_ticks(100, {})
     assert called == []
+
+
+def test_optional_producer_import_failure_does_not_skip_other_producers(monkeypatch):
+    called = []
+    for name, module, attribute in TICKS:
+        monkeypatch.setattr(module, attribute, lambda now, name=name: called.append(name))
+    original = worker.importlib.import_module
+    attempts = []
+    def unavailable(name, package=None):
+        if name == '.persistence':
+            attempts.append(name)
+            raise ImportError('Fixture producer dependency unavailable')
+        return original(name, package)
+    monkeypatch.setattr(worker.importlib, 'import_module', unavailable)
+    state = {}
+    worker.periodic_ticks(100, state)
+    worker.periodic_ticks(101, state)
+    assert called == [name for name, _, _ in TICKS if name != 'startup schedules']
+    assert attempts == ['.persistence']
