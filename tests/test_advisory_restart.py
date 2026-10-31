@@ -66,3 +66,46 @@ def test_advisory_reconciliation_reviews_central_receipts_without_target_access(
     with Session() as s:
         job=s.get(Job,job_id)
         assert job.state=='interrupted' and 'was not replayed' in job.output
+
+
+def test_recovery_failure_keeps_scheduler_admitting_work_and_waits_five_seconds(admin,monkeypatch,caplog):
+    from concurrent.futures import Future
+    from app import execution_scans,persistence,response_monitor,service_monitor,worker_registry
+
+    with Session() as s:
+        s.add(Host(id='scheduler-host',name='Scheduler fixture',address='192.0.2.2',fingerprint='',state='online'))
+        s.add(Job(id='scheduler-job',host_id='scheduler-host',action='refresh'))
+        s.commit()
+    for module in (worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
+        monkeypatch.setattr(module,'schedule_tick',lambda *a:None)
+    monkeypatch.setattr(worker.incidents,'auto_plan_tick',lambda *a:None)
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:None)
+    scheduled=[];admitted=[];recoveries=[];tick=[0];now=time.time()
+    monkeypatch.setattr(worker.scheduling,'tick',lambda *a:scheduled.append(tick[0]))
+    monkeypatch.setattr(worker,'submit_job',lambda *a:admitted.append(tick[0]) or False)
+    def unavailable():
+        recoveries.append(tick[0])
+        raise OSError('Fixture recovery database unavailable')
+    monkeypatch.setattr(worker,'reconcile_interrupted_advisory_jobs',unavailable)
+
+    class Pool:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def submit(self,*args):
+            future=Future();future.set_result(None);return future
+    monkeypatch.setattr(worker.concurrent.futures,'ThreadPoolExecutor',Pool)
+    offsets={1:0,2:1,3:5,4:6,5:7}
+    monkeypatch.setattr(worker.time,'time',lambda:now+offsets.get(tick[0],0))
+    with worker_registry.Registration() as node:
+        def wait(_):
+            tick[0]+=1
+            if tick[0]==4:
+                worker_registry.request_control(node.id,node.boot,0,'drain','End fixture scheduler','admin')
+            return tick[0]>=4
+        monkeypatch.setattr(worker.stop,'wait',wait)
+        worker._loop(node)
+
+    assert recoveries==[1,3]
+    assert scheduled==[1] and admitted==[1,2,3]
+    assert caplog.text.count('Advisory plan recovery failed')==2

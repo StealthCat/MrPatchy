@@ -768,7 +768,9 @@ def _loop(reporter):
                 if is_leader:
                     ai_runs.heartbeat()
                     if now-last_advisory_reconcile>=5:
-                        reconcile_interrupted_advisory_jobs();last_advisory_reconcile=now
+                        try:reconcile_interrupted_advisory_jobs()
+                        except Exception:log.exception('Advisory plan recovery failed')
+                        last_advisory_reconcile=now
                 for future in list(ai_tasks):
                     if future.done():
                         try:future.result()

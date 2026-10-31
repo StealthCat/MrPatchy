@@ -4898,9 +4898,9 @@ priority actionable issue fixes; multi-stage release persistence, pricing lifecy
 invoice reconciliation and full controller failover/reset acceptance remain planned.
 
 
-## v1.35.4 — Interrupted advisory-plan recovery
+## v1.35.6 — Interrupted advisory-plan recovery
 
-Delivery record: version **v1.35.4**, implementation commit
+Delivery record: version **v1.35.6**, original implementation commit
 [`7abe6f1e`](https://github.com/StealthCat/MrPatchy/commit/7abe6f1e65e09bb05d0f77c8cd9eac99990041c1)
 and [PR #113](https://github.com/StealthCat/MrPatchy/pull/113), which addresses
 [issue #104](https://github.com/StealthCat/MrPatchy/issues/104). The issue may close
@@ -4942,8 +4942,18 @@ recovery, zero replay, bounded diagnostics, receipt/ledger preservation, audit o
 and the administrator reconciliation boundary alongside existing orphan and release-
 resume tests. Exact-final-head SQLite, MySQL, browser, SSH/RPM and remaining CI checks
 remain the merge gate. Source, README, changelog and UI/API metadata synchronize at
-v1.35.4 with major fixed at 1. No schema, target helper, Docker publication, Git tag or
+v1.35.6 with major fixed at 1. No schema, target helper, Docker publication, Git tag or
 schedule change is included.
+
+User-directed PR #113 integration (Codex session `c30b40e47808`) preserves merged
+PR #112's v1.35.4 coordination rules and changelog, allocating v1.35.6 because PR #115
+already proposed v1.35.5. Advisory-recovery exceptions are logged and paced at the
+normal five-second interval without aborting unrelated scheduler admissions. Tests
+adapted from the offered duplicate PR #114 exercise actual worker execution interrupted
+before and after provider transmission, retained sent spend, no automatic replay,
+separate distributed-lock ownership and unrelated-job/run scoping. All applicable
+checks must pass on the final integration commit before merge; PR #115 must reconcile
+its version and validation against the resulting main.
 
 After this focused issue fix, #103 remains a policy decision, #106–#108 remain broader
 spool reliability/observability work, #98 remains CI maintenance, #96 remains the OS-
