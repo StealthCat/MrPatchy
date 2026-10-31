@@ -5071,6 +5071,36 @@ fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #1
 Main advanced to v1.35.11 while initial integration CI was running. Combined PR #195 preserves that eBPF diagnostic lifecycle update and all original PR heads as ancestors, synchronizes source metadata at v1.35.16 (above pending v1.35.15), and carries the enrollment hardening, failed-login audit and CI runtime maintenance together. The connector cannot write the contributor fork, so the maintainer explicitly approved upstream publication. All nine applicable checks must pass on the exact final integration commit before merge. Verify original PRs and issues #136/#98 close after the tested merge. No Git tags or Docker publication.
 
 
+## v1.35.17 — Populated SBOM export repair (#121)
+
+Codex session `gfr-sbom-20261031` claimed issue #121 after reading current main
+`3635d0a` (v1.35.6), all open issues and open PRs. No related PR or overlapping
+claim existed. Pending #115/#116 require version reconciliation; #137 proposes
+v1.35.7. This focused update proposes v1.35.17, subject to refreshing main before
+merge and rerunning affected checks if integration changes the final head.
+
+The current-main SBOM handler reproduced `NameError: name 'h' is not defined`
+with a populated package result using its actual AST-extracted function and stub
+session. Local full-app tests could not start because Windows application control
+blocked a downloaded SQLAlchemy extension. Full application validation is delegated
+to exact-final-head CI, not claimed as a local pass.
+
+The endpoint now retains the resolved host for the existing Debian/RPM package URL
+selection. Regression tests exercise populated Debian and RPM JSON exports, escaped
+versions and architecture, host isolation, empty/missing hosts, unauthenticated
+access and existing administrator/operator/viewer access for active, disabled and
+deleted hosts. Existing permission and lifecycle decisions remain in force.
+
+Source, README and changelog synchronize at v1.35.17, major fixed at 1. The linked
+PR must record exact-head checks and merge evidence; #121 closes only after that
+tested merge is verified. No schema change, target update or Docker publication is
+included.
+
+Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (SQLite 1450 passed/129 skipped; MySQL 1445 passed/134 skipped). Main then advanced to 491df9e (v1.35.11). This merge preserves PR #183 diagnostics and all prior history, allocates v1.35.17 above pending versions through v1.35.15, and requires fresh exact-head CI before merge.
+
+Dependency checkpoint: PR #138 now includes exact PR #195 head 0824d084 as an ancestor and depends on its tested merge first. Enrollment hardening, failed-login auditing and CI action upgrades remain owned by #195; all are preserved here. Fresh exact-head CI validates their combination with the SBOM repair. If #195 changes, refresh/reassess before merge.
+
+
 ## v1.35.20 — Zero-server recovery backup
 
 Delivery record: version **v1.35.20** (initially proposed as v1.35.9) on branch `claude/mr-patchy-issue-fix-e7s51r`,
@@ -5121,8 +5151,8 @@ target helper, Docker publication, Git tag or response-authorization change is
 included.
 
 Integration: while PR #196 waited, the combined #116/#137/#115 integration (#195) and
-#183 merged, moving main to v1.35.16; #174 had also used v1.35.9. This session
-respected that PR's integration hold, then merged the resulting main and re-allocated
-**v1.35.20**, newer than main and the pending #138 (v1.35.17), #139 (v1.35.18) and
+#183 merged, moving main to v1.35.16; #138 then merged as v1.35.17, and #174 had also
+used v1.35.9. This session respected the #195 integration hold, merged the resulting
+main and re-allocated **v1.35.20**, newer than main and the pending #139 (v1.35.18) and
 #168 (v1.35.19). Only shared version metadata conflicted; main's entries were kept
 intact and this update's entries reapplied.
