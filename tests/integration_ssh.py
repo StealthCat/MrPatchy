@@ -36,7 +36,7 @@ def main():
         assert host.fingerprint in enrolled and enrolled.count('SHA256:')==1
         assert 'then click Finish installation' in enrolled
         ssh.deploy(host)
-        verification=ssh.call(host,{'action':'verify'})
+        verification=ssh.call(host,{'action':'agent-status'})
         assert verification['files']['/usr/local/lib/mrpatchy/release.py']=={'uid':0,'gid':0,'mode':0o644,'sha256':ssh.hashlib.sha256((ssh.TARGET/'release.py').read_bytes()).hexdigest()}
         assert verification['active'] and verification['files']['/usr/local/lib/mrpatchy/agent.py']['uid']==0
         # Independent health action must work even when the collector is modified.
