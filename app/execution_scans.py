@@ -80,27 +80,35 @@ def dropped(s,host_id,count,now):
     s.merge(Setting(key='execution-scan-coverage:'+host_id,value={'dropped_observations':previous.get('dropped_observations',0)+count,'last_dropped':now}))
 
 
+def normalized_uid(value):
+    """Accept the integer wire protocol and legacy decimal strings from stored events."""
+    if type(value) is int:uid=value
+    elif isinstance(value,str) and re.fullmatch(r'(?:0|[1-9][0-9]{0,9})',value):uid=int(value)
+    else:return None
+    return uid if 0<=uid<=2**32-1 else None
+
+
 def observe(s,host,observation_id,processes,observed,cfg=None):
     """Called only for newly persisted spool events, in their ingestion transaction."""
     cfg=policy(s,host.id) if cfg is None else cfg;now=time.time()
     if not cfg['enabled'] or not host_lifecycle.active(host) or not host.fingerprint or not host.baseline:return
     if type(observed) not in (int,float) or not math.isfinite(observed) or not cfg['activated']<=observed<=now+5 or now-observed>120:return
     if not isinstance(processes,list):return
-    candidates={}
+    candidates={};omitted=max(0,len(processes)-128)
     for item in processes[:128]:
         if not isinstance(item,dict) or item.get('capture')!='ebpf' or item.get('identity_verified') is not True:continue
-        path=item.get('executable');digest=item.get('sha256');uid=item.get('uid')
-        if not canonical(path) or not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest) or type(uid) is not int or uid<0:continue
+        path=item.get('executable');digest=item.get('sha256');uid=normalized_uid(item.get('uid'))
+        if not canonical(path) or not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest) or uid is None:
+            omitted+=1;continue
         if not any(path.startswith(root+'/') for root in cfg['paths']):continue
         identifier=incidents.digest({'host_id':host.id,'revision':cfg['revision'],'path':path,'sha256':digest})
         candidates[identifier]={'observation_id':observation_id,'executable':path,'sha256':digest,'uid':uid,'capture':'ebpf','identity_verified':True}
-    unexamined=max(0,len(processes)-128)
     if not candidates:
-        dropped(s,host.id,unexamined,now);return
+        dropped(s,host.id,omitted,now);return
     existing=set(s.scalars(select(Trigger.id).where(Trigger.id.in_(candidates))))
     pending=s.scalar(select(func.count()).select_from(Trigger).where(Trigger.host_id==host.id,Trigger.state.in_(('pending','queued'))))
     intake=s.scalar(select(func.count()).select_from(Trigger).where(Trigger.host_id==host.id,Trigger.created>now-3600))
-    capacity=max(0,min(MAX_PENDING-pending,MAX_INTAKE_HOURLY-intake));omitted=unexamined
+    capacity=max(0,min(MAX_PENDING-pending,MAX_INTAKE_HOURLY-intake))
     for identifier,evidence in candidates.items():
         if identifier in existing:continue
         if not capacity:omitted+=1;continue
