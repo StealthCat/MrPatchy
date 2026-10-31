@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.28 — 2026-10-31
+
+- Fix legacy `PUT /api/settings` silently resetting omitted fields (#145). It now merges only the fields the client sent, under the `settings-config` lock, so an omitted `history_days`, AI admission mode or AI limits keep their stored values and a legacy install still requires its reviewed AI-control migration. The audit entry lists the changed fields and any admission or daily-cap change.
+- Align the `ConfigInput` `ai_control_mode` default with `AISettingsInput` (`legacy`).
+- Compatibility: clients that relied on omitted fields resetting to defaults now keep stored values. Major version stays 1.
+
 ## 1.35.24 — 2026-10-31
 
 - Stop pushes to `main` cancelling each other's CI runs. The shared concurrency group had cancelled the main runs for v1.35.16–v1.35.20 before they finished. Only superseded pull request runs are cancelled now, and pull requests are grouped by number so a fork branch named `main` cannot collide with `main`.
