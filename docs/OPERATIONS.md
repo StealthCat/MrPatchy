@@ -100,7 +100,7 @@ Use Add server → Endpoint → Prepare → Connect and verify. The third delive
 
 Repository credentials, CA/proxy/default-release and mirror mappings are configured under Repositories → Repository access. Source backup restoration is reviewed in the UI. Package recovery is separate from ordinary upgrades and can run maintainer scripts; inspect Activity after errors/timeouts before retrying.
 
-Target events.db is a bounded SQLite spool. Do not delete it as routine cleanup: unacknowledged observations may be lost. Central history retention is configurable. Overflow counts remain visible as cumulative evidence of lost batches.
+Target events.db is a bounded SQLite spool. Do not delete it as routine cleanup: unacknowledged observations may be lost. Central history retention is configurable. `spool.queued_bytes`, configured limits and reasoned cumulative batch/observation loss counters distinguish an individually oversized record from 48 MB capacity eviction. A new counter increase is actionable; an unchanged cumulative value is retained historical evidence rather than an ongoing-loss claim.
 
 See [completion review and upgrade notes](COMPLETION_REVIEW.md) for migration, validation and platform limits.
 

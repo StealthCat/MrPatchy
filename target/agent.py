@@ -18,6 +18,8 @@ import re
 
 ROOT = Path('/opt/drpatch')
 SERVICE_PROPERTIES = ('Id','LoadState','ActiveState','SubState','Result','ExecMainCode','ExecMainStatus','MainPID','NRestarts','InvocationID','FragmentPath','UnitFileState')
+SPOOL_BATCH_BYTES = 256*1024
+SPOOL_CAPACITY_BYTES = 48_000_000
 
 def response_service_units(units):
     if (not isinstance(units,list) or not 1<=len(units)<=16 or
@@ -191,27 +193,63 @@ def spool_db():
         with db: yield db
     finally: db.close()
 
+def spool_counter(db,name,value=1):
+    if value:
+        db.execute('INSERT INTO counters VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value',(name,value))
+
+def spool_drop(db,reason,batches,observations):
+    spool_counter(db,'dropped',batches) # Backward-compatible cumulative batch counter.
+    spool_counter(db,'dropped_'+reason+'_batches',batches)
+    spool_counter(db,'dropped_'+reason+'_observations',observations)
+
+def spool_payloads(processes):
+    """Split one observation snapshot without splitting or silently losing records."""
+    if not isinstance(processes,list):raise ValueError('Invalid spool process batch')
+    prefix='{"processes":[';suffix=']}'
+    batches=[];current=[];size=len(prefix.encode())+len(suffix.encode())
+    oversize=0
+    for process in processes:
+        encoded=json.dumps(process,separators=(',',':'))
+        encoded_size=len(encoded.encode())
+        if len(prefix.encode())+encoded_size+len(suffix.encode())>SPOOL_BATCH_BYTES:
+            oversize+=1
+            continue
+        separator=1 if current else 0
+        if current and size+separator+encoded_size>SPOOL_BATCH_BYTES:
+            batches.append(prefix+','.join(current)+suffix);current=[];size=len(prefix.encode())+len(suffix.encode());separator=0
+        current.append(encoded);size+=separator+encoded_size
+    if current or not processes:batches.append(prefix+','.join(current)+suffix)
+    return batches,oversize
+
 def spool(processes, observed):
-    # Bounded durable batches. Overflow is explicit and persists across restarts.
+    # Bounded durable batches. Individual records stay atomic; overflow is explicit.
     with spool_db() as db:
-        payload=json.dumps({'processes':processes})
-        if len(payload.encode())>2_000_000:
-            db.execute("INSERT INTO counters VALUES ('dropped',1) ON CONFLICT(name) DO UPDATE SET value=value+1")
-            return
-        db.execute('INSERT INTO events VALUES (?,?,?)',(str(uuid.uuid4()),observed,payload))
+        payloads,oversize=spool_payloads(processes)
+        if oversize:spool_drop(db,'oversize',oversize,oversize)
+        db.executemany('INSERT INTO events VALUES (?,?,?)',[(str(uuid.uuid4()),observed,payload) for payload in payloads])
         size=db.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events').fetchone()[0]
-        while size>48_000_000:
-            row=db.execute('SELECT id,length(CAST(payload AS BLOB)) FROM events ORDER BY rowid LIMIT 1').fetchone()
-            db.execute('DELETE FROM events WHERE id=?',(row[0],));size-=row[1]
-            db.execute("INSERT INTO counters VALUES ('dropped',1) ON CONFLICT(name) DO UPDATE SET value=value+1")
+        while size>SPOOL_CAPACITY_BYTES:
+            row=db.execute('SELECT id,payload,length(CAST(payload AS BLOB)) FROM events ORDER BY rowid LIMIT 1').fetchone()
+            db.execute('DELETE FROM events WHERE id=?',(row[0],));size-=row[2]
+            try:lost=len(json.loads(row[1]).get('processes',[]))
+            except (AttributeError,TypeError,ValueError):lost=0
+            spool_drop(db,'capacity',1,lost)
 
 def pending_events():
     with spool_db() as db:
         rows=db.execute('SELECT id,observed,payload FROM events ORDER BY rowid LIMIT 8').fetchall()
-        dropped=db.execute("SELECT value FROM counters WHERE name='dropped'").fetchone()
+        counters=dict(db.execute('SELECT name,value FROM counters').fetchall())
         count=db.execute('SELECT count(*) FROM events').fetchone()[0]
+        queued_bytes=db.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events').fetchone()[0]
+    oversize_batches=counters.get('dropped_oversize_batches',0);capacity_batches=counters.get('dropped_capacity_batches',0)
+    dropped=counters.get('dropped',0)
     return {'events':[{'id':r[0],'observed':r[1],**json.loads(r[2])} for r in rows],
-            'spool':{'pending':count,'dropped':dropped[0] if dropped else 0}}
+            'spool':{'pending':count,'queued_bytes':queued_bytes,'capacity_bytes':SPOOL_CAPACITY_BYTES,
+                     'batch_limit_bytes':SPOOL_BATCH_BYTES,'dropped':dropped,
+                     'dropped_observations':counters.get('dropped_oversize_observations',0)+counters.get('dropped_capacity_observations',0),
+                     'drop_reasons':{'oversize':{'batches':oversize_batches,'observations':counters.get('dropped_oversize_observations',0)},
+                                     'capacity':{'batches':capacity_batches,'observations':counters.get('dropped_capacity_observations',0)},
+                                     'unclassified_batches':max(0,dropped-oversize_batches-capacity_batches)}}}
 
 def acknowledge(ids):
     if not isinstance(ids,list) or len(ids)>8 or any(not isinstance(x,str) or len(x)!=36 for x in ids):

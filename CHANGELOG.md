@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.2 — 2026-10-31
+
+- Split large normal process-observation snapshots into durable 256 KiB batches instead of dropping the entire snapshot at the former 2 MB ceiling.
+- Preserve individually oversized-record and 48 MB capacity loss as explicit, reasoned cumulative batch/observation counters with queued-byte and limit telemetry.
+- Raise an active event-spool integrity finding only when the cumulative counter increases, retaining historical evidence without leaving recovered agents permanently in attention state.
+
 ## 1.35.1 — 2026-10-31
 
 - Accept Linux's valid zero process start tick when binding collector, controller, follow-up and reference identities, fixing fleet-wide PID 1 `Process identity unverified` findings without weakening the remaining identity fields.

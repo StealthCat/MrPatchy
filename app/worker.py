@@ -139,6 +139,32 @@ def behavior_evidence(p):
         evidence['process_identity']={key:identity[key] for key in ('pid','start_ticks','pid_namespace','boot_id','proc_device','proc_inode')}
     return evidence
 
+def spool_loss_issue(current,previous):
+    """Describe only newly observed loss while retaining cumulative target counters."""
+    if not isinstance(current,dict):return None
+    previous=previous if isinstance(previous,dict) else {}
+    def counter(value):return value if type(value) is int and value>=0 else 0
+    def delta(value,old):
+        value=counter(value);old=counter(old)
+        return value-old if value>=old else value
+    lost=delta(current.get('dropped'),previous.get('dropped'))
+    if not lost:return None
+    observations=delta(current.get('dropped_observations'),previous.get('dropped_observations'))
+    reasons=current.get('drop_reasons') if isinstance(current.get('drop_reasons'),dict) else {}
+    old_reasons=previous.get('drop_reasons') if isinstance(previous.get('drop_reasons'),dict) else {}
+    details=[]
+    for name,label in (('oversize','oversize records'),('capacity','spool capacity')):
+        row=reasons.get(name) if isinstance(reasons.get(name),dict) else {}
+        old=old_reasons.get(name) if isinstance(old_reasons.get(name),dict) else {}
+        amount=delta(row.get('batches'),old.get('batches'))
+        if amount:details.append(str(amount)+' '+label)
+    unclassified=delta(reasons.get('unclassified_batches'),old_reasons.get('unclassified_batches'))
+    if unclassified:details.append(str(unclassified)+' legacy/unclassified')
+    message=str(lost)+' new observation '+('batch' if lost==1 else 'batches')+' lost'
+    if observations:message+=' ('+str(observations)+' observation'+('' if observations==1 else 's')+')'
+    if details:message+=': '+', '.join(details)
+    return message+'; '+str(counter(current.get('dropped')))+' cumulative batches retained in telemetry'
+
 def ingest(s,h,snapshot,include_inventory=True):
     if include_inventory and 'inventory' in snapshot and snapshot['inventory'].get('collected',0)>h.inventory.get('collected',0): save_inventory(s,h,snapshot['inventory'])
     t=snapshot.get('telemetry',{})
@@ -164,8 +190,8 @@ def ingest(s,h,snapshot,include_inventory=True):
     if not h.baseline: issues.append({'path':'baseline','issue':'Managed baseline missing; finish installation'})
     ingest_events(s,h,snapshot)
     for p in t.get('processes',[]): record_behavior(s,h,p,t['collected'])
-    if snapshot.get('spool',{}).get('dropped',0):
-        issues.append({'path':'event spool','issue':str(snapshot['spool']['dropped'])+' observation batches lost to the target size limit'})
+    spool_issue=spool_loss_issue(snapshot.get('spool',{}),h.telemetry.get('spool',{}) if isinstance(h.telemetry,dict) else {})
+    if spool_issue:issues.append({'path':'event spool','issue':spool_issue})
     t=dict(t);t['spool']=snapshot.get('spool',{})
     if snapshot.get('ebpf-diagnostic'):issues.append({'path':'eBPF diagnostics','issue':str(snapshot['ebpf-diagnostic'])})
     if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})

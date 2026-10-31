@@ -4794,3 +4794,53 @@ After this issue fix, priority returns to the faster-AI program's multi-stage re
 plan persistence, remaining billable-path controls, pricing lifecycle and complete
 multi-controller failover/reset acceptance. The database-migration refusal remains
 blocked pending categorized mismatch output or a reviewed schema inventory.
+
+
+## v1.35.2 — Bounded loss-aware observation batching
+
+Issue-first reconciliation read merged v1.35.1 main, repository instructions, this
+checkpoint and merged PR #99. No unfinished PR existed. Open issues included the
+critical event-spool loss report #105, its broader reliability/observability follow-ups
+#106–#108, confirmed deferred-plan defects #100–#102, investigation/recovery reports
+#103–#104, CI maintenance #98 and distribution-upgrade roadmap #96. Issue #105 took
+priority because it reports durable security-observation loss. None of #105–#108 had
+comments or a related open/merged fix.
+
+Current main reproduced the normal-load loss condition with 900 individually small
+process observations: the combined JSON exceeded a single hard 2 MB ceiling, so the
+target persisted zero events and incremented one generic `dropped` counter. The same
+counter was also incremented when the 48 MB spool evicted its oldest batch, making the
+reported `950 observation batches lost to the target size limit` unable to distinguish
+oversize input from delivery backlog/capacity. The controller raised the unchanged
+cumulative value on every poll, leaving a recovered server in attention indefinitely.
+
+The target now serializes each process observation independently and partitions normal
+snapshots into durable batches no larger than 256 KiB without splitting a record. A
+single record exceeding that bound is explicitly rejected while its peers continue.
+The existing 48 MB bounded spool remains fail-visible. Oversize-record and capacity-
+eviction batch/observation counters are persisted separately, older generic counts are
+retained as legacy/unclassified, and telemetry exposes queued bytes plus both limits.
+The controller compares cumulative evidence with the previously stored target value:
+only a positive delta creates a current integrity finding, with bounded reason detail;
+unchanged historical loss stays available in telemetry and no longer claims ongoing
+loss. Counter rollback after agent data replacement is handled conservatively as a new
+baseline and later increases remain visible.
+
+Regression coverage first executes the v1.35.1 implementation and confirms the 900-
+record snapshot yields `pending=0, dropped=1`. The corrected implementation yields nine
+bounded batches, no lost observation and unchanged ordering. Focused tests also cover
+restart/ACK behavior, individual oversize rejection, forced-capacity eviction, distinct
+reason counters, cumulative legacy preservation and active-alert delta semantics.
+Exact-final-head SQLite, MySQL, browser, SSH/RPM and remaining CI checks are still the
+merge gate. Deploy the controller and then use the existing reviewed agent verification
+flow so targets receive the new batching logic. No database schema change, Docker
+publication, Git tag or schedule change is included. Source, README, changelog and
+UI/API metadata synchronize at v1.35.2 with major fixed at 1.
+
+Issue #105 can close only after the exact tested merge and closure verification. Issues
+#106–#108 remain open: configurable flush/capacity policy, negotiated compression,
+resource-aware pressure controls, full dashboard/alert history and outage/disk-failure
+acceptance exceed this focused fix. Confirmed #100–#102 remain the next issue-fix batch,
+followed by safe crash/restart investigation #104. Issue #103 remains a policy question;
+#98 and #96 remain lower-impact maintenance/roadmap work. Faster-AI roadmap development
+resumes only after these higher-priority actionable fixes.

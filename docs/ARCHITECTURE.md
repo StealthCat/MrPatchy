@@ -60,7 +60,7 @@ Local audit records support review but are not immutable against a database admi
 
 ## v0.2 data delivery and access
 
-Observation batches use UUIDs on the target and host-scoped SHA-256 IDs centrally. A transaction persists the batch and behavior records before ACK; interrupted delivery retries safely. A 48 MB target payload budget and 2 MB batch ceiling bound storage, with explicit persistent overflow counters. Central received-time retention controls history cleanup. Inventory revisions are written on changes, including A → B → A transitions.
+Observation batches use UUIDs on the target and host-scoped SHA-256 IDs centrally. A transaction persists the batch and behavior records before ACK; interrupted delivery retries safely. Normal multi-process observations are partitioned at a 256 KiB serialized ceiling without splitting an individual record. A 48 MB target payload budget bounds storage. Individually oversized records and oldest-batch capacity eviction have distinct persistent batch/observation counters; older undifferentiated counts remain labeled legacy/unclassified. Central received-time retention controls history cleanup. Inventory revisions are written on changes, including A → B → A transitions.
 
 Central repository access is declarative and encrypted in Setting records. Native APT receives a private auth.conf, optional CA/proxy/default-release, and rewritten mirror URIs. Unsupported source configurations fail closed; all captured source files remain editable. Local/media mirrors are administrator-provisioned. Custom target hooks and arbitrary filesystem access are not delegated to APT.
 

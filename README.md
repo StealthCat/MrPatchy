@@ -1,6 +1,6 @@
 # Mr Patchy
 
-Current source version: **1.35.1** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
+Current source version: **1.35.2** · [Changelog](CHANGELOG.md). Source versions do not imply a published Docker image.
 
 The major version stays at **1** until explicitly changed by the user. Existing minor/patch increments and all other [versioning instructions](AGENTS.md) continue to apply.
 
@@ -226,7 +226,7 @@ Each action now shows **estimated API cost in USD**, including follow-up calls. 
 
 ![AI diagnostics and worker status](docs/screenshots/ai-run-logs.jpg)
 
-The target's durable spool acknowledges batches only after central commit; overflow is visible. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
+The target's durable spool partitions normal observations into batches of at most 256 KiB and acknowledges them only after central commit. It retains up to 48 MB, exposes queued bytes and reasoned cumulative oversize/capacity loss counters, and reports only newly observed loss as an active integrity finding. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
 
 ## Reviewed file replacement
 
