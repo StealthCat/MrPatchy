@@ -5065,6 +5065,24 @@ Source, README, changelog and UI/API metadata synchronize at v1.35.11 with major
 fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #121,
 #117, #131 and #124).
 
+## v1.35.20 — Canonical execution-scan UID protocol (#117)
+
+PR #174 fixes the native collector/controller UID type mismatch. Current main
+reproduced zero triggers for the collector's decimal-string UID and one trigger when
+only the UID became an integer; the rejected event also produced no coverage record.
+The collector now validates and emits a bounded integer UID. Intake normalizes legacy
+canonical decimal strings, while malformed verified records fail closed and increment
+the existing coverage-loss counter.
+
+Regression coverage drives the production parser through durable spooling, ingestion,
+trigger creation and scheduler queueing, plus legacy normalization and invalid identity
+accounting. Earlier exact-head checks passed after the first reconciliation; this
+v1.35.20 reconciliation also preserves v1.35.16 enrollment hardening, login auditing
+and CI maintenance, v1.35.17 populated SBOM repair, v1.35.18 AI-budget formatting and
+v1.35.19 native Debian comparisons. It must pass all checks again before merge. No
+schema, scope, role, response authority, policy default, Docker
+publication, Git tag or schedule change is included. P1 issues
+#118–#120 remain the next issue-first priority.
 
 ## v1.35.16 — User-directed integration of PRs #116, #137 and #115
 
@@ -5100,10 +5118,92 @@ Integration checkpoint: original PR #138 head 02beaa1 passed all nine CI jobs (S
 
 Dependency checkpoint: PR #138 now includes exact PR #195 head 0824d084 as an ancestor and depends on its tested merge first. Enrollment hardening, failed-login auditing and CI action upgrades remain owned by #195; all are preserved here. Fresh exact-head CI validates their combination with the SBOM repair. If #195 changes, refresh/reassess before merge.
 
+## v1.35.18 — Accurate AI budget amounts
 
-## v1.35.20 — Zero-server recovery backup
+Codex session `grab-issue-2-20261031` claims issue #124 in isolated branch
+`fix/budget-money-124`. Claim timestamp correction: the claim was posted before
+19:21:27 UTC on 2026-10-31; its manually entered 19:24 timestamp was inaccurate.
+Issue-first reconciliation listed all open reports and PRs #115, #116 and #137;
+#121 was already actively claimed, so this work takes independent unclaimed #124.
+Current main was v1.35.6 (`3635d0a`). Proposed v1.35.15 reserves room for pending
+v1.35.7/v1.35.8 work and must be reassessed with main immediately before merge.
 
-Delivery record: version **v1.35.20** (initially proposed as v1.35.9) on branch `claude/mr-patchy-issue-fix-e7s51r`,
+Executing the actual formatter extracted from current-main source reproduced
+`10 -> 1`, `100 -> 1` and `1000000 -> 1`, while `10.000000` remained `10`.
+The correction strips zeros only after a decimal point. Both settings request
+models validate their float default cap. Regressions cover integral/fractional
+and Numeric-style Decimal exponents, signed zero, omitted-cap persistence through
+both settings APIs, and the real browser input/remaining-budget amount.
+
+The local Windows host cannot import the Linux-only application's fcntl locking.
+Local validation therefore covers the extracted formatter regressions, compilation,
+JavaScript syntax, whitespace and version consistency. Exact-final-head Linux
+SQLite/MySQL, browser, recovery, SSH/RPM, Docker and GCP checks remain mandatory
+before merge. No schema, provider-call, admission-policy or operational authorization
+change is included. Source, README and changelog synchronize at v1.35.15; no Git tag
+or Docker publication is implied. The linked PR and final validation/merge receipt
+are recorded in the issue checkpoints; close #124 only after tested merge verification.
+
+Integration update: current main advanced to v1.35.11 in PR #183 while earlier
+PRs remained pending. This merge preserves that diagnostics fix and allocates
+v1.35.15 above main and pending v1.35.12/v1.35.13/v1.35.14 proposals.
+All nine checks passed on original head 67b5f2e; full exact-head CI must pass
+again on this integration commit before merge.
+
+Dependency integration update: v1.35.18 stacks on exact PR #138 head
+2bf15092 (v1.35.17), which includes PR #195 head 0824d084 (v1.35.16).
+Preserve their SBOM, login-audit, enrollment and CI updates as actual ancestors.
+Merge #195 then #138 before this PR. Full exact-final-head checks are required
+again; the original budget implementation passed all nine checks. The earlier
+v1.35.15 proposal is superseded by this explicit dependency order.
+
+
+## v1.35.19 — Debian comparison process reuse (#128)
+
+Codex session `grab-issue-3-20261031` claimed unowned issue #128 after checking
+open issues, claims and related PRs against main 3635d0a (v1.35.6). An instrumented
+execution of the actual current-main inventory helper requested 1,000 dpkg launches
+for 1,000 identical pairs. The fix shares one native Debian comparator between APT
+refresh and inventory reconciliation, skips exact equality and uses an inventory-local
+512-entry LRU cache. Distinct version spellings still go to native dpkg, with a
+ten-second timeout and explicit failure on native errors. No Python reimplementation
+of Debian ordering, dependency or trust-policy change is introduced. RPM is unchanged.
+
+Focused tests cover unchanged/mixed process counts, bounded cache eviction, timeout
+and native errors, epoch/revision/tilde/equivalent spellings and refresh candidate,
+hold, architecture and security-priority behavior. Windows standalone comparator
+tests pass (four passed; native-dpkg case skipped); Linux native/full SQLite/MySQL,
+browser, recovery, Docker/TLS, SSH/RPM and GCP checks remain the exact-head merge
+gate. Version v1.35.12 follows pending allocations through v1.35.11 and must be
+rechecked against main before merge. Source versioning publishes no Docker image;
+no tags, schema, target helper or runtime authorization changes.
+
+Integration checkpoint: preserve main 491df9e v1.35.11 and its eBPF diagnostic
+lifecycle fix. Original head 611c6de passed all nine CI jobs, including MySQL
+(1446 passed, 134 skipped), SQLite (1451 passed, 129 skipped), native benchmarks,
+browser, recovery, SSH/RPM, Docker/TLS/proxy and GCP. Combined-head CI is required
+again before merge; existing agent integration hold remains in force.
+
+Final dependency integration: include PR #195 exact head 0824d084 (v1.35.16)
+without modifying that workstream. Current source is v1.35.18, reserving v1.35.17
+for PR #138. Preserve enrollment temp-file hardening, failed-login auditing and
+CI runtime modernization. Original v1.35.12 validation remains historical; all
+applicable checks must pass again on this combined head. Hold merge until #195
+is tested/merged and its owner releases the integration hold.
+
+Dependency checkpoint: preserve PR #138 exact head 2bf15092 and reserve
+v1.35.19 after #139 planned v1.35.18. Await #139 stable combined head before
+publishing final integration and restarting all exact-head checks.
+
+Final combined dependency: PR #139 exact 914c6b83 includes #138 2bf15092
+and #195 0824d084. Current source v1.35.19 follows those planned merges.
+Retain the budget Decimal/default validation fix and SBOM host binding, then run
+all exact-head checks before merge. No changes to dependency branches.
+
+
+## v1.35.21 — Zero-server recovery backup
+
+Delivery record: version **v1.35.21** (initially proposed as v1.35.9) on branch `claude/mr-patchy-issue-fix-e7s51r`,
 addressing [issue #131](https://github.com/StealthCat/MrPatchy/issues/131) (Claude Code
 session `session_01AfdfYaRTCpQyx5noPLyT4L`). The issue may close only after every
 applicable check passes on the exact final PR head and that commit is merged.
@@ -5156,3 +5256,6 @@ used v1.35.9. This session respected the #195 integration hold, merged the resul
 main and re-allocated **v1.35.20**, newer than main and the pending #139 (v1.35.18) and
 #168 (v1.35.19). Only shared version metadata conflicted; main's entries were kept
 intact and this update's entries reapplied.
+
+
+Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.

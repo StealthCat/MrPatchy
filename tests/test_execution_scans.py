@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session as DatabaseSession
 from app import execution_scans as scans,worker,quarantine,ssh,incidents,operations,host_lifecycle
 from app.db import Session,Host,Job,Setting,Observation,engine
 from app.identity import User
+from target import agent
 
 BASE='/api/hosts/exec-host/security/execution-scans'
 
@@ -67,6 +68,44 @@ def test_opt_in_future_verified_spool_events_only_no_backfill(managed):
     emit();emit([process(connections=[{'protocol':'tcp','remote':'192.0.2.99','remote_port':443,'local_port':12345,'local':'192.0.2.19','state':'01'}])])
     assert len(rows())==1
     emit([process(sha256='b'*64)]);assert len(rows())==2
+
+
+def test_native_collector_uid_survives_spool_ingestion_and_queue(managed,tmp_path,monkeypatch):
+    assert configure(managed).status_code==200
+    monkeypatch.setattr(agent,'ROOT',tmp_path)
+    monkeypatch.setattr(agent.os,'readlink',lambda path:'/srv/app/fixture')
+    monkeypatch.setattr(agent,'hash_artifact',lambda *args,**kwargs:'a'*64)
+    monkeypatch.setattr(agent,'observe_process_identity',lambda *args,**kwargs:(_ for _ in ()).throw(OSError('exited')))
+    produced=agent.ebpf_process('321\t0\t/srv/app/fixture\n')
+    assert produced['uid']==0 and type(produced['uid']) is int and produced['identity_verified']
+    agent.spool([produced],time.time())
+    snapshot=agent.pending_events()
+    assert snapshot['events'][0]['processes'][0]['uid']==0
+    with Session() as s:
+        worker.ingest_events(s,s.get(Host,'exec-host'),snapshot);s.commit()
+        trigger=s.query(scans.Trigger).one();trigger.created=time.time()-31;s.commit()
+    scans.schedule_tick()
+    with Session() as s:
+        job=s.query(Job).filter_by(action='execution-scan').one()
+        assert job.payload['trigger_ids']==[s.query(scans.Trigger).one().id]
+
+
+@pytest.mark.parametrize('record',[
+    '0\t0\t/srv/app/fixture\n','01\t0\t/srv/app/fixture\n',
+    '321\t-1\t/srv/app/fixture\n','321\t00\t/srv/app/fixture\n',
+    '321\t4294967296\t/srv/app/fixture\n',
+])
+def test_native_collector_rejects_noncanonical_process_identity(record):
+    with pytest.raises(ValueError,match='bpftrace process identity'):agent.ebpf_process(record)
+
+
+def test_legacy_decimal_uid_is_normalized_and_invalid_uid_is_accounted(managed):
+    assert configure(managed).status_code==200
+    emit([process(uid='0')])
+    assert rows()[0].evidence['uid']==0 and type(rows()[0].evidence['uid']) is int
+    emit([process(uid='not-a-uid',sha256='b'*64)])
+    status=managed.get(BASE).json()
+    assert status['limited'] and status['coverage']['dropped_observations']==1
 
 
 @pytest.mark.parametrize('paths',[['relative'],['/'],['/srv/../etc'],['/srv/app/'],['/srv//app'],['/proc'],['/var/lib/mrpatchy-quarantine'],['/srv\napp'],['/srv','/srv/app'],['/srv','/srv']])

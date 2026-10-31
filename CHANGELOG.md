@@ -1,10 +1,27 @@
 # Changelog
 
-## 1.35.20 — 2026-10-31
+## 1.35.21 — 2026-10-31
 
 - Fix full recovery backups of a valid zero-server deployment, which failed with `FileNotFoundError` because `ssh/` is created only when the first server is added. The bundle now carries an explicit empty owner-only SSH directory that activation restores.
 - Distinguish that optional absence from damaged key state: backup and activation require a non-empty, non-linked private key for every server that is not deleted, checked against the database snapshot. They fail before restic runs or any destination changes. The manifest lists the required server identifiers. Bundles from earlier versions remain accepted.
 - Compatibility: a deployment that has a non-deleted server without its private key, which previously backed up silently, now fails until the key is restored or the server is deleted. Major version stays 1.
+
+## 1.35.20 — 2026-10-31
+
+- Emit native eBPF execution UIDs as canonical non-negative integers and validate the collector record before durable spooling.
+- Normalize legacy decimal-string UIDs at controller intake so stored verified observations still create scoped execution-scan triggers.
+- Count malformed verified eBPF observations as explicit coverage loss, with a producer-shaped spool-to-queue regression for issue #117.
+
+## 1.35.19 — 2026-10-31
+
+- Skip identical Debian version comparisons during refresh and inventory reconciliation; reuse up to 512 native comparison results per inventory.
+- Bound each remaining dpkg comparison to ten seconds and fail closed on native errors, preserving Debian epochs, revisions and tilde ordering.
+- Cover native version edge cases, inventory process counts, candidate/hold/architecture semantics and comparison cache limits.
+
+## 1.35.18 — 2026-10-31
+
+- Preserve significant integral zeros in every AI budget amount, so a configured $10 cap and remaining budget display as $10.
+- Validate and normalize omitted daily-cap defaults consistently in both settings APIs, with Decimal, API and visible settings regressions.
 
 ## 1.35.17 — 2026-10-31
 
