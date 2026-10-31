@@ -4960,3 +4960,37 @@ spool reliability/observability work, #98 remains CI maintenance, #96 remains th
 upgrade roadmap, and #111 remains owned by its claimant. Faster-AI roadmap priority
 then returns to multi-stage release-plan persistence, remaining billable-path controls,
 pricing lifecycle and full multi-controller failover/reset acceptance.
+
+## v1.35.11 eBPF diagnostic lifecycle (#123)
+
+A single bpftrace stderr warning previously persisted in `ebpf-diagnostic.json`
+forever, and controller ingestion treated any nonempty diagnostic as a current
+integrity issue regardless of its age or the collector state. A recovered or
+intentionally disabled collector therefore kept the host in **attention**.
+
+The collector now tags every recorded warning with the identifier of the bpftrace
+run that emitted it, writes that run's `starting` status before its stderr reader
+can record anything, and stores the time of the last state transition (`since`) in
+`ebpf-status.json`. Under one lock shared with the stderr reader, a warning is
+retired (state `historical`, with `retired_at`, `retired_reason` and the recovering
+run) when the run delivers its first event, when eBPF is disabled and when the
+collector restarts. Retirement preserves the original warning text and time; a later
+warning from the current run is recorded as current again, so a persisting or new
+fault is not suppressed.
+
+Ingestion independently treats a diagnostic as history when it is retired, when the
+collector is disabled, when it belongs to an earlier run than the current status, or
+when it predates the current run's transition to active. A current-run warning,
+a malformed or non-numeric diagnostic, and status from an older untagged collector
+continue to raise the finding (fail closed) until the collector is upgraded through
+normal agent maintenance. The delivered diagnostic is retained in host telemetry as
+`ebpf_diagnostic`. eBPF status findings (`error`/`warning`/`unavailable`) are
+unchanged.
+
+Regressions drive the real collector loop with a fake bpftrace through failure,
+recovery, a post-recovery warning, process exit, disable and restart, then deliver
+the files through the bridge snapshot to controller ingestion. No schema, role,
+audit, response-authorization, Docker publication or Git tag change is included.
+Source, README, changelog and UI/API metadata synchronize at v1.35.11 with major
+fixed at 1 (v1.35.7–v1.35.10 are reserved by pending PRs/claims #137, #115, #121,
+#117, #131 and #124).
