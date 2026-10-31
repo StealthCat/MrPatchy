@@ -185,8 +185,9 @@ def event(stage, message, *, state=None, call=False):
 
 def defer(run_id,next_at):
     """Reclassify a controlled shared-eligibility refusal as retained queued work."""
-    if not run_id or not isinstance(next_at,(int,float)) or not math.isfinite(next_at) or next_at<=0:return
-    message='Work remains queued until shared AI eligibility; no provider request will bypass the saved floor.'
+    if not run_id or not isinstance(next_at,(int,float)) or not math.isfinite(next_at) or next_at<0:return
+    message=('Work remains queued until shared AI eligibility; no provider request will bypass the saved floor.' if next_at else
+        'Work remains queued until server and global AI resume; no provider request will bypass the administrator pause.')
     with Session() as s:
         row=s.get(AIRun,run_id)
         if not row or row.state!='error':return
@@ -292,7 +293,7 @@ def status(s):
     plan_rows=[row for row in plan_rows if row.payload.get('_ai_deferred') is True]
     plan_deferred=len(plan_rows)
     plan_next=min((row.next_at for row in plan_rows if row.next_at>now),default=None)
-    plan_ready=any(row.next_at<=now and row.host_id not in paused_ids for row in plan_rows)
+    plan_ready=sum(row.next_at<=now and row.host_id not in paused_ids for row in plan_rows)
     if scoring_next and scoring_next>now:retry=min([value for value in (retry,scoring_next) if value is not None])
     if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
     if provider_backoff['blocked']:
@@ -307,8 +308,8 @@ def status(s):
     elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min(recent+([oldest_run] if oldest_run else []))+3600
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
     elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
-    elif not rows and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
     elif not rows and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
+    elif not rows and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
     elif not rows and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
     elif not rows and scoring_deferred and scoring_next>now:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
     elif not rows and scoring_deferred:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
@@ -323,4 +324,4 @@ def status(s):
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
-            'plan_deferred':plan_deferred,'plan_next_at':plan_next}
+            'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next}

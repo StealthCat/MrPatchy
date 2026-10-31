@@ -73,7 +73,7 @@ def generate(s,row,expected_updated):
             return plan
     except ai.AIError as error:
         eligible=ai.defer_until(error)
-        if eligible:ai_runs.defer(run_id,eligible)
+        if eligible is not None:ai_runs.defer(run_id,eligible)
         raise
 
 
