@@ -26,27 +26,22 @@ class TrustedHook:
         return self.path.is_symlink()
 
 
-@pytest.mark.parametrize(
-    ('operation', 'expected'),
-    [
-        ('snapshot', {'snapshot': '42'}),
-        ('rollback', {'reboot_required': True}),
-    ],
-)
-def test_recovery_hook_parses_stdout_when_adapter_warns_on_stderr(
-    tmp_path, monkeypatch, operation, expected
-):
+def warning_hook(tmp_path):
     hook = tmp_path / 'rollback'
     hook.write_text(
         '#!/bin/sh\n'
         "printf 'snapper warning\\n' >&2\n"
-        "if [ \"$1\" = snapshot ]; then\n"
-        "  printf '%s\\n' '{\"snapshot\":\"42\"}'\n"
-        'else\n'
-        "  printf '%s\\n' '{\"reboot_required\":true}'\n"
-        'fi\n'
+        "case \"$1\" in\n"
+        "  probe) printf '%s\\n' '{\"ready\":true}' ;;\n"
+        "  snapshot) printf '%s\\n' '{\"snapshot\":\"42\"}' ;;\n"
+        "  rollback) printf '%s\\n' '{\"reboot_required\":false}' ;;\n"
+        'esac\n'
     )
     hook.chmod(0o755)
+    return hook
+
+
+def use_hook(monkeypatch, hook):
     real_path = Path
     monkeypatch.setattr(
         bridge,
@@ -56,7 +51,53 @@ def test_recovery_hook_parses_stdout_when_adapter_warns_on_stderr(
         else real_path(value),
     )
 
+
+@pytest.mark.parametrize(
+    ('operation', 'expected'),
+    [
+        ('snapshot', {'snapshot': '42'}),
+        ('rollback', {'reboot_required': False}),
+    ],
+)
+def test_recovery_hook_parses_stdout_when_adapter_warns_on_stderr(
+    tmp_path, monkeypatch, operation, expected
+):
+    hook = warning_hook(tmp_path)
+    use_hook(monkeypatch, hook)
+
     assert bridge.recovery_hook(operation, 'fixture') == expected
+
+
+def test_adapter_warnings_do_not_lose_patch_recovery_journal(tmp_path, monkeypatch):
+    hook = warning_hook(tmp_path)
+    use_hook(monkeypatch, hook)
+    monkeypatch.setattr(bridge, 'ROOT', tmp_path)
+    monkeypatch.setattr(
+        bridge,
+        'handle',
+        lambda request: (_ for _ in ()).throw(RuntimeError('apt failure'))
+        if request['action'] == 'patch'
+        else {'failed_units': '', 'collector_active': True},
+    )
+    monkeypatch.setattr(
+        bridge,
+        'verify_patch_original',
+        lambda original: {'outcome': 'rolled_back', 'original_state_verified': True},
+    )
+    job_id = 'a' * 36
+    result = bridge.protected_patch(
+        {
+            'job_id': job_id,
+            'packages': ['demo=2'],
+            'policy': {'rollback': True},
+            'original': {'version': 1},
+        }
+    )
+
+    journal = json.loads(bridge.transaction_path(job_id).read_text())
+    assert result['outcome'] == journal['state'] == 'rolled_back'
+    assert journal['snapshot'] == '42'
+    assert journal['rollback'] == {'reboot_required': False}
 
 
 def test_recovery_hook_rejects_oversized_stdout_without_tail_parsing(monkeypatch):
