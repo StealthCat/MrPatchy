@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.30 — Isolate periodic scheduler failures
+
+- A failure in one leader producer no longer skips other periodic tasks, host polling, queued-job dispatch, cleanup, notifications or AI admission. Each task has a separate retry deadline and a named exception log.
+- Failed producers retry after 30, 60, 120, 240 and at most 300 seconds; success restores the normal 30-second cadence. Worker identity loss still stops admission. Leadership, drain, queue claims and target mutation authorization are unchanged.
+- Regression tests reproduce each of seven failing producer positions on current main, verify independent work continues, and cover bounded backoff, recovery cadence and identity-loss propagation. No schema, target helper, UI, Git tag or Docker publication changes. Major stays 1.
+
 ## 1.35.29 — Enforce deleted-server read boundaries
 
 - Resolve host authorization for query-scoped investigations, jobs and package history and job-ID output reads. Viewers/operators receive the existing administrator-only refusal for deleted-server records.

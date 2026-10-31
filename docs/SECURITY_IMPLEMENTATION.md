@@ -5346,3 +5346,37 @@ Preserve that exact main and its stylesheet regression. The combined final tree
 requires fresh exact-head CI and local focused authorization/CSS/lifecycle checks;
 the preceding full local suite passed 1647 tests / 9 skipped / 9 subtests on the
 pre-CSS integration tree. Earlier-head CI does not authorize this final integration.
+
+
+## v1.35.30 — Independent periodic scheduler producers (#140)
+
+Owner: Codex `scheduler-6eac54918b34`, branch
+`codex/scheduler-tick-isolation`. Issue-first triage selected #140 after accepting
+#118/#208's explicit integration handoff. Current main `fa5d933` reproduced all
+seven injected producer failures in a disposable real application/SQLite loop:
+queued-job dispatch was skipped and failing tasks retried each iteration. Cause:
+a single outer exception boundary surrounded all producers and the rest of the
+loop, with the shared schedule timestamp advanced only after every task succeeded.
+
+Each leader producer now has its own deadline and failure count. A named failure
+is logged and backed off at 30/60/120/240 seconds, capped at 300 seconds, without
+skipping the remaining producers, polling, dispatch, cleanup, notification or AI
+admission. Success restores 30-second cadence. Worker identity loss propagates
+to the existing stop path rather than being treated as a retriable policy error.
+Deadlines are process-local scheduling safeguards, not durable job claims or a
+replacement for existing coordinator election, drain, leases and per-host locks.
+No additional response authority, automatic replay or provider call is introduced.
+
+Focused new loop/backoff/identity-loss and existing advisory restart, drain/control
+and worker registry tests: 66 passed. Full final-tree local suite and all twelve
+applicable exact-head GitHub jobs are required before merge. No UI changes were
+made. The runtime pipeline remains a priority, but unrelated roadmap work waits
+behind actionable issues. Wider issues/roadmap are not claimed complete.
+
+Version/source/README/changelog use v1.35.30, major fixed at 1. Depends on the exact
+#208 final integration head `a16688690e2a2486cfe3e281ddbae7dce2c09507` (v1.35.29),
+which includes current main `6589f4d` (v1.35.25, #207). Merge #208 first after its
+own exact-head checks; preserve other owners' mutation, recovery and route-role
+work. Re-read main/open PR versions before integration, rerun affected checks if
+head or integration changes, and verify #140 closes only after tested merge.
+No Git tags, Docker publication or schedule changes.

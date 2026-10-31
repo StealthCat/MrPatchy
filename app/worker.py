@@ -761,13 +761,37 @@ def loop(role="embedded"):
             _loop(reporter)
     finally:ai.transport.close()
 
+def periodic_ticks(now,state):
+    """Isolate independent leader producers; retry failures without a hot loop."""
+    from .worker_registry import IdentityLost
+    from .persistence import schedule_tick as persistence_tick
+    from .response_monitor import schedule_tick as response_tick
+    from .service_monitor import schedule_tick as service_tick
+    from .execution_scans import schedule_tick as execution_tick
+    callbacks=(('patch schedules',scheduling.tick),('scanner schedules',incidents.schedule_tick),
+               ('startup schedules',persistence_tick),('incident AI plans',incidents.auto_plan_tick),
+               ('response monitoring',response_tick),('service monitoring',service_tick),
+               ('execution scans',execution_tick))
+    for name,callback in callbacks:
+        due,failures=state.get(name,(0,0))
+        if now<due:continue
+        try:callback(now)
+        except IdentityLost:raise  # Control-plane identity loss must still stop admission.
+        except Exception:
+            failures=min(failures+1,5)
+            delay=min(300,30*2**(failures-1))
+            state[name]=(now+delay,failures)
+            log.exception('Periodic %s tick failed; retry in %ss',name,delay)
+        else:state[name]=(now+30,0)
+
+
 def _loop(reporter):
     from .worker_registry import IdentityLost,capacities
     capacity=getattr(reporter,'capacity',None) or capacities()
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
+        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
@@ -806,13 +830,7 @@ def _loop(reporter):
                     ai_transport.close(wait=False)
                     continue
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
-                if is_leader and now-last_schedule>=30:
-                    scheduling.tick(now); incidents.schedule_tick(now);
-                    from .persistence import schedule_tick as persistence_tick
-                    from .response_monitor import schedule_tick as response_tick
-                    from .service_monitor import schedule_tick as service_tick
-                    from .execution_scans import schedule_tick as execution_tick
-                    persistence_tick(now); incidents.auto_plan_tick(now);response_tick(now);service_tick(now);execution_tick(now); last_schedule=now
+                if is_leader:periodic_ticks(now,tick_state)
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:
