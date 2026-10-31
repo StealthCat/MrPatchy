@@ -143,11 +143,24 @@ def vendor_report(path='/usr/bin/fixture',checksum=None,state='matches_artifact_
 
 
 def partial(host='one',pid=10,collected=100):
+    gaps=['configuration_not_collected','package_authentication_missing']
+    coverage={'cache_eligible':False,'scope':'recorded_process_identity','gaps':gaps,
+        'consistency':'matching_before_after_samples','trust':'target_kernel_and_local_files'}
+    context={'version':1,'process':{'pid':pid,'start_ticks':20,'pid_namespace':1000+pid,
+            'boot_id':'a'*8+'-'+'a'*4+'-'+'a'*4+'-'+'a'*4+'-'+'a'*12,
+            'proc_device':30+pid,'proc_inode':40+pid},
+        'credentials':{'Uid':['0','0','0','0'],'Gid':['0','0','0','0'],'Groups':['0'],
+            'CapEff':['0000000000000000'],'NoNewPrivs':['1'],'Seccomp':['2']},
+        'namespaces':{'pid':2000+pid,'net':3000+pid,'mnt':4000+pid,'user':5000+pid},
+        'maps_sha256':sha('b'),'cgroup_sha256':sha('c'),
+        'artifacts':[{'kind':'library','path':'/usr/lib/libfixture.so','identity_verified':True,
+            'sha256':sha('d'),'source':'mapped-file','metadata':{'uid':0,'gid':0,'mode':493,'size':12}}],
+        'executable':{'sha256':sha('a'),'uid':0,'gid':0,'mode':493,'size':123},
+        'coverage':copy.deepcopy(coverage)}
     return {'executable':'/usr/bin/fixture','sha256':sha('a'),'identity_verified':True,
         'investigation':{'collected':collected,'details':{'version':2,'identity_verified':True,
-            'context':{'version':1,'process':{'pid':pid,'start_ticks':20,'boot_id':'a'*8+'-'+'a'*4+'-'+'a'*4+'-'+'a'*4+'-'+'a'*12,
-                'proc_device':30,'proc_inode':40},'coverage':{'cache_eligible':False,'scope':'recorded_process_identity',
-                'gaps':['package_authentication_missing','configuration_not_collected']}}}}}
+            'checks':['package'],'context':context,'coverage':copy.deepcopy(coverage),
+            'package':'fixture: /usr/bin/fixture'}}}
 
 
 def test_controller_authenticated_vendor_receipt_binds_exact_artifact_but_stays_ineligible(client):
@@ -160,7 +173,9 @@ def test_controller_authenticated_vendor_receipt_binds_exact_artifact_but_stays_
     result=evaluate(bound)
     assert not result['eligible'] and result['fingerprint']==''
     assert 'provenance_binding_invalid' not in codes(result)
-    assert {'configuration_binding_invalid','behavior_binding_invalid','followup_binding_invalid','coverage_binding_invalid'}<=set(codes(result))
+    assert contract['followup']['complete'] and contract['followup']['policy_version']=='process-followup-v2'
+    assert 'followup_binding_invalid' not in codes(result)
+    assert {'configuration_binding_invalid','behavior_binding_invalid','coverage_binding_invalid'}<=set(codes(result))
 
 
 def test_vendor_binding_is_cross_host_stable_but_observations_remain_local(client):
@@ -173,6 +188,80 @@ def test_vendor_binding_is_cross_host_stable_but_observations_remain_local(clien
     left=first['investigation']['details']['known_good_context'];right=second['investigation']['details']['known_good_context']
     assert {name:left[name] for name in known_good.COMPONENTS}=={name:right[name] for name in known_good.COMPONENTS}
     assert left['observation']!=right['observation']
+
+
+@pytest.mark.parametrize('mutation',["credentials","maps","cgroup","artifact","result"])
+def test_security_relevant_followup_changes_alter_the_evidence_manifest(client,mutation):
+    with Session() as s:
+        s.add(Inspection(id='vendor-followup-'+mutation,host_id=mutation,created=123,report=vendor_report()));s.commit()
+        baseline=partial(mutation)
+        changed=copy.deepcopy(baseline)
+        details=changed['investigation']['details'];context=details['context']
+        if mutation=='credentials':context['credentials']['Uid'][1]='1000'
+        elif mutation=='maps':context['maps_sha256']=sha('e')
+        elif mutation=='cgroup':context['cgroup_sha256']=sha('f')
+        elif mutation=='artifact':context['artifacts'][0]['sha256']=sha('e')
+        else:details['package']='other: /usr/bin/fixture'
+        first=known_good.bind_vendor_provenance(s,mutation,baseline,100)
+        second=known_good.bind_vendor_provenance(s,mutation,changed,100)
+    left=first['investigation']['details']['known_good_context']['followup']
+    right=second['investigation']['details']['known_good_context']['followup']
+    assert left['requirements_sha256']==right['requirements_sha256']
+    assert left['evidence_sha256']!=right['evidence_sha256']
+
+
+def test_changed_followup_requirements_change_the_requirements_manifest(client):
+    with Session() as s:
+        s.add(Inspection(id='vendor-requirements',host_id='requirements',created=123,report=vendor_report()));s.commit()
+        baseline=partial('requirements')
+        changed=copy.deepcopy(baseline);details=changed['investigation']['details']
+        details['checks']=['package','executable']
+        details['executable']={**details['context']['executable'],
+            'status':['Uid:\t0\t0\t0\t0','Gid:\t0\t0\t0\t0','CapEff:\t0000000000000000','NoNewPrivs:\t1','Seccomp:\t2']}
+        first=known_good.bind_vendor_provenance(s,'requirements',baseline,100)
+        second=known_good.bind_vendor_provenance(s,'requirements',changed,100)
+    left=first['investigation']['details']['known_good_context']['followup']
+    right=second['investigation']['details']['known_good_context']['followup']
+    assert left['requirements_sha256']!=right['requirements_sha256']
+    assert left['evidence_sha256']!=right['evidence_sha256']
+
+
+def test_check_order_is_not_a_cross_host_difference(client):
+    with Session() as s:
+        s.add(Inspection(id='vendor-order',host_id='order',created=123,report=vendor_report()));s.commit()
+        first=partial('order');second=copy.deepcopy(first)
+        for value in (first,second):
+            details=value['investigation']['details'];details['checks']=['package','executable']
+            details['executable']={**details['context']['executable'],'status':['Uid:\t0\t0\t0\t0']}
+        second['investigation']['details']['checks'].reverse()
+        left=known_good.bind_vendor_provenance(s,'order',first,100)
+        right=known_good.bind_vendor_provenance(s,'order',second,100)
+    assert (left['investigation']['details']['known_good_context']['followup']==
+        right['investigation']['details']['known_good_context']['followup'])
+
+
+def test_invalid_complete_receipt_does_not_remove_any_declared_gap(client):
+    evidence=partial('invalid');del evidence['investigation']['details']['context']['cgroup_sha256']
+    with Session() as s:
+        s.add(Inspection(id='vendor-invalid',host_id='invalid',created=123,report=vendor_report()));s.commit()
+        bound=known_good.bind_vendor_provenance(s,'invalid',evidence,100)
+    assert bound==evidence
+    assert 'package_authentication_missing' in bound['investigation']['details']['context']['coverage']['gaps']
+    assert 'known_good_context' not in bound['investigation']['details']
+
+
+@pytest.mark.parametrize('field,value',[('checks',[{}]),('gaps',[{}])])
+def test_unhashable_receipt_values_fail_closed_without_removing_gaps(client,field,value):
+    evidence=partial('unhashable-'+field);details=evidence['investigation']['details']
+    if field=='checks':details['checks']=value
+    else:
+        details['context']['coverage']['gaps']=value
+        details['coverage']['gaps']=copy.deepcopy(value)
+    with Session() as s:
+        s.add(Inspection(id='vendor-unhashable-'+field,host_id='unhashable-'+field,
+            created=123,report=vendor_report()));s.commit()
+        bound=known_good.bind_vendor_provenance(s,'unhashable-'+field,evidence,100)
+    assert bound==evidence and 'known_good_context' not in bound['investigation']['details']
 
 
 @pytest.mark.parametrize('inspection_id,host,report',[
