@@ -257,6 +257,8 @@ The target's durable spool partitions normal observations into batches of at mos
 
 **Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
 
+ClamAV scans group already-open file descriptors into local engine processes of at most 32 files / 128 MiB. Each batch has a 120-second timeout inside the four-minute overall scan budget; ambiguous output or engine failure falls back to the existing 30-second single-file path. This batching does not enable or connect to a ClamAV daemon, and descriptor, path and metadata identity checks remain in force.
+
 **Servers → server → Security → Execution-triggered scans** optionally queues bounded
 ClamAV directory scans when new, fresh, verified eBPF executable identities appear in
 the event spool. The policy is off by default and includes scan directories, debounce,

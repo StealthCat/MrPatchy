@@ -25,6 +25,134 @@ def test_scan_detects_and_reports_symlink_gaps(tmp_path,monkeypatch):
     assert result['findings'][0]['path']==str(file)
     assert len(result['findings'][0]['sha256'])==64
 
+
+def test_clamav_reuses_one_bounded_process_for_multiple_files(tmp_path,monkeypatch):
+    for index in range(20):(tmp_path/f'file-{index:02d}').write_text(f'fixture {index}')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    scan_calls=[]
+    def scan(args,**kwargs):
+        if '--version' in args:
+            return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        scan_calls.append(targets)
+        return SimpleNamespace(stdout='\n'.join(target+': OK' for target in targets),returncode=0)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert result['scanned']==20
+    assert len(scan_calls)==1
+    assert len(scan_calls[0])==20
+
+
+def test_clamav_batch_maps_mixed_per_file_outcomes(tmp_path,monkeypatch):
+    for index in range(3):(tmp_path/f'file-{index}').write_text(f'fixture {index}')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        assert len(targets)==3
+        return SimpleNamespace(stdout='\n'.join(
+            target+(': Fixture.Signature FOUND' if index==1 else ': OK')
+            for index,target in enumerate(targets)),returncode=1)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert result['scanned']==3 and len(result['findings'])==1
+    assert result['findings'][0]['path'] in {str(tmp_path/f'file-{index}') for index in range(3)}
+    assert result['findings'][0]['evidence'].endswith('Fixture.Signature FOUND')
+
+
+def test_clamav_batch_rejects_only_the_replaced_path(tmp_path,monkeypatch):
+    files=[tmp_path/f'file-{index}' for index in range(3)]
+    for index,file in enumerate(files):file.write_text(f'original {index}')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        files[1].unlink();files[1].write_text('replacement')
+        return SimpleNamespace(stdout='\n'.join(target+': Fixture.Signature FOUND' for target in targets),returncode=1)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert result['scanned']==2 and result['state']=='incomplete'
+    assert {finding['path'] for finding in result['findings']}=={str(files[0]),str(files[2])}
+    assert {finding['sha256'] for finding in result['findings']}=={
+        agent.hashlib.sha256(b'original 0').hexdigest(),agent.hashlib.sha256(b'original 2').hexdigest()}
+
+
+def test_clamav_batches_are_bounded(tmp_path,monkeypatch):
+    for index in range(65):(tmp_path/f'file-{index:02d}').write_text('fixture')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    batch_sizes=[]
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        batch_sizes.append(len(targets))
+        return SimpleNamespace(stdout='\n'.join(target+': OK' for target in targets),returncode=0)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert result['scanned']==65
+    assert batch_sizes==[agent.CLAMAV_BATCH_FILES,agent.CLAMAV_BATCH_FILES,1]
+
+
+def test_clamav_batch_bytes_are_bounded(tmp_path,monkeypatch):
+    for index in range(3):(tmp_path/f'file-{index}').write_text('12345')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    monkeypatch.setattr(agent,'CLAMAV_BATCH_BYTES',10)
+    batch_sizes=[]
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        batch_sizes.append(len(targets))
+        return SimpleNamespace(stdout='\n'.join(target+': OK' for target in targets),returncode=0)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert result['scanned']==3 and batch_sizes==[2,1]
+
+
+def test_clamav_finding_limit_closes_pending_descriptors(tmp_path,monkeypatch):
+    for index in range(105):(tmp_path/f'file-{index:03d}').write_text('x')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    monkeypatch.setattr(agent,'CLAMAV_BATCH_BYTES',2)
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        return SimpleNamespace(stdout='\n'.join(target+': Fixture.Signature FOUND' for target in targets),returncode=1)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+    descriptors=len(os.listdir('/proc/self/fd'))
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert len(result['findings'])==100
+    assert len(os.listdir('/proc/self/fd'))==descriptors
+
+
+def test_clamav_ambiguous_batch_output_falls_back_per_file(tmp_path,monkeypatch):
+    for index in range(3):(tmp_path/f'file-{index}').write_text(f'fixture {index}')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    scan_sizes=[]
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        scan_sizes.append(len(targets))
+        if len(targets)>1:return SimpleNamespace(stdout='unusable batch diagnostics',returncode=2)
+        return SimpleNamespace(stdout='',returncode=0)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert result['scanned']==3
+    assert not any('Scanner failed' in gap or 'Timeout' in gap for gap in result['gaps'])
+    assert scan_sizes==[3,1,1,1]
+
+
 def test_changed_file_is_not_accepted(tmp_path,monkeypatch):
     file=tmp_path/'sample';file.write_text('before')
     monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
