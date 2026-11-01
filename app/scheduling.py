@@ -172,6 +172,11 @@ def job_guard(s, job, now=None):
     now = time.time() if now is None else now
     run = s.get(PatchRun, ref['run_id'])
     schedule = s.get(PatchSchedule, run.schedule_id) if run else None
+    if (run and schedule and schedule.policy['enabled'] and schedule.revision == run.revision and
+            run.host_id == job.host_id and now >= run.expires):
+        # An expired window is a missed run (alerting), not an authorization change.
+        job.state = 'cancelled'; job.output = 'Scheduled start window expired'
+        run.state = 'skipped'; run.detail = 'Scheduled start window expired before execution'; s.commit(); return False
     if (not run or not schedule or not schedule.policy['enabled'] or schedule.revision != run.revision or
             run.host_id != job.host_id or now >= run.expires):
         job.state = 'cancelled'; job.output = 'Scheduled authorization changed or start window expired'; s.commit(); return False
