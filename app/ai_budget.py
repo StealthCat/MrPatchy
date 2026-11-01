@@ -68,6 +68,13 @@ def _state(session,cfg,now):
     return enabled,name,start,reset,rows,groups,counted,cap
 
 
+def waiting(session,now):
+    """Read-only: the budget reset instant when the daily cap is already spent, or 0."""
+    cfg=config(session)
+    enabled,name,start,reset,rows,groups,counted,cap=_state(session,cfg,now)
+    return reset if enabled and counted>=cap else 0
+
+
 def reserve(payload):
     """Atomically retain a conservative per-call amount before rate admission."""
     from .ai import AIError

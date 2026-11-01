@@ -198,8 +198,10 @@ def test_same_host_independent_subject_respects_shared_provider_floor_and_duplic
     assert len(calls)==1
     with Session() as s:
         assert s.get(Behavior,'subject').verdict=='error'
-        other=s.get(Behavior,'other');assert other.verdict=='error' and not other.approved
-        retry=s.get(ai_retry.TriageRetry,'other');assert retry.state=='deferred' and retry.attempts==0
+        # The active shared floor is checked before claiming: no run, attempt or error is created.
+        other=s.get(Behavior,'other');assert other.verdict=='pending' and not other.approved
+        assert s.get(ai_retry.TriageRetry,'other') is None
+        assert len(list(s.scalars(select(ai_runs.AIRun).where(ai_runs.AIRun.subject=='other'))))==0
 
 
 def test_manual_retry_roles_and_csrf(admin):

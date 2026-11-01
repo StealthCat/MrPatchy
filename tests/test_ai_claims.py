@@ -287,3 +287,29 @@ def test_database_json_normalization_is_bound_before_followup(admin,monkeypatch)
         assert len(normalized)==1 and sent[1]['investigation']['collected']==normalized[0]
         saved=s.scalar(select(ai_assessments.Assessment));assert saved and saved.inputs[1]['evidence']==sent[1]
         assert s.get(Behavior,'subject-0').verdict=='low'
+
+
+def test_rate_throttled_triage_is_not_claimed_and_deferrals_are_spread(admin,monkeypatch):
+    seed(count=4)
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1};s.commit()
+    sent=[]
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:sent.append(1) or result())
+    for _ in range(4):worker.investigate_one()
+    assert len(sent)==1
+    with Session() as s:
+        states=sorted(r.state for r in s.scalars(select(ai_runs.AIRun)))
+        # The gate closed after the first admission: no runs/attempts for the rest.
+        assert states==['complete']
+        assert not list(s.scalars(select(ai_retry.TriageRetry)))
+    # Force a refused item through the failure path: it must be deferred, not errored,
+    # and later waiters must not share an identical wake time.
+    from app.ai import AIError
+    now=time.time();wakes=[]
+    with Session() as s:
+        rows=list(s.scalars(select(Behavior).order_by(Behavior.id)))[1:]
+        for row in rows:
+            ai_retry.begin(s,row,'sig',now)
+            wakes.append(ai_retry.failed(s,row,AIError('wait',policy_wait=True,retry_after=600),now).next_at)
+        s.commit()
+    assert len(set(wakes))==3 and wakes==sorted(wakes)
