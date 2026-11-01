@@ -259,6 +259,8 @@ and review service impact before using `KEEP REPLACEMENT`. Process pauses remain
 independent. Existing opt-in retained-response monitoring verifies both the live
 replacement and original evidence. See [scope, approvals, recovery and limits](docs/SECURITY_IMPLEMENTATION.md#separately-approved-live-replacement-publication).
 
+A helper-verified `not_started` process response restores the matching approval’s prior state and process hold after an interrupted attempt. The receipt and audit history remain available. Uncertain or invalid verification retains the hold; independent file holds remain active, and another suspension requires a fresh typed approval. See [process suspension and recovery](docs/SECURITY_IMPLEMENTATION.md#separately-approved-process-suspension-and-recovery).
+
 **Check service health** reads explicitly selected systemd services without changing
 them. Capture a baseline, compare a later check, and review **Service health history**
 before deciding whether to release a response pause. Checks never restart services or

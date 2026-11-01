@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.65 — 2026-11-01
+
+1. [PR #260](https://github.com/StealthCat/MrPatchy/pull/260): A validated helper `not_started` process-response receipt restores the matching approval's prior state and process hold, resolving a stuck hold after a lost reply. Retain the receipt and `observed_not_started` audit event; a new suspension still requires fresh typed approval.
+2. Compatibility: no schema, helper protocol or role change. Uncertain/suspended responses, invalid verification and missing or mismatched approvals retain conservative holds; prior holds and the independent file-response hold remain intact. Receipt validation does not establish trust in a compromised target.
+
 ## 1.35.64 — 2026-11-01
 
 1. [PR #254](https://github.com/StealthCat/MrPatchy/pull/254): Load schedule recovery policies with one batched Setting lookup instead of one lookup per server. Preserve missing/partial flag defaults, the existing per-server recovery-policy helper, host lifecycle filtering and the schedules response contract.
