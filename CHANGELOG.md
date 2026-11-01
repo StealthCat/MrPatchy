@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.81 — 2026-11-01
+
+1. [PR #255](https://github.com/StealthCat/MrPatchy/pull/255): Place Security scan forms inside cards, space the targeted Security and File integrity pager/evidence actions consistently, and move Browse startup files below the baseline heading.
+2. Compatibility: markup-only presentation change; existing element identities and handlers are retained. No API, schema, role, audit or runtime-response authorization change.
+
 ## 1.35.80 — 2026-11-01
 
 1. [PR #256](https://github.com/StealthCat/MrPatchy/pull/256): Reflow server Overview summary cards by available content width, keep the decorative mascot clear of guide text and actions, and render multi-line link buttons with complete borders on Overview and Patching pages.
