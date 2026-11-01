@@ -1,2 +1,2 @@
 # Static hygiene check run by CI (issue #135); not needed at runtime.
-ruff==0.16.9
+ruff==0.17.3
