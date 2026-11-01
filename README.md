@@ -158,6 +158,8 @@ Deadlines start at first discovery of an outstanding update and do not reset whe
 
 Enable **AI update importance scores** in Settings alongside AI investigations. Pending updates receive an advisory **0–100** score with an expandable explanation, limitations, model and assessment time. Assessments bind to the exact installed/candidate versions and policy evidence; a changed candidate needs a new assessment. The default separate allowance is 20 batches/hour, with up to five updates per call. Scores use package metadata and repository classification, carry **low confidence**, and do not claim verified CVE/changelog evidence or change your patch schedule/priority.
 
+Update-score eligibility is read in bounded ordered chunks, reducing database work when a fleet already has completed or future-deferred assessments. Exact evidence matching, durable deferrals, oldest-first batches and existing AI admission/spend limits still apply.
+
 **Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**. File, process, replacement-publication and service-monitoring holds explain the review needed before a start can be estimated; dates remain unknown until a separately authorized release. Recovery, offline targets and unknown dependency completion also explain why a date cannot be given. All times displayed in the table use your browser's timezone.
 
 ![Explained AI importance and expected installation](docs/screenshots/update-importance.jpg)
