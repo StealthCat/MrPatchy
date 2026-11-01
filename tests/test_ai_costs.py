@@ -180,3 +180,23 @@ def test_new_table_upgrade_keeps_old_runs_and_api_is_admin_only(admin):
     with db.Session() as s: s.get(User, 'admin').role = 'viewer'; s.commit()
     assert admin.get('/api/ai/runs').status_code == 403
     assert admin.get('/api/ai/runs/legacy').status_code == 403
+
+
+def test_estimate_and_reservation_share_one_tier_multiplier_table(monkeypatch):
+    for model, rates in ai_pricing.RATES.items():
+        table = ai_pricing.tier_multipliers(model)
+        assert table['default'] == '1'
+        assert ('flex' in table) == (rates[3] is not None)
+        for tier in ('default', 'flex', 'priority', 'fast', 'ultrafast'):
+            reserved = ai_pricing.reservation({'model': model, 'service_tier': tier, 'max_output_tokens': 10})
+            assert reserved['ok'] == (tier in table)
+    monkeypatch.setitem(ai_pricing.RATES, 'gpt-6-luna', ai_pricing.RATES['gpt-6-luna'])
+    patched = lambda model: {'default': '1', 'flex': '3'}
+    monkeypatch.setattr(ai_pricing, 'tier_multipliers', patched)
+    assert ai_pricing.reservation({'model': 'gpt-6-luna', 'service_tier': 'flex', 'max_output_tokens': 10})['ok']
+    assert not ai_pricing.reservation({'model': 'gpt-6-luna', 'service_tier': 'priority', 'max_output_tokens': 10})['ok']
+
+
+def test_ai_run_event_has_no_unused_call_flag():
+    import inspect as pyinspect
+    assert 'call' not in pyinspect.signature(ai_runs.event).parameters

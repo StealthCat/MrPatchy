@@ -79,10 +79,7 @@ def estimate(data, payload):
     if modern and 'cache_write_tokens' not in data['usage'].get('input_tokens_details', {}):
         result['reason'] = 'Cache-write usage was not returned; a reliable estimate is unavailable.'
         return result
-    # Old model priority/Flex prices are not inferred from modern multipliers.
-    multiplier = {'default': '1'}
-    if modern: multiplier.update(flex='0.5', priority='2', fast='2')
-    if model in ('gpt-6-astra', 'gpt-6.1-sol'): multiplier['ultrafast'] = '6'
+    multiplier = tier_multipliers(model)
     if result['service_tier'] not in multiplier:
         result['reason'] = 'The processing tier is missing or has no verified price.'
         return result
@@ -115,6 +112,19 @@ def estimate(data, payload):
     return result
 
 
+def tier_multipliers(model):
+    """Verified processing-tier price multipliers for a catalogued model.
+
+    Shared by estimate() and reservation() so the settled estimate and the
+    reservation ceiling cannot diverge. Old-model priority/Flex prices are not
+    inferred from modern multipliers.
+    """
+    multipliers = {'default': '1'}
+    if RATES[model][3] is not None: multipliers.update(flex='0.5', priority='2', fast='2')
+    if model in ('gpt-6-astra', 'gpt-6.1-sol'): multipliers['ultrafast'] = '6'
+    return multipliers
+
+
 def reservation(payload):
     """Return a conservative USD ceiling before a capped provider call.
 
@@ -133,9 +143,7 @@ def reservation(payload):
         return {'ok': False, 'reason': 'Tool fees are not available for a safe reservation.'}
     tier = payload.get('service_tier', 'default')
     rates = RATES[model]; modern = rates[3] is not None
-    multipliers = {'default': '1'}
-    if modern: multipliers.update(flex='0.5', priority='2', fast='2')
-    if model in ('gpt-6-astra', 'gpt-6.1-sol'): multipliers['ultrafast'] = '6'
+    multipliers = tier_multipliers(model)
     if tier not in multipliers:
         return {'ok': False, 'reason': 'The requested processing tier has no verified price for a safe reservation.'}
     excluded = {'model', 'store', 'max_output_tokens', 'service_tier', 'prompt_cache_options'}
