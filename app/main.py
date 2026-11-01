@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
@@ -1113,18 +1113,24 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
 
 @app.post('/api/operations/jobs/{job_id}/cancel')
 def cancel_job(job_id:str,user=Depends(admin_user)):
+    from . import quarantine
     with Session() as s:
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
         host_id=job.host_id
-        publication_cancel=job.action=='trusted-repair-publish'
-    with host_change(host_id,allow_quarantined=publication_cancel),Session() as s:
+        # Cancelling unstarted response work is local bookkeeping, not a new
+        # target operation. Its own (or unrelated) holds must remain reviewable.
+        response_cancel=job.action in (*quarantine.ACTIONS,'evidence-prepare','evidence-preserve','evidence-status','evidence-acquire','evidence-archive-status','execution-scan')
+    with host_change(host_id,allow_quarantined=response_cancel),Session() as s:
         job=s.get(Job,job_id)
+        if not job or job.host_id!=host_id:raise HTTPException(404,'Job not found')
         if job.state!='queued':raise HTTPException(409,'Only queued operations can be cancelled')
-        job.state='cancelled'
-        if job.action=='trusted-repair-publish':
-            from . import repair_publication
-            repair_publication.reject_unstarted(s,job,user['username'],'cancelled')
+        cancelled=s.execute(update(Job).where(Job.id==job_id,Job.host_id==host_id,Job.state=='queued').values(state='cancelled')).rowcount
+        if cancelled!=1:raise HTTPException(409,'Only queued operations can be cancelled')
+        host_lifecycle.reject_pending_records(s,job,user['username'],'Operation cancelled before execution')
+        if job.action=='execution-scan':
+            from . import execution_scans
+            execution_scans.finish(s,job,'skipped','Operation cancelled before execution')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(releases.ReleasePlan,job.payload.get('plan_id'))
             if plan and plan.host_id==host_id and plan.job_id==job.id:
