@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.65'
+APP_VERSION='1.35.67'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -56,7 +56,10 @@ from . import sso
 app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 @app.exception_handler(host_lifecycle.Busy)
+@app.exception_handler(host_lifecycle.Inactive)
 async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=409)
+@app.exception_handler(host_lifecycle.QueueFull)
+async def queue_full(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=429)
 @app.exception_handler(ValueError)
 async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
 static=Path(__file__).parent/'static'

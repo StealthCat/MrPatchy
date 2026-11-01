@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.35.67 — 2026-11-01
+
+1. [PR #267](https://github.com/StealthCat/MrPatchy/pull/267): Avoid ingesting the first event batch twice per poll by reusing its committed IDs for acknowledgement, reducing redundant policy and observation lookups. Remove the unused worker `ai_cycle` helper and update its tests; the strict newest-changelog-section check already present on main is retained.
+2. Compatibility: no schema/API or runtime-response authorization change. Commit-before-acknowledgement, replay deduplication, later batches and finite drain budgets remain intact; a lost acknowledgement can still cause a safe replay. No cross-worker exactly-once or lossless-capture guarantee is added.
+
+## 1.35.66 — 2026-11-01
+
+1. [PR #257](https://github.com/StealthCat/MrPatchy/pull/257): Return HTTP 409 consistently for disabled/deleted-server and busy-state conflicts, and HTTP 429 for the existing 50-operation server-queue limit, using dedicated centrally handled exceptions.
+2. Compatibility: API consumers that expected HTTP 400 for these conflicts or capacity refusals must handle 409/429. Ordinary invalid input remains 400; queue capacity, lifecycle checks, roles and runtime response approvals are unchanged. No schema change.
+
 ## 1.35.65 — 2026-11-01
 
 1. [PR #260](https://github.com/StealthCat/MrPatchy/pull/260): A validated helper `not_started` process-response receipt restores the matching approval's prior state and process hold, resolving a stuck hold after a lost reply. Retain the receipt and `observed_not_started` audit event; a new suspension still requires fresh typed approval.
