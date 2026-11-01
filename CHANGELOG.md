@@ -1,8 +1,47 @@
 # Changelog
 
-## 1.35.43 — 2026-11-01
+## 1.35.49 — 2026-10-31
 
-- Fix #166: the target agent's `hash_artifact` no longer rejects already-cached hashes once the shared collection deadline has passed. The deadline now applies only when a cache miss needs the file read (still checked per chunk), so later PIDs are no longer marked unverified without real budget pressure. The identity re-check (dev, inode, mtime, ctime, size) on cache hits is unchanged. No compatibility impact; major stays 1.
+1. [PR #220](https://github.com/StealthCat/MrPatchy/pull/220): return verified cached artifact hashes after the shared collection deadline instead of marking later processes unverified solely because their hashes are already cached.
+2. Apply the initial time-budget guard inside the cache-miss branch before any data read, including empty files; retain per-chunk budgets and device/inode/mtime/ctime/size identity checks. Cover expired cached hits and empty/nonempty uncached misses with zero-read assertions.
+3. Deploy the updated target agent through the existing reviewed helper-maintenance workflow. No receipt-format, role, schema or response-authority change; major remains 1.
+
+## 1.35.48 — 2026-10-31
+
+1. [PR #210](https://github.com/StealthCat/MrPatchy/pull/210): exclude soft-deleted server records from the Prometheus mrpatchy_hosts gauge by filtering deleted_at==0 in SQL.
+2. Preserve disabled-server counting, retained administrator history, other metrics and viewer access to the metrics endpoint. A regression verifies the count drops from two to one after soft deletion.
+3. Compatibility: consumers may see a lower host count reflecting deleted records; no database records are removed. No schema, audit or response-authority change; major remains 1.
+
+## 1.35.47 — 2026-10-31
+
+1. [PR #216](https://github.com/StealthCat/MrPatchy/pull/216): record old-to-new role and enabled state plus password-set yes/no in manage-user audit entries. Newly created users are identified as new; passwords and hashes are never included in the detail.
+2. Add an authenticated API regression covering account creation, role escalation, disabling and password-presence markers while asserting the supplied password is absent from audit history.
+3. Preserve administrator/self-access checks, session-generation invalidation and audit retention. No schema or response-authority change; major remains 1.
+
+## 1.35.46 — 2026-10-31
+
+1. [PR #218](https://github.com/StealthCat/MrPatchy/pull/218): prevent older ineligible incidents from permanently hiding eligible automatic ClamAV advisory plans. Filter quarantined hosts before selecting candidates and page past YARA incidents instead of using a fixed oldest-100 window.
+2. Preserve YARA's automatic-plan exclusion, per-host pending checks, host lifecycle/pause gates and existing remaining-capacity limits. Advisory planning does not authorize runtime response actions.
+3. Add the 100-older-YARA-plus-newer-ClamAV regression. No schema, target-helper or permission change; major remains 1.
+
+## 1.35.45 — 2026-10-31
+
+1. [PR #213](https://github.com/StealthCat/MrPatchy/pull/213): parse standard DNF4 versionlock exclude records without failing RPM inventory and patch evidence. Strip one optional exclusion marker, then an optional epoch prefix, before extracting the package name; treat excludes conservatively as held packages.
+2. Cover DNF4 add/exclude and yum epoch-first add/exclude layouts. Keep unsupported expressions rejected, including repeated exclusion markers; coordinator review tightened the candidate's unrestricted leading-marker stripping.
+3. Preserve package-manager trust and response authorization. No schema or controller API change; update target helpers through the existing reviewed deployment workflow. Major remains 1.
+
+## 1.35.44 — 2026-10-31
+
+1. [PR #211](https://github.com/StealthCat/MrPatchy/pull/211): merge only client-supplied fields in legacy PUT /api/settings under the shared settings-config lock. Preserve omitted retention, AI model/enabled state, admission mode, limits and legacy migration requirements.
+2. Capture supplied fields before request normalization so trimming an omitted model cannot turn its default into an explicit reset. Audit changed fields and admission/cap/reset-timezone transitions; align the legacy input's admission default with section settings.
+3. Compatibility: partial legacy API saves now retain stored settings instead of silently applying defaults; explicit settings remain validated. No role, history-retention policy or runtime response-authority change; major remains 1.
+
+## 1.35.43 — 2026-10-31
+
+1. [PR #224](https://github.com/StealthCat/MrPatchy/pull/224): retain recovery holds after unknown repair, repository-configuration and signing-key mutation outcomes, matching ordinary-patch safeguards. Lost/unverified replies or a failed post-mutation inventory block later host changes without automatic replay.
+2. Retain available completion receipts in existing bounded operation output, audit the action and operation ID, and explain the package/configuration/trust state an administrator must inspect before the existing explicit reconciliation workflow releases the queue.
+3. Compatibility: uncertain non-patch mutations now pause later changes for target review. Known-unstarted, structured target failures, successful outcomes and journaled patch/release recovery retain their existing behavior. A structured failure is not proof that no partial changes occurred; inventory is a bounded observation. No schema, target-helper or response-authority change; major remains 1.
+
 ## 1.35.42 — 2026-10-31
 
 1. [PR #226](https://github.com/StealthCat/MrPatchy/pull/226): deliver the original commits from [PR #206](https://github.com/StealthCat/MrPatchy/pull/206) through an upstream integration branch. Declare viewer/operator/admin/self-service roles on each route and reject undeclared, conflicting or incorrectly public routes during startup.

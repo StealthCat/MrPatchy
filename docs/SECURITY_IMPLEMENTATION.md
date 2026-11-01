@@ -5620,6 +5620,24 @@ maintainer-directed batch #222 uses a writable upstream branch. Historical
 candidate version .22 is superseded; README no longer tracks versions. Final
 PR-bound version and all 13 exact-head checks are required before delivery and
 verified #206/#198 closure. The separate #157 telemetry report stays open.
-## v1.35.43 — Cached artifact hashes survive the collection deadline (#166)
 
-`hash_artifact` previously checked the deadline before the cache lookup, so processes later in PID order were marked `identity_verified: False` after the shared 10-second deadline even when their hash was cached. The deadline now gates only reading uncached files (per chunk); the file identity re-check on cache hits is unchanged. Roles, audit history and response authorization are untouched.
+## v1.35.48 — Lifecycle-aware host metrics (#160)
+
+PR #210 filters the Prometheus mrpatchy_hosts gauge to Host.deleted_at==0.
+Soft-deleted history remains retained and administrator-readable; disabled,
+non-deleted servers remain counted. Other metrics, route roles, audit retention
+and runtime response authorization are unchanged. The final version/changelog
+record is coordinator-owned under #222, and all 13 exact-head checks remain
+required before merge and verified issue closure. No tags or Docker publication.
+
+## v1.35.49 — Cache-aware artifact hash deadlines (#166)
+
+PR #220 moves the initial shared-deadline check into the verified cache-miss
+branch before data reads, retaining per-chunk checks. A matching cache hit still
+checks device, inode, mtime, ctime and size and can return after the deadline.
+Expired uncached empty/nonempty files perform no data reads. Existing file and
+process identity checks, roles and response authorization remain unchanged.
+This preserves the owner's corrected bebc0c9 handoff; legacy candidate versions
+are superseded by coordinator #222's final version/PR-linked changelog. All 13
+exact-head checks are required before merge and verified issue closure. Deploy
+the agent update through the existing reviewed maintenance workflow; no tags.

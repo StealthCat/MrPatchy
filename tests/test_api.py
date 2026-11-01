@@ -103,3 +103,13 @@ def test_changed_connection_has_new_identity():
     assert worker.behavior_evidence(a)==worker.behavior_evidence(b)
     b['connections'][0]['remote_port']=22
     assert worker.behavior_evidence(a)!=worker.behavior_evidence(b)
+
+
+def test_metrics_host_count_excludes_deleted_servers(admin):
+    keep=host(admin)
+    gone=admin.post('/api/hosts',json={'name':'Gone Pi','address':'192.0.2.11'}).json()['id']
+    assert 'mrpatchy_hosts 2\n' in admin.get('/api/metrics').text
+    with Session() as s:
+        s.get(Host,gone).deleted_at=1;s.commit()
+    assert 'mrpatchy_hosts 1\n' in admin.get('/api/metrics').text
+    assert keep
