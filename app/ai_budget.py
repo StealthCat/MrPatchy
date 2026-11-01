@@ -5,7 +5,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, and_, case, func, select
+from sqlalchemy import String, Text, Double, Numeric, and_, case, func, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -60,8 +60,10 @@ def _state(session,cfg,now):
         # Group by status and per-row amount in SQL so the ledger is never loaded row by row;
         # exact Decimal(amount)*count keeps the sums exact on SQLite and MySQL.
         amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),else_=BudgetEntry.reservation_usd)
-        query=select(BudgetEntry.status,amount,func.count()).where(BudgetEntry.created>=start,BudgetEntry.created<reset,
-            BudgetEntry.status!='released').group_by(BudgetEntry.status,amount)
+        # A row also counts while the window it was admitted under (its own reset_at) is still
+        # open, so changing the reset timezone cannot hand back spend from that window.
+        query=select(BudgetEntry.status,amount,func.count()).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(BudgetEntry.status,amount)
         for key,value,count in session.execute(query):
             total=Decimal(value or 0)*count;counted+=total
             if key in groups:groups[key]+=total
