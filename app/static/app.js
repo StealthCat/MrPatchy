@@ -10,7 +10,7 @@ const serverListContext={q:"",state:"all",offset:0};
 let csrf='',hosts=[],selected='',page='overview',cfg={},toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
 const badge=s=>`<span class="badge ${esc(s)}">${esc(s)}</span>`;
-async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});let data=await r.json();if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin();throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail));}return data;}
+async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data={};if(text){try{data=JSON.parse(text);}catch{data=null;}}if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin();throw Error(data&&typeof data.detail==='string'?data.detail:data&&data.detail!==undefined?JSON.stringify(data.detail):`Request failed (HTTP ${r.status}${r.statusText?' '+r.statusText:''})`);}if(data===null)throw Error(`Unexpected non-JSON response (HTTP ${r.status})`);return data;}
 function toast(message){
  const target=$('#modal').open?$('#modal-message'):$('#toast');
  target.textContent=message;target.classList.remove('hidden');target.style.display='block';
