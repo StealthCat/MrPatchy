@@ -71,12 +71,14 @@ def build(s,host,actor,reason):
     known=scan_ids|{r['id'] for r in b.sections['incidents']}
     references={e['details']['scan_id'] for e in b.sections['incident_events'] if isinstance(e['details'].get('scan_id'),str)}
     references.update(ref for p in b.sections['advisory_plans'] for step in p['content']['steps'] for ref in (step.get('evidence_ids') if isinstance(step.get('evidence_ids'),list) else []) if isinstance(ref,str))
-    unresolved=sorted(references-known)
+    known|={'scans:'+i for i in scan_ids}
+    out_of_scope=sorted(r for r in references-known if r.split(':',1)[0] in ('executions','inspections') and ':' in r)
+    unresolved=sorted(references-known-set(out_of_scope))
     record={'format':'mrpatchy-scanner-record','version':1,
         'export':{'id':str(uuid.uuid4()),'created':time.time(),'actor':actor,'reason':reason},
         'host':{'id':host.id,'name':host.name,'fingerprint':host.fingerprint,'enabled':host.enabled,'deleted_at':host.deleted_at},
         'scope':{'source':'controller_database_under_host_operation_lock','history_truncated':False,
-            'missing_scan_references':missing,'primary_references_complete':not missing and not unresolved,'missing_evidence_references':unresolved,
+            'missing_scan_references':missing,'primary_references_complete':not missing and not unresolved,'missing_evidence_references':unresolved,'out_of_scope_evidence_references':out_of_scope,
             'projection':'allowlisted scanner receipt, finding, review and advisory metadata only',
             'source_digests':'Opaque retained references; projected metadata does not reproduce all original evidence digest inputs',
             'excludes':['raw_scanner_output','file_bytes','credentials_and_connection_configuration','job_payloads_and_outputs',
