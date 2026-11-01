@@ -113,4 +113,36 @@ module.exports=async function modalRaces(page){
     await page.unroute('**/api/schedules/calendar?*',scheduleCalendar);
     await page.unroute('**/api/schedules',scheduleList);
   }
+
+  // A delayed patch confirmation reports through the global toast for its own
+  // session and never closes or annotates a newer dialog; failures behave alike.
+  const patchFixture=[{name:'race-pkg:amd64',installed:'1',candidate:'2',held:false,dpkg_state:'install ok installed',priority:'normal',installation:{state:'unscheduled',at:null,reason:'No matching schedule.'}}];
+  const patchList=route=>route.fulfill({json:patchFixture});
+  const patchPolicy=route=>route.fulfill({json:{reboot:false,rollback:false}});
+  for(const outcome of ['success','error']){
+    let patchPosts=0,releasePatch,patchStarted;
+    const patchWait=new Promise(resolve=>releasePatch=resolve);
+    const patchStart=new Promise(resolve=>patchStarted=resolve);
+    const patchWrite=async route=>{patchPosts++;patchStarted();await patchWait;await route.fulfill(outcome==='success'?{json:{job_id:'patch-race'}}:{status:409,json:{detail:'Patch request became stale'}});};
+    await page.route('**/api/hosts/*/packages?*',patchList);
+    await page.route('**/api/hosts/*/patch-policy',patchPolicy);
+    await page.route('**/api/hosts/*/patch',patchWrite);
+    try{
+      await page.locator('[data-nav=packages]').click();
+      await page.locator('.pkg-check').first().waitFor();
+      await page.locator('#select-all-updates').click();
+      await page.locator('#patch-selected').click();
+      await page.locator('#confirm-patch').waitFor();
+      await page.locator('#confirm-patch').evaluate(button=>{button.click();button.click();});
+      await patchStart;
+      const accountTitle=await replaceDialog();
+      releasePatch();
+      await page.locator('#toast').filter({hasText:outcome==='success'?'Installation queued':'Patch request became stale'}).waitFor({state:'visible'});
+      await assertAccountUnaffected(accountTitle);
+      assert.equal(patchPosts,1);
+      await page.locator('#close-modal').click();
+      await page.locator('[data-nav=overview]').click();
+      await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
+    }finally{releasePatch();await page.unroute('**/api/hosts/*/patch',patchWrite);await page.unroute('**/api/hosts/*/patch-policy',patchPolicy);await page.unroute('**/api/hosts/*/packages?*',patchList);}
+  }
 };

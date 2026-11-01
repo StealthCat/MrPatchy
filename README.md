@@ -365,6 +365,8 @@ CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and 
 
 Repository, trust and schedule dialog submissions are one-shot while pending. Opening another dialog keeps it intact; an earlier result is shown globally for the same signed-in session and is suppressed after sign-out. Closing a dialog does not cancel the submitted operation.
 
+Late manual-response-plan approvals and patch confirmations also leave newer dialogs intact. Patch success or failure is reported globally for the same session when its original dialog has been replaced; stale-session feedback is suppressed. Manual-plan approval remains a record of review and executes no target response action.
+
 Browser regressions also exercise all three roles, 320px/390px layouts, account access, persisted maintenance and SMTP settings, queued cancellation, inline dialog errors, duplicate patch clicks, and delayed responses after navigation, dialog dismissal or sign-out.
 
 Real distribution release upgrades, Raspberry Pi/systemd hardware, live IdP/SMTP/custom-ACME services, kernel eBPF attachment, bootable filesystem rollback and off-host provider connectivity require acceptance tests in your environment. The existing MySQL CI suite does not constitute a MySQL dump/import disaster-recovery drill.
