@@ -63,12 +63,19 @@ def enqueue(s,host_id,action,payload=None):
         if host_id in revisions:body['_host_revision']=revisions[host_id]
         return _enqueue_active(s,host_id,action,body)
 
-def _enqueue_active(s,host_id,action,payload=None):
+def ensure_queue_capacity(s,host_id):
+    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
+
+def stage_job(s,host_id,action,payload=None):
+    """Add a queued job with its per-job audit entry; the caller commits."""
     host=s.get(Host,host_id)
     if host and not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
-    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
+    ensure_queue_capacity(s,host_id)
     job=Job(id=str(uuid.uuid4()),host_id=host_id,action=action,payload=payload or {})
-    s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
+    s.add(job); audit(s,'queue '+action,host_id); return job.id
+
+def _enqueue_active(s,host_id,action,payload=None):
+    job_id=stage_job(s,host_id,action,payload); s.commit(); return job_id
 
 def save_inventory(s,h,inv):
     items=package_backend.installed(inv)

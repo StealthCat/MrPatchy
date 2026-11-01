@@ -154,7 +154,7 @@ Deadlines start at first discovery of an outstanding update and do not reset whe
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
 
-After a reviewed staged rollout is queued, its dialog closes and a confirmation reports the queued server count. Approval is disabled while submission is in flight.
+After a reviewed staged rollout is queued, its dialog closes and a confirmation reports the queued server count. Approval is disabled while submission is in flight. Each server job records a `queue patch` audit entry alongside the rollout batch audit. Submission remains one transaction: a server queue at the 50-operation limit rejects the whole rollout without partially queueing it.
 
 ## Update importance, expected installation and package history
 
@@ -200,6 +200,8 @@ Configure each host under **Account → Operations → SSO, SMTP & target polici
 - After inspecting package/service state, repository configuration and signing-key trust where applicable, snapshots and pending reboot timers through a trusted console, use **Activity → Review interrupted operation**. Reconciliation also requires idle central and target mutation locks. It releases the queue without replaying the interrupted job.
 
 A host that never returns over SSH cannot be automatically repaired from the central service. Keep an out-of-band recovery path. See [recovery contracts and procedures](docs/ENTERPRISE_RECOVERY.md).
+
+After enrollment completion or server deletion, navigation loads the destination once and shows its success message after that view finishes loading. Failed or superseded navigation drops pending success feedback. Activity uses the loaded account identity for its controls; the server still authorizes each request.
 
 ## Distribution release upgrades
 
@@ -1058,3 +1060,12 @@ each target to install both new helper and collector. Older helpers and observat
 remain readable but cannot bind follow-up to the recorded process. No new schema,
 automatic target upgrade, Docker-image publication or cache-hit claim is made.
 Assessment history retains the context actually supplied to each AI stage.
+
+### Dependency update maintenance
+
+Dependabot is configured for weekly pip, npm, GitHub Actions and Docker update
+PRs. Docker coverage includes the root, `deploy/` and `tests/fixtures/` Dockerfiles.
+These proposed updates still need review and CI; configuration alone does not
+verify live update generation or provide code scanning. Image digests, Python
+package hashes, Actions commit pinning and further Compose sandboxing remain
+tracked in [#201](https://github.com/StealthCat/MrPatchy/issues/201).
