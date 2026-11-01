@@ -853,6 +853,15 @@ def _loop(reporter):
                         try: future.result()
                         except Exception: log.exception('Job worker failed outside its operation handler')
                         del active_jobs[key]
+                for host_id,future in list(active_polls.items()):
+                    if future.done() and not getattr(future,'_mp_reaped',False):
+                        future._mp_reaped=True
+                        try: future.result()
+                        except Exception: log.exception('Host poll failed outside its handler')
+                if notification_task is not None and notification_task.done() and not getattr(notification_task,'_mp_reaped',False):
+                    notification_task._mp_reaped=True
+                    try: notification_task.result()
+                    except Exception: log.exception('Notification delivery failed outside its handler')
                 if draining:
                     ai_transport.close(wait=False)
                     continue
