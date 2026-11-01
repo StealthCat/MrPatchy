@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.85 — 2026-11-01
+
+1. [PR #293](https://github.com/StealthCat/MrPatchy/pull/293): Complete native-browser regression coverage for delayed patch success and conflict responses after navigation or sign-out, retaining one-shot submission, same-session global feedback, destination/login state and obsolete-session suppression. Compatibility: test-only completion of the already-delivered #241/#238 lifecycle guards; no production source, API, schema, role, audit, target action, data-sharing or runtime-response authorization change. Completes #126.
+
 ## 1.35.84 — 2026-11-01
 
 1. [PR #259](https://github.com/StealthCat/MrPatchy/pull/259): Batch descriptor-safe ClamAV scans into local engine processes of at most 32 files / 128 MiB, while preserving exact per-file result mapping, descriptor/path/metadata identity checks, signature provenance, scan budgets and cleanup on every exit. Ambiguous output or engine failure conservatively retries through the existing single-file path. Compatibility: no schema, role, target-action, daemon or runtime-response authorization change; batches may run for up to 120 seconds within the existing four-minute overall budget, and fallback invocations retain their 30-second per-file timeout.
