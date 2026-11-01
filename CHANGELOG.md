@@ -1,5 +1,101 @@
 # Changelog
 
+## 1.35.63 — 2026-11-01
+
+1. [PR #232](https://github.com/StealthCat/MrPatchy/pull/232): Close the staged-rollout review dialog before displaying its queued-server confirmation so the message is visible. Disable approval while the request is in flight and reenable the captured button on error to reduce duplicate submissions.
+2. Compatibility: UI-only; backend rollout authorization, roles, audit and recovery rules are unchanged. This focused confirmation fix does not complete the separately tracked stale-dialog/session isolation work in #126/#156, which remains open.
+
+## 1.35.62 — 2026-11-01
+
+1. [PR #250](https://github.com/StealthCat/MrPatchy/pull/250): Bulk-load advisory update-scoring candidates and exact/deferred score state in ordered 200-package chunks instead of two per-package score queries. Retain oldest-first/id ordering, stale deferred supersession, due-work eligibility, the five-item provider batch and final exact-evidence checks.
+2. Compatibility: no API/schema, model-quality, role or response-authorization change. Existing scoring ownership, lifecycle/AI pause, admission and spend gates remain required. Reduced local database round trips are not a guarantee of provider or end-to-end throughput.
+
+## 1.35.61 — 2026-11-01
+
+1. [PR #243](https://github.com/StealthCat/MrPatchy/pull/243): Page fleet Investigations in batches of 50 with Previous/Next controls so behaviors beyond the former first-500 limit remain reachable. Remember each fleet/server view's offset across refresh and navigation; clear it on session reset. Keep host scoping, role restrictions, advisory assessments and explicit approvals unchanged.
+2. Compatibility: frontend-only paging uses the existing API offset/limit contract; no schema or API change. Page state belongs to the current signed-in session, and existing response authorization remains required.
+
+## 1.35.60 — 2026-11-01
+
+1. [PR #247](https://github.com/StealthCat/MrPatchy/pull/247): Verify missing/disabled account attempts against a dummy password hash, move password verification outside the global login lock, and evict oldest throttle buckets at the 10,000-bucket cap instead of rejecting every sign-in. Recheck current identity/password and consume MFA under the lock before creating a session; retain failure/audit responses and existing per-bucket/address limits.
+2. Compatibility: no API schema change. This reduces account-existence timing differences and concurrent sign-in blocking; it does not add cross-process MFA guarantees or account-wide distributed throttling. Wider throttling and hash-format policy remain separate work.
+
+## 1.35.59 — 2026-11-01
+
+1. [PR #246](https://github.com/StealthCat/MrPatchy/pull/246): Fail lifecycle activity closed when its lock cannot be acquired; interactive SSH requests use nonblocking admission and report HTTP 409 when busy. Background operations retain blocking exclusion. Lifecycle admission/release errors preserve whether a remote command started, so pre-transport repair, repository and key failures release the host without losing uncertain-outcome safeguards after remote start.
+2. Compatibility: internal SSH calls gain an optional admission flag; external API schemas and operational approvals are unchanged. Busy interactive requests must be retried after active work finishes; no operation is replayed automatically.
+
+## 1.35.58 — 2026-11-01
+
+1. [PR #230](https://github.com/StealthCat/MrPatchy/pull/230): Restrict investigation-status AI budget, spend, admission, provider-backoff, error and capacity telemetry to administrators. Non-admins receive only pending count, oldest pending time and enabled state; the fleet Investigations page retains its safe queue summary and shows triage diagnostics and hourly limits only to admins.
+2. Compatibility: viewer/operator clients of `/api/investigation-status` must use the reduced response. Administrator telemetry and existing roles, approvals, response authorization and recent dialog guards remain unchanged.
+
+## 1.35.57 — 2026-10-31
+
+1. [PR #235](https://github.com/StealthCat/MrPatchy/pull/235): create a fresh urgent high/critical attempt when a previous run was skipped after its window expired without ever queuing a patch job. Reconsider it only after host telemetry, health and the approved maintenance-window/bypass rules allow.
+2. Retain deterministic attempt identities and previous run history. Existing active, failed or patch-queued attempts stop the reissue chain, preserving no-replay behavior and one patch batch per eligible attempt. Preserve the dispatcher-first expiry reporting delivered in PR #231.
+3. Compatibility: urgent work previously stranded after an unstarted expired window can become eligible again. Current repository revalidation, policy, host locks, recovery and response authorization remain required; no schema or target-helper change, major remains 1.
+
+## 1.35.56 — 2026-10-31
+
+1. [PR #231](https://github.com/StealthCat/MrPatchy/pull/231): record an otherwise-authorized scheduled patch whose start window expired as a skipped run even when the job dispatcher notices before the schedule tick. Retain the expiry reason so history and scheduled-patching alerts report the missed window.
+2. Keep authorization revocation separate: disabled or revised schedules, missing runs and mismatched host scope retain cancellation behavior. Expired queued jobs are cancelled before execution; running work is not replayed.
+3. Compatibility: expired runs previously shown as cancelled now show skipped and participate in existing missed-window alerting. No schema, roles, target-helper or response-authority change; major remains 1.
+
+## 1.35.55 — 2026-10-31
+
+1. [PR #241](https://github.com/StealthCat/MrPatchy/pull/241): bind repository source/key/access, investigation trust and schedule save/delete submissions to their originating dialog and session. Disable covered submissions while pending to prevent duplicate requests.
+2. Preserve newer dialogs when earlier requests finish; report stale same-session results globally and suppress obsolete feedback after sign-out. Keep the existing queued-response cancellation browser coverage alongside the new dialog-race coverage.
+3. Compatibility: UI lifecycle only; submitted operations are not cancelled by closing a dialog or signing out. No API, schema, role or response-authority change; major remains 1. Related #126 stays open pending the separately owned patch-confirm/manual-response work and complete combined acceptance.
+
+## 1.35.54 — 2026-10-31
+
+1. [PR #237](https://github.com/StealthCat/MrPatchy/pull/237): let administrators cancel genuinely unstarted file/process response and related queued security jobs despite retained response holds. Keep the host mutex and use an atomic queued-only transition with linked-record cleanup in one transaction.
+2. Reuse reject-unstarted approval, publication, staging, preparation and evidence semantics; mark only the cancelled execution-scan job's queued triggers skipped. Preserve prior/unrelated/uncertain holds, audit history, running/recovery job refusal and existing lifecycle/release-plan cancellation.
+3. Compatibility: cancellation remains controller-local bookkeeping, reflected in Activity, and does not undo target work or release an uncertain response. No schema, target-helper or runtime response-authority change; major remains 1.
+
+## 1.35.53 — 2026-10-31
+
+1. [PR #239](https://github.com/StealthCat/MrPatchy/pull/239): explain retained file-response, process-response, replacement-publication and service-monitoring review holds in package installation forecasts. Queued and scheduled work show a waiting state without a concrete start estimate while a hold remains.
+2. Reuse the authoritative local hold predicate in one request-local snapshot, reevaluate on the next request after separately authorized release, and preserve already-running installation status and host isolation.
+3. Compatibility: existing forecast fields and rendering are retained; held work now reports an unknown start instead of a misleading timestamp. Forecasts remain advisory and do not contact targets, release holds or change execution/response authorization. No schema change; major remains 1.
+
+## 1.35.52 — 2026-10-31
+
+1. [PR #228](https://github.com/StealthCat/MrPatchy/pull/228): render IPv6 server endpoints as [address]:port through one shared presentation helper in the server directory, enrollment verification, management dialog, workspace heading and system facts.
+2. Preserve hostname/IPv4 formatting and existing HTML escaping. Connection settings, request payloads, roles, audit and response authorization are unchanged; this is a display correction.
+3. Add a browser regression asserting a long IPv6 address with port 2222 renders with brackets in the server directory. Major remains 1.
+
+## 1.35.51 — 2026-10-31
+
+1. [PR #225](https://github.com/StealthCat/MrPatchy/pull/225): reject explicit public-URL port 0, empty ports and out-of-range ports with a clear error before creating .env. Use HTTPS port 443 only when no port is supplied, avoiding silent fallback or a Python traceback.
+2. Warn on stderr when an existing .env is retained and a supplied --public-url is ignored. Existing configuration remains unchanged; no cloud resource or credential behavior changes.
+3. Cover default 443, invalid/empty IPv4-hostname and bracketed-IPv6 port cases, and ignored-URL warnings. Valid installation inputs and trust checks retain their behavior; major remains 1.
+
+## 1.35.50 — 2026-10-31
+
+1. [PR #223](https://github.com/StealthCat/MrPatchy/pull/223): make legacy bridge verify a thin alias of agent-status. Missing managed files return status entries instead of failing the entire request, and the existing descriptor-based probes avoid following unchecked links or splitting stat/hash identity.
+2. Update the native SSH integration caller to use canonical agent-status and retain alias dispatch regression coverage. Command allowlists and trust boundaries are unchanged.
+3. Compatibility: verify now returns the agent-status response shape and service probes; file entries may report missing:true or unsafe:true. No controller runtime caller used legacy verify. Deploy the updated bridge through the reviewed maintenance workflow; major remains 1.
+
+## 1.35.49 — 2026-10-31
+
+1. [PR #220](https://github.com/StealthCat/MrPatchy/pull/220): return verified cached artifact hashes after the shared collection deadline instead of marking later processes unverified solely because their hashes are already cached.
+2. Apply the initial time-budget guard inside the cache-miss branch before any data read, including empty files; retain per-chunk budgets and device/inode/mtime/ctime/size identity checks. Cover expired cached hits and empty/nonempty uncached misses with zero-read assertions.
+3. Deploy the updated target agent through the existing reviewed helper-maintenance workflow. No receipt-format, role, schema or response-authority change; major remains 1.
+
+## 1.35.48 — 2026-10-31
+
+1. [PR #210](https://github.com/StealthCat/MrPatchy/pull/210): exclude soft-deleted server records from the Prometheus mrpatchy_hosts gauge by filtering deleted_at==0 in SQL.
+2. Preserve disabled-server counting, retained administrator history, other metrics and viewer access to the metrics endpoint. A regression verifies the count drops from two to one after soft deletion.
+3. Compatibility: consumers may see a lower host count reflecting deleted records; no database records are removed. No schema, audit or response-authority change; major remains 1.
+
+## 1.35.47 — 2026-10-31
+
+1. [PR #216](https://github.com/StealthCat/MrPatchy/pull/216): record old-to-new role and enabled state plus password-set yes/no in manage-user audit entries. Newly created users are identified as new; passwords and hashes are never included in the detail.
+2. Add an authenticated API regression covering account creation, role escalation, disabling and password-presence markers while asserting the supplied password is absent from audit history.
+3. Preserve administrator/self-access checks, session-generation invalidation and audit retention. No schema or response-authority change; major remains 1.
+
 ## 1.35.46 — 2026-10-31
 
 1. [PR #218](https://github.com/StealthCat/MrPatchy/pull/218): prevent older ineligible incidents from permanently hiding eligible automatic ClamAV advisory plans. Filter quarantined hosts before selecting candidates and page past YARA incidents instead of using a fixed oldest-100 window.

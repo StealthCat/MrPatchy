@@ -27,13 +27,15 @@ def inactive_ids():
 
 
 @contextmanager
-def activity(host_ids,kind):
+def activity(host_ids,kind,blocking=True):
     """Keep lifecycle transitions out of in-flight SSH and provider requests."""
     locks=[]
     try:
         for identifier in sorted(set(host_ids)):
             lock=Lock('server-'+kind+':'+identifier)
-            lock.acquire();locks.append(lock)
+            if not lock.acquire(blocking):
+                raise Busy('Server communication or AI work is active; retry after it finishes')
+            locks.append(lock)
         revisions={}
         with Session() as s:
             for identifier in host_ids:
@@ -64,27 +66,37 @@ def revoke_links(s,host_id):
         if row.value.get('host_id')==host_id:s.delete(row)
 
 
+def reject_pending_records(s,job,actor,reason):
+    """Controller-local cleanup after the caller has fenced an unstarted job.
+
+    State/host checks in each handler preserve uncertain or unrelated responses.
+    The caller owns the host lock, queued-only transition and transaction.
+    """
+    from . import quarantine,process_response,repair_publication,repair_staging,repair_preparation,evidence_vault,evidence_archive
+    if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
+    if job.action in ('process-suspend','process-resume'):process_response.reject_unstarted(s,job)
+    if job.action=='trusted-repair-publish':repair_publication.reject_unstarted(s,job,actor,'cancelled')
+    if job.action=='trusted-repair-stage':
+        row=s.get(repair_staging.Stage,job.payload.get('stage_id'))
+        if row and row.host_id==job.host_id and row.state=='queued':
+            row.state='rejected';repair_staging.event(s,row,'cancelled',actor,{'reason':reason})
+    if job.action=='trusted-repair-prepare':
+        row=s.get(repair_preparation.Preparation,job.payload.get('preparation_id'))
+        if row and row.host_id==job.host_id and row.state=='queued':row.state='cancelled';row.finished=time.time()
+    if job.action=='evidence-preserve':
+        row=s.get(evidence_vault.EvidenceCopy,job.payload.get('copy_id'))
+        if row and row.host_id==job.host_id and row.state=='queued':row.state='rejected';row.expires=0
+    if job.action=='evidence-acquire':
+        row=s.get(evidence_vault.EvidenceArchive,job.payload.get('archive_id'))
+        if row and row.host_id==job.host_id and row.state=='queued':
+            row.state='rejected';evidence_archive.observe(s,row,'rejected',job.id)
+
+
 def cancel_pending(s,host_id,actor):
-    from . import quarantine,process_response,repair_publication,repair_staging,repair_preparation,evidence_vault,evidence_archive,releases,scheduling
+    from . import releases,scheduling
     count=0
     for job in s.scalars(select(Job).where(Job.host_id==host_id,Job.state=='queued')):
-        if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
-        if job.action in ('process-suspend','process-resume'):process_response.reject_unstarted(s,job)
-        if job.action=='trusted-repair-publish':repair_publication.reject_unstarted(s,job,actor,'cancelled')
-        if job.action=='trusted-repair-stage':
-            row=s.get(repair_staging.Stage,job.payload.get('stage_id'))
-            if row and row.host_id==host_id and row.state=='queued':
-                row.state='rejected';repair_staging.event(s,row,'cancelled',actor,{'reason':'Server management disabled'})
-        if job.action=='trusted-repair-prepare':
-            row=s.get(repair_preparation.Preparation,job.payload.get('preparation_id'))
-            if row and row.host_id==host_id and row.state=='queued':row.state='cancelled';row.finished=time.time()
-        if job.action=='evidence-preserve':
-            row=s.get(evidence_vault.EvidenceCopy,job.payload.get('copy_id'))
-            if row and row.host_id==host_id and row.state=='queued':row.state='rejected';row.expires=0
-        if job.action=='evidence-acquire':
-            row=s.get(evidence_vault.EvidenceArchive,job.payload.get('archive_id'))
-            if row and row.host_id==host_id and row.state=='queued':
-                row.state='rejected';evidence_archive.observe(s,row,'rejected',job.id)
+        reject_pending_records(s,job,actor,'Server management disabled')
         job.state='cancelled';job.output='Server management disabled; cancelled work will not resume automatically'
         plan=s.get(releases.ReleasePlan,job.payload.get('plan_id')) if job.action in ('release-plan','release-upgrade') else None
         if plan and plan.host_id==host_id and plan.state in ('planning','approved','queued'):plan.state='cancelled';plan.error=job.output

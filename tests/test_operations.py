@@ -23,6 +23,12 @@ def test_viewer_cannot_mutate_or_read_installer(client):
     assert client.get('/api/hosts').status_code==200
     assert client.get('/api/settings').status_code==403
 
+def test_viewer_investigation_status_hides_ai_telemetry(client):
+    login_as(client,'reader','viewer')
+    r=client.get('/api/investigation-status');assert r.status_code==200
+    assert set(r.json())=={'pending','oldest','enabled'}
+    for key in ('budget','admission','provider_backoff','last_error','reported_capacity','worker_seen'): assert key not in r.json()
+
 def test_operator_cannot_deploy_or_change_trust(client):
     login_as(client,'operator','operator')
     assert client.post('/api/hosts/x/actions/deploy').status_code==403
