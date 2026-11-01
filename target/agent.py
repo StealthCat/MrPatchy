@@ -176,11 +176,16 @@ def collect(hash_cache):
     return processes, errors
 
 def atomic(path, value):
+    path=Path(path)
+    if path.is_symlink():raise ValueError('Refusing symlink destination')
     fd,name=tempfile.mkstemp(prefix='.'+path.name,dir=path.parent)
     try:
         with os.fdopen(fd,'w') as stream:
             json.dump(value,stream);stream.flush();os.fsync(stream.fileno());os.fchmod(stream.fileno(),0o600)
         os.replace(name,path)
+        directory_fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(directory_fd)
+        finally:os.close(directory_fd)
     finally:
         if os.path.exists(name):os.unlink(name)
 
@@ -479,9 +484,9 @@ def main():
                 optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
                 for p in MANAGED+([optional] if Path(optional).exists() else []):
                     try:
-                        hashes[p] = digest(p)
-                        info=Path(p).stat()
-                        metadata[p]={'uid':info.st_uid,'gid':info.st_gid,'mode':stat.S_IMODE(info.st_mode)}
+                        # One descriptor yields hash and ownership, so a swap cannot split them.
+                        found={};hashes[p] = hash_artifact(p,{},metadata=found)
+                        metadata[p]={key:found[key] for key in ('uid','gid','mode')}
                     except (OSError,ValueError) as e: hashes[p] = 'ERROR: '+str(e)
                 hashed_at = time.time(); next_hash = started+300
             procs, errors = collect(cache)
