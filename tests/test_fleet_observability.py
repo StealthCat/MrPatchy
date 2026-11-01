@@ -57,11 +57,8 @@ def test_manual_retry_does_not_reset_hourly_quota(admin,monkeypatch):
     ai_runs.heartbeat();assert admin.get('/api/investigation-status').json()['reason']=='rate_limited'
 
 
-def test_worker_failure_is_visible_and_scoring_still_runs(admin,monkeypatch):
-    called=[]
-    monkeypatch.setattr(worker,'investigate_one',lambda:(_ for _ in ()).throw(RuntimeError('secret password')))
-    monkeypatch.setattr(update_scores,'run_one',lambda:called.append(1))
-    worker.ai_cycle();assert called==[1]
+def test_worker_failure_is_visible_without_leaking_detail(admin):
+    ai_runs.task_failure(RuntimeError('secret password'))
     runs=admin.get('/api/ai/runs').json()['items'];assert runs[0]['purpose']=='worker' and 'RuntimeError' in runs[0]['message']
     assert 'secret password' not in json.dumps(runs)
 

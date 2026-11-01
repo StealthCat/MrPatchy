@@ -244,7 +244,7 @@ def ingest(s,h,snapshot,include_inventory=True):
             if t.get('managed_metadata',{}).get(name)!={'uid':0,'gid':0,'mode':expected_mode}:
                 issues.append({'path':name,'issue':'Managed file ownership/permissions changed or metadata is missing; upgrade the collector if needed'})
     if not h.baseline: issues.append({'path':'baseline','issue':'Managed baseline missing; finish installation'})
-    ingest_events(s,h,snapshot)
+    ids=ingest_events(s,h,snapshot)
     for p in t.get('processes',[]): record_behavior(s,h,p,t['collected'])
     spool_issue=spool_loss_issue(snapshot.get('spool',{}),h.telemetry.get('spool',{}) if isinstance(h.telemetry,dict) else {})
     if spool_issue:issues.append({'path':'event spool','issue':spool_issue})
@@ -256,14 +256,19 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
     s.commit()
+    return ids
 
-def drain_events(s,h,snapshot,max_batches=32,budget=10):
-    """Commit before acknowledgement; bounded catch-up without full inventories."""
+def drain_events(s,h,snapshot,max_batches=32,budget=10,ingested_ids=None):
+    """Commit before acknowledgement; bounded catch-up without full inventories.
+
+    ingested_ids are the ids of the first batch that ingest() already committed;
+    that batch is acknowledged without being ingested a second time."""
     deadline=time.monotonic()+budget
     for index in range(max_batches):
         events=snapshot.get('events',[])
         if not events:return
-        ids=ingest_events(s,h,snapshot);s.commit()
+        if index==0 and ingested_ids is not None:ids=ingested_ids
+        else:ids=ingest_events(s,h,snapshot);s.commit()
         ssh.call(h,{'action':'ack','ids':ids},timeout=max(1,deadline-time.monotonic()))
         if snapshot.get('spool',{}).get('pending',len(events))<=len(events):return
         if index+1==max_batches or time.monotonic()>=deadline:return
@@ -295,8 +300,8 @@ def _poll_active_host(host_id):
                     return
             try:
                 snapshot=ssh.call(h,{'action':'snapshot'})
-                ingest(s,h,snapshot,include_inventory=locked)
-                drain_events(s,h,snapshot)
+                ids=ingest(s,h,snapshot,include_inventory=locked)
+                drain_events(s,h,snapshot,ingested_ids=ids)
             except Exception as e:
                 s.rollback()
                 h=s.get(Host,host_id)
@@ -776,13 +781,6 @@ def _assess_active_behavior(s,row,cfg,secret):
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
 
-def ai_cycle():
-    # Separate quotas keep score batches from starving process investigations.
-    for fn in (investigate_one,update_scores.run_one):
-        try:fn()
-        except Exception as error:ai_runs.task_failure(error)
-
-
 def loop(role="embedded"):
     from .worker_registry import Registration
     try:
@@ -875,8 +873,11 @@ def _loop(reporter):
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
                         if len(active_jobs)>=capacity['jobs']:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
+                    hold_cache={};window_cache={};closed_patch_windows=set()
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.next_at<=now,Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=capacity['jobs']: break
+                        if j.host_id in busy_hosts:continue
+                        if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
                         if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
                         from . import quarantine,process_response
                         response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
@@ -884,8 +885,16 @@ def _loop(reporter):
                         read_only_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-prepare','response-service-health') and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
                         staging_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
                         publication_id=j.payload.get('publication_id') if j.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None):continue
-                        if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
+                        hold_scope=(j.host_id,response_id,process_id,read_only_response_id,staging_response_id,publication_id,
+                                    response_id if publication_id else None,j.action=='evidence-archive-status',
+                                    response_id if j.action=='response-service-health' else None)
+                        if hold_scope not in hold_cache:
+                            hold_cache[hold_scope]=operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None)
+                        if hold_cache[hold_scope]:continue
+                        eligible=operations.eligible(s,j,window_cache)
+                        if not eligible and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule') and window_cache.get(j.host_id) is False:
+                            closed_patch_windows.add(j.host_id)
+                        if j.id not in active_jobs and eligible:
                             submit_job(jobs,j,active_jobs,busy_hosts)
                 if is_leader and now-last_cleanup>3600:
                     with Session() as s:

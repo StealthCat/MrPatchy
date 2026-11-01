@@ -150,7 +150,7 @@ Explicit installation refreshes target metadata and requests the recorded exact 
 | Normal | 168 hours |
 | Low | 720 hours |
 
-Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates default to high; others default to normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
+Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates with a newer candidate default to high; others default to normal. Resetting a package to **auto** uses the same rule; a package without a newer candidate stays normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
 
@@ -183,6 +183,8 @@ Review and explicitly approve unattended installation before enabling a schedule
 See [scheduling behavior, daylight saving, safety checks and failure handling](docs/PATCH_SCHEDULES.md). Distribution release upgrades still use their separate reviewed GO workflow.
 
 ## Reboot, rollback and interrupted operations
+
+Queued dispatch reuses matching response-hold and ordinary maintenance-window results only within one worker iteration, and skips work for servers already busy in that iteration. The executor rechecks holds and eligibility before claiming work; dispatch caching does not authorize an operation or bypass a response pause.
 
 API clients receive HTTP 409 for disabled/deleted-server or busy-state conflicts, and HTTP 429 when the server queue reaches its existing 50-operation limit. Handle these separately from HTTP 400 invalid input; rejected requests do not authorize or enqueue additional work.
 
@@ -237,7 +239,7 @@ Each action now shows **estimated API cost in USD**, including follow-up calls. 
 
 ![AI diagnostics and worker status](docs/screenshots/ai-run-logs.jpg)
 
-The target's durable spool partitions normal observations into batches of at most 256 KiB and acknowledges them only after central commit. It retains up to 48 MB, exposes queued bytes and reasoned cumulative oversize/capacity loss counters, and reports only newly observed loss as an active integrity finding. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
+The target's durable spool partitions normal observations into batches of at most 256 KiB and acknowledges them only after central commit. It retains up to 48 MB, exposes queued bytes and reasoned cumulative oversize/capacity loss counters, and reports only newly observed loss as an active integrity finding. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty. Within a poll, the first event batch reuses its committed ingestion result before acknowledgement. A lost acknowledgement can still replay a batch; deduplication preserves the stored observations.
 
 ## Reviewed file replacement
 
