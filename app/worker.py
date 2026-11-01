@@ -695,8 +695,8 @@ def mutation_outcome_uncertain(stage,error):
     if stage!='sent':return False
     return not (ssh.request_unstarted(error) or isinstance(error,ssh.RemoteFailure))
 
-def validate_patch(s,h,specs):
-    cfg=config(s)
+def validate_patch(s,h,specs,cfg=None):
+    cfg=cfg or config(s)
     if h.repo_error or not h.last_repo or time.time()-h.last_repo>cfg['repo_minutes']*120:
         raise ValueError('Refresh repositories before patching; metadata is stale, changed, or the latest check failed')
     for spec in specs:

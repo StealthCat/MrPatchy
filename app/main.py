@@ -488,7 +488,8 @@ def patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         policy=reviewed_policy(s,host_id,body.expected_recovery_policy)
-        try: worker.validate_patch(s,h,[])
+        cfg=config(s)
+        try: worker.validate_patch(s,h,[],cfg)
         except ValueError as e: raise HTTPException(409,str(e))
         specs=[]
         if len(set(body.packages))!=len(body.packages): raise HTTPException(400,'Duplicate package selections')
@@ -497,7 +498,7 @@ def patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
             p=s.get(Package,host_id+':'+name)
             if not p or not p.candidate: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             spec=p.name+'='+p.candidate
-            try: worker.validate_patch(s,h,[spec])
+            try: worker.validate_patch(s,h,[spec],cfg)
             except ValueError: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
             specs.append(spec)
