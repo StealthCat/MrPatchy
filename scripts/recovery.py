@@ -83,7 +83,7 @@ def tree_inventory(source):
 
 def copy_tree(source,destination,private=False):
     before=tree_inventory(source)
-    shutil.copytree(source,destination)
+    shutil.copytree(source,destination,dirs_exist_ok=True)
     if tree_inventory(destination)!=before:raise ValueError('Recovery directory changed during copy')
     if private:
         Path(destination).chmod(0o700)
@@ -224,7 +224,13 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
             hosts|=sqlite_key_hosts(db)
             if manifest['format']==2:check_archives(bundle,sqlite_verified_archives(db))
     check_ssh(bundle/'ssh',hosts)
-    data.mkdir(mode=0o700,parents=True,exist_ok=True)
+    # Prove every destination is usable before any irreversible write, so a
+    # mounted or read-only volume cannot leave a half-activated deployment (#151).
+    for location in (data,tls,Path(caddy_data),Path(caddy_config)):
+        location.mkdir(mode=0o700,parents=True,exist_ok=True)
+        try:
+            with tempfile.TemporaryFile(dir=location):pass
+        except OSError as error:raise ValueError('Activation destination is not writable: '+str(location)+' ('+str(error)+')') from None
     if manifest['database']=='mysql':
         url=make_url(os.environ['DATABASE_URL'])
         with tempfile.TemporaryDirectory() as temp:
@@ -238,12 +244,9 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
         for name in DURABLE_STATE:
             if manifest['durable_state'][name] is not None:copy_tree(bundle/name,data/name,private=True)
     copy_tree(bundle/'ssh',data/'ssh');(data/'ssh').chmod(0o700)
-    if tls.exists():tls.rmdir()
+    # Fill the existing empty directories in place: mount points cannot be removed.
     copy_tree(bundle/'tls',tls)
-    for name,location in (('caddy-data',caddy_data),('caddy-config',caddy_config)):
-        location=Path(location)
-        if location.exists():location.rmdir()
-        copy_tree(bundle/name,location)
+    for name,location in (('caddy-data',caddy_data),('caddy-config',caddy_config)):copy_tree(bundle/name,Path(location))
     if os.geteuid()==0:
         for root in (data,tls):
             os.chown(root,uid,uid)
