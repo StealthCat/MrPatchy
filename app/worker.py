@@ -9,14 +9,12 @@ import time
 import uuid
 import math
 import re
-import subprocess
-from sqlalchemy import select, delete, update, func
+from sqlalchemy import select, delete, update
 from . import host_lifecycle
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend
+from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
 from .security import unseal
-import httpx
 from .coordination import Lock
 log=logging.getLogger(__name__)
 stop=threading.Event()
@@ -927,7 +925,7 @@ def start():
     t=threading.Thread(target=loop,daemon=True); t.start(); return t
 
 if __name__=='__main__':
-    from . import identity,operations
+    from . import operations
     from .db import init
     import signal
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
