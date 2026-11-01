@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.35.79 — 2026-11-01
+
+1. [PR #233](https://github.com/StealthCat/MrPatchy/pull/233): Show readable HTTP-status errors for non-JSON or empty API error bodies instead of JSON parser failures. Preserve valid JSON values, including null, accept empty successful responses, and retain sign-in reset and stale-session response guards.
+2. Compatibility: no backend API, schema, role or runtime-response authorization change. Unexpected non-JSON successful responses produce a readable error; existing structured API detail messages are retained.
+
+## 1.35.78 — 2026-11-01
+
+1. [PR #284](https://github.com/StealthCat/MrPatchy/pull/284): Configure weekly Dependabot update PRs for pip, npm, GitHub Actions and Docker, covering the root, deploy and test-fixture Dockerfile locations. Add tracked-manifest coverage regressions.
+2. Compatibility: no runtime or API change. Configuration does not establish a successful live update-generation run, dependency vulnerability scanning, code scanning, digest/hash/Actions-SHA pinning or additional Compose sandboxing. Partial #201 remains open for those requirements.
+
 ## 1.35.77 — 2026-11-01
 
 1. [PR #285](https://github.com/StealthCat/MrPatchy/pull/285): Stage rollout jobs through the shared worker queue helper, recording one `queue patch` audit entry per server job alongside the existing batch audit. Share the per-server 50-operation queue-capacity check with ordinary queueing.
