@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.86 — 2026-11-01
+
+1. [PR #294](https://github.com/StealthCat/MrPatchy/pull/294): Share one bounded, strong-digest gpgv verification boundary across Debian vendor-package and YARA-bundle authentication, preserving signer fingerprints and the existing SHA-224/256/384/512 acceptance set while normalizing command, timeout, output-limit and status failures to a redacted `ValueError` subtype. Compatibility: failed YARA gpgv commands now use the shared failure type instead of exposing a `RuntimeError`; no schema, API, target helper, UI, role, audit or runtime-response authorization change. This is partial #189; advisory-plan, response/status/query and duplicate-stub consolidation remain open.
+
 ## 1.35.85 — 2026-11-01
 
 1. [PR #293](https://github.com/StealthCat/MrPatchy/pull/293): Complete native-browser regression coverage for delayed patch success and conflict responses after navigation or sign-out, retaining one-shot submission, same-session global feedback, destination/login state and obsolete-session suppression. Compatibility: test-only completion of the already-delivered #241/#238 lifecycle guards; no production source, API, schema, role, audit, target action, data-sharing or runtime-response authorization change. Completes #126.
