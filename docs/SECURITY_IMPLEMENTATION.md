@@ -5620,3 +5620,12 @@ maintainer-directed batch #222 uses a writable upstream branch. Historical
 candidate version .22 is superseded; README no longer tracks versions. Final
 PR-bound version and all 13 exact-head checks are required before delivery and
 verified #206/#198 closure. The separate #157 telemetry report stays open.
+
+## v1.35.48 — Lifecycle-aware host metrics (#160)
+
+PR #210 filters the Prometheus mrpatchy_hosts gauge to Host.deleted_at==0.
+Soft-deleted history remains retained and administrator-readable; disabled,
+non-deleted servers remain counted. Other metrics, route roles, audit retention
+and runtime response authorization are unchanged. The final version/changelog
+record is coordinator-owned under #222, and all 13 exact-head checks remain
+required before merge and verified issue closure. No tags or Docker publication.
