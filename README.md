@@ -558,6 +558,11 @@ sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
 changes are audited. Estimates use published token prices and may differ from the
 provider invoice.
 
+Daily accounting groups repeated amounts without loading every ledger entry as an
+application object. This reduces memory use, especially when amounts repeat, but
+many distinct amounts still increase work under the shared admission lock. A bounded
+summary and broader SQLite/MySQL concurrency evidence remain open work.
+
 Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
 alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
 failover/reset acceptance remain required before the shared controls program is
