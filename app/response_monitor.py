@@ -3,7 +3,7 @@ from . import host_lifecycle
 import time
 from sqlalchemy import String,Double,JSON,Index,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from .db import Base,Session,Setting,Host,Job,audit
+from .db import Base,Session,Setting,Host,Job
 from . import quarantine,incidents,ssh
 
 DEFAULT={'enabled':False,'interval_minutes':15,'pause_on_problem':False,'revision':''}

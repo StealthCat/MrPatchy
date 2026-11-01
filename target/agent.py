@@ -262,7 +262,7 @@ def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
     # Read through one descriptor: pathname replacement cannot change the inode
     # between validation and hashing. O_NONBLOCK prevents FIFO substitution hangs.
     deadline=min(deadline if deadline is not None else float('inf'),time.monotonic()+2)
-    if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
+    # The budget applies only when a cache miss needs the file read (checked per chunk).
     fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as stream:
         info=os.fstat(stream.fileno())
@@ -272,6 +272,8 @@ def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
             raise ValueError('On-disk inode differs from the running mapping')
         identity=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns,info.st_size)
         if identity not in cache:
+            # Expired budget: reject a miss before any read (also covers empty files).
+            if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
             checksum=hashlib.sha256();total=0
             for chunk in iter(lambda:stream.read(1024*1024),b''):
                 if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
@@ -942,8 +944,6 @@ def vendor_inspect(manifest):
         if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or str(Path(path))!=path or '..' in Path(path).parts or path in seen or len(path)>4096 or any(ord(c)<32 for c in path):raise ValueError('Invalid vendor file path')
         if not re.fullmatch('[a-f0-9]{64}',entry.get('sha256','')) or type(entry.get('size')) is not int or not 0<=entry['size']<=32*1024*1024:raise ValueError('Invalid vendor file hash or size')
         seen.add(path)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
     result={'state':'incomplete','package':manifest['package'],'version':version,'architecture':manifest['architecture'],
             'scope_files':len(entries),'examined':0,'findings':[],'gaps':[],'trust_basis':'controller_authenticated_rpm_artifact' if manager=='rpm' else 'controller_authenticated_debian_artifact'}
     deadline=time.monotonic()+120;total=0

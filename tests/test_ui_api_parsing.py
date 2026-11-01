@@ -36,6 +36,7 @@ def test_api_handles_non_json_and_empty_bodies():
         {'status': 422, 'body': '{"detail":[{"msg":"x"}]}'},
         {'status': 200, 'body': '{"a":1}'},
         {'status': 401, 'body': ''},
+        {'status': 200, 'body': 'null'},
     ])
     out = res['out']
     assert out[0]['err'] == 'Request failed (HTTP 502 Bad Gateway)'
@@ -45,4 +46,5 @@ def test_api_handles_non_json_and_empty_bodies():
     assert 'msg' in out[4]['err']
     assert out[5] == {'ok': {'a': 1}}
     assert out[6]['err'].startswith('Request failed (HTTP 401')
+    assert out[7] == {'ok': None}  # valid JSON null is not a parse failure
     assert res['logins'] == 1

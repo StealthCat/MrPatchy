@@ -32,6 +32,8 @@ class Planner:
         self.runs={r.id:r for r in s.scalars(select(scheduling.PatchRun).where(scheduling.PatchRun.host_id==host.id))}
         self.packages=list(s.scalars(select(Package).where(Package.host_id==host.id,Package.candidate!='').order_by(Package.name)))
         self.cache={}
+        # One read-only snapshot per planner, shared by all package forecasts.
+        self.hold_reason=self._hold_reason()
     def result(self,state,reason,at=None,**extra):return {'state':state,'at':at,'reason':reason,'estimated':True,**extra}
     def for_package(self,p):
         if not p.candidate:return None
@@ -58,6 +60,7 @@ class Planner:
                 if run.trigger!='regular' and schedule.policy[run.trigger]['bypass_window']:windows=[]
             at=next_window(windows,now,end)
             return self.result('queued' if at is not None else 'blocked','Earliest worker start, subject to repository revalidation.' if at is not None else 'No remaining permitted start window.',at,job_id=job.id)
+        if self.hold_reason:return self.result('waiting',self.hold_reason)
         if not self.schedules:return self.result('unscheduled','No enabled schedule covers this server. Select updates to install on demand.')
         if self.host.state!='online' or now-self.host.last_seen>120 or self.host.integrity:return self.result('blocked','Automatic patching awaits a healthy online server with fresh telemetry.')
         if self._busy():return self.result('waiting',self._busy())
@@ -90,7 +93,24 @@ class Planner:
             at,name,trigger=min(choices)
             return self.result('scheduled','Estimated start window; repository refresh, worker availability and safety checks must pass.',at,schedule=name,trigger=trigger)
         return self.result('blocked' if mismatch else 'unscheduled','Recovery policy differs from the schedule approval.' if mismatch else 'No eligible start in the next 62 days, or this urgency batch already ran. Review schedules or install on demand.')
+    def _hold_reason(self):
+        # The executor's predicate decides whether work is held. These additional
+        # local queries explain the review categories; they grant no exemptions.
+        if not operations.host_quarantined(self.s,self.host.id):return ''
+        from .quarantine import Quarantine
+        from .process_response import ProcessResponse
+        from .repair_publication import Publication
+        from .service_monitor import Watch
+        reviews=[]
+        for model,label in ((Quarantine,'file response'),(ProcessResponse,'process response'),
+                            (Publication,'replacement publication'),(Watch,'service monitoring')):
+            if self.s.scalar(select(model.id).where(model.host_id==self.host.id,model.hold==True).limit(1)) is not None:
+                reviews.append(label)
+        if reviews:return 'Waiting for review of '+', '.join(reviews)+' holds; start time is unknown.'
+        return 'Waiting for other server work or recovery; its finish time is unknown.'
+
     def _busy(self,job=None):
+        if self.hold_reason:return self.hold_reason
         for other in self.jobs:
             if job and other.id==job.id:continue
             if other.state in ('running','recovery_required') or (other.state=='queued' and other.action!='refresh' and (job is None or other.created<job.created)):
