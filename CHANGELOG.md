@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.47 — 2026-10-31
+
+1. [PR #216](https://github.com/StealthCat/MrPatchy/pull/216): record old-to-new role and enabled state plus password-set yes/no in manage-user audit entries. Newly created users are identified as new; passwords and hashes are never included in the detail.
+2. Add an authenticated API regression covering account creation, role escalation, disabling and password-presence markers while asserting the supplied password is absent from audit history.
+3. Preserve administrator/self-access checks, session-generation invalidation and audit retention. No schema or response-authority change; major remains 1.
+
 ## 1.35.46 — 2026-10-31
 
 1. [PR #218](https://github.com/StealthCat/MrPatchy/pull/218): prevent older ineligible incidents from permanently hiding eligible automatic ClamAV advisory plans. Filter quarantined hosts before selecting candidates and page past YARA incidents instead of using a fixed oldest-100 window.
