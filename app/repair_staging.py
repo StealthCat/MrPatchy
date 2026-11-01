@@ -4,7 +4,7 @@ import time
 import uuid
 from sqlalchemy import String,Double,JSON,Text,select
 from sqlalchemy.orm import Mapped,mapped_column
-from .db import Base,audit,Job
+from .db import Base,audit
 from . import incidents,quarantine,repair_preparation,vendor,ssh,operations
 
 ACTIONS=('trusted-repair-stage','trusted-repair-stage-status')

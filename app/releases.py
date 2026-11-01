@@ -1,28 +1,21 @@
 """Release planning, AI configuration review, and resumable approved orchestration."""
-import base64
 import difflib
 import gzip
-import hashlib
 import json
-import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tarfile
 import time
-import uuid
 from urllib.parse import urlsplit
-import httpx
 from . import ai
-from sqlalchemy import select
 from . import apt,ssh
-from .db import Base,Session,Setting,Job,Host,config,audit
+from .db import Base,Setting,config
 from sqlalchemy.orm import Mapped,mapped_column
 from sqlalchemy import String,Text,Double
 from sqlalchemy.dialects.mysql import LONGTEXT
 from .security import seal,unseal
-from target.release import canonical,digest,parse_transaction,conffiles,validator,allowed_config
+from target.release import canonical,digest,parse_transaction,conffiles,validator
 
 class ReleasePlan(Base):
     __tablename__='release_plans'
