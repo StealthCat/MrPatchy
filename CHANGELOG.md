@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.80 — 2026-11-01
+
+1. [PR #256](https://github.com/StealthCat/MrPatchy/pull/256): Reflow server Overview summary cards by available content width, keep the decorative mascot clear of guide text and actions, and render multi-line link buttons with complete borders on Overview and Patching pages.
+2. Compatibility: CSS-only presentation change; no API, schema, role or runtime-response authorization change. The separately tracked long server-heading overflow (#176) is not changed by this delivery.
+
 ## 1.35.79 — 2026-11-01
 
 1. [PR #233](https://github.com/StealthCat/MrPatchy/pull/233): Show readable HTTP-status errors for non-JSON or empty API error bodies instead of JSON parser failures. Preserve valid JSON values, including null, accept empty successful responses, and retain sign-in reset and stale-session response guards.
