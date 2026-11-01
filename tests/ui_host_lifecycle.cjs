@@ -49,7 +49,11 @@ module.exports=async(page,capture)=>{
   await page.locator('#host-lifecycle-form [name=confirmation]').fill('Lifecycle UI server');
   await page.getByRole('button',{name:'Delete this server',exact:true}).click();
   await page.locator('#modal-message').filter({hasText:'Reconcile the active response hold'}).waitFor();assert.equal(deleted,false);
+  const afterDelete=[];const track=r=>{const u=new URL(r.url());if(u.pathname==='/api/hosts'||u.pathname==='/api/identity')afterDelete.push(r.method()+' '+u.pathname);};page.on('request',track);
   await page.getByRole('button',{name:'Delete this server',exact:true}).click();await page.locator('#modal').waitFor({state:'hidden'});
+  await page.getByRole('heading',{name:'Servers'}).first().waitFor().catch(()=>{});await page.waitForLoadState('networkidle');page.off('request',track);
+  assert.equal(afterDelete.filter(x=>x==='GET /api/hosts').length,1,'deletion renders the destination once: '+afterDelete);
+  assert.equal(afterDelete.filter(x=>x==='GET /api/identity').length,1,'deletion fetches identity once: '+afterDelete);
   await page.setViewportSize({width:1440,height:1000});
   await page.getByRole('link',{name:'Deleted servers',exact:true}).click();
   await page.getByRole('heading',{name:'Deleted servers',exact:true}).waitFor();
