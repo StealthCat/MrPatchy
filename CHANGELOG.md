@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.73 — 2026-11-01
+
+1. [PR #278](https://github.com/StealthCat/MrPatchy/pull/278): Share one pure, action-specific response-hold scope resolver between worker admission and execution, and derive the dispatch hold-cache key from that scope. Add table-driven coverage for response, process, read-only, staging, publication, local-observation and service exemptions.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Execution still checks current holds independently before claiming work; strict service-watch distinctions, separate hold IDs, per-host serialization, approvals and existing dispatch-cache boundaries are retained.
+
 ## 1.35.72 — 2026-11-01
 
 1. [PR #280](https://github.com/StealthCat/MrPatchy/pull/280): Count sign-in attempts against the exact client address instead of a text prefix. Attempts from a different IPv6 address sharing that prefix no longer exhaust another address's sign-in window; same-address limits and audit-once behavior remain covered by regression tests. This coordinator integration preserves the implementation and history from PR #277.
