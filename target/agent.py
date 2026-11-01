@@ -278,9 +278,11 @@ def acknowledge(ids):
         for x in ids:
             row=db.execute('SELECT length(CAST(payload AS BLOB)) FROM events WHERE id=?',(x,)).fetchone()
             if row:
-                db.execute('DELETE FROM events WHERE id=?',(x,))
-                db.execute("UPDATE counters SET value=MAX(0,value-?) WHERE name='queued_bytes'",(row[0],))
-                db.execute("UPDATE counters SET value=MAX(0,value-1) WHERE name='queued_count'")
+                # A concurrent duplicate acknowledgement may already have deleted the row:
+                # only the call whose DELETE removed it may decrement the counters.
+                if db.execute('DELETE FROM events WHERE id=?',(x,)).rowcount==1:
+                    db.execute("UPDATE counters SET value=MAX(0,value-?) WHERE name='queued_bytes'",(row[0],))
+                    db.execute("UPDATE counters SET value=MAX(0,value-1) WHERE name='queued_count'")
     return {'acknowledged':len(ids)}
 
 def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):

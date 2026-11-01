@@ -76,3 +76,47 @@ def test_ebpf_hash_cache_is_bounded(tmp_path, monkeypatch):
         link.symlink_to(binary)
         agent.ebpf_process(f"7\t0\t{binary}\n", tmp_path / "proc", cache)
         assert len(cache) <= 2
+
+
+def test_concurrent_duplicate_ack_decrements_once(tmp_path, monkeypatch):
+    """A second acknowledgement that read the row before the first deleted it must not subtract again."""
+    import contextlib
+    monkeypatch.setattr(agent, "ROOT", tmp_path)
+    monkeypatch.setattr(agent, "SPOOL_READY", set())
+    proc = {"executable": "/bin/x", "sha256": "a" * 64, "uid": "0", "connections": [], "capture": "ebpf"}
+    agent.spool([proc], time.time())
+    agent.spool([proc], time.time())
+    target_id = agent.pending_events()["events"][0]["id"]
+    real = agent.spool_db
+
+    class Racing:
+        """Lets a competing acknowledgement fully complete right after our SELECT."""
+        def __init__(self, db):
+            self.db = db
+            self.raced = False
+
+        def execute(self, sql, *args):
+            result = self.db.execute(sql, *args)
+            if sql.startswith("SELECT length") and not self.raced:
+                self.raced = True
+                agent.spool_db = real
+                try:
+                    agent.acknowledge([target_id])
+                finally:
+                    agent.spool_db = racing
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+
+    @contextlib.contextmanager
+    def racing():
+        with real() as db:
+            yield Racing(db)
+
+    monkeypatch.setattr(agent, "spool_db", racing)
+    agent.acknowledge([target_id])
+    monkeypatch.setattr(agent, "spool_db", real)
+    info = agent.pending_events()["spool"]
+    assert (info["queued_bytes"], info["pending"]) == true_totals(tmp_path / "events.db")
+    assert info["pending"] == 1
