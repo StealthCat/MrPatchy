@@ -123,7 +123,10 @@ def execute(s,host,job):
         s.rollback();s.expire_all();row=s.get(ProcessResponse,payload['process_id'])
         if not row or not bound(s,host,row) or incidents.digest(row.plan)!=digest:raise ValueError('Process scope changed during remote response; review console')
         row.receipt=receipt;row.observed=time.time();row.state=receipt['state'];row.hold=row.state!='resumed'
-        event(s,row,'observed_'+row.state,actor,{'job_id':job.id,'receipt':receipt})
+        if receipt['state']=='not_started':
+            approval=s.get(Approval,row.approval_id)
+            if approval and approval.process_id==row.id and approval.plan_digest==digest:row.state=approval.before_state;row.hold=approval.before_hold
+        event(s,row,'observed_'+receipt['state'],actor,{'job_id':job.id,'receipt':receipt})
         incomplete=not status and row.state!=('resumed' if action=='resume' else 'suspended')
         return {'id':row.id,'state':row.state,'process_hold':row.hold,'outcome':'response_incomplete' if incomplete else 'observed'}
     except Exception:
