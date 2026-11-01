@@ -773,6 +773,14 @@ def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
     return save_settings_section(body.model_dump(),'history')
 
+@app.post('/api/ai/provider-backoff/clear')
+def clear_provider_backoff(user=Depends(admin_user)):
+    from . import ai_provider_backoff
+    active=ai_provider_backoff.clear()
+    with Session() as s:
+        audit(s,'clear AI provider backoff',user['username']+(' cleared an active floor' if active else ' (no active floor)'));s.commit()
+    return {'cleared':active}
+
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}
     expected_model:str|None=Field(default=None,max_length=100)
