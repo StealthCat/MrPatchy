@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.77 — 2026-11-01
+
+1. [PR #285](https://github.com/StealthCat/MrPatchy/pull/285): Stage rollout jobs through the shared worker queue helper, recording one `queue patch` audit entry per server job alongside the existing batch audit. Share the per-server 50-operation queue-capacity check with ordinary queueing.
+2. Compatibility: retain single-transaction submission, canary dependencies, actor, reviewed recovery policy and host lifecycle revision. A full server queue still rejects the entire submission with HTTP 429; its error text now comes from the shared helper. No schema, role or runtime-response authorization change. Partial #188: patch-validation reuse and response-idle deduplication remain unfinished.
+
 ## 1.35.76 — 2026-11-01
 
 1. [PR #263](https://github.com/StealthCat/MrPatchy/pull/263): Render the destination once after enrollment completion or server deletion, and reuse the loaded identity when displaying Activity controls. Show navigation success feedback only after its matching destination render succeeds, including unchanged-hash navigation.

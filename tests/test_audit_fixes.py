@@ -9,8 +9,9 @@ import sys
 import time
 from types import SimpleNamespace
 import pytest
+from sqlalchemy import select
 from app import worker,operations,sso
-from app.db import Session,Host,Package,Job,Setting
+from app.db import Session,Host,Package,Job,Setting,Audit
 from target import agent,bridge
 
 
@@ -246,3 +247,29 @@ def test_rollout_requires_each_hosts_reviewed_policy(admin):
     with Session() as s:
         for job_id in result.json()['jobs']:
             job=s.get(Job,job_id);assert job.payload['_recovery_policy']==policies[job.host_id]
+
+
+def test_rollout_audits_each_queued_patch_job(admin):
+    with Session() as s:
+        a=host(s);b=Host(id='audit-third',name='Third',address='192.0.2.3',fingerprint='fixture',last_repo=time.time())
+        s.add(b)
+        for h in (a,b):s.add(Package(id=h.id+':demo:amd64',host_id=h.id,name='demo:amd64',installed='1',candidate='2'))
+        s.commit()
+    body={'hosts':['audit-host','audit-third'],'packages':['demo:amd64']}
+    policies={h:{'reboot':False,'rollback':False} for h in body['hosts']}
+    result=admin.post('/api/operations/rollouts',json={**body,'expected_recovery_policies':policies})
+    assert result.status_code==200
+    with Session() as s:
+        queued=[r.detail for r in s.scalars(select(Audit).where(Audit.action=='queue patch'))]
+    assert sorted(queued)==['audit-host','audit-third']
+
+
+def test_rollout_rejects_full_server_queue(admin):
+    with Session() as s:
+        a=host(s);s.add(Package(id=a.id+':demo:amd64',host_id=a.id,name='demo:amd64',installed='1',candidate='2'))
+        b=Host(id='audit-fourth',name='Fourth',address='192.0.2.4',fingerprint='fixture',last_repo=time.time());s.add(b)
+        s.add(Package(id=b.id+':demo:amd64',host_id=b.id,name='demo:amd64',installed='1',candidate='2'))
+        for i in range(50):s.add(Job(id='full-%d'%i,host_id=b.id,action='inventory',payload={}))
+        s.commit()
+    body={'hosts':['audit-host','audit-fourth'],'packages':['demo:amd64'],'expected_recovery_policies':{h:{'reboot':False,'rollback':False} for h in ('audit-host','audit-fourth')}}
+    assert admin.post('/api/operations/rollouts',json=body).status_code==429
