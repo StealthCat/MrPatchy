@@ -41,5 +41,6 @@ window.PatchyUI=(()=>{
  document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const menu=event.target.closest('.section-menu[open]');if(menu){menu.open=false;menu.querySelector('summary').focus();event.preventDefault();}});
  document.querySelectorAll('[data-icon]').forEach(node=>node.innerHTML=icon(node.dataset.icon));
  document.querySelectorAll('[data-mascot-portrait]').forEach(node=>node.innerHTML=portrait());
- return {icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation};
+ const endpoint=(address,port)=>{const a=String(address??'');return (a.includes(':')&&!a.startsWith('[')?'['+a+']':a)+(port===undefined||port===null||port===''?'':':'+port);};
+ return {icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation,endpoint};
 })();
