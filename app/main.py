@@ -488,15 +488,19 @@ def patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         policy=reviewed_policy(s,host_id,body.expected_recovery_policy)
-        if h.repo_error or not h.last_repo or time.time()-h.last_repo>config(s)['repo_minutes']*120: raise HTTPException(409,'Refresh repositories before patching; candidate data is stale')
+        try: worker.validate_patch(s,h,[])
+        except ValueError as e: raise HTTPException(409,str(e))
         specs=[]
         if len(set(body.packages))!=len(body.packages): raise HTTPException(400,'Duplicate package selections')
         if body.expected_versions is not None and set(body.expected_versions)!=set(body.packages): raise HTTPException(400,'Expected versions must match selected packages')
         for name in body.packages:
             p=s.get(Package,host_id+':'+name)
-            if not p or not p.candidate or p.held or p.dpkg_state.split()[-1]!='installed': raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            if not p or not p.candidate: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            spec=p.name+'='+p.candidate
+            try: worker.validate_patch(s,h,[spec])
+            except ValueError: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
-            specs.append(p.name+'='+p.candidate)
+            specs.append(spec)
         return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs,'_recovery_policy':policy,'_actor':user['username']})}
 @app.get('/api/hosts/{host_id}/repositories')
 def repositories(host_id:str,user=Depends(admin_user)):
