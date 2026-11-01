@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.63 — 2026-11-01
+
+1. [PR #232](https://github.com/StealthCat/MrPatchy/pull/232): Close the staged-rollout review dialog before displaying its queued-server confirmation so the message is visible. Disable approval while the request is in flight and reenable the captured button on error to reduce duplicate submissions.
+2. Compatibility: UI-only; backend rollout authorization, roles, audit and recovery rules are unchanged. This focused confirmation fix does not complete the separately tracked stale-dialog/session isolation work in #126/#156, which remains open.
+
 ## 1.35.62 — 2026-11-01
 
 1. [PR #250](https://github.com/StealthCat/MrPatchy/pull/250): Bulk-load advisory update-scoring candidates and exact/deferred score state in ordered 200-package chunks instead of two per-package score queries. Retain oldest-first/id ordering, stale deferred supersession, due-work eligibility, the five-item provider batch and final exact-evidence checks.
