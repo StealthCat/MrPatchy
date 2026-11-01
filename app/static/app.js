@@ -462,12 +462,28 @@ async function releasePanel(id){
   $('#build-release').onclick=async e=>{e.target.disabled=true;try{const r=await api(`/hosts/${id}/releases`,'POST',{});if(e.target.isConnected&&$('#modal').open)await reviewRelease(id,r.plan_id);}catch(error){toast(error.message);e.target.disabled=false;}};
  }catch(error){toast(error.message);}
 }
-async function reviewRelease(id,planId){
+async function updateReleaseProgress(r,view){
+ if(!r.job_id)return;
+ const job=await api('/jobs/'+r.job_id),panel=$('#release-progress');
+ if(view===modalRevision&&panel&&panel.isConnected)panel.textContent=job.state+(job.output?'\n'+job.output:'');
+}
+async function reviewRelease(id,planId,poll){
  const request=++releaseRequest,revision=modalRevision;
  try{
   const r=await api(`/hosts/${id}/releases/${planId}`),p=r.plan||{},t=p.target||{},pending=['planning','approved','running'].includes(r.state);
   if(request!==releaseRequest||revision!==modalRevision)return;
+  // Background polls update only the state badge and progress while the plan state is unchanged,
+  // so open diffs, scroll position and dialog messages survive. A state change rebuilds the dialog
+  // and restores which <details> were open.
+  if(poll&&poll.view===modalRevision&&poll.state===r.state&&$('#release-progress')?.isConnected&&$('#modal').open){
+   const badgeNode=$('#modal-body .toolbar .badge');if(badgeNode)badgeNode.outerHTML=badge(r.state);
+   await updateReleaseProgress(r,poll.view);
+   if(pending)setTimeout(()=>{if(poll.view===modalRevision&&$('#modal').open)reviewRelease(id,planId,poll);},5000);
+   return;
+  }
+  const openDetails=poll?[...document.querySelectorAll('#modal-body details')].map(x=>x.open):[];
   modal('Release upgrade · '+hostName(id),`<div class="toolbar">${badge(r.state)}<button id="refresh-release">Refresh progress</button></div><h3>${esc(t.distribution||'Preparing inventory')} ${esc(t.from_version||'')} → ${esc(t.version||'next supported release')}</h3>${r.error?`<div class="notice">${esc(r.error)}</div>`:''}${pending?'<p class="help">Progress is durable. You can close this window and return from this server’s saved plans.</p>':''}${p.expires?`<p class="help">Approval expires ${date(p.expires)}. Inventory/configuration drift requires a new plan.</p>`:''}${(p.blockers||[]).length?`<div class="notice"><strong>Cannot proceed</strong><ul>${p.blockers.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}${(p.warnings||[]).map(x=>`<p class="help">${esc(x)}</p>`).join('')}<details><summary>Package transaction · ${(p.transaction||[]).length} changes</summary><div class="table-wrap"><table><thead><tr><th>Action</th><th>Package</th><th>Version</th></tr></thead><tbody>${(p.transaction||[]).map(x=>`<tr><td>${esc(x.action)}</td><td>${esc(x.package)}</td><td>${esc(x.version)}</td></tr>`).join('')}</tbody></table></div></details><h3>Configuration migration</h3>${(p.reviews||[]).map(x=>`<p><strong>${esc(x.path)}</strong><br>${esc(x.reason)}</p>`).join('')}${(p.edits||[]).map(x=>`<details class="source"><summary>${esc(x.path)}</summary><pre>${esc(x.diff)}</pre></details>`).join('')}<details class="source"><summary>Repository configuration</summary>${Object.entries(p.sources||{}).map(([path,content])=>`<h3>${esc(path)}</h3><pre>${esc(content)}</pre>`).join('')}</details>${['ready','blocked'].includes(r.state)?`<div class="notice">${esc(p.authorization)}</div><div class="actions"><button id="decline-release">No-go · Keep current release</button><button class="primary" id="approve-release" ${r.state!=='ready'?'disabled':''}>GO · Execute approved plan</button></div>`:''}<pre id="release-progress"></pre>`);
+  if(poll)document.querySelectorAll('#modal-body details').forEach((x,i)=>{if(openDetails[i])x.open=true;});
   const panel=$('#release-progress'),view=modalRevision;
   const current=()=>panel.isConnected&&$('#modal').open&&view===modalRevision;
   $('#refresh-release').onclick=()=>reviewRelease(id,planId);
@@ -478,8 +494,8 @@ async function reviewRelease(id,planId){
    const control=$(selector);if(!control)continue;
    control.onclick=async()=>{if(!current())return;controls.forEach(x=>x.disabled=true);try{await api(`/hosts/${id}/releases/${planId}/decision`,'POST',{decision,digest:r.digest});if(current())await reviewRelease(id,planId);}catch(error){toast(error.message);if(current())controls.forEach(x=>x.disabled=x.id==='approve-release'&&r.state!=='ready');}};
   }
-  if(r.job_id){const job=await api('/jobs/'+r.job_id);if(current())panel.textContent=job.state+(job.output?'\n'+job.output:'');}
-  if(pending)setTimeout(()=>{if(current())reviewRelease(id,planId);},5000);
+  await updateReleaseProgress(r,view);
+  if(pending)setTimeout(()=>{if(current())reviewRelease(id,planId,{view,state:r.state});},5000);
  }catch(error){toast(error.message);}
 }
 
