@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.72 — 2026-11-01
+
+1. [PR #280](https://github.com/StealthCat/MrPatchy/pull/280): Count sign-in attempts against the exact client address instead of a text prefix. Attempts from a different IPv6 address sharing that prefix no longer exhaust another address's sign-in window; same-address limits and audit-once behavior remain covered by regression tests. This coordinator integration preserves the implementation and history from PR #277.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Existing bucket format, per-account limits, expiry/eviction, IPv4 protection, password/MFA and session checks are retained. This does not complete the separate login-spray retention or aggregate password-hashing resource/concurrency work.
+
 ## 1.35.71 — 2026-11-01
 
 1. [PR #273](https://github.com/StealthCat/MrPatchy/pull/273): Compute daily AI budget totals from SQL groups by status and exact amount instead of loading every ledger entry as an ORM object. Reuse those totals for status displays, exclude released reservations, and retain conservative cap accounting for unrecognized unreleased states.

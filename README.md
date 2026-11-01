@@ -58,7 +58,7 @@ Administrators can **Disable server** or **Delete server** from **Servers → Op
 
 Interactive SSH checks and configuration requests return HTTP 409 promptly when lifecycle communication is busy; retry after the active operation finishes. Background jobs keep their operation-duration exclusion. Lock refusal stops before target contact, and failures after a remote mutation starts retain their existing recovery safeguards.
 
-Sign-in verifies a password hash for unknown and disabled accounts as well as active accounts. Password hashing runs outside the global login lock; current identity/password and MFA are checked before session creation. The bounded throttle table evicts its oldest buckets instead of locking out all users when full.
+Sign-in verifies a password hash for unknown and disabled accounts as well as active accounts. Password hashing runs outside the global login lock; current identity/password and MFA are checked before session creation. The bounded throttle table evicts its oldest buckets instead of locking out all users when full. Address limits count attempts from the exact same address, so separate IPv6 addresses sharing a text prefix do not use up each other's limit.
 
 Fleet **Investigations** shows 50 behaviors per page with Previous/Next controls. Each fleet or server view remembers its page across Refresh and navigation within the signed-in session; signing out clears that page state.
 
