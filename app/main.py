@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from contextlib import asynccontextmanager, contextmanager
 import hashlib
 import os
@@ -67,7 +68,11 @@ app.mount('/static',StaticFiles(directory=static),name='static')
 
 @app.middleware('http')
 async def guard(request,call_next):
-    response=await call_next(request)
+    try: response=await call_next(request)
+    except Exception:
+        # Unhandled errors would otherwise be answered outside this middleware, without the security headers.
+        logging.getLogger('mrpatchy').exception('Unhandled error for %s %s',request.method,request.url.path)
+        response=JSONResponse({'detail':'Internal server error'},status_code=500)
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
