@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.83 — 2026-11-01
+
+1. [PR #262](https://github.com/StealthCat/MrPatchy/pull/262): Initially open the patch calendar in hourly day view at widths of 700px or narrower and keep weekday headers visible while scrolling the month grid. Retain the wider-screen month default and manual view selection.
+2. Compatibility: presentation-only defaults; no schedule execution, API, schema or authorization change. The initial choice is not reset on resize, and explicitly selected month/tablet grids can still scroll horizontally.
+
 ## 1.35.82 — 2026-11-01
 
 1. [PR #238](https://github.com/StealthCat/MrPatchy/pull/238): Keep late manual-response-plan approval and patch-confirmation results from closing or annotating a newer dialog. Patch success/error feedback uses the shared same-session global notification contract and suppresses obsolete-session effects.
