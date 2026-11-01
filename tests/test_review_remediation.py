@@ -334,5 +334,21 @@ def test_cached_hash_is_returned_after_deadline(tmp_path):
     cache={}
     digest=agent.hash_artifact(path,cache)
     assert agent.hash_artifact(path,cache,deadline=agent.time.monotonic()-1)==digest
-    with pytest.raises(ValueError,match='time budget'):
-        agent.hash_artifact(path,{},deadline=agent.time.monotonic()-1)
+    for name,data in (('full',b'x'*10),('empty',b'')):
+        target=tmp_path/name;target.write_bytes(data)
+        reads=[]
+        real=agent.os.fdopen
+        def spy(fd,*a,**k):
+            stream=real(fd,*a,**k)
+            class S:
+                def __getattr__(self,n):return getattr(stream,n)
+                def __enter__(self):return self
+                def __exit__(self,*e):return stream.__exit__(*e)
+                def read(self,*x):reads.append(x);return stream.read(*x)
+            return S()
+        agent.os.fdopen=spy
+        try:
+            with pytest.raises(ValueError,match='time budget'):
+                agent.hash_artifact(target,{},deadline=agent.time.monotonic()-1)
+        finally:agent.os.fdopen=real
+        assert reads==[]

@@ -272,6 +272,8 @@ def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
             raise ValueError('On-disk inode differs from the running mapping')
         identity=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns,info.st_size)
         if identity not in cache:
+            # Expired budget: reject a miss before any read (also covers empty files).
+            if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
             checksum=hashlib.sha256();total=0
             for chunk in iter(lambda:stream.read(1024*1024),b''):
                 if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
