@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.43'
+APP_VERSION='1.35.58'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -676,7 +676,7 @@ class ConfigInput(BaseModel):
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_updates_enabled:bool=True
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
-    ai_control_mode:str=Field(default='rate',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
+    ai_control_mode:str=Field(default='legacy',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
@@ -686,15 +686,24 @@ class ConfigInput(BaseModel):
 def settings_save(body:ConfigInput,user=Depends(admin_user)):
     from . import ai_budget
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()): raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
+    supplied=set(body.model_fields_set)  # capture before normalizing: assignment would mark omitted fields as sent
     body.ai_model=body.ai_model.strip();body.api_key=body.api_key.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    with Session() as s:
-        if body.ai_enabled and (not body.ai_model or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
-        s.merge(Setting(key='config',value=body.model_dump(exclude={'api_key'})))
-        if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
-        audit(s,'update settings','Patch policy, cadence or AI configuration changed'); s.commit(); return {'ok':True}
+    # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
+    sent=body.model_dump(exclude={'api_key'},include=supplied)
+    with worker.Lock('settings-config'):
+        with Session() as s:
+            previous=config(s);merged=previous|sent
+            if merged['ai_enabled'] and (not merged['ai_model'] or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
+            raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
+            if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
+            detail='Patch policy, cadence or AI configuration changed ('+(', '.join(sorted(k for k in sent if previous.get(k)!=sent[k])) or 'no stored values changed')+')'
+            if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
+            if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
+            if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
+            audit(s,'update settings',detail); s.commit(); return {'ok':True}
 
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
@@ -958,12 +967,17 @@ def save_user(body:UserInput,user=Depends(admin_user)):
     if body.password and len(body.password)<12: raise HTTPException(400,'Password must have at least 12 characters')
     with Session() as s:
         row=s.get(User,body.username)
-        if not row:
+        created=row is None
+        if created:
             if not body.password: raise HTTPException(400,'New users require a password')
             row=User(username=body.username,password=password_hash(body.password));s.add(row);s.flush()
-        elif body.password: row.password=password_hash(body.password)
+            old_role=old_enabled='new'
+        else:
+            old_role=row.role;old_enabled=str(bool(row.enabled)).lower()
+            if body.password: row.password=password_hash(body.password)
         row.role=body.role;row.enabled=body.enabled;row.generation+=1
-        audit(s,'manage user',user['username']+' → '+body.username);s.commit()
+        detail=(user['username']+' → '+body.username+'; role '+str(old_role)+' → '+body.role+'; enabled '+old_enabled+' → '+str(bool(body.enabled)).lower()+'; password set: '+('yes' if body.password else 'no'))
+        audit(s,'manage user',detail);s.commit()
     return {'ok':True}
 
 class Reauthenticate(BaseModel):
@@ -1101,18 +1115,24 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
 
 @app.post('/api/operations/jobs/{job_id}/cancel')
 def cancel_job(job_id:str,user=Depends(admin_user)):
+    from . import quarantine
     with Session() as s:
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
         host_id=job.host_id
-        publication_cancel=job.action=='trusted-repair-publish'
-    with host_change(host_id,allow_quarantined=publication_cancel),Session() as s:
+        # Cancelling unstarted response work is local bookkeeping, not a new
+        # target operation. Its own (or unrelated) holds must remain reviewable.
+        response_cancel=job.action in (*quarantine.ACTIONS,'evidence-prepare','evidence-preserve','evidence-status','evidence-acquire','evidence-archive-status','execution-scan')
+    with host_change(host_id,allow_quarantined=response_cancel),Session() as s:
         job=s.get(Job,job_id)
+        if not job or job.host_id!=host_id:raise HTTPException(404,'Job not found')
         if job.state!='queued':raise HTTPException(409,'Only queued operations can be cancelled')
-        job.state='cancelled'
-        if job.action=='trusted-repair-publish':
-            from . import repair_publication
-            repair_publication.reject_unstarted(s,job,user['username'],'cancelled')
+        cancelled=s.execute(update(Job).where(Job.id==job_id,Job.host_id==host_id,Job.state=='queued').values(state='cancelled')).rowcount
+        if cancelled!=1:raise HTTPException(409,'Only queued operations can be cancelled')
+        host_lifecycle.reject_pending_records(s,job,user['username'],'Operation cancelled before execution')
+        if job.action=='execution-scan':
+            from . import execution_scans
+            execution_scans.finish(s,job,'skipped','Operation cancelled before execution')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(releases.ReleasePlan,job.payload.get('plan_id'))
             if plan and plan.host_id==host_id and plan.job_id==job.id:
@@ -1138,7 +1158,7 @@ def export_audit(after:int=0,limit:int=1000,user=Depends(admin_user)):
 @app.get('/api/metrics')
 def metrics(user=Depends(viewer_user)):
     with Session() as s:
-        counts={'hosts':s.scalar(select(func.count()).select_from(Host)),'queued_jobs':s.scalar(select(func.count()).select_from(Job).where(Job.state=='queued')),'open_alerts':s.scalar(select(func.count()).select_from(operations.Alert).where(operations.Alert.state=='open'))}
+        counts={'hosts':s.scalar(select(func.count()).select_from(Host).where(Host.deleted_at==0)),'queued_jobs':s.scalar(select(func.count()).select_from(Job).where(Job.state=='queued')),'open_alerts':s.scalar(select(func.count()).select_from(operations.Alert).where(operations.Alert.state=='open'))}
         return PlainTextResponse(''.join('mrpatchy_'+name+' '+str(value)+'\n' for name,value in counts.items()))
 
 class RolloutInput(BaseModel):
