@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.74 — 2026-11-01
+
+1. [PR #266](https://github.com/StealthCat/MrPatchy/pull/266): Update release-upgrade review status and progress in place during unchanged-state background polls, retaining open package/configuration details, scroll position and dialog messages. Reapply expanded-detail flags when a plan state transition rebuilds the review; add a browser regression covering polling and completion.
+2. Synchronize the eBPF diagnostic test fixture with recorded collector recovery before emitting its late warning, and cover delayed event processing while retaining every original diagnostic assertion. Runtime collector behavior is unchanged.
+3. Compatibility: no schema/API/role or runtime-response authorization change. Plan state transitions and explicit manual refresh can still rebuild the dialog; request/modal/session stale-response guards and the separately reviewed GO workflow remain intact.
+
 ## 1.35.73 — 2026-11-01
 
 1. [PR #278](https://github.com/StealthCat/MrPatchy/pull/278): Share one pure, action-specific response-hold scope resolver between worker admission and execution, and derive the dispatch hold-cache key from that scope. Add table-driven coverage for response, process, read-only, staging, publication, local-observation and service exemptions.

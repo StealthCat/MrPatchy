@@ -205,6 +205,8 @@ A host that never returns over SSH cannot be automatically repaired from the cen
 
 Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
 
+While a plan stays in the same planning, approved or running state, background polling updates status and output in place, preserving expanded transaction/configuration details, scroll position and dialog messages. State changes rebuild the review and reapply expanded details; **Refresh progress** explicitly reloads it.
+
 Cancelling a queued planning or upgrade job also cancels its linked plan. Prepare a fresh plan before another GO; cancellation does not preserve approval.
 
 One GO authorizes the named release transition, displayed configuration edits, service interruption, reboot and one snapshot rollback. The detached target runner survives SSH disconnects; workers resume observation after a central restart without replaying installation or resetting recovery deadlines. The approved plan binds configuration, inventory and executable recovery/validation hooks. A rollback is successful only when the original inventory, repository trust, configuration and services have been verified. Uncertain recovery quarantines the host and creates an alert.
