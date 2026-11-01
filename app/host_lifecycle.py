@@ -12,6 +12,7 @@ from .coordination import Lock
 
 class Inactive(ValueError):pass
 class Busy(ValueError):pass
+class QueueFull(ValueError):pass
 
 
 def active(host):
