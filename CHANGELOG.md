@@ -1,8 +1,48 @@
 # Changelog
 
-## 1.35.38 — 2026-10-31
+## 1.35.45 — 2026-10-31
 
-- Accept DNF4 `versionlock exclude` entries (`!name-epoch:version-release.*`) in RPM inventory. The leading `!` is now stripped before the optional epoch, so the entry is held conservatively instead of failing the whole inventory, collector and patching (issue #152). Unsupported expressions are still rejected. No compatibility impact; major version stays 1.
+1. [PR #213](https://github.com/StealthCat/MrPatchy/pull/213): parse standard DNF4 versionlock exclude records without failing RPM inventory and patch evidence. Strip one optional exclusion marker, then an optional epoch prefix, before extracting the package name; treat excludes conservatively as held packages.
+2. Cover DNF4 add/exclude and yum epoch-first add/exclude layouts. Keep unsupported expressions rejected, including repeated exclusion markers; coordinator review tightened the candidate's unrestricted leading-marker stripping.
+3. Preserve package-manager trust and response authorization. No schema or controller API change; update target helpers through the existing reviewed deployment workflow. Major remains 1.
+
+## 1.35.44 — 2026-10-31
+
+1. [PR #211](https://github.com/StealthCat/MrPatchy/pull/211): merge only client-supplied fields in legacy PUT /api/settings under the shared settings-config lock. Preserve omitted retention, AI model/enabled state, admission mode, limits and legacy migration requirements.
+2. Capture supplied fields before request normalization so trimming an omitted model cannot turn its default into an explicit reset. Audit changed fields and admission/cap/reset-timezone transitions; align the legacy input's admission default with section settings.
+3. Compatibility: partial legacy API saves now retain stored settings instead of silently applying defaults; explicit settings remain validated. No role, history-retention policy or runtime response-authority change; major remains 1.
+
+## 1.35.43 — 2026-10-31
+
+1. [PR #224](https://github.com/StealthCat/MrPatchy/pull/224): retain recovery holds after unknown repair, repository-configuration and signing-key mutation outcomes, matching ordinary-patch safeguards. Lost/unverified replies or a failed post-mutation inventory block later host changes without automatic replay.
+2. Retain available completion receipts in existing bounded operation output, audit the action and operation ID, and explain the package/configuration/trust state an administrator must inspect before the existing explicit reconciliation workflow releases the queue.
+3. Compatibility: uncertain non-patch mutations now pause later changes for target review. Known-unstarted, structured target failures, successful outcomes and journaled patch/release recovery retain their existing behavior. A structured failure is not proof that no partial changes occurred; inventory is a bounded observation. No schema, target-helper or response-authority change; major remains 1.
+
+## 1.35.42 — 2026-10-31
+
+1. [PR #226](https://github.com/StealthCat/MrPatchy/pull/226): deliver the original commits from [PR #206](https://github.com/StealthCat/MrPatchy/pull/206) through an upstream integration branch. Declare viewer/operator/admin/self-service roles on each route and reject undeclared, conflicting or incorrectly public routes during startup.
+2. Preserve session generation, CSRF, audit and host lifecycle/deleted-server read safeguards. Give refresh its own operator route while keeping other host actions administrator-only; concrete identifiers can no longer gain permissions by matching a path suffix.
+3. Pin the complete route-to-role inventory and exercise anonymous, viewer and operator access across routes. Existing intended permissions are retained; the separately tracked investigation-status telemetry permission issue #157 remains open. Major remains 1.
+4. Unblock exact-head validation after a confirmed 30-minute Ubuntu Azure-mirror prerequisite stall (#227). Share the primary-archive setup across apt-consuming runner jobs, bound network waits/retries and limit prerequisite installation steps to five minutes while retaining signature checks and unrelated package sources. Application checks remain required.
+
+## 1.35.41 — 2026-10-31
+
+1. [PR #214](https://github.com/StealthCat/MrPatchy/pull/214): isolate each periodic leader producer so a failed schedule, scanner, monitoring or AI-plan tick cannot stop other producers, polling, queued-job dispatch, cleanup or notifications.
+2. Log named failures and retry independently at 30/60/120/240 seconds, capped at 300 seconds; successful producers retain a 30-second cadence. Module-loading failures share the same isolation, while worker identity loss still stops admission.
+3. Preserve election, drain, leases, host locks, audit and response authorization. Retry deadlines are process-local; no schema, target-helper or UI changes. Major remains 1.
+
+## 1.35.40 — 2026-10-31
+
+1. [PR #209](https://github.com/StealthCat/MrPatchy/pull/209): report flushed offline migration progress, stage/role/table context, sanitized error categories and safe driver/OS codes with actionable next checks. Add bounded, redacted cause-chain and stack-location details with `--verbose`.
+2. Preserve JSON-only stdout and report progress and completion on stderr. Identify destination write/commit state honestly, including a failed fresh connection after commit; preserve offline locking, read-only source checks, verification and explicit activation.
+3. Compatibility: scripts reading the former trailing completion notice from stdout must read stderr. The reported Apollo deployment cause remains unverified; diagnostics now identify the failing phase. Major remains 1.
+
+## 1.35.39 — 2026-10-31
+
+1. [PR #221](https://github.com/StealthCat/MrPatchy/pull/221): allow two independent implementation streams with isolated issue ownership and explicit ready handoffs to a single integration/version/merge coordinator.
+2. Reserve all README.md and CHANGELOG.md notes and updates for the coordinator. Workers leave those files and APP_VERSION unchanged, proposing documentation and change notes in PR descriptions. Remove the current-version field and synchronization requirement from README; runtime metadata still derives from APP_VERSION.
+3. Separate development validation from strict integration readiness. Unversioned worker checks reject README/changelog changes; the new integration-version CI job requires a newer major-1 version and the exact PR's changelog link, preserving historical entries. Cover worker handoffs, malformed/decreasing versions, PR binding and history preservation with real Git-history tests.
+4. Reconcile repository guidance and all four development-task prompts, retaining their roadmap requirements, schedules and enabled states. Add the copyable coordinator prompt and legacy-PR transition procedure. Compatibility: worker commits/PR titles no longer require version prefixes, and unversioned PRs intentionally await coordinator preparation at the new integration-version check. Existing versioned PRs are retained for handoff. No runtime authorization changes, Docker publication or Git tags.
 
 ## 1.35.37 — 2026-10-31
 

@@ -128,5 +128,6 @@ def test_versionlock_name_accepts_dnf4_and_yum_lines(line,name):
     assert rpm.versionlock_name(line)==name
 
 
-def test_versionlock_name_still_rejects_unsupported_expressions():
-    with pytest.raises(ValueError):rpm.versionlock_name('!ba$h-0:1-2.*')
+@pytest.mark.parametrize('line',['!ba$h-0:1-2.*','!!bash-0:1-2.*'])
+def test_versionlock_name_still_rejects_unsupported_expressions(line):
+    with pytest.raises(ValueError):rpm.versionlock_name(line)

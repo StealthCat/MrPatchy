@@ -175,7 +175,7 @@ def local_inventory():
 
 def versionlock_name(line):
     # Exclude entries ('!') are treated as held too: conservative, and they must not fail inventory.
-    pattern=re.sub(r'^\d+:','',line.lstrip('!')).rsplit('-',2)[0]
+    pattern=re.sub(r'^\d+:','',line[1:] if line.startswith('!') else line).rsplit('-',2)[0]
     if not pattern or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-*?' for c in pattern):raise ValueError('Unsupported versionlock expression')
     return pattern
 
