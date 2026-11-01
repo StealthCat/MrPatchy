@@ -154,9 +154,13 @@ Deadlines start at first discovery of an outstanding update and do not reset whe
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
 
+After a reviewed staged rollout is queued, its dialog closes and a confirmation reports the queued server count. Approval is disabled while submission is in flight.
+
 ## Update importance, expected installation and package history
 
 Enable **AI update importance scores** in Settings alongside AI investigations. Pending updates receive an advisory **0–100** score with an expandable explanation, limitations, model and assessment time. Assessments bind to the exact installed/candidate versions and policy evidence; a changed candidate needs a new assessment. The default separate allowance is 20 batches/hour, with up to five updates per call. Scores use package metadata and repository classification, carry **low confidence**, and do not claim verified CVE/changelog evidence or change your patch schedule/priority.
+
+Update-score eligibility is read in bounded ordered chunks, reducing database work when a fleet already has completed or future-deferred assessments. Exact evidence matching, durable deferrals, oldest-first batches and existing AI admission/spend limits still apply.
 
 **Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**. File, process, replacement-publication and service-monitoring holds explain the review needed before a start can be estimated; dates remain unknown until a separately authorized release. Recovery, offline targets and unknown dependency completion also explain why a date cannot be given. All times displayed in the table use your browser's timezone.
 
@@ -254,6 +258,8 @@ stays quarantined. Publication creates a separate server pause; verify the resul
 and review service impact before using `KEEP REPLACEMENT`. Process pauses remain
 independent. Existing opt-in retained-response monitoring verifies both the live
 replacement and original evidence. See [scope, approvals, recovery and limits](docs/SECURITY_IMPLEMENTATION.md#separately-approved-live-replacement-publication).
+
+A helper-verified `not_started` process response restores the matching approval’s prior state and process hold after an interrupted attempt. The receipt and audit history remain available. Uncertain or invalid verification retains the hold; independent file holds remain active, and another suspension requires a fresh typed approval. See [process suspension and recovery](docs/SECURITY_IMPLEMENTATION.md#separately-approved-process-suspension-and-recovery).
 
 **Check service health** reads explicitly selected systemd services without changing
 them. Capture a baseline, compare a later check, and review **Service health history**

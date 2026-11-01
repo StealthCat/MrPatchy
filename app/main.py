@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.61'
+APP_VERSION='1.35.65'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1368,7 +1368,7 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(adm
 @app.get('/api/schedules')
 def patch_schedules(user=Depends(admin_user)):
     with Session() as s:
-        return {'host_policies':{h.id:operations.recovery_policy(s,h.id) for h in s.scalars(select(Host).where(Host.deleted_at==0))},
+        return {'host_policies':operations.recovery_policies(s,[h.id for h in s.scalars(select(Host).where(Host.deleted_at==0))]),
                 'schedules':[scheduling.serialize(row) for row in s.scalars(select(scheduling.PatchSchedule).order_by(scheduling.PatchSchedule.updated.desc()))],
                 'runs':[object_dict(row) for row in s.scalars(select(scheduling.PatchRun).order_by(scheduling.PatchRun.due.desc()).limit(100))]}
 

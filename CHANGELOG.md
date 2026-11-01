@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.35.65 — 2026-11-01
+
+1. [PR #260](https://github.com/StealthCat/MrPatchy/pull/260): A validated helper `not_started` process-response receipt restores the matching approval's prior state and process hold, resolving a stuck hold after a lost reply. Retain the receipt and `observed_not_started` audit event; a new suspension still requires fresh typed approval.
+2. Compatibility: no schema, helper protocol or role change. Uncertain/suspended responses, invalid verification and missing or mismatched approvals retain conservative holds; prior holds and the independent file-response hold remain intact. Receipt validation does not establish trust in a compromised target.
+
+## 1.35.64 — 2026-11-01
+
+1. [PR #254](https://github.com/StealthCat/MrPatchy/pull/254): Load schedule recovery policies with one batched Setting lookup instead of one lookup per server. Preserve missing/partial flag defaults, the existing per-server recovery-policy helper, host lifecycle filtering and the schedules response contract.
+2. Compatibility: no API/schema, role, audit or runtime-approval change. Fewer policy-query round trips do not make the complete schedules response constant-time; host/policy rows and payload still scale with fleet size.
+
+## 1.35.63 — 2026-11-01
+
+1. [PR #232](https://github.com/StealthCat/MrPatchy/pull/232): Close the staged-rollout review dialog before displaying its queued-server confirmation so the message is visible. Disable approval while the request is in flight and reenable the captured button on error to reduce duplicate submissions.
+2. Compatibility: UI-only; backend rollout authorization, roles, audit and recovery rules are unchanged. This focused confirmation fix does not complete the separately tracked stale-dialog/session isolation work in #126/#156, which remains open.
+
+## 1.35.62 — 2026-11-01
+
+1. [PR #250](https://github.com/StealthCat/MrPatchy/pull/250): Bulk-load advisory update-scoring candidates and exact/deferred score state in ordered 200-package chunks instead of two per-package score queries. Retain oldest-first/id ordering, stale deferred supersession, due-work eligibility, the five-item provider batch and final exact-evidence checks.
+2. Compatibility: no API/schema, model-quality, role or response-authorization change. Existing scoring ownership, lifecycle/AI pause, admission and spend gates remain required. Reduced local database round trips are not a guarantee of provider or end-to-end throughput.
+
 ## 1.35.61 — 2026-11-01
 
 1. [PR #243](https://github.com/StealthCat/MrPatchy/pull/243): Page fleet Investigations in batches of 50 with Previous/Next controls so behaviors beyond the former first-500 limit remain reachable. Remember each fleet/server view's offset across refresh and navigation; clear it on session reset. Keep host scoping, role restrictions, advisory assessments and explicit approvals unchanged.
