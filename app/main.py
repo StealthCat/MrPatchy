@@ -20,7 +20,7 @@ from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations, incidents, connections,host_lifecycle
-from .identity import User,actor,consume_otp,new_secret
+from .identity import User,consume_otp,new_secret
 from .security import unseal
 
 @asynccontextmanager
@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.65'
+APP_VERSION='1.35.74'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -56,7 +56,10 @@ from . import sso
 app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 @app.exception_handler(host_lifecycle.Busy)
+@app.exception_handler(host_lifecycle.Inactive)
 async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=409)
+@app.exception_handler(host_lifecycle.QueueFull)
+async def queue_full(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=429)
 @app.exception_handler(ValueError)
 async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
 static=Path(__file__).parent/'static'
@@ -189,7 +192,9 @@ def login(body:Login,request:Request,response:Response):
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
         recent=login_attempts.get(bucket,[])
-        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
+        # Usernames cannot contain ':', so the address is everything before the last one.
+        # A prefix match would also count other IPv6 addresses, e.g. ::1:2 under ::1.
+        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.rsplit(':',1)[0]==ip)
         if len(recent)>=10 or ip_attempts>=50:
             scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit')
             # One audit entry per limit and window, so rejected requests cannot flood the log.
@@ -894,7 +899,7 @@ def set_priority(host_id:str,body:PriorityInput,user=Depends(admin_user)):
         p=s.get(Package,host_id+':'+body.name)
         if not p: raise HTTPException(404,'Package not found')
         p.priority_manual=body.priority!='auto'
-        p.priority=body.priority if p.priority_manual else ('high' if '-security' in p.origin or '/security' in p.origin else 'normal')
+        p.priority=body.priority if p.priority_manual else apt.auto_priority(p.origin,p.candidate)
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
 
 @app.get('/api/jobs/{job_id}')
@@ -1775,7 +1780,6 @@ def response_idle(s,host_id,response_id=None):
 
 @app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/quarantine')
 def prepare_quarantine(host_id:str,archive_id:str,user=Depends(admin_user)):
-    from . import quarantine
     from .evidence_vault import EvidenceArchive,EvidenceCopy,incident
     with host_change(host_id),Session() as s:
         host_or_404(s,host_id);archive=s.get(EvidenceArchive,archive_id)
