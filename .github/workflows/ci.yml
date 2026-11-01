@@ -82,7 +82,11 @@ jobs:
           cache-dependency-path: requirements*.txt
       # restic enables the encrypted backup/restore drills in tests/test_final_features.py,
       # which otherwise skip; this replaces the former separate recovery job.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends restic
+      - name: Native encrypted SQLite recovery tools
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends restic
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
       - run: docker build -t mrpatchy:test .
@@ -146,7 +150,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
       - name: Native encrypted MySQL recovery tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends restic mariadb-client
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends restic mariadb-client
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
 
@@ -165,7 +172,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
       - name: Install native Debian fixture signing tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
       - run: pip install -r requirements.txt
       - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test tests/fixtures
       - run: python tests/integration_ssh.py
@@ -189,11 +199,7 @@ jobs:
       - name: Install browser system dependencies
         timeout-minutes: 5
         run: |
-          # The Azure mirror has repeatedly stalled on font downloads. Keep APT
-          # signature validation and the deadline, using Ubuntu's primary archive.
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
-          fi
+          bash .github/scripts/configure-ci-apt.sh
           npx playwright install-deps chromium
       - name: Download Chromium
         timeout-minutes: 5
@@ -209,7 +215,11 @@ jobs:
         target: ['fedora:44', 'almalinux:9']
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv rpm
+      - name: Native RPM fixture tools
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv rpm
       - run: /usr/bin/python3 -m venv --system-site-packages /tmp/patchy-rpm-test
       - run: /tmp/patchy-rpm-test/bin/pip install -r requirements-dev.txt
       # These run against the runner's own libdnf/libRPM and do not depend on the

@@ -5585,3 +5585,38 @@ preserves current main through #221/#209, including rollback/SSO/recovery/patch-
 and all delivery history. README has no source-version field. Final major-1 version
 and the numbered changelog entry are allocated by the sole coordinator; all 13
 applicable checks must pass on the final integrated head before merge.
+
+## v1.35.22 — Per-route role declarations (#198)
+
+Claude Code session `012YQAphimPkYCq5KWgr1sGh` claimed issue #198 after reading main
+`1328a82` (v1.35.17), all open issues and open PRs. Pending #139, #168, #174 and #196
+hold versions up to v1.35.20 and also edit `app/main.py`; this update proposes
+v1.35.22, subject to refreshing main before merge.
+
+`auth()` used to decide roles by testing the request path (`'/security' in path`,
+`path.endswith('/patch')`, prefix lists), so a new route defaulted to viewer-readable
+and any path ending in `/preview` was operator-writable. Roles are now declared per
+route through `viewer_user`, `operator_user`, `admin_user` and `self_user`, which share
+one `authenticate()` that keeps session, generation, CSRF and host lifecycle checks in
+their existing order. `app/route_roles.py` builds an inventory of every route at
+startup (including the SSO router) and raises if a route declares no role, declares
+conflicting roles, or is public without being listed in `PUBLIC_ROUTES`.
+
+The authenticated routes were migrated from the roles the old logic produced and compared
+against it. The full suite caught one route the template comparison missed: operators may
+run `refresh` through `/api/hosts/{id}/actions/{action}`, so `refresh` is now its own
+operator route and the other actions stay admin. Old accidental matches (a concrete id such
+as `patch` ending a path) no longer grant operator access. `tests/test_route_roles.py` pins
+the full route-to-role table, proves unlisted routes fail closed, and drives a viewer
+and an operator through every admin-only and operator route. #157 (viewer-readable
+`/api/investigation-status`) is still a viewer route here; changing it is now a one-word
+edit on the new mechanism and is left to that issue. Host-lifecycle and deleted-record
+checks still read the path; they are not role decisions and were out of scope.
+
+Coordinator integration v1.35.42 (2026-10-31): PR #226 preserves original #206
+commits and current main through #214, including the deleted-server resolved-host
+and SQL list-filter safeguards. The fork is read-only to this connection, so the
+maintainer-directed batch #222 uses a writable upstream branch. Historical
+candidate version .22 is superseded; README no longer tracks versions. Final
+PR-bound version and all 13 exact-head checks are required before delivery and
+verified #206/#198 closure. The separate #157 telemetry report stays open.
