@@ -44,9 +44,9 @@ def test_iap_validation_and_test_does_not_change_pin(admin,host,monkeypatch):
     new={**old,'transport':'gcp_iap','project':'test-project','zone':'us-central1-a','instance':'server-1'}
     assert admin.put(host,json={'connection':new,'expected':old}).status_code==200
     seen=[]
-    monkeypatch.setattr(ssh,'call',lambda h,payload,timeout:seen.append((h.fingerprint,payload,timeout)) or {})
+    monkeypatch.setattr(ssh,'call',lambda h,payload,timeout,**kwargs:seen.append((h.fingerprint,payload,timeout,kwargs)) or {})
     assert admin.post(host+'/test').status_code==200
-    assert seen==[('SHA256:'+'a'*43,{'action':'snapshot'},30)]
+    assert seen==[('SHA256:'+'a'*43,{'action':'snapshot'},30,{'lifecycle_blocking':False})]
     def fail(*a,**k):raise RuntimeError('SSH host fingerprint mismatch')
     monkeypatch.setattr(ssh,'call',fail)
     assert admin.post(host+'/test').status_code==502

@@ -1,6 +1,7 @@
 'use strict';
 // Shared presentation components. No network calls, permissions or fleet state.
 window.PatchyUI=(()=>{
+ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const icons={
   overview:'<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
   servers:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M15 6.5h3M15 17.5h3"/>',
@@ -27,14 +28,13 @@ window.PatchyUI=(()=>{
  const enrollment=step=>`<ol class="enrollment-steps" aria-label="Enrollment progress">${['Server details','Prepare target','Connect & verify'].map((label,index)=>`<li class="${index+1===step?'current':index+1<step?'done':''}" ${index+1===step?'aria-current="step"':''}><span>${index+1<step?'✓':index+1}</span>${label}</li>`).join('')}</ol>`;
  // Shared route-link navigation, using native disclosure rather than a simulated ARIA menu.
  function sectionNavigation(entries,current,link,primary,groups){
-  const safe=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const anchor=entry=>`<a href="${safe(link(entry[0]))}" ${entry[0]===current?'class="active" aria-current="page"':''}>${safe(entry[1])}</a>`;
+  const anchor=entry=>`<a href="${esc(link(entry[0]))}" ${entry[0]===current?'class="active" aria-current="page"':''}>${esc(entry[1])}</a>`;
   const secondary=entries.filter(entry=>!primary.includes(entry[0]));
   const selected=secondary.find(entry=>entry[0]===current);
   return primary.map(key=>entries.find(entry=>entry[0]===key)).filter(Boolean).map(anchor).join('')+(secondary.length?`
-   <details class="section-menu ${selected?'has-current':''}"><summary><span>${selected?safe(selected[1])+' · ':''}More sections</span>${icon('overview')}</summary>
+   <details class="section-menu ${selected?'has-current':''}"><summary><span>${selected?esc(selected[1])+' · ':''}More sections</span>${icon('overview')}</summary>
     <div class="section-menu-panel"><div class="section-menu-intro">${portrait()}<div><strong>Your server workbench</strong><small>Choose a focused workspace</small></div></div>
-    <div class="section-menu-groups">${groups.map(group=>{const items=secondary.filter(entry=>group.ids.includes(entry[0]));return items.length?`<section><h3>${safe(group.title)}</h3>${items.map(anchor).join('')}</section>`:'';}).join('')}</div></div>
+    <div class="section-menu-groups">${groups.map(group=>{const items=secondary.filter(entry=>group.ids.includes(entry[0]));return items.length?`<section><h3>${esc(group.title)}</h3>${items.map(anchor).join('')}</section>`:'';}).join('')}</div></div>
    </details>`:'');
  }
  document.addEventListener('click',event=>{document.querySelectorAll('.section-menu[open]').forEach(menu=>{if(!menu.contains(event.target)||event.target.closest('a'))menu.open=false;});});
@@ -42,5 +42,5 @@ window.PatchyUI=(()=>{
  document.querySelectorAll('[data-icon]').forEach(node=>node.innerHTML=icon(node.dataset.icon));
  document.querySelectorAll('[data-mascot-portrait]').forEach(node=>node.innerHTML=portrait());
  const endpoint=(address,port)=>{const a=String(address??'');return (a.includes(':')&&!a.startsWith('[')?'['+a+']':a)+(port===undefined||port===null||port===''?'':':'+port);};
- return {icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation,endpoint};
+ return {esc,icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation,endpoint};
 })();

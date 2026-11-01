@@ -48,6 +48,10 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Server workspaces
 
+Overview summary cards reflow to the available content width. Decorative imagery stays clear of text and actions, and multi-line link buttons retain a complete border on narrow screens.
+
+Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
+
 Open **Servers → a server name** (or **Open server**) to see everything recorded for that server in one place. Separate tabs cover its overview, packages, patching timeline, investigations, AI activity with estimated costs, history, repositories and maintenance. Switch servers while keeping the same tab, or bookmark a server tab directly. Sensitive tabs and actions retain the existing role permissions.
 
 Administrators can **Disable server** or **Delete server** from **Servers → Open server → Settings → Server management**, the server list, or the **Manage** dialog. These controls require an administrator account. If they are missing, update/rebuild the controller and verify that its administrator controls are present. Disable suspends polling, scheduled work and host AI requests, cancels queued operations and revokes enrollment links. Enable resumes future management; cancelled jobs do not restart. Delete requires the exact server name and a reason, removes local SSH/repository credentials and removes the entry from the managed fleet. **Servers → Deleted servers** retains read-only inventory, patching, AI, security and audit history. Running work and unresolved response/recovery holds must be reconciled before deletion. These controls leave the remote agent, account and services running; uninstall them separately through a trusted console if required. See [server lifecycle safeguards](docs/SECURITY_IMPLEMENTATION.md#server-management-lifecycle).
@@ -55,6 +59,12 @@ Administrators can **Disable server** or **Delete server** from **Servers → Op
 ![Individual server overview with illustrative data](docs/screenshots/server-overview.jpg)
 
 [Server tabs and permissions](docs/SERVER_WORKSPACES.md) · [Patching timeline preview](docs/screenshots/server-patching.jpg)
+
+Interactive SSH checks and configuration requests return HTTP 409 promptly when lifecycle communication is busy; retry after the active operation finishes. Background jobs keep their operation-duration exclusion. Lock refusal stops before target contact, and failures after a remote mutation starts retain their existing recovery safeguards.
+
+Sign-in verifies a password hash for unknown and disabled accounts as well as active accounts. Password hashing runs outside the global login lock; current identity/password and MFA are checked before session creation. The bounded throttle table evicts its oldest buckets instead of locking out all users when full. Address limits count attempts from the exact same address, so separate IPv6 addresses sharing a text prefix do not use up each other's limit.
+
+Fleet **Investigations** shows 50 behaviors per page with Previous/Next controls. Each fleet or server view remembers its page across Refresh and navigation within the signed-in session; signing out clears that page state.
 
 ## Quick start
 
@@ -125,6 +135,8 @@ Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed alrea
 
 ## Workspace settings
 
+The web UI reports readable HTTP-status errors when a proxy or server returns an empty or non-JSON error body. Empty successful responses are accepted; stale-session responses are still discarded.
+
 Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
 
 ## Review and install updates
@@ -144,15 +156,19 @@ Explicit installation refreshes target metadata and requests the recorded exact 
 | Normal | 168 hours |
 | Low | 720 hours |
 
-Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates default to high; others default to normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
+Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates with a newer candidate default to high; others default to normal. Resetting a package to **auto** uses the same rule; a package without a newer candidate stays normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
+
+After a reviewed staged rollout is queued, its dialog closes and a confirmation reports the queued server count. Approval is disabled while submission is in flight. Each server job records a `queue patch` audit entry alongside the rollout batch audit. Submission remains one transaction: a server queue at the 50-operation limit rejects the whole rollout without partially queueing it.
 
 ## Update importance, expected installation and package history
 
 Enable **AI update importance scores** in Settings alongside AI investigations. Pending updates receive an advisory **0–100** score with an expandable explanation, limitations, model and assessment time. Assessments bind to the exact installed/candidate versions and policy evidence; a changed candidate needs a new assessment. The default separate allowance is 20 batches/hour, with up to five updates per call. Scores use package metadata and repository classification, carry **low confidence**, and do not claim verified CVE/changelog evidence or change your patch schedule/priority.
 
-**Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**; holds, recovery, offline targets and unknown dependency completion explain why a date cannot be given. All times displayed in the table use your browser's timezone.
+Update-score eligibility is read in bounded ordered chunks, reducing database work when a fleet already has completed or future-deferred assessments. Exact evidence matching, durable deferrals, oldest-first batches and existing AI admission/spend limits still apply.
+
+**Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**. File, process, replacement-publication and service-monitoring holds explain the review needed before a start can be estimated; dates remain unknown until a separately authorized release. Recovery, offline targets and unknown dependency completion also explain why a date cannot be given. All times displayed in the table use your browser's timezone.
 
 ![Explained AI importance and expected installation](docs/screenshots/update-importance.jpg)
 
@@ -164,15 +180,21 @@ Enable **AI update importance scores** in Settings alongside AI investigations. 
 
 Open **Patch schedules** in the main menu to configure daily, weekly or monthly patching for all configured servers (including future enrollments) or a selected group. Set an IANA timezone, start time, allowed start-window length and regular priorities. The month calendar and hourly day view show upcoming windows and recorded urgent runs; times in the calendar use your browser’s timezone.
 
-Each schedule can independently enable **high** and **critical** out-of-cycle updates after a configurable delay from first discovery. These rules respect server maintenance windows unless you explicitly authorize a bypass for that priority. Detection follows the central repository check interval. Priority labels are Mr Patchy policy labels, not automatic CVSS classifications.
+The calendar initially opens in hourly day view on screens 700px wide or narrower; wider screens start in month view. You can select either view, and resizing preserves that session's selection. Month weekday headers stay visible while scrolling; the month grid can still scroll horizontally on narrow screens.
 
-Review and explicitly approve unattended installation before enabling a schedule. Jobs refresh signed repository metadata, select exact candidate versions and preserve package holds, host-key verification, recovery quarantine and per-host serialization. Unhealthy/offline targets wait within the allowed start window. Missed windows are skipped; pausing, editing or deleting cancels queued work while already running patches may finish. The selected reboot/rollback behavior must match each target’s saved recovery policy.
+Each schedule can independently enable **high** and **critical** out-of-cycle updates after a configurable delay from first discovery. These rules respect server maintenance windows unless you explicitly authorize a bypass for that priority. Urgent work skipped before any patch job was queued can be reconsidered once the host and allowed window are ready. Failed batches and attempts that already queued a patch are not automatically replayed. Detection follows the central repository check interval. Priority labels are Mr Patchy policy labels, not automatic CVSS classifications.
+
+Review and explicitly approve unattended installation before enabling a schedule. Jobs refresh signed repository metadata, select exact candidate versions and preserve package holds, host-key verification, recovery quarantine and per-host serialization. Unhealthy/offline targets wait within the allowed start window. Expired start windows are recorded as skipped in history and included in scheduled-patching alerts; pausing, editing or deleting cancels queued work while already running patches may finish. The selected reboot/rollback behavior must match each target’s saved recovery policy.
 
 ![Monthly patch calendar](docs/screenshots/patch-calendar.jpg)
 
 See [scheduling behavior, daylight saving, safety checks and failure handling](docs/PATCH_SCHEDULES.md). Distribution release upgrades still use their separate reviewed GO workflow.
 
 ## Reboot, rollback and interrupted operations
+
+Queued dispatch reuses matching response-hold and ordinary maintenance-window results only within one worker iteration, and skips work for servers already busy in that iteration. Admission and execution share the same action-specific response-hold rules. The executor independently rechecks current holds and eligibility before claiming work; dispatch caching does not authorize an operation or bypass a response pause.
+
+API clients receive HTTP 409 for disabled/deleted-server or busy-state conflicts, and HTTP 429 when the server queue reaches its existing 50-operation limit. Handle these separately from HTTP 400 invalid input; rejected requests do not authorize or enqueue additional work.
 
 Configure each host under **Account → Operations → SSO, SMTP & target policies**. Reboot and rollback default off, and the controls load the saved policy when you select a server.
 
@@ -187,9 +209,13 @@ Configure each host under **Account → Operations → SSO, SMTP & target polici
 
 A host that never returns over SSH cannot be automatically repaired from the central service. Keep an out-of-band recovery path. See [recovery contracts and procedures](docs/ENTERPRISE_RECOVERY.md).
 
+After enrollment completion or server deletion, navigation loads the destination once and shows its success message after that view finishes loading. Failed or superseded navigation drops pending success feedback. Activity uses the loaded account identity for its controls; the server still authorizes each request.
+
 ## Distribution release upgrades
 
 Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
+
+While a plan stays in the same planning, approved or running state, background polling updates status and output in place, preserving expanded transaction/configuration details, scroll position and dialog messages. State changes rebuild the review and reapply expanded details; **Refresh progress** explicitly reloads it.
 
 Cancelling a queued planning or upgrade job also cancels its linked plan. Prepare a fresh plan before another GO; cancellation does not preserve approval.
 
@@ -225,7 +251,7 @@ Each action now shows **estimated API cost in USD**, including follow-up calls. 
 
 ![AI diagnostics and worker status](docs/screenshots/ai-run-logs.jpg)
 
-The target's durable spool partitions normal observations into batches of at most 256 KiB and acknowledges them only after central commit. It retains up to 48 MB, exposes queued bytes and reasoned cumulative oversize/capacity loss counters, and reports only newly observed loss as an active integrity finding. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty.
+The target's durable spool partitions normal observations into batches of at most 256 KiB and acknowledges them only after central commit. It retains up to 48 MB, exposes queued bytes and reasoned cumulative oversize/capacity loss counters, and reports only newly observed loss as an active integrity finding. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty. Within a poll, the first event batch reuses its committed ingestion result before acknowledgement. A lost acknowledgement can still replay a batch; deduplication preserves the stored observations.
 
 ## Reviewed file replacement
 
@@ -248,6 +274,8 @@ stays quarantined. Publication creates a separate server pause; verify the resul
 and review service impact before using `KEEP REPLACEMENT`. Process pauses remain
 independent. Existing opt-in retained-response monitoring verifies both the live
 replacement and original evidence. See [scope, approvals, recovery and limits](docs/SECURITY_IMPLEMENTATION.md#separately-approved-live-replacement-publication).
+
+A helper-verified `not_started` process response restores the matching approval’s prior state and process hold after an interrupted attempt. The receipt and audit history remain available. Uncertain or invalid verification retains the hold; independent file holds remain active, and another suspension requires a fresh typed approval. See [process suspension and recovery](docs/SECURITY_IMPLEMENTATION.md#separately-approved-process-suspension-and-recovery).
 
 **Check service health** reads explicitly selected systemd services without changing
 them. Capture a baseline, compare a later check, and review **Service health history**
@@ -276,7 +304,7 @@ refused as a whole. See [response-record scope and limits](docs/SECURITY_IMPLEME
 
 ## Accounts, SSO, notifications and keys
 
-**Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring.
+**Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring. The fleet Investigations queue summary remains visible to non-admins, while AI budget, spend, provider errors, admission and capacity diagnostics (including the full `/api/investigation-status` response) are administrator-only.
 
 Account and Sign out remain available in the header on mobile. Navigation and action controls reflect the signed-in role; the API independently enforces permissions. Password verification and MFA setup/confirmation share a limit of ten attempts per account in five minutes. A failed verification leaves the current session intact; successful password/MFA changes and session revocation require signing in again.
 
@@ -284,7 +312,7 @@ For OIDC, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`, register
 
 SMTP requires verified TLS or STARTTLS, with optional private CA support. SMTP and HTTPS webhooks are alternative delivery channels. Alerts use a durable retrying outbox and acknowledgements; delivery is at least once. SSH rotation proves a replacement key works before removing the old target key and records a resumable journal.
 
-**Account → Operations** loads the selected server's saved maintenance windows. Notification forms load saved metadata without returning credentials. Leave a secret blank to retain it, or select its explicit clear checkbox to remove it. Changing the webhook URL or SMTP host, port, encryption mode or username requires providing or explicitly clearing the secret. Saving the other delivery channel replaces the current channel. **Activity** lets administrators cancel queued operations before execution; a linked release plan is also cancelled and needs replanning.
+**Account → Operations** loads the selected server's saved maintenance windows. Notification forms load saved metadata without returning credentials. Leave a secret blank to retain it, or select its explicit clear checkbox to remove it. Changing the webhook URL or SMTP host, port, encryption mode or username requires providing or explicitly clearing the secret. Saving the other delivery channel replaces the current channel. **Activity** lets administrators cancel queued operations before execution; a linked release plan is also cancelled and needs replanning. Queued file/process responses and related security work can be cancelled while response holds remain, with linked unstarted records reconciled locally. Cancellation does not undo target work or release prior, unrelated or uncertain holds; running and recovery-required jobs still require the existing review workflow.
 
 ## Workers, databases and backups
 
@@ -326,14 +354,20 @@ Schema initialization is idempotent. MySQL upgrades need ALTER privileges for ex
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt -r requirements-lint.txt
+ruff check --no-cache --select F app target scripts tools
+ruff check --no-cache --select F821 tests
 python -m pytest -q
 npm ci
 npx playwright install chromium
 npm run test:ui
 ```
 
-CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
+CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
+
+Repository, trust and schedule dialog submissions are one-shot while pending. Opening another dialog keeps it intact; an earlier result is shown globally for the same signed-in session and is suppressed after sign-out. Closing a dialog does not cancel the submitted operation.
+
+Late manual-response-plan approvals and patch confirmations also leave newer dialogs intact. Patch success or failure is reported globally for the same session when its original dialog has been replaced; stale-session feedback is suppressed. Manual-plan approval remains a record of review and executes no target response action.
 
 Browser regressions also exercise all three roles, 320px/390px layouts, account access, persisted maintenance and SMTP settings, queued cancellation, inline dialog errors, duplicate patch clicks, and delayed responses after navigation, dialog dismissal or sign-out.
 
@@ -537,6 +571,11 @@ remaining and next-reset values in Settings and AI worker status. The administra
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
 changes are audited. Estimates use published token prices and may differ from the
 provider invoice.
+
+Daily accounting groups repeated amounts without loading every ledger entry as an
+application object. This reduces memory use, especially when amounts repeat, but
+many distinct amounts still increase work under the shared admission lock. A bounded
+summary and broader SQLite/MySQL concurrency evidence remain open work.
 
 Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
 alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
@@ -1031,3 +1070,12 @@ each target to install both new helper and collector. Older helpers and observat
 remain readable but cannot bind follow-up to the recorded process. No new schema,
 automatic target upgrade, Docker-image publication or cache-hit claim is made.
 Assessment history retains the context actually supplied to each AI stage.
+
+### Dependency update maintenance
+
+Dependabot is configured for weekly pip, npm, GitHub Actions and Docker update
+PRs. Docker coverage includes the root, `deploy/` and `tests/fixtures/` Dockerfiles.
+These proposed updates still need review and CI; configuration alone does not
+verify live update generation or provide code scanning. Image digests, Python
+package hashes, Actions commit pinning and further Compose sandboxing remain
+tracked in [#201](https://github.com/StealthCat/MrPatchy/issues/201).

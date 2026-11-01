@@ -14,13 +14,13 @@ from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations, incidents, connections,host_lifecycle
-from .identity import User,actor,consume_otp,new_secret
+from .identity import User,consume_otp,new_secret
 from .security import unseal
 
 @asynccontextmanager
@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.52'
+APP_VERSION='1.35.83'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -55,6 +55,11 @@ from .security import cipher
 from . import sso
 app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
+@app.exception_handler(host_lifecycle.Busy)
+@app.exception_handler(host_lifecycle.Inactive)
+async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=409)
+@app.exception_handler(host_lifecycle.QueueFull)
+async def queue_full(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=429)
 @app.exception_handler(ValueError)
 async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
 static=Path(__file__).parent/'static'
@@ -167,6 +172,9 @@ class Login(BaseModel):
     password:str=Field(max_length=1024)
     otp:str=Field(default='',max_length=6)
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+LOGIN_BUCKET_LIMIT=10000
+# Verified when an account is missing or disabled so response time does not reveal which usernames exist.
+DUMMY_PASSWORD_HASH=password_hash('mrpatchy-timing-equaliser','00'*16)
 def audit_login_event(action,username,ip,reason):
     # Usernames are pattern-restricted by Login; never record the submitted password or OTP.
     with Session() as s:
@@ -184,21 +192,32 @@ def login(body:Login,request:Request,response:Response):
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
         recent=login_attempts.get(bucket,[])
-        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
-        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000:
-            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit') if ip_attempts>=50 else ('global','global limit')
+        # Usernames cannot contain ':', so the address is everything before the last one.
+        # A prefix match would also count other IPv6 addresses, e.g. ::1:2 under ::1.
+        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.rsplit(':',1)[0]==ip)
+        if len(recent)>=10 or ip_attempts>=50:
+            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit')
             # One audit entry per limit and window, so rejected requests cannot flood the log.
             throttled=reason if scope not in login_throttle_logged else ''
             login_throttle_logged.setdefault(scope,now)
-        else: login_attempts[bucket]=recent+[now]
+        else:
+            # Evict the buckets idle longest instead of rejecting every user at the cap.
+            if bucket not in login_attempts and len(login_attempts)>=LOGIN_BUCKET_LIMIT:
+                for key in sorted(login_attempts,key=lambda k:login_attempts[k][-1])[:len(login_attempts)-LOGIN_BUCKET_LIMIT+1]: del login_attempts[key]
+            login_attempts[bucket]=recent+[now]
     if throttled is not None:
         if throttled: audit_login_event('login throttled',body.username,ip,throttled)
         raise HTTPException(429,'Too many attempts. Try again in five minutes.')
     failure=None
+    # Hash outside login_lock so password guesses cannot serialize other sign-ins. Always hash, even for missing accounts.
+    with Session() as s:
+        identity=s.get(User,body.username)
+        stored=identity.password if identity and identity.enabled else None
+    password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
     with login_lock, Session() as s:
         identity=s.get(User,body.username)
-        if not identity or not identity.enabled: failure='unknown or disabled account'
-        elif not verify(body.password,identity.password): failure='bad password'
+        if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
+        elif not password_ok or identity.password!=stored: failure='bad password'
         elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
         else:
             token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
@@ -356,7 +375,8 @@ def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
         if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
-        try: ssh.call(h,{'action':'snapshot'},timeout=30)
+        try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
+        except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
@@ -879,7 +899,7 @@ def set_priority(host_id:str,body:PriorityInput,user=Depends(admin_user)):
         p=s.get(Package,host_id+':'+body.name)
         if not p: raise HTTPException(404,'Package not found')
         p.priority_manual=body.priority!='auto'
-        p.priority=body.priority if p.priority_manual else ('high' if '-security' in p.origin or '/security' in p.origin else 'normal')
+        p.priority=body.priority if p.priority_manual else apt.auto_priority(p.origin,p.candidate)
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
 
 @app.get('/api/jobs/{job_id}')
@@ -903,7 +923,8 @@ def history(host_id:str,kind:str='inventory',offset:int=0,limit:int=50,user=Depe
 def repository_backups(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
-        try: return ssh.call(h,{'action':'backups'})
+        try: return ssh.call(h,{'action':'backups'},lifecycle_blocking=False)
+        except host_lifecycle.Busy:raise
         except Exception as e: raise HTTPException(502,str(e)[:1000])
 
 class RepositoryAccess(BaseModel):
@@ -934,7 +955,9 @@ def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(admin_
 @app.get('/api/investigation-status')
 def investigation_status(user=Depends(viewer_user)):
     with Session() as s:
-        return ai_runs.status(s)
+        full=ai_runs.status(s)
+    if user.get('role')=='admin': return full
+    return {k:full[k] for k in ('pending','oldest','enabled')}
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
@@ -1113,18 +1136,24 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
 
 @app.post('/api/operations/jobs/{job_id}/cancel')
 def cancel_job(job_id:str,user=Depends(admin_user)):
+    from . import quarantine
     with Session() as s:
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
         host_id=job.host_id
-        publication_cancel=job.action=='trusted-repair-publish'
-    with host_change(host_id,allow_quarantined=publication_cancel),Session() as s:
+        # Cancelling unstarted response work is local bookkeeping, not a new
+        # target operation. Its own (or unrelated) holds must remain reviewable.
+        response_cancel=job.action in (*quarantine.ACTIONS,'evidence-prepare','evidence-preserve','evidence-status','evidence-acquire','evidence-archive-status','execution-scan')
+    with host_change(host_id,allow_quarantined=response_cancel),Session() as s:
         job=s.get(Job,job_id)
+        if not job or job.host_id!=host_id:raise HTTPException(404,'Job not found')
         if job.state!='queued':raise HTTPException(409,'Only queued operations can be cancelled')
-        job.state='cancelled'
-        if job.action=='trusted-repair-publish':
-            from . import repair_publication
-            repair_publication.reject_unstarted(s,job,user['username'],'cancelled')
+        cancelled=s.execute(update(Job).where(Job.id==job_id,Job.host_id==host_id,Job.state=='queued').values(state='cancelled')).rowcount
+        if cancelled!=1:raise HTTPException(409,'Only queued operations can be cancelled')
+        host_lifecycle.reject_pending_records(s,job,user['username'],'Operation cancelled before execution')
+        if job.action=='execution-scan':
+            from . import execution_scans
+            execution_scans.finish(s,job,'skipped','Operation cancelled before execution')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(releases.ReleasePlan,job.payload.get('plan_id'))
             if plan and plan.host_id==host_id and plan.job_id==job.id:
@@ -1167,7 +1196,7 @@ def rollout(body:RolloutInput,user=Depends(admin_user)):
             h=host_or_404(s,host_id);specs=[]
             if not host_lifecycle.active(h):raise HTTPException(409,'A selected server is disabled or deleted')
             policy=reviewed_policy(s,host_id,(body.expected_recovery_policies or {}).get(host_id))
-            if s.scalar(select(func.count()).select_from(Job).where(Job.host_id==host_id,Job.state.in_(['queued','running'])))>=50:raise HTTPException(429,'Server queue is full')
+            worker.ensure_queue_capacity(s,host_id)
             for name in body.packages:
                 p=s.get(Package,host_id+':'+name)
                 if not p or not p.candidate:raise HTTPException(400,'Missing candidate on '+h.name+': '+name)
@@ -1176,8 +1205,7 @@ def rollout(body:RolloutInput,user=Depends(admin_user)):
         # One transaction: no partial rollout submission. The first server is the canary.
         ids=[]
         for host_id,specs,policy,revision in prepared:
-            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_host_revision':revision,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']})
-            s.add(job);ids.append(job.id)
+            ids.append(worker.stage_job(s,host_id,'patch',{'packages':specs,'_host_revision':revision,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']}))
         audit(s,'create staged rollout',user['username']+' '+','.join(ids));s.commit()
         return {'jobs':ids,'canary':ids[0]}
 
@@ -1237,7 +1265,7 @@ class RecoveryPolicy(BaseModel):
 def recovery_policy(host_id:str,body:RecoveryPolicy,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
-        status=ssh.call(h,{'action':'recovery-status'})
+        status=ssh.call(h,{'action':'recovery-status'},lifecycle_blocking=False)
         if body.rollback and not status['rollback_adapter']:raise HTTPException(409,'Install and validate a root-owned rollback adapter on this target first')
         if body.reboot and not status['systemd']:raise HTTPException(409,'Automatic reboot requires systemd')
         s.merge(Setting(key='recovery:'+host_id,value=body.model_dump()));audit(s,'set recovery policy',host_id);s.commit()
@@ -1247,7 +1275,7 @@ class ObservabilityInput(BaseModel): ebpf:bool=False
 @app.put('/api/operations/{host_id}/observability')
 def observability(host_id:str,body:ObservabilityInput,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
-        h=host_or_404(s,host_id);result=ssh.call(h,{'action':'observability','ebpf':body.ebpf})
+        h=host_or_404(s,host_id);result=ssh.call(h,{'action':'observability','ebpf':body.ebpf},lifecycle_blocking=False)
         path='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
         baseline=dict(h.baseline)
         if body.ebpf:baseline[path]=hashlib.sha256(b'[Service]\nProtectSystem=false\nNoNewPrivileges=false\nRestrictAddressFamilies=AF_UNIX AF_NETLINK\n').hexdigest()
@@ -1271,7 +1299,7 @@ def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         job=s.get(Job,job_id);h=host_or_404(s,host_id)
         if job.state not in operations.QUARANTINE_STATES:raise HTTPException(409,'Only running or recovery-required jobs require reconciliation')
-        if not advisory and ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
+        if not advisory and ssh.call(h,{'action':'operation-status'},lifecycle_blocking=False).get('busy'):raise HTTPException(409,'Target operation is still running')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(worker.releases.ReleasePlan,job.payload.get('plan_id'))
             if plan:plan.state='interrupted'
@@ -1344,7 +1372,7 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(adm
 @app.get('/api/schedules')
 def patch_schedules(user=Depends(admin_user)):
     with Session() as s:
-        return {'host_policies':{h.id:operations.recovery_policy(s,h.id) for h in s.scalars(select(Host).where(Host.deleted_at==0))},
+        return {'host_policies':operations.recovery_policies(s,[h.id for h in s.scalars(select(Host).where(Host.deleted_at==0))]),
                 'schedules':[scheduling.serialize(row) for row in s.scalars(select(scheduling.PatchSchedule).order_by(scheduling.PatchSchedule.updated.desc()))],
                 'runs':[object_dict(row) for row in s.scalars(select(scheduling.PatchRun).order_by(scheduling.PatchRun.due.desc()).limit(100))]}
 
@@ -1751,7 +1779,6 @@ def response_idle(s,host_id,response_id=None):
 
 @app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/quarantine')
 def prepare_quarantine(host_id:str,archive_id:str,user=Depends(admin_user)):
-    from . import quarantine
     from .evidence_vault import EvidenceArchive,EvidenceCopy,incident
     with host_change(host_id),Session() as s:
         host_or_404(s,host_id);archive=s.get(EvidenceArchive,archive_id)

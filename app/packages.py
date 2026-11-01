@@ -1,6 +1,5 @@
 """Distribution-aware package operations; discovery always runs centrally."""
 import json
-import os
 from pathlib import Path
 import tempfile
 from . import apt
