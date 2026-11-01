@@ -168,14 +168,26 @@ function securitySignatureSummary(signatures){
  return '<p class="security-signatures"><strong>Signature freshness: '+esc(labels[state]||'Unknown')+'</strong>'+(signatures?.built_at?' · Database built '+date(signatures.built_at):'')+'</p><p class="help">Daily database build age uses a seven-day limit. Stale, unknown, changed or future-dated signatures leave coverage incomplete. This is not proof of current vendor signatures or a clean host.</p>';
 }
 
+function panelError(target,title,error,retry){
+ target.innerHTML='<h3>'+esc(title)+'</h3><p class="notice">Unable to load this panel: '+esc(error?.message||'Request failed')+'</p><button type="button" class="panel-retry">Retry</button>';
+ target.querySelector('.panel-retry').onclick=retry;
+}
+
+function isolatedPanel(root,current,title,render,hostId){
+ const wrap=document.createElement('div');wrap.style.display='contents';root.append(wrap);
+ const run=async()=>{wrap.replaceChildren();try{await render(wrap,hostId,current);}catch(error){if(!current())return;wrap.replaceChildren();const card=document.createElement('section');card.className='card';wrap.append(card);panelError(card,title,error,run);}};
+ return run();
+}
+
 async function serverSecurity(revision,context){
  const {root,hostId}=context;let offset=0,historyOffset=0,ticket=0;
  root.innerHTML=scannerRecordControls()+'<p class="notice">Security findings are evidence for investigation, not proof of compromise. Coverage gaps remain explicit. AI plans require review and are manual-only; approval does not execute actions.</p><form id="security-scan-form"><label>Absolute directories, one per line<textarea name="paths">/usr/local/bin\n/var/www\n/tmp</textarea></label><button>Queue security scan</button></form><form id="yara-scan-form"><h3>Authenticated YARA scan</h3><label>Offline signed rule bundle ID<input name="bundle_id" required pattern="[A-Za-z0-9_-]{1,64}" maxlength="64"></label><label>Absolute directories, one per line<textarea name="paths" required>/tmp</textarea></label><p class="help">Requires YARA on the target and independently trusted rule keys/bundle on the controller. Read-only, bounded file scanning; no automatic AI upload or remediation.</p><button>Queue YARA scan</button></form><form id="security-policy-form"><h3>Scheduled scanning</h3><label class="check"><input name="enabled" type="checkbox">Enable recurring scans</label><label>Interval in hours<input name="interval_hours" type="number" min="1" max="720" value="24"></label><label>Scheduled directories, one per line<textarea name="paths"></textarea></label><label class="check"><input name="auto_ai_plan" type="checkbox">Automatically request AI plans for new detections</label><p class="help">Sends scanner evidence to the configured AI provider. At most ten plan requests per hour across the fleet; one automatic attempt per incident scan. Plans remain manual-only.</p><button>Save scan policy</button><p class="help">Uses the same bounded scan limits. Incomplete scans are not proof of coverage. Pending scans are not duplicated.</p></form><section class="card" id="execution-scan-panel"></section><div class="actions"><button id="security-refresh">Refresh security records</button></div><div id="security-latest"></div><section><h3>Incidents &amp; response plans</h3><div id="security-incidents"></div><div class="actions"><button id="incident-prev">Previous incidents</button><button id="incident-next">Next incidents</button></div></section><section><h3>Scan history</h3><div id="security-history"></div><div class="actions"><button id="scan-prev">Previous scans</button><button id="scan-next">Next scans</button></div></section>';
  root.querySelector('#scanner-record-export').onclick=()=>exportResponseRecord(hostId,null,()=>root.isConnected&&currentView(revision,'servers'),true);
- const policyForm=root.querySelector('#security-policy-form'),policy=await api('/hosts/'+hostId+'/security/policy');
+ const policyForm=root.querySelector('#security-policy-form');
+ let policy;try{policy=await api('/hosts/'+hostId+'/security/policy');}catch(error){if(root.isConnected&&currentView(revision,'servers'))panelError(policyForm,'Scheduled scanning',error,()=>serverSecurity(revision,context));}
  if(!root.isConnected||!currentView(revision,'servers'))return;
- policyForm.elements.enabled.checked=policy.enabled;policyForm.elements.auto_ai_plan.checked=!!policy.auto_ai_plan;policyForm.elements.interval_hours.value=policy.interval_hours;policyForm.elements.paths.value=policy.paths.join('\n');
- policyForm.onsubmit=async e=>{e.preventDefault();const b=policyForm.querySelector('button');b.disabled=true;try{const f=new FormData(policyForm);await api('/hosts/'+hostId+'/security/policy','PUT',{enabled:f.has('enabled'),auto_ai_plan:f.has('auto_ai_plan'),interval_hours:Number(f.get('interval_hours')),paths:f.get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});toast('Scan policy saved');}catch(error){toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
+ if(policy){policyForm.elements.enabled.checked=policy.enabled;policyForm.elements.auto_ai_plan.checked=!!policy.auto_ai_plan;policyForm.elements.interval_hours.value=policy.interval_hours;policyForm.elements.paths.value=policy.paths.join('\n');
+ policyForm.onsubmit=async e=>{e.preventDefault();const b=policyForm.querySelector('button');b.disabled=true;try{const f=new FormData(policyForm);await api('/hosts/'+hostId+'/security/policy','PUT',{enabled:f.has('enabled'),auto_ai_plan:f.has('auto_ai_plan'),interval_hours:Number(f.get('interval_hours')),paths:f.get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});toast('Scan policy saved');}catch(error){toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};}
  const load=async()=>{const request=++ticket;
  const [latest,items,history]=await Promise.all([api('/hosts/'+hostId+'/security'),api('/hosts/'+hostId+'/security/incidents?offset='+offset),api('/hosts/'+hostId+'/security/history?offset='+historyOffset)]);
  if(!root.isConnected||!currentView(revision,'servers')||request!==ticket)return;
@@ -196,15 +208,12 @@ async function serverSecurity(revision,context){
  for(const [id,change] of [['incident-prev',()=>offset=Math.max(0,offset-20)],['incident-next',()=>offset+=20],['scan-prev',()=>historyOffset=Math.max(0,historyOffset-20)],['scan-next',()=>historyOffset+=20]])root.querySelector('#'+id).onclick=()=>{change();reload();};
  root.querySelector('form').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{await api('/hosts/'+hostId+'/security','POST',{paths:new FormData(e.target).get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});toast('Security scan queued. Refresh after the operation completes.');}catch(error){toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
  root.querySelector('#yara-scan-form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button'),values=new FormData(e.target);button.disabled=true;try{await api('/hosts/'+hostId+'/security/yara','POST',{bundle_id:values.get('bundle_id').trim(),paths:values.get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});toast('YARA scan queued. Review the job log and refresh scan history.');}catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
- await load();
- if(root.isConnected&&currentView(revision,'servers'))await renderExecutionScans(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
- if(root.isConnected&&currentView(revision,'servers'))await renderEvidenceVault(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
- if(root.isConnected&&currentView(revision,'servers'))await renderEvidenceArchives(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
- if(root.isConnected&&currentView(revision,'servers'))await renderQuarantines(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
- if(root.isConnected&&currentView(revision,'servers'))await renderProcessResponses(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
- if(root.isConnected&&currentView(revision,'servers'))await renderRepairPreparations(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
- if(root.isConnected&&currentView(revision,'servers'))await renderRepairStages(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
- if(root.isConnected&&currentView(revision,'servers'))await renderRepairPublications(root,hostId,()=>root.isConnected&&currentView(revision,'servers'));
+ const alive=()=>root.isConnected&&currentView(revision,'servers');
+ const latest=root.querySelector('#security-latest');
+ const first=()=>load().catch(error=>{if(alive()){panelError(latest,'Latest scan coverage and incidents',error,first);}});
+ const panels=[first(),renderExecutionScans(root,hostId,alive)];
+ for(const [title,render] of [['Evidence copies',renderEvidenceVault],['Evidence archives',renderEvidenceArchives],['Quarantines',renderQuarantines],['Process responses',renderProcessResponses],['Repair preparations',renderRepairPreparations],['Repair stages',renderRepairStages],['Repair publications',renderRepairPublications]])panels.push(isolatedPanel(root,alive,title,render,hostId));
+ await Promise.allSettled(panels);
 }
 
 function serverIncidentActions(root,hostId,rows,reload){
@@ -283,8 +292,8 @@ coreutils"></textarea></label><label class="check"><input type="checkbox" name="
  try{await api('/hosts/'+hostId+'/security/inspections','POST',{packages:values.get('packages').split('\n').map(x=>x.trim()).filter(Boolean),persistence:values.has('persistence'),custom_paths:values.get('custom_paths').split('\n').map(x=>x.trim()).filter(Boolean)});if(current())toast('Inspection queued. Refresh after the job completes.');}
  catch(error){if(current())toast(error.message);}finally{if(current())button.disabled=false;}
  };
- await load();
- await renderPersistenceMonitoring(root,hostId,current);
+ const inspections=()=>load().catch(error=>{if(current())panelError(root.querySelector('#inspection-reports'),'Inspection receipts and startup baseline',error,inspections);});
+ await Promise.allSettled([inspections(),renderPersistenceMonitoring(root,hostId,current)]);
 }
 
 
@@ -313,12 +322,17 @@ function renderPersistenceBaseline(root,hostId,data,reload,current){
 
 
 async function renderPersistenceMonitoring(root,hostId,current){
- const base='/hosts/'+hostId+'/security';let policy=await api(base+'/persistence-monitor');if(!current())return;
- const panel=root.querySelector('#persistence-monitor');
+ const base='/hosts/'+hostId+'/security';let policy;const panel=root.querySelector('#persistence-monitor'),container=root.querySelector('#persistence-incidents');
+ const retry=()=>renderPersistenceMonitoring(root,hostId,current);
+ try{policy=await api(base+'/persistence-monitor');}catch(error){if(current()){panelError(panel,'Recurring startup inspections',error,retry);}}
+ if(!current())return;
+ const incidentsLoad=()=>load().catch(error=>{if(current())panelError(container,'Startup-change incidents',error,incidentsLoad);});
+ if(policy){
  panel.innerHTML='<h3>Recurring startup inspections</h3><form id="persistence-monitor-form"><label class="check"><input name="enabled" type="checkbox">Enable scheduled inspections</label><label>Interval in hours<input name="interval_hours" type="number" min="1" max="168"></label><label>Additional monitored files or directories, one absolute path per line (maximum 16)<textarea name="custom_paths" placeholder="/srv/myapp/config.json"></textarea></label><p class="help">Custom scope is included alongside startup paths. Changing scope requires a fresh complete inventory and baseline review. Keep manual inspection scope consistent with this policy.</p><label class="check"><input name="link_incidents" type="checkbox">Record startup-change incidents against the approved baseline</label><p class="help">Both options are off by default. Scheduled inspections are read-only and wait for idle servers. Incident recording also applies to manual inspections. Incomplete coverage never becomes a removal detection. No AI upload or remediation is enabled.</p><button>Save startup monitoring</button></form>';
  const form=panel.querySelector('form');for(const key of ['enabled','link_incidents'])form.elements[key].checked=policy[key];form.elements.interval_hours.value=policy.interval_hours;form.elements.custom_paths.value=(policy.custom_paths||[]).join('\n');const manual=root.querySelector('#security-inspection-form [name=custom_paths]');if(!manual.dataset.edited)manual.value=form.elements.custom_paths.value;
  form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button');button.disabled=true;try{policy=await api(base+'/persistence-monitor','PUT',{enabled:form.elements.enabled.checked,interval_hours:Number(form.elements.interval_hours.value),link_incidents:form.elements.link_incidents.checked,custom_paths:form.elements.custom_paths.value.split('\n').map(x=>x.trim()).filter(Boolean),expected_revision:policy.revision});if(current())toast('Startup monitoring saved');}catch(e){if(current())toast(e.message);}finally{if(button.isConnected)button.disabled=false;}};
- let offset=0,ticket=0;const container=root.querySelector('#persistence-incidents');
+ }
+ let offset=0,ticket=0;
  const load=async()=>{const request=++ticket,result=await api(base+'/persistence-incidents?offset='+offset);if(!current()||request!==ticket)return;
  container.innerHTML='<h3>Startup-change incidents</h3><p>Changes require investigation; these are not malware verdicts. Resolving an incident does not change files or the approved baseline. A repeated detection reopens it.</p>'+result.items.map(row=>'<article class="card"><h4>'+badge(row.state)+' · '+date(row.updated)+'</h4><p>Baseline '+esc(row.baseline_id)+'</p><details><summary>Change evidence</summary><pre>'+esc(JSON.stringify(row.evidence,null,2))+'</pre></details><button data-startup-plan="'+esc(row.id)+'">Request startup AI plan</button><button data-startup-review="'+esc(row.id)+'">Review startup incident</button><button data-startup-history="'+esc(row.id)+'">Linked inspections and reviews</button>'+(row.plans||[]).map(plan=>'<section class="card"><h4>Advisory AI plan · '+badge(plan.state)+'</h4><p>'+esc(plan.content.summary)+'</p><p>'+esc(plan.content.uncertainty)+'</p><details><summary>Plan steps and evidence references</summary><pre>'+esc(JSON.stringify(plan.content,null,2))+'</pre></details><p>Manual tasks only. No action is executed by approval.</p>'+(plan.state==='draft'?'<button data-startup-approve="'+esc(plan.id)+'" data-incident="'+esc(row.id)+'" data-digest="'+esc(plan.evidence_digest)+'">Review startup plan approval</button>':'<p>Reviewer: '+esc(plan.approved_by||'None')+'</p>')+'</section>').join('')+'</article>').join('')+'<button id="startup-prev" '+(!offset?'disabled':'')+'>Previous startup incidents</button><button id="startup-next" '+(!result.more?'disabled':'')+'>Next startup incidents</button><button id="startup-refresh">Refresh startup incidents</button>';
  container.querySelector('#startup-prev').onclick=()=>{offset=Math.max(0,offset-10);refresh();};container.querySelector('#startup-next').onclick=()=>{offset+=10;refresh();};container.querySelector('#startup-refresh').onclick=refresh;
@@ -327,7 +341,8 @@ async function renderPersistenceMonitoring(root,hostId,current){
  container.querySelectorAll('[data-startup-review]').forEach(button=>button.onclick=()=>{const row=result.items.find(r=>r.id===button.dataset.startupReview);modal('Review startup incident','<form id="startup-review-form"><label>State<select name="state"><option value="open">Open</option><option value="acknowledged">Acknowledged</option><option value="false_positive">False positive</option><option value="resolved">Resolved manually</option></select></label><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Save startup review</button></form>');const revision=modalRevision;const form=$('#startup-review-form');form.elements.state.value=row.state;form.onsubmit=async e=>{e.preventDefault();const save=form.querySelector('button');save.disabled=true;try{await api(base+'/persistence-incidents/'+row.id,'PUT',{state:form.elements.state.value,reason:form.elements.reason.value,expected_updated:row.updated});if(current()&&revision===modalRevision){$('#modal').close();await load();}}catch(e){if(current()&&revision===modalRevision)toast(e.message);}finally{if(save.isConnected)save.disabled=false;}};});
  container.querySelectorAll('[data-startup-history]').forEach(button=>button.onclick=()=>{modal('Linked startup evidence','<pre id="startup-evidence"></pre><button id="startup-evidence-prev">Previous evidence</button><button id="startup-evidence-next">Next evidence</button>');const revision=modalRevision;let page=0,request=0;const history=async()=>{const token=++request;try{const data=await api(base+'/persistence-incidents/'+button.dataset.startupHistory+'/history?offset='+page);if(!current()||revision!==modalRevision||token!==request)return;$('#startup-evidence').textContent=JSON.stringify(data,null,2);$('#startup-evidence-prev').disabled=page===0;$('#startup-evidence-next').disabled=!data.more;}catch(e){if(current()&&revision===modalRevision)toast(e.message);}};$('#startup-evidence-prev').onclick=()=>{page=Math.max(0,page-20);history();};$('#startup-evidence-next').onclick=()=>{page+=20;history();};history();});
  };
- const refresh=()=>load().catch(e=>{if(current())toast(e.message);});await load();
+ const refresh=()=>load().catch(e=>{if(current())toast(e.message);});
+ await incidentsLoad();
 }
 
 async function renderEvidenceVault(root,hostId,current){
