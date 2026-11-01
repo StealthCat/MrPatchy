@@ -141,6 +141,8 @@ module.exports=async function modalRaces(page){
       await assertAccountUnaffected(accountTitle);
       assert.equal(patchPosts,1);
       await page.locator('#close-modal').click();
+      await page.locator('[data-nav=overview]').click();
+      await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
     }finally{releasePatch();await page.unroute('**/api/hosts/*/patch',patchWrite);await page.unroute('**/api/hosts/*/patch-policy',patchPolicy);await page.unroute('**/api/hosts/*/packages?*',patchList);}
   }
 };
