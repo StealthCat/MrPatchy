@@ -1,10 +1,11 @@
 import os
 
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db import Audit, Session
 from app.identity import User, new_secret
-from app.main import login_attempts
+from app.main import app, login_attempts, login_throttle_logged
 from app.security import seal
 
 PASSWORD = os.environ['ADMIN_PASSWORD']
@@ -75,6 +76,32 @@ def test_address_limit_is_audited_once_even_across_many_usernames(client):
     for n in range(5):
         assert client.post('/api/login', json={'username': 'other' + str(n), 'password': 'bad'}).status_code == 429
     assert len(entries('login failed')) == 50
+    [detail] = entries('login throttled')
+    assert 'address limit' in detail
+
+
+def test_address_limit_ignores_other_ipv6_addresses_that_share_a_text_prefix(client):
+    import time
+    login_attempts.clear()
+    login_throttle_logged.clear()
+    now = time.time()
+    # '2001:db8::1:2:user0' starts with the text '2001:db8::1:' but belongs to another address.
+    for n in range(50):
+        login_attempts['2001:db8::1:2:user' + str(n)] = [now]
+    neighbour = TestClient(app, client=('2001:db8::1', 50000))
+    assert neighbour.post('/api/login', json={'password': PASSWORD}).status_code == 200
+    assert entries('login throttled') == []
+
+
+def test_ipv6_address_limit_still_applies_to_the_same_address(client):
+    import time
+    login_attempts.clear()
+    login_throttle_logged.clear()
+    now = time.time()
+    for n in range(50):
+        login_attempts['2001:db8::1:user' + str(n)] = [now]
+    same = TestClient(app, client=('2001:db8::1', 50000))
+    assert same.post('/api/login', json={'password': PASSWORD}).status_code == 429
     [detail] = entries('login throttled')
     assert 'address limit' in detail
 
