@@ -1,7 +1,7 @@
 import os
 import time
 from pathlib import Path
-from sqlalchemy import create_engine, String, Text, JSON, Integer, Double, Boolean, event, inspect, text
+from sqlalchemy import create_engine, String, Text, JSON, Integer, Double, Boolean, event, Index, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 DATA = Path(os.getenv('DATA_DIR', '/data'))
@@ -73,6 +73,9 @@ class Job(Base):
     output: Mapped[str] = mapped_column(Text, default='')
     created: Mapped[float] = mapped_column(Double, default=time.time)
     next_at: Mapped[float] = mapped_column(Double, default=0, server_default='0')
+    # Hot scheduler, queue-count, latest-refresh and history paths filter by
+    # host/state/action and order by created; history is retained forever.
+    __table_args__=(Index('ix_jobs_host_state','host_id','state'),Index('ix_jobs_host_action_created','host_id','action','created'),Index('ix_jobs_host_created','host_id','created'),Index('ix_jobs_state_created','state','created'))
 class Audit(Base):
     __tablename__ = 'audit'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -133,6 +136,9 @@ def init():
         job_columns={c['name'] for c in inspect(connection).get_columns('jobs')}
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
+        # create_all() never adds indexes to a table that already exists.
+        for index in Job.__table__.indexes:
+            index.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):
