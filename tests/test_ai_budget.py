@@ -124,3 +124,29 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
     assert state['ai_budget']['timezone']=='America/New_York'
     body['ai_budget_timezone']='Not/A_Zone'
     assert admin.put('/api/settings/ai',json=body).status_code==400
+
+
+@pytest.mark.parametrize('first,second', [
+    ('UTC', 'Pacific/Kiritimati'), ('Pacific/Kiritimati', 'UTC'),
+    ('UTC', 'Pacific/Pago_Pago'), ('America/New_York', 'Asia/Tokyo'),
+])
+def test_timezone_change_does_not_regrant_spent_budget(admin, first, second):
+    from datetime import datetime, timezone
+    now = datetime(2026, 3, 8, 23, 0, tzinfo=timezone.utc).timestamp()  # US DST change day
+    created = now - 18 * 3600
+    configure(mode='daily_cap', cap=Decimal('1'), timezone=first)
+    start, reset = ai_budget._window(created, first)
+    with Session() as session:
+        session.add(ai_budget.BudgetEntry(id='e1', created=created, updated=created, reset_at=reset, timezone=first,
+            model='gpt-6-luna', status='settled', reservation_usd=Decimal('1'), actual_usd=Decimal('1'),
+            pricing_version='t', pricing_source='t'))
+        session.commit()
+    with Session() as session:
+        before = ai_budget.status(session, created + 60)
+        assert before['remaining_usd'] == '0'
+    configure(mode='daily_cap', cap=Decimal('1'), timezone=second)
+    with Session() as session:
+        assert ai_budget.status(session, now)["remaining_usd"] == "0"
+        # Once the original window has ended and the new one holds nothing, spend is released.
+        late = reset + 2 * 86400
+        assert ai_budget.status(session, late)['remaining_usd'] == '1'

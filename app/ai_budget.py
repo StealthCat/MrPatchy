@@ -5,7 +5,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, select
+from sqlalchemy import String, Text, Double, Numeric, and_, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -61,7 +61,10 @@ def _amount(row):
 def _state(session,cfg,now):
     mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
-    rows=list(session.scalars(select(BudgetEntry).where(BudgetEntry.created>=start,BudgetEntry.created<reset))) if enabled else []
+    # A row also counts while the window it was admitted under (its own reset_at) is still
+    # open, so changing the reset timezone cannot hand back spend from that window.
+    rows=list(session.scalars(select(BudgetEntry).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+        and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now))))) if enabled else []
     groups={key:sum((_amount(row) for row in rows if row.status==key),Decimal(0)) for key in ('reserved','sent','settled','uncertain')}
     # Settled rows count actual cost; sent/reserved/uncertain count their safe ceiling.
     counted=sum((_amount(row) for row in rows),Decimal(0));cap=Decimal(str(cfg['ai_daily_cap_usd']))
