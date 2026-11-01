@@ -233,11 +233,18 @@ def auto_plan_tick(now=None):
             planned=select(Plan.id).where(Plan.incident_id==Incident.id,Plan.state!='superseded').exists()
             attempted=select(Job.id).where(Job.action=='security-plan',Job.host_id==Incident.host_id,
                 Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id).exists()
-            rows=list(s.scalars(select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id).limit(100)))
-            for row in rows:
-                from .operations import host_quarantined
-                if host_quarantined(s,row.host_id):continue
-                if row.evidence.get('scan_context',{}).get('engine')=='YARA':continue
+            from .operations import host_quarantined
+            enabled=[host for host in enabled if not host_quarantined(s,host)]
+            if not enabled:return
+            query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id)
+            # YARA incidents are never planned automatically, so page past them instead of letting them fill a fixed window.
+            rows=[];offset=0
+            while len(rows)<100:
+                batch=list(s.scalars(query.limit(100).offset(offset)))
+                rows+=[r for r in batch if r.evidence.get('scan_context',{}).get('engine')!='YARA']
+                if len(batch)<100:break
+                offset+=100
+            for row in rows[:100]:
                 if remaining<=0:break
                 pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
                 if pending or not s.get(Host,row.host_id):continue
