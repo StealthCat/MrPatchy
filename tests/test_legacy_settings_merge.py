@@ -20,12 +20,15 @@ def test_legacy_put_settings_keeps_omitted_fields(admin):
 
 
 def test_legacy_put_settings_applies_sent_fields(admin):
-    r=admin.put('/api/settings', json={'repo_minutes': 60, 'deadlines': DEADLINES, 'history_days': 10, 'ai_control_mode': 'daily_cap'})
+    r=admin.put('/api/settings', json={'repo_minutes': 60, 'deadlines': DEADLINES, 'history_days': 10, 'ai_control_mode': 'daily_cap', 'ai_daily_cap_usd': 5, 'ai_budget_timezone': 'America/New_York'})
     assert r.status_code == 200
     with Session() as s:
         cfg=config(s)
         assert cfg['history_days'] == 10 and cfg['ai_control_mode'] == 'daily_cap'
-        assert 'AI admission changed' in s.query(Audit).filter_by(action='update settings').one().detail
+        detail=s.query(Audit).filter_by(action='update settings').one().detail
+        assert 'AI admission changed' in detail and 'daily AI cap changed from $10.0 to $5.0' in detail
+        assert 'daily AI reset timezone changed from UTC to America/New_York' in detail
+        assert cfg['ai_budget_timezone']=='America/New_York'
 
 
 def _seed_model(enabled):
@@ -59,3 +62,21 @@ def test_supplied_model_is_trimmed_and_can_be_cleared(admin):
     assert admin.put('/api/settings', json={'repo_minutes': 60, 'deadlines': DEADLINES, 'ai_model': ''}).status_code == 200
     with Session() as s:
         assert s.get(Setting, 'config').value['ai_model'] == ''
+
+
+def test_legacy_partial_save_preserves_enabled_ai_model_and_key(admin):
+    from app.security import seal
+    encrypted=seal('fixture-api-key')
+    with Session() as s:
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'saved-model','history_days':365,'ai_control_mode':'rate','ai_hourly_limit':5}))
+        s.merge(Setting(key='openai_key',value={'encrypted':encrypted}))
+        s.commit()
+    result=admin.put('/api/settings',json={'repo_minutes':90,'deadlines':DEADLINES})
+    assert result.status_code==200
+    with Session() as s:
+        cfg=config(s)
+        assert cfg['ai_enabled'] is True and cfg['ai_model']=='saved-model'
+        assert cfg['history_days']==365 and cfg['ai_control_mode']=='rate' and cfg['ai_hourly_limit']==5
+        assert s.get(Setting,'openai_key').value['encrypted']==encrypted
+        detail=s.query(Audit).filter_by(action='update settings').one().detail
+        assert 'repo_minutes' in detail and 'ai_model' not in detail and 'fixture-api-key' not in detail

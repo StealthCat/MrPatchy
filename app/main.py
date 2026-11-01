@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.42'
+APP_VERSION='1.35.44'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -702,6 +702,7 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
             detail='Patch policy, cadence or AI configuration changed ('+(', '.join(sorted(k for k in sent if previous.get(k)!=sent[k])) or 'no stored values changed')+')'
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
+            if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
             audit(s,'update settings',detail); s.commit(); return {'ok':True}
 
 def ai_key_revision(secret):
