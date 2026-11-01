@@ -39,6 +39,14 @@ jobs:
           else
             python tools/check_version.py
           fi
+      - name: Python undefined names and unused imports
+        # Compilation accepts undefined names (issue #121). Pyflakes rules (F) cover undefined
+        # names, redefinitions and unused imports; app/db.py:register_models() keeps its
+        # side-effect imports with a narrow noqa. Tests are checked for undefined names only.
+        run: |
+          python -m pip install --quiet -r requirements-lint.txt
+          ruff check --no-cache --select F app target scripts tools
+          ruff check --no-cache --select F821 tests
       - name: Python byte-compilation
         run: python -m compileall -q app target scripts tools tests
       - name: Shell syntax
