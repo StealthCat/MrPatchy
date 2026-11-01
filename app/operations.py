@@ -165,6 +165,15 @@ def collect_alerts():
             if alert.id not in active:alert.state='resolved'
         s.commit()
 
+def delivery_error(error):
+    """Sanitized, bounded delivery failure reason: class plus HTTP status or SMTP code only."""
+    reason=type(error).__name__
+    status=getattr(getattr(error,'response',None),'status_code',None)
+    if isinstance(status,int):reason+=' (HTTP %d)'%status
+    code=getattr(error,'smtp_code',None)
+    if isinstance(code,int):reason+=' (SMTP %d)'%code
+    return reason[:120]
+
 def deliver_one():
     # Administrators explicitly configure/enable delivery. Never send in tests.
     with Session() as s:
@@ -184,7 +193,7 @@ def deliver_one():
                 json={'id':alert.id,'event_id':hashlib.sha256((alert.id+str(alert.created)).encode()).hexdigest(),'host_id':alert.host_id,'kind':alert.kind,'message':alert.message,'created':alert.created},timeout=10,follow_redirects=False)
                 response.raise_for_status()
             alert.notified=time.time();alert.error=''
-        except Exception as e:alert.error=type(e).__name__
+        except Exception as e:alert.error=delivery_error(e)
         s.commit()
 
 
