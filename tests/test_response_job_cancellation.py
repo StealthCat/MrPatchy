@@ -131,8 +131,8 @@ def test_cleanup_failure_rolls_back_job_hold_events_and_audit(admin,monkeypatch)
         original(*args)
         raise RuntimeError('Fixture cleanup failed')
     monkeypatch.setattr(host_lifecycle,'reject_pending_records',fail)
-    with pytest.raises(RuntimeError,match='Fixture cleanup failed'):
-        admin.post('/api/operations/jobs/cancel-me/cancel')
+    response=admin.post('/api/operations/jobs/cancel-me/cancel')
+    assert response.status_code==500 and 'Fixture cleanup failed' not in response.text
     with Session() as s:
         assert s.get(Job,'cancel-me').state=='queued'
         row=s.get(quarantine.Quarantine,'response')
