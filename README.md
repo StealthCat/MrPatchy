@@ -1060,3 +1060,12 @@ each target to install both new helper and collector. Older helpers and observat
 remain readable but cannot bind follow-up to the recorded process. No new schema,
 automatic target upgrade, Docker-image publication or cache-hit claim is made.
 Assessment history retains the context actually supplied to each AI stage.
+
+### Dependency update maintenance
+
+Dependabot is configured for weekly pip, npm, GitHub Actions and Docker update
+PRs. Docker coverage includes the root, `deploy/` and `tests/fixtures/` Dockerfiles.
+These proposed updates still need review and CI; configuration alone does not
+verify live update generation or provide code scanning. Image digests, Python
+package hashes, Actions commit pinning and further Compose sandboxing remain
+tracked in [#201](https://github.com/StealthCat/MrPatchy/issues/201).
