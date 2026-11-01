@@ -90,6 +90,7 @@ footer { display: flex; align-items: center; justify-content: space-between; gap
 /* Page introductions and glass surfaces */
 .heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 170px; margin-bottom: 26px; padding: 8px 6px; }
 .heading-copy { min-width: 0; flex: 1; }
+.heading h1 { overflow-wrap: anywhere; }
 .heading p { color: var(--muted); font-size: 13px; max-width: 650px; line-height: 1.7; margin-bottom: 0; }
 .heading-actions { margin-top:22px;display:flex;align-items:center;flex-wrap:wrap;gap:10px; }
 .heading-actions .button { display:inline-flex;align-items:center; }
