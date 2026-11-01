@@ -38,7 +38,9 @@ function modalRequest(){
  const sameSession=()=>session===sessionRevision;
  return {active,sameSession,close(message){if(!sameSession())return false;if(active())$('#modal').close();toast(message,true);return true;},error(error){if(!sameSession())return false;toast(error.message,!active());return true;}};
 }
+let quietRender=false;
 async function render(){
+ const quiet=quietRender;quietRender=false;
  const revision=++renderRevision;
  let requested=location.hash.slice(1)||'overview';
  if(requested.startsWith('overview/'))requested='overview';
@@ -61,9 +63,28 @@ async function render(){
   $('#breadcrumb').textContent='Workspace / '+PatchyUI.pages[page][0];
   document.title=PatchyUI.pages[page][0]+' · Mr Patchy';
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
-  $('#content').innerHTML=PatchyUI.loading();
+  if(!quiet)$('#content').innerHTML=PatchyUI.loading();
   await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics}[page])(revision);
  }catch(error){if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
+}
+// Background refresh: keep the old view while fetching, then restore scroll and focus.
+function focusKey(el){
+ const root=$('#content');if(!el||el===document.body||!root||!root.contains(el))return null;
+ const keys=['id','href','data-action','data-id','data-nav','name'];
+ return {tag:el.tagName,attrs:keys.map(k=>[k,el.getAttribute(k)]).filter(pair=>pair[1]!==null),text:(el.textContent||'').trim().slice(0,80)};
+}
+function restoreFocus(key){
+ if(!key)return;
+ const matches=[...$('#content').querySelectorAll(key.tag.toLowerCase())].filter(el=>key.attrs.every(([k,v])=>el.getAttribute(k)===v));
+ const target=matches.find(el=>(el.textContent||'').trim().slice(0,80)===key.text)||matches[0];
+ if(target)target.focus({preventScroll:true});
+}
+async function refreshInBackground(){
+ const y=window.scrollY,key=focusKey(document.activeElement),before=renderRevision;
+ quietRender=true;
+ await render();
+ if(renderRevision!==before+1)return;
+ window.scrollTo(0,y);restoreFocus(key);
 }
 // Fleet contact is an observation, never a component readiness or protection claim.
 function fleetObservation(host,now){
@@ -367,7 +388,7 @@ async function tlsModal(){
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset,revision=renderRevision;try{if(action==='retry-investigation'){b.disabled=true;try{const result=await api('/investigations/'+id+'/retry','POST');toast(result.detail);if(revision===renderRevision)await render();}finally{if(b.isConnected)b.disabled=false;}return;}if(action==='retriage-investigation')return requestInvestigationRetriage(id);if(action==='revoke-known-good')return requestKnownGoodRevocation(b.dataset.fingerprint,b.dataset.version,b.dataset.linked);if(action==='add')return addServer();if(action==='inspect')return inspect(id);if(['deploy','refresh'].includes(action)){await api(`/hosts/${id}/actions/${action}`,'POST');toast('Operation queued. See Activity for progress.');return;}if(action==='trust'){const approved=b.dataset.approved!=='true';modal(approved?'Approve known-good behavior':'Revoke behavior approval',`<p>${approved?'Record this exact behavior as reviewed and trusted? Its AI assessment alone is not proof of safety.':'This behavior will no longer be marked as trusted.'}</p><button class="primary" id="confirm-trust">${approved?'Approve behavior':'Revoke approval'}</button>`);const request=modalRequest();$('#confirm-trust').onclick=async event=>{const button=event.currentTarget;if(button.disabled)return;button.disabled=true;try{await api('/investigations/'+id,'PUT',{approved});request.close(approved?'Behavior approval saved':'Behavior approval revoked');if(request.sameSession()&&revision===renderRevision)await render();}catch(error){request.error(error);if(request.active())button.disabled=false;}};}}catch(e){toast(e.message);}});
 $('#close-modal').onclick=()=>{modalRevision++;releaseRequest++;$('#modal').close();};$('#modal').addEventListener('cancel',()=>{modalRevision++;releaseRequest++;});$('#refresh-page').onclick=render;$('#logout').onclick=async()=>{try{await api('/logout','POST');showLogin();}catch(e){toast(e.message);}};$('#login-form').onsubmit=async e=>{e.preventDefault();try{const d=await api('/login','POST',{password:new FormData(e.target).get('password'),username:new FormData(e.target).get('username')||'admin',otp:new FormData(e.target).get('otp')||''});csrf=d.csrf;e.target.reset();showShell();await render();resumeEnrollment();}catch(e){$('#login-error').textContent=e.message;}};window.addEventListener('hashchange',()=>{modalRevision++;releaseRequest++;$('#modal').close();window.scrollTo(0,0);render();});(async()=>{try{csrf=(await api('/session')).csrf;showShell();await render();resumeEnrollment();}catch{showLogin();}})();
 
-setInterval(()=>{if(!$('#shell').classList.contains('hidden')&&!$('#modal').open&&!document.activeElement?.closest('#server-list-controls,#fleet-review-controls')&&document.visibilityState==='visible'&&(page==='overview'||(page==='servers'&&(!location.hash.startsWith('#servers/')||location.hash.endsWith('/overview')))))render();},30000);
+setInterval(()=>{if(!$('#shell').classList.contains('hidden')&&!$('#modal').open&&!document.activeElement?.closest('#server-list-controls,#fleet-review-controls')&&document.visibilityState==='visible'&&(page==='overview'||(page==='servers'&&(!location.hash.startsWith('#servers/')||location.hash.endsWith('/overview')))))refreshInBackground();},30000);
 
 async function repositoryAccessModal(hostId){
  const revision=modalRevision;try{
