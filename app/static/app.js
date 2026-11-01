@@ -19,8 +19,9 @@ function toast(message,global=false){
 // Success feedback for a navigation is shown once the matching hashchange render has finished.
 let pendingNavToast=null;
 async function navigateWithToast(hash,message){
- if(location.hash===hash){await render();toast(message);return;}
- pendingNavToast={hash,message,session:sessionRevision};location.hash=hash;
+ pendingNavToast={hash,message,session:sessionRevision};
+ if(location.hash===hash){await render();return;}
+ location.hash=hash;
 }
 function flushNavToast(revision){
  const pending=pendingNavToast;if(!pending||revision!==renderRevision)return;
@@ -75,7 +76,7 @@ async function render(){
   $('#content').innerHTML=PatchyUI.loading();
   await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics}[page])(revision);
   flushNavToast(revision);
- }catch(error){if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
+ }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
 // Fleet contact is an observation, never a component readiness or protection claim.
 function fleetObservation(host,now){
