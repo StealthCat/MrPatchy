@@ -31,7 +31,11 @@ jobs:
         run: |
           if [ -n "$VERSION_BASE" ] && [ "$VERSION_BASE" != "0000000000000000000000000000000000000000" ]; then
             git fetch --no-tags --depth=1 origin "$VERSION_BASE"
-            python tools/check_version.py --base-ref "$VERSION_BASE"
+            version_args=(--base-ref "$VERSION_BASE")
+            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+              version_args+=(--allow-unversioned)
+            fi
+            python tools/check_version.py "${version_args[@]}"
           else
             python tools/check_version.py
           fi
@@ -47,6 +51,25 @@ jobs:
           docker compose --env-file .env.example config --quiet
           GCP_PROJECT=ci-project GCP_ZONE=us-central1-a docker compose --env-file .env.example -f compose.yaml -f compose.gcp.yaml config --quiet
 
+  # Development PRs may retain main's version. This separate merge gate stays red
+  # until the coordinator adds a newer version and this PR's changelog entry.
+  integration-version:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Coordinator version and PR traceability
+        env:
+          VERSION_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$VERSION_BASE"
+          python tools/check_version.py --base-ref "$VERSION_BASE" --pr-number "$PR_NUMBER"
+
   tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -59,7 +82,11 @@ jobs:
           cache-dependency-path: requirements*.txt
       # restic enables the encrypted backup/restore drills in tests/test_final_features.py,
       # which otherwise skip; this replaces the former separate recovery job.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends restic
+      - name: Native encrypted SQLite recovery tools
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends restic
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
       - run: docker build -t mrpatchy:test .
@@ -122,6 +149,11 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements*.txt
+      - name: Native encrypted MySQL recovery tools
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends restic mariadb-client
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
 
@@ -140,7 +172,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
       - name: Install native Debian fixture signing tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
       - run: pip install -r requirements.txt
       - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test tests/fixtures
       - run: python tests/integration_ssh.py
@@ -164,11 +199,7 @@ jobs:
       - name: Install browser system dependencies
         timeout-minutes: 5
         run: |
-          # The Azure mirror has repeatedly stalled on font downloads. Keep APT
-          # signature validation and the deadline, using Ubuntu's primary archive.
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
-          fi
+          bash .github/scripts/configure-ci-apt.sh
           npx playwright install-deps chromium
       - name: Download Chromium
         timeout-minutes: 5
@@ -184,7 +215,11 @@ jobs:
         target: ['fedora:44', 'almalinux:9']
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv rpm
+      - name: Native RPM fixture tools
+        timeout-minutes: 5
+        run: |
+          bash .github/scripts/configure-ci-apt.sh
+          sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv rpm
       - run: /usr/bin/python3 -m venv --system-site-packages /tmp/patchy-rpm-test
       - run: /tmp/patchy-rpm-test/bin/pip install -r requirements-dev.txt
       # These run against the runner's own libdnf/libRPM and do not depend on the

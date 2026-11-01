@@ -1,20 +1,31 @@
 # Security implementation checkpoint
 
-## Version policy: major fixed at 1
+## Development and integration policy
 
-User instruction (2026-10-30): use **1.MINOR.PATCH** and keep the major number at
-**1** until the user explicitly instructs otherwise. The initial transition is
-`0.17.0` to `1.17.0`, preserving the existing minor/patch numbers. Subsequent
-completed updates retain the existing patch/minor increment criteria and full
-version monotonicity. This overrides automatic major bumps, including for breaking
-changes; record compatibility impacts while keeping major 1.
+User instructions (2026-10-30 and 2026-10-31): keep the application major at **1**;
+allow independent concurrent implementation with one coordinator responsible for
+final version allocation, integration, merging and verified issue closure. Start
+with at most two active implementation streams. Existing schedules are unchanged.
 
-All other versioning instructions remain in force: authoritative `APP_VERSION`,
-synchronized README/changelog/UI/API metadata, versioned development and merge
-commit subjects and PR titles/labels, exact-final-commit checks and skipped Git
-tags. `AGENTS.md`, the source version checker and the scheduled development task
-carry this policy. Roadmap completion remains governed by the existing completion
-gate and issue-first workflow.
+Workers use isolated issue-owned branches and leave APP_VERSION, README.md and
+CHANGELOG.md unchanged. They document reproduction, delivered behavior, compatibility impacts
+and validation in the PR, then explicitly hand the exact ready commit to the
+coordinator. Development commits/PRs need no version prefix. The coordinator owns
+all README/changelog notes and updates based on the PR description, and adds
+the final version, a numbered PR-linked changelog entry and versioned integration/
+merge subjects only when integrating that PR. README no longer tracks a source
+version. Runtime UI/API/health/identity still derive from APP_VERSION. Preserve
+historical commits/changelog entries and skip Git tags. A source bump does not
+publish a Docker image.
+
+Development metadata checks permit unchanged release metadata against main. The
+separate `integration-version` gate requires a newer version and this PR's link in
+the newest changelog entry; all applicable checks must pass on the exact final
+integrated commit before merge. Reconcile/retest when main or the head changes.
+Only the coordinator merges and verifies fully delivered issues close. Read
+[AGENTS.md](../AGENTS.md) and [the coordinator guide](DEVELOPMENT_COORDINATOR.md)
+for ownership, handoff, transition and the copyable coordinator prompt. Historical
+delivery records below describe the policy in force when they were written.
 
 ## Scheduled development completion gate
 
@@ -23,10 +34,10 @@ Before each scheduled development cycle, assess the current roadmap against curr
 implementation checkpoint and any unfinished related PR. This is a read-only
 assessment before any implementation, UI polishing, versioning or repository write.
 
-- If the explicitly requested roadmap is feature complete and no unfinished in-scope implementation remains, stop that cycle without working on the code. Do not invent additional features, refactor, polish the UI or begin speculative bug hunts to fill the cycle.
+- After issue-first triage, if the requested roadmap is feature complete and neither actionable issue fixes nor unfinished in-scope implementation remains, stop that cycle without working on the code. Do not invent additional features, refactor, polish the UI or begin speculative bug hunts to fill the cycle.
 - A completed cycle with no work must not change source, tests, documentation or the checkpoint; it must not bump a version or create commits, tags or PRs merely to record that nothing needs doing.
 - Report briefly that no development is needed, citing this roadmap and the latest merged PR/commit used for the assessment. Keep the development schedule enabled; later cycles may resume when a new roadmap requirement or unfinished in-scope milestone is present.
-- Proceed only when the assessment identifies a concrete outstanding roadmap requirement or unfinished related implementation. State the remaining work before starting it. Review/polish, versioning, testing, PR/merge and checkpoint requirements apply when there is actual work to deliver.
+- Proceed when the assessment identifies an actionable issue fix, a concrete outstanding roadmap requirement or unfinished related implementation. State the remaining work before starting it. Workers own implementation/testing/checkpoints; the coordinator owns final versioning, integration and merge checks.
 - Missing, contradictory or blocked evidence is not proof of completion. Report the uncertainty or blocker and stop without speculative code changes; retain honest outstanding requirements and limitations.
 
 This gate takes precedence over instructions to always continue development or
@@ -42,9 +53,9 @@ validation and PR completion. A large milestone may fill the batch; combine
 several small related items when appropriate.
 
 - State the selected items and intended outcome before implementation, respecting dependency order and unfinished work from earlier runs.
-- Reserve roughly the final 10–15 minutes for review, applicable tests/checks, version/changelog consistency, PR/merge handling and the checkpoint.
+- Reserve roughly the final 10–15 minutes for review, applicable tests/checks, the PR ready handoff and the checkpoint. Final version/changelog preparation and merging belong to the coordinator.
 - If a small item finishes early and roadmap work remains, take the next coherent item only when it can reasonably be completed and validated within the remaining budget. Do not stop merely because one small milestone is finished.
-- Preserve reviewable scope and passing checks on the exact final commit. Avoid risky late additions or overlapping development runs; leave a precise checkpoint and unfinished PR state if safe completion is not possible.
+- Preserve reviewable scope and applicable checks on the exact worker commit. Independent development may overlap within the two-stream limit; overlapping ownership and concurrent final integration are prohibited. Avoid risky late additions and leave a precise checkpoint when a safe handoff is not possible.
 - This is a sizing target, not a mandatory minimum. Stop early for roadmap completion or a genuine blocker. Do not invent work, wait, repeat successful checks or change completed code simply to fill time.
 
 The completion gate takes priority, and the development schedule is unchanged.
@@ -5261,7 +5272,35 @@ intact and this update's entries reapplied.
 
 Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
 
-Checkpoint (v1.35.26, issue #160): `/api/metrics` `mrpatchy_hosts` now counts only servers with `deleted_at==0`, matching the dashboard and `/api/hosts`. No role, audit, schema, response-authorization, Docker publication or Git tag change. Version allocated above pending PRs #203 (1.35.22), #206 (1.35.21), #207 (1.35.23) and #208 (1.35.25).
+## v1.35.29 — Deleted-server indirect read authorization
+
+Owner: Codex `issue118-a53dc732a02d`, branch
+`codex/deleted-host-read-boundary`, issue #118. Read current main `128704f`
+(v1.35.21), AGENTS/CONTRIBUTING, checkpoint, 78 open issues and open PRs
+#203/#206/#207. #119 and #205 are actively owned; #120 is a separate recovery
+scope and #204 depends on active #203. No unrelated roadmap/UI changes selected.
+The issue claim's initially written 21:25Z timestamp was inaccurate; the actual
+run/checkpoint is 2026-10-31T21:19Z.
+
+Reproduced on unmodified main using disposable SQLite and the real authenticated
+FastAPI application: 14 failures / 12 passes in the new regression suite. Viewers
+and operators received 200 for deleted-server query-scoped jobs, job output,
+investigations and package history; global job/package pages included deleted
+records. Direct host paths already returned 403. The cause was URL-only lifecycle
+read authorization, without resolved-host checks in query/indirect endpoints.
+
+The fix checks the resolved host before returning query-scoped records or job-ID
+output. Job/package list filtering occurs in SQL before pagination. Retained
+administrator access, disabled-server read policy, active-only default fleet
+investigations, missing/mismatched scope responses and hostless jobs are preserved.
+No response authority, schema, helper, audit policy or route-role changes.
+
+Focused validation: 44 passed (26 new authorization cases plus lifecycle suite).
+Full Python suite and exact-final-head CI remain required before merge. Source,
+README and changelog use v1.35.29 above pending .22/.23/.24 allocations; integration
+must recheck main/version order and preserve #206's independently owned role work.
+No tags or Docker publication. Issue #118 stays open until a tested merge is
+verified. All wider roadmap requirements remain tracked above.
 
 ## CI pipeline review (v1.35.24)
 
@@ -5296,3 +5335,297 @@ Check names change: `static` and `mysql (1)`–`mysql (4)` are added, and `mysql
 `recovery` are removed. Branch-protection required checks must follow. Future exact-head
 records should list the twelve resulting jobs rather than nine. Action references
 remain major-version tags; SHA pinning belongs to supply-chain issue #201.
+
+## v1.35.37 — Rollback adapter stream isolation (#150)
+
+Issue-first triage on current main `6589f4d` found all open P1 issues already owned by
+active PRs. Issue #150 was the highest-impact independent unclaimed P2 and had no
+related fix. A disposable executable adapter reproduced both snapshot and rollback
+misreporting successful JSON as `JSONDecodeError: Extra data` whenever it also emitted
+a warning on stderr. `recovery_hook` now invokes the existing bounded subprocess
+collector directly, parses stdout alone and rejects stdout above 20 KB before parsing;
+stderr remains separately bounded and cannot corrupt the JSON response. Existing
+root ownership, writable-bit, executable, operation, identifier and object-response
+checks remain unchanged.
+
+Focused regression coverage demonstrates the failure before the fix and covers both
+operations, durable snapshot/rollback journal recording and the oversized-response
+guard. Exact-final-head static, SQLite, four MySQL shards, browser, SSH/RPM,
+Docker/TLS/proxy and GCP checks remain the merge gate. Version **v1.35.37** follows
+active allocations through v1.35.36; major remains 1 and no Git tag or Docker
+publication is included.
+
+Final integration refresh: main advanced to `8fd8d49` (v1.35.29) after all twelve
+checks passed on the earlier head. Preserve PR #212's durable recovery coverage and
+PR #208's deleted-server read authorization, including their tests, recovery format
+and delivery records. The combined v1.35.37 head requires a fresh full local run and
+all twelve exact-head checks; the earlier green run does not authorize merge.
+
+Second final integration refresh: all twelve jobs passed on combined head
+`7b0cb3d54f56452ba6e054ab8db863550c2820f8`, and its local tree passed 1,670 tests,
+11 skips and 9 subtests. Main then advanced to `db7871e` (v1.35.30) through PR #203.
+Preserve its uncertain ordinary-patch outcome hold, remote-start classification,
+receipts, audit records and regression suite unchanged. The new combined head again
+requires the full local and twelve-job exact-head gates; neither earlier green run
+authorizes merge.
+
+Third final integration refresh: all twelve jobs passed on head
+`0243975481869722bb39a3ae102779dea5b12ee3`, and its local tree passed 1,682 tests,
+11 skips and 9 subtests. Main then advanced to `115e3bd` (v1.35.35) through PR #217,
+and open PR #218 allocated v1.35.36. This fix is reallocated to **v1.35.37** and
+preserves #217's sanitized, rate-limited rejected-SSO logging/auditing and tests.
+The changed version/integration head must pass the full local and twelve-job exact-head
+gates again; earlier results do not authorize merge.
+
+Integration continuation — Codex `integration-6eac54918b34`, PR #208, 2026-10-31.
+Accepted the explicit #118 handoff and retained the same branch. Reproduced again
+on current main `fa5d933` (v1.35.24): 14 failed / 12 passed in
+`tests/test_deleted_host_reads.py`. Merged that main into this branch, preserving
+all CI pipeline review/sharding changes and both delivery entries. Allocated
+v1.35.29 above pending proposals through .28; other owners retain their work and
+must reconcile against final main when integrating. This independently scoped P1
+read-boundary fix has no dependency on the separate route-role refactor #206.
+No roadmap work started. Current open-issue listing returned all 78 reports;
+#119/#120/#198/#205 have existing owned fixes, #204 depends on #203, and #140
+remains actionable independent work for a later cycle after this integration.
+Final local validation and all twelve applicable exact-head CI jobs are required;
+no issue closure is claimed until the tested merge is verified. Keep schedule unchanged.
+
+
+Before merge, main advanced to `6589f4d` (v1.35.25, PR #207 checkbox CSS).
+Preserve that exact main and its stylesheet regression. The combined final tree
+requires fresh exact-head CI and local focused authorization/CSS/lifecycle checks;
+the preceding full local suite passed 1647 tests / 9 skipped / 9 subtests on the
+pre-CSS integration tree. Earlier-head CI does not authorize this final integration.
+
+## v1.35.27 — Durable controller recovery coverage (#120)
+
+Codex `recovery-437f6ead2050` selected independent P1 #120 after reading main
+fa5d933 (v1.35.24), repository instructions, the checkpoint, all 77 open issues
+(one 100-item API page, no next link), six open PRs and candidate issue comments.
+P1 #118/#119/#205 already have #208/#203/#209 and retain their owners; #204 depends
+on #203. No roadmap work or competing fix was started. Claim comment's 21:40Z
+was an inaccurate manually entered timestamp; actual claim was near 21:35Z.
+
+On unchanged main, the new staged-bundle regression failed because
+`evidence-archive/sample/content` did not exist after backup. The cause was the
+explicit database/key/SSH/TLS-only allowlist in scripts/recovery.py. A format-2
+manifest now inventories evidence-archive, vendor-packages, yara-rules and local
+gcloud trees with names, sizes and hashes, explicit absence, and verified archive
+IDs. Both restore and activation recheck coverage. Backup refuses missing files
+for verified archives. SQLite activation independently checks retained SQL rows.
+Private evidence/trust/GCP contents restore with 0700 directories, 0600 files and
+app service ownership; links/special files are rejected. Format 1 remains readable
+with an honest missing-coverage warning. External dependencies and reconstructible
+caches are inventoried in docs/ENTERPRISE_RECOVERY.md. Existing response authority,
+role/lifecycle and #131 SSH safeguards remain intact; mounted-volume retry work
+remains separate in #151.
+
+Validation at first publication: unchanged-main failure recorded; focused recovery
+and final-feature suites 37 passed / 4 skipped locally (native restic/MySQL absent).
+New tests verify an actual EvidenceArchive after a SQLite snapshot/activation and
+reauthenticate signed vendor/YARA bundles using restored keyrings. They cover
+modified/missing/extra files, links/FIFOs, missing verified files and legacy/absent
+coverage. Native encrypted SQLite and MySQL dump/import drills are CI gates;
+MySQL CI now installs restic and MariaDB clients. Full suite and exact-head CI are
+pending. This is self-review, not independent approval. No issue closure before
+all applicable exact-final-head checks pass and the tested PR merges.
+
+Proposed version v1.35.27 follows main .24 and pending work through #210 .26;
+recheck main and actively owned lower-version PR integration before merging.
+Keep the same focused branch/PR if integration is still held. No Git tags, Docker
+publication, schedule change or completed-roadmap claim.
+
+Self-review/validation update (2026-10-31T21:44Z): full local Python suite on the
+initial published tree completed with **1637 passed, 11 skipped, 9 subtests passed**.
+The follow-up adds missing-trust warnings and staging-restore tamper coverage;
+focused final recovery/final-feature validation with an extracted native restic
+binary completed **42 passed, 1 skipped** (only the MySQL-specific drill). The
+real encrypted SQLite evidence recovery and both existing restic drills pass.
+No local MySQL server/client or Docker acceptance is claimed. All twelve exact-head
+GitHub jobs must run after this follow-up, including the native MySQL drill.
+PR #212 targets main, has the matching v1.35.27 label and Fixes #120. Initial
+published commit 96c000071caee68ffc5287730e657454afa9a560 exactly matched the locally
+tested tree. Active integration/version holds were posted on #203/#206/#207/#208/
+#209 because main's direct CI update is already v1.35.24. Do not merge ahead of
+that coordinated issue-fix sequence or reuse lower versions. Keep #120 open until
+the tested final merge is verified; continue the same PR if this cycle ends first.
+
+
+Final integration refresh (2026-10-31T21:54Z): all twelve checks passed on PR #212
+head e4ea3714a60ad06139ea9c6cd9e95849831d8788 (run 41244989750). SQLite CI:
+1521 passed / 129 skipped / 9 subtests. MySQL shards combined: 1517 passed /
+133 skipped / 9 subtests; the native encrypted MySQL archive recovery drill is
+included in successful shard 1. Browser, both SSH and RPM legs, GCP runtime and
+static checks passed. Main advanced just before merge to 6589f4d (PR #207,
+v1.35.25). Preserve its checkbox CSS/regression and delivery entry; retain
+v1.35.27 and rerun ALL checks on this new merged final commit. No stale-combination
+merge was attempted. #208's owner explicitly confirmed independent integration
+and will refresh its .29 work if #212 integrates first. Current next-integration
+proposal is #212 at .27; preserve other independently owned fixes and recheck
+main immediately before merge. The earlier blanket hold was superseded by
+PR #212's integration discussion. No issue closure before verified tested merge.
+
+
+Coordinated P1 integration: preserve exact #212 head
+`8253159beb1799986dec5f1644e67cd08174f4eb` (v1.35.27) as an explicit dependency
+of #208 v1.35.29. Serial merge order agreed in PR discussions: #212, #208,
+#203, then later versions. Recovery code, native validation and every delivery
+entry remain intact. The combined final source receives fresh full local and
+all twelve exact-head CI checks. Do not merge #208 before #212's tested merge is
+verified; if its head changes, refresh/reassess this candidate. No other branch
+ownership or schedule changes.
+
+
+## v1.35.30 — Uncertain ordinary patch outcomes (#119)
+
+MrPatchy hourly development, Claude Code session `session_01AfdfYehh8Cf5AJiiyGRkCf`,
+claimed unowned issue #119 after reviewing all open issues, comments and PRs at
+main 56d4eb7 (v1.35.19). Reproduced on that main: with reboot/rollback off, an
+injected `RemoteProtocolError` on the patch send left the job `failed` and the
+host unquarantined, so the next queued mutation ran.
+
+The worker now tracks ordinary patch progress (not sent, sent, receipt received,
+inventory observed). After the request is sent, a failure is held as
+`recovery_required` unless `ssh.call` proves the remote command never started or
+the bridge returned its own structured JSON failure (`ssh.RemoteFailure`). A
+bridge exit without that receipt, a lost/truncated/invalid reply, a timeout, a
+transport error after `exec_command`, and a failed post-patch inventory read are
+all uncertain. Held jobs keep the receipt, the error and the operation identity
+in output and audit (`uncertain patch <job id>`), block later queued work through
+the existing quarantine states and are released only through the existing
+reconciliation path; nothing is replayed. Once the post-patch inventory is
+observed, a later health regression stays a terminal `failed` rollout stage.
+Protected-patch, release-upgrade, role, response-authorization and audit
+boundaries are unchanged. `repository`, `key` and `repair` mutations keep their
+existing classification; tracked in follow-up issue #204.
+
+Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malformed
+replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
+inventory failure, verified target failure, inactive and unreachable servers
+(using the real `ssh.call`), the remote-start marker, structured-failure parsing
+and a later queued job. First proposed as v1.35.22. While this PR waited, main
+advanced through PRs #174 (v1.35.20), #196 (v1.35.21), the CI review (v1.35.24),
+#207 (v1.35.25), #212 (v1.35.27) and #208 (v1.35.29), in the order agreed on
+#203/#208/#212; all are preserved. v1.35.30 is newer than main and below the
+later #213-#215 allocations. No schema, target helper or Git tag change; source versioning
+publishes no Docker image.
+
+Checkpoint v1.35.35 (#170): failed SSO callbacks are logged server-side with
+the exception class and a fixed sanitized reason, and audited as `SSO login
+failed` with issuer, hashed subject prefix and reason, rate-limited per
+reason/subject per five minutes. Responses keep the generic 400 message; no
+raw provider text, token or plain subject is recorded. Roles, successful-login
+audit and response-authorization boundaries are unchanged.
+
+## v1.35.32 — Independent periodic scheduler producers (#140)
+
+Owner: Codex `scheduler-6eac54918b34`, branch
+`codex/scheduler-tick-isolation`. Issue-first triage selected #140 after accepting
+#118/#208's explicit integration handoff. Current main `fa5d933` reproduced all
+seven injected producer failures in a disposable real application/SQLite loop:
+queued-job dispatch was skipped and failing tasks retried each iteration. Cause:
+a single outer exception boundary surrounded all producers and the rest of the
+loop, with the shared schedule timestamp advanced only after every task succeeded.
+
+Each leader producer now has its own deadline and failure count. A named failure
+is logged and backed off at 30/60/120/240 seconds, capped at 300 seconds, without
+skipping the remaining producers, polling, dispatch, cleanup, notification or AI
+admission. Success restores 30-second cadence. Worker identity loss propagates
+to the existing stop path rather than being treated as a retriable policy error.
+Deadlines are process-local scheduling safeguards, not durable job claims or a
+replacement for existing coordinator election, drain, leases and per-host locks.
+No additional response authority, automatic replay or provider call is introduced.
+
+Focused new loop/backoff/identity-loss and existing advisory restart, drain/control
+and worker registry tests: 67 passed. Full final-tree local suite and all twelve
+applicable exact-head GitHub jobs are required before merge. No UI changes were
+made. The runtime pipeline remains a priority, but unrelated roadmap work waits
+behind actionable issues. Wider issues/roadmap are not claimed complete.
+
+Version/source/README/changelog use v1.35.32, major fixed at 1. Depends on the exact
+#208 final integration head `a16688690e2a2486cfe3e281ddbae7dce2c09507` (v1.35.29),
+which includes current main `6589f4d` (v1.35.25, #207). Merge #208 first after its
+own exact-head checks; preserve other owners' mutation, recovery and route-role
+work. Re-read main/open PR versions before integration, rerun affected checks if
+head or integration changes, and verify #140 closes only after tested merge.
+No Git tags, Docker publication or schedule changes.
+
+Version allocation correction: another active owner had reserved v1.35.30 for
+#203, and #213 reserves v1.35.31. Reassigned this update to v1.35.32 after the
+fresh open-PR check. Preserve #203's independently owned worker mutation changes;
+coordinate #208 then #203 integration before this later version. Earlier .30
+candidate metadata/CI is superseded; final version metadata receives fresh CI.
+
+Final review extended the same per-producer exception/backoff boundary to module
+loading, so an unavailable optional producer dependency cannot skip healthy tasks
+or the rest of the loop. A focused import-failure regression joins the seven real
+loop failures and backoff/identity checks (67 focused tests pass). Superseded local
+suite/CI results do not authorize this final runtime revision; rerun the full suite
+and all applicable exact-head jobs on the final published tree.
+
+
+Continuation integration (Codex scheduler-85a36b0d8f8a, 2026-10-31): SAME PR #214
+accepts the released handoff after #212/#208/#203 merged. Current main db7871e
+(v1.35.30) reproduces all seven producer-position failures: queued dispatch is
+skipped and the failed producer retries every loop. Preserve all recovery,
+read-authorization and ordinary-patch uncertainty implementation, regressions,
+CI and delivery records while retaining independent periodic producers. No new
+roadmap or unrelated UI scope. This run retrieved 73 open issues (under the
+100-result limit) and nine open PRs; prior run's initial count was 77, not the
+copied historical 78. Keep source v1.35.32 pending coordinated .31/#213 order;
+refresh main and version allocations before merge. The earlier candidate's green
+checks do not authorize this changed integration: require combined focused/full
+local validation and all twelve exact-final-head CI jobs. No issue closure before
+tested merge; no tags, Docker publication or schedule changes.
+
+Coordinator integration v1.35.41 (2026-10-31): the historical candidate versions and
+reservations above are superseded by the maintainer-directed batch in #222. PR #214
+preserves current main through #221/#209, including rollback/SSO/recovery/patch-safety
+and all delivery history. README has no source-version field. Final major-1 version
+and the numbered changelog entry are allocated by the sole coordinator; all 13
+applicable checks must pass on the final integrated head before merge.
+
+## v1.35.22 — Per-route role declarations (#198)
+
+Claude Code session `012YQAphimPkYCq5KWgr1sGh` claimed issue #198 after reading main
+`1328a82` (v1.35.17), all open issues and open PRs. Pending #139, #168, #174 and #196
+hold versions up to v1.35.20 and also edit `app/main.py`; this update proposes
+v1.35.22, subject to refreshing main before merge.
+
+`auth()` used to decide roles by testing the request path (`'/security' in path`,
+`path.endswith('/patch')`, prefix lists), so a new route defaulted to viewer-readable
+and any path ending in `/preview` was operator-writable. Roles are now declared per
+route through `viewer_user`, `operator_user`, `admin_user` and `self_user`, which share
+one `authenticate()` that keeps session, generation, CSRF and host lifecycle checks in
+their existing order. `app/route_roles.py` builds an inventory of every route at
+startup (including the SSO router) and raises if a route declares no role, declares
+conflicting roles, or is public without being listed in `PUBLIC_ROUTES`.
+
+The authenticated routes were migrated from the roles the old logic produced and compared
+against it. The full suite caught one route the template comparison missed: operators may
+run `refresh` through `/api/hosts/{id}/actions/{action}`, so `refresh` is now its own
+operator route and the other actions stay admin. Old accidental matches (a concrete id such
+as `patch` ending a path) no longer grant operator access. `tests/test_route_roles.py` pins
+the full route-to-role table, proves unlisted routes fail closed, and drives a viewer
+and an operator through every admin-only and operator route. #157 (viewer-readable
+`/api/investigation-status`) is still a viewer route here; changing it is now a one-word
+edit on the new mechanism and is left to that issue. Host-lifecycle and deleted-record
+checks still read the path; they are not role decisions and were out of scope.
+
+Coordinator integration v1.35.42 (2026-10-31): PR #226 preserves original #206
+commits and current main through #214, including the deleted-server resolved-host
+and SQL list-filter safeguards. The fork is read-only to this connection, so the
+maintainer-directed batch #222 uses a writable upstream branch. Historical
+candidate version .22 is superseded; README no longer tracks versions. Final
+PR-bound version and all 13 exact-head checks are required before delivery and
+verified #206/#198 closure. The separate #157 telemetry report stays open.
+
+## v1.35.48 — Lifecycle-aware host metrics (#160)
+
+PR #210 filters the Prometheus mrpatchy_hosts gauge to Host.deleted_at==0.
+Soft-deleted history remains retained and administrator-readable; disabled,
+non-deleted servers remain counted. Other metrics, route roles, audit retention
+and runtime response authorization are unchanged. The final version/changelog
+record is coordinator-owned under #222, and all 13 exact-head checks remain
+required before merge and verified issue closure. No tags or Docker publication.
