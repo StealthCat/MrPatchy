@@ -52,11 +52,8 @@ def atomic(path, data, mode=0o600):
     finally:
         tmp.unlink(missing_ok=True)
 
-import os
 import selectors
 import signal
-import subprocess
-import time
 
 def bounded(args,timeout=900,env=None,limit=16_000_000,allowed_codes=(0,),return_status=False,pass_fds=(),memory_limit=None):
     import resource

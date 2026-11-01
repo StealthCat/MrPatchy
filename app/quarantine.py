@@ -5,7 +5,7 @@ import stat
 import time
 import uuid
 from pathlib import PurePosixPath
-from sqlalchemy import String,Double,Boolean,JSON,Text,select
+from sqlalchemy import String,Double,Boolean,JSON,Text
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
 from . import incidents,ssh,evidence_archive
