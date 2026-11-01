@@ -6,7 +6,10 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
   - package-ecosystem: docker
-    directory: /
+    directories:
+      - /
+      - /deploy
+      - /tests/fixtures
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
