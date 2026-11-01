@@ -5,8 +5,8 @@ from pathlib import Path
 import re
 import tempfile
 import time
+from .gpgv import verify as verify_gpgv
 from .vendor import read_file,sha
-from .process import bounded
 
 
 def authenticate(bundle_id):
@@ -19,9 +19,7 @@ def authenticate(bundle_id):
     with tempfile.TemporaryDirectory() as tmp:
         for name,data in [('trustedkeys.gpg',key),('manifest.json',manifest),('signature',signature)]:
             (Path(tmp)/name).write_bytes(data)
-        out,_=bounded(['gpgv','--homedir',tmp,'--keyring',str(Path(tmp)/'trustedkeys.gpg'),'--status-fd','1',str(Path(tmp)/'signature'),str(Path(tmp)/'manifest.json')],timeout=15,limit=64000)
-        valid=[line.split() for line in out.splitlines() if line.startswith('[GNUPG:] VALIDSIG ')]
-        if not valid or any(len(v)<10 or v[9] not in ('8','9','10','11') for v in valid):raise ValueError('YARA manifest requires a strong trusted signature')
+        signers=verify_gpgv(['gpgv','--homedir',tmp,'--keyring',str(Path(tmp)/'trustedkeys.gpg'),'--status-fd','1',str(Path(tmp)/'signature'),str(Path(tmp)/'manifest.json')])
     def unique(pairs):
         result={}
         for k,v in pairs:
@@ -34,7 +32,7 @@ def authenticate(bundle_id):
     packet={'source':source.decode('utf-8'),'sha256':meta['sha256'],'issued':meta['issued'],'expires':meta['expires']}
     validate_yara_rules(packet)
     return packet,{'bundle_id':bundle_id,'manifest_sha256':sha(manifest),'rules_sha256':sha(source),'keyring_sha256':sha(key),
-                   'signers':[v[2] for v in valid],'issued':meta['issued'],'expires':meta['expires'],'authenticated_at':time.time()}
+                   'signers':signers,'issued':meta['issued'],'expires':meta['expires'],'authenticated_at':time.time()}
 
 if __name__=='__main__':
     import argparse

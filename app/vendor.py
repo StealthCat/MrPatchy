@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 import re
 import stat
-import subprocess
 import tarfile
 import tempfile
 import time
+from .gpgv import verify as verify_gpgv
 
 TAR_STREAM_LIMIT=130*1024*1024
 
@@ -112,12 +112,7 @@ def authenticate(bundle_id,now=None):
     with tempfile.TemporaryDirectory() as tmp:
         for name,data in [('trustedkeys.gpg',keyring),('Release',release),('Release.gpg',signature)]:
             (Path(tmp)/name).write_bytes(data)
-        result=subprocess.run(['gpgv','--homedir',tmp,'--keyring',str(Path(tmp)/'trustedkeys.gpg'),'--status-fd','1',str(Path(tmp)/'Release.gpg'),str(Path(tmp)/'Release')],capture_output=True,timeout=15)
-        if result.returncode or b'[GNUPG:] VALIDSIG ' not in result.stdout:raise ValueError('Vendor Release signature verification failed')
-        # Reject weak digest signatures, even if the local gpgv policy accepts them.
-        signatures=[line.split() for line in result.stdout.decode().splitlines() if line.startswith('[GNUPG:] VALIDSIG ')]
-        if any(len(line)<10 or line[9] not in ('8','9','10','11') for line in signatures):raise ValueError('Weak vendor signature digest')
-        signers=[line[2] for line in signatures]
+        signers=verify_gpgv(['gpgv','--homedir',tmp,'--keyring',str(Path(tmp)/'trustedkeys.gpg'),'--status-fd','1',str(Path(tmp)/'Release.gpg'),str(Path(tmp)/'Release')])
     meta=fields(release.decode('utf-8'))
     now=time.time() if now is None else now
     def stamp(key):
