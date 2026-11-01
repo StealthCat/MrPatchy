@@ -16,8 +16,20 @@ function toast(message,global=false){
  target.textContent=message;target.classList.remove('hidden');target.style.display='block';
  clearTimeout(toastTimer);toastTimer=setTimeout(()=>{target.style.display='none';},6000);
 }
+// Success feedback for a navigation is shown once the matching hashchange render has finished.
+let pendingNavToast=null;
+async function navigateWithToast(hash,message){
+ pendingNavToast={hash,message,session:sessionRevision};
+ if(location.hash===hash){await render();return;}
+ location.hash=hash;
+}
+function flushNavToast(revision){
+ const pending=pendingNavToast;if(!pending||revision!==renderRevision)return;
+ pendingNavToast=null;
+ if(pending.session===sessionRevision&&location.hash===pending.hash&&!$('#shell').classList.contains('hidden'))toast(pending.message);
+}
 function showLogin(){
- sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
+ pendingNavToast=null;sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
  packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
  $('#toast').style.display='none';clearTimeout(toastTimer);
@@ -63,7 +75,8 @@ async function render(){
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   $('#content').innerHTML=PatchyUI.loading();
   await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics}[page])(revision);
- }catch(error){if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
+  flushNavToast(revision);
+ }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
 // Fleet contact is an observation, never a component readiness or protection claim.
 function fleetObservation(host,now){
@@ -226,8 +239,7 @@ function finishServer(id){
      hosts=list;selected=id;enrollmentProgress(null);
      // Keep the verified confirmation on the destination, including after refresh.
      sessionStorage.setItem('mrpatchy-enrollment-success:'+currentUser.username,id);
-     modalRevision++;$('#modal').close();location.hash=serverLink(id);await render();
-     toast('Installation verified for '+host.name+'. Monitoring data will arrive shortly.');return;
+     modalRevision++;$('#modal').close();await navigateWithToast(serverLink(id),'Installation verified for '+host.name+'. Monitoring data will arrive shortly.');return;
     }
     if(['failed','interrupted','cancelled'].includes(state.state)){
      stopTracking.hidden=true;enrollmentProgress(null);progress=null;button.disabled=false;button.textContent='Retry installation after reviewing Activity';
@@ -284,10 +296,10 @@ async function activity(revision=renderRevision,context=null,offset=null){
  if(!context&&location.hash.startsWith('#activity/jobs/'))return operationDetail(revision,null,location.hash.slice('#activity/jobs/'.length));
  const key=context?.hostId||'fleet';offset=offset??activityViewContext.get(key)??0;
  const root=context?.root||$('#content');
- const me=await api('/identity'),jobs=await api('/jobs?'+(context?'host_id='+encodeURIComponent(context.hostId)+'&':'')+'offset='+offset+'&limit=50');
+ const jobs=await api('/jobs?'+(context?'host_id='+encodeURIComponent(context.hostId)+'&':'')+'offset='+offset+'&limit=50');
  if(!currentView(revision,context?'servers':'activity')||!root.isConnected)return;
  activityViewContext.set(key,offset);
- root.innerHTML=(context?'':heading('A record of the work.','Queued operations, results, and recovery decisions.')+activityNavigation('operations'))+`<div class="card"><h2>Operations</h2>${jobs.length?jobs.map(j=>`<details class="source"><summary>${badge(j.state)} ${esc(j.action)} · ${esc(hostName(j.host_id))} · ${date(j.created)}</summary>${j.ai_deferred?`<p class="help">${j.next_at?'Next AI eligibility: '+date(j.next_at):'Waiting for server and global AI resume.'}</p>`:''}<pre>${esc(j.output||'Awaiting execution')}</pre><a class="button" href="${context?serverLink(context.hostId,'patching/jobs/'+encodeURIComponent(j.id)):'#activity/jobs/'+encodeURIComponent(j.id)}">Open operation detail →</a>${me.role==='admin'&&j.state==='queued'?`<button class="cancel-job" data-id="${j.id}">Cancel queued operation</button>`:''}${me.role==='admin'&&['running','recovery_required'].includes(j.state)?`<button class="reconcile-job" data-id="${j.id}" data-action="${esc(j.action)}">Review interrupted operation</button>`:''}</details>`).join(''):empty('No operations yet','Enrollment, repository checks, and patch runs will appear here.')}</div>`;
+ root.innerHTML=(context?'':heading('A record of the work.','Queued operations, results, and recovery decisions.')+activityNavigation('operations'))+`<div class="card"><h2>Operations</h2>${jobs.length?jobs.map(j=>`<details class="source"><summary>${badge(j.state)} ${esc(j.action)} · ${esc(hostName(j.host_id))} · ${date(j.created)}</summary>${j.ai_deferred?`<p class="help">${j.next_at?'Next AI eligibility: '+date(j.next_at):'Waiting for server and global AI resume.'}</p>`:''}<pre>${esc(j.output||'Awaiting execution')}</pre><a class="button" href="${context?serverLink(context.hostId,'patching/jobs/'+encodeURIComponent(j.id)):'#activity/jobs/'+encodeURIComponent(j.id)}">Open operation detail →</a>${isAdmin()&&j.state==='queued'?`<button class="cancel-job" data-id="${j.id}">Cancel queued operation</button>`:''}${isAdmin()&&['running','recovery_required'].includes(j.state)?`<button class="reconcile-job" data-id="${j.id}" data-action="${esc(j.action)}">Review interrupted operation</button>`:''}</details>`).join(''):empty('No operations yet','Enrollment, repository checks, and patch runs will appear here.')}</div>`;
  document.querySelectorAll('.cancel-job').forEach(button=>button.onclick=()=>{modal('Cancel queued operation',`<p>Cancel this operation before it starts? A linked release plan will also be cancelled and require a new plan.</p><button class="primary" id="confirm-cancel-job">Cancel operation</button>`);$('#confirm-cancel-job').onclick=async event=>{event.target.disabled=true;try{await api('/operations/jobs/'+button.dataset.id+'/cancel','POST');$('#modal').close();if(root.isConnected)await activity(revision,context,offset);toast('Operation cancelled');}catch(error){toast(error.message);event.target.disabled=false;}};});
  document.querySelectorAll('.reconcile-job').forEach(button=>button.onclick=()=>{
   const advisory=['security-plan','startup-plan'].includes(button.dataset.action);

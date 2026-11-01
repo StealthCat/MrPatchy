@@ -201,6 +201,8 @@ Configure each host under **Account → Operations → SSO, SMTP & target polici
 
 A host that never returns over SSH cannot be automatically repaired from the central service. Keep an out-of-band recovery path. See [recovery contracts and procedures](docs/ENTERPRISE_RECOVERY.md).
 
+After enrollment completion or server deletion, navigation loads the destination once and shows its success message after that view finishes loading. Failed or superseded navigation drops pending success feedback. Activity uses the loaded account identity for its controls; the server still authorizes each request.
+
 ## Distribution release upgrades
 
 Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
