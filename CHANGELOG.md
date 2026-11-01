@@ -1,5 +1,72 @@
 # Changelog
 
+## 1.35.52 — 2026-10-31
+
+1. [PR #228](https://github.com/StealthCat/MrPatchy/pull/228): render IPv6 server endpoints as [address]:port through one shared presentation helper in the server directory, enrollment verification, management dialog, workspace heading and system facts.
+2. Preserve hostname/IPv4 formatting and existing HTML escaping. Connection settings, request payloads, roles, audit and response authorization are unchanged; this is a display correction.
+3. Add a browser regression asserting a long IPv6 address with port 2222 renders with brackets in the server directory. Major remains 1.
+
+## 1.35.51 — 2026-10-31
+
+1. [PR #225](https://github.com/StealthCat/MrPatchy/pull/225): reject explicit public-URL port 0, empty ports and out-of-range ports with a clear error before creating .env. Use HTTPS port 443 only when no port is supplied, avoiding silent fallback or a Python traceback.
+2. Warn on stderr when an existing .env is retained and a supplied --public-url is ignored. Existing configuration remains unchanged; no cloud resource or credential behavior changes.
+3. Cover default 443, invalid/empty IPv4-hostname and bracketed-IPv6 port cases, and ignored-URL warnings. Valid installation inputs and trust checks retain their behavior; major remains 1.
+
+## 1.35.50 — 2026-10-31
+
+1. [PR #223](https://github.com/StealthCat/MrPatchy/pull/223): make legacy bridge verify a thin alias of agent-status. Missing managed files return status entries instead of failing the entire request, and the existing descriptor-based probes avoid following unchecked links or splitting stat/hash identity.
+2. Update the native SSH integration caller to use canonical agent-status and retain alias dispatch regression coverage. Command allowlists and trust boundaries are unchanged.
+3. Compatibility: verify now returns the agent-status response shape and service probes; file entries may report missing:true or unsafe:true. No controller runtime caller used legacy verify. Deploy the updated bridge through the reviewed maintenance workflow; major remains 1.
+
+## 1.35.49 — 2026-10-31
+
+1. [PR #220](https://github.com/StealthCat/MrPatchy/pull/220): return verified cached artifact hashes after the shared collection deadline instead of marking later processes unverified solely because their hashes are already cached.
+2. Apply the initial time-budget guard inside the cache-miss branch before any data read, including empty files; retain per-chunk budgets and device/inode/mtime/ctime/size identity checks. Cover expired cached hits and empty/nonempty uncached misses with zero-read assertions.
+3. Deploy the updated target agent through the existing reviewed helper-maintenance workflow. No receipt-format, role, schema or response-authority change; major remains 1.
+
+## 1.35.48 — 2026-10-31
+
+1. [PR #210](https://github.com/StealthCat/MrPatchy/pull/210): exclude soft-deleted server records from the Prometheus mrpatchy_hosts gauge by filtering deleted_at==0 in SQL.
+2. Preserve disabled-server counting, retained administrator history, other metrics and viewer access to the metrics endpoint. A regression verifies the count drops from two to one after soft deletion.
+3. Compatibility: consumers may see a lower host count reflecting deleted records; no database records are removed. No schema, audit or response-authority change; major remains 1.
+
+## 1.35.47 — 2026-10-31
+
+1. [PR #216](https://github.com/StealthCat/MrPatchy/pull/216): record old-to-new role and enabled state plus password-set yes/no in manage-user audit entries. Newly created users are identified as new; passwords and hashes are never included in the detail.
+2. Add an authenticated API regression covering account creation, role escalation, disabling and password-presence markers while asserting the supplied password is absent from audit history.
+3. Preserve administrator/self-access checks, session-generation invalidation and audit retention. No schema or response-authority change; major remains 1.
+
+## 1.35.46 — 2026-10-31
+
+1. [PR #218](https://github.com/StealthCat/MrPatchy/pull/218): prevent older ineligible incidents from permanently hiding eligible automatic ClamAV advisory plans. Filter quarantined hosts before selecting candidates and page past YARA incidents instead of using a fixed oldest-100 window.
+2. Preserve YARA's automatic-plan exclusion, per-host pending checks, host lifecycle/pause gates and existing remaining-capacity limits. Advisory planning does not authorize runtime response actions.
+3. Add the 100-older-YARA-plus-newer-ClamAV regression. No schema, target-helper or permission change; major remains 1.
+
+## 1.35.45 — 2026-10-31
+
+1. [PR #213](https://github.com/StealthCat/MrPatchy/pull/213): parse standard DNF4 versionlock exclude records without failing RPM inventory and patch evidence. Strip one optional exclusion marker, then an optional epoch prefix, before extracting the package name; treat excludes conservatively as held packages.
+2. Cover DNF4 add/exclude and yum epoch-first add/exclude layouts. Keep unsupported expressions rejected, including repeated exclusion markers; coordinator review tightened the candidate's unrestricted leading-marker stripping.
+3. Preserve package-manager trust and response authorization. No schema or controller API change; update target helpers through the existing reviewed deployment workflow. Major remains 1.
+
+## 1.35.44 — 2026-10-31
+
+1. [PR #211](https://github.com/StealthCat/MrPatchy/pull/211): merge only client-supplied fields in legacy PUT /api/settings under the shared settings-config lock. Preserve omitted retention, AI model/enabled state, admission mode, limits and legacy migration requirements.
+2. Capture supplied fields before request normalization so trimming an omitted model cannot turn its default into an explicit reset. Audit changed fields and admission/cap/reset-timezone transitions; align the legacy input's admission default with section settings.
+3. Compatibility: partial legacy API saves now retain stored settings instead of silently applying defaults; explicit settings remain validated. No role, history-retention policy or runtime response-authority change; major remains 1.
+
+## 1.35.43 — 2026-10-31
+
+1. [PR #224](https://github.com/StealthCat/MrPatchy/pull/224): retain recovery holds after unknown repair, repository-configuration and signing-key mutation outcomes, matching ordinary-patch safeguards. Lost/unverified replies or a failed post-mutation inventory block later host changes without automatic replay.
+2. Retain available completion receipts in existing bounded operation output, audit the action and operation ID, and explain the package/configuration/trust state an administrator must inspect before the existing explicit reconciliation workflow releases the queue.
+3. Compatibility: uncertain non-patch mutations now pause later changes for target review. Known-unstarted, structured target failures, successful outcomes and journaled patch/release recovery retain their existing behavior. A structured failure is not proof that no partial changes occurred; inventory is a bounded observation. No schema, target-helper or response-authority change; major remains 1.
+
+## 1.35.42 — 2026-10-31
+
+1. [PR #226](https://github.com/StealthCat/MrPatchy/pull/226): deliver the original commits from [PR #206](https://github.com/StealthCat/MrPatchy/pull/206) through an upstream integration branch. Declare viewer/operator/admin/self-service roles on each route and reject undeclared, conflicting or incorrectly public routes during startup.
+2. Preserve session generation, CSRF, audit and host lifecycle/deleted-server read safeguards. Give refresh its own operator route while keeping other host actions administrator-only; concrete identifiers can no longer gain permissions by matching a path suffix.
+3. Pin the complete route-to-role inventory and exercise anonymous, viewer and operator access across routes. Existing intended permissions are retained; the separately tracked investigation-status telemetry permission issue #157 remains open. Major remains 1.
+4. Unblock exact-head validation after a confirmed 30-minute Ubuntu Azure-mirror prerequisite stall (#227). Share the primary-archive setup across apt-consuming runner jobs, bound network waits/retries and limit prerequisite installation steps to five minutes while retaining signature checks and unrelated package sources. Application checks remain required.
+
 ## 1.35.41 — 2026-10-31
 
 1. [PR #214](https://github.com/StealthCat/MrPatchy/pull/214): isolate each periodic leader producer so a failed schedule, scanner, monitoring or AI-plan tick cannot stop other producers, polling, queued-job dispatch, cleanup or notifications.
