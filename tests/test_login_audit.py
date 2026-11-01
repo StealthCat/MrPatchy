@@ -77,3 +77,40 @@ def test_address_limit_is_audited_once_even_across_many_usernames(client):
     assert len(entries('login failed')) == 50
     [detail] = entries('login throttled')
     assert 'address limit' in detail
+
+
+def test_full_bucket_table_evicts_oldest_instead_of_locking_everyone_out(client):
+    import time
+    from app import main
+    login_attempts.clear()
+    now = time.time()
+    for n in range(main.LOGIN_BUCKET_LIMIT):
+        login_attempts['198.51.100.1:u' + str(n)] = [now - 200 + n * 0.001]
+    assert client.post('/api/login', json={'username': 'admin', 'password': PASSWORD}).status_code == 200
+    assert len(login_attempts) <= main.LOGIN_BUCKET_LIMIT
+    assert '198.51.100.1:u0' not in login_attempts and '198.51.100.1:u1' in login_attempts
+
+
+def test_missing_and_disabled_accounts_still_run_the_password_hash(client, monkeypatch):
+    from app import main
+    calls = []
+    real = main.verify
+    monkeypatch.setattr(main, 'verify', lambda password, value: calls.append(value) or real(password, value))
+    login_attempts.clear()
+    assert client.post('/api/login', json={'username': 'nobody', 'password': 'bad'}).status_code == 401
+    assert calls == [main.DUMMY_PASSWORD_HASH]
+    with Session() as s:
+        s.get(User, 'admin').enabled = False
+        s.commit()
+    assert client.post('/api/login', json={'username': 'admin', 'password': PASSWORD}).status_code == 401
+    assert calls == [main.DUMMY_PASSWORD_HASH] * 2
+
+
+def test_password_hashing_does_not_hold_the_login_lock(client, monkeypatch):
+    from app import main
+    held = []
+    real = main.verify
+    monkeypatch.setattr(main, 'verify', lambda password, value: held.append(main.login_lock.locked()) or real(password, value))
+    login_attempts.clear()
+    assert client.post('/api/login', json={'username': 'admin', 'password': PASSWORD}).status_code == 200
+    assert held == [False]
