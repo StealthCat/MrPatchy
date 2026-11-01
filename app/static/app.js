@@ -430,7 +430,7 @@ document.addEventListener('click',async event=>{
  $('#rollout-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),hostIds=lines(f.get('hosts')),packageNames=lines(f.get('packages'));try{
  const policies=Object.fromEntries(await Promise.all(hostIds.map(async id=>[id,await api('/hosts/'+id+'/patch-policy')])));
  modal('Review staged rollout',`<p>Servers run in this order, with the first acting as canary. A failed or unreconciled server blocks later stages.</p>${hostIds.map(id=>`<h3>${esc(hostName(id))}</h3>${recoverySummary(policies[id])}`).join('')}<pre>${esc(packageNames.join('\n'))}</pre><button class="primary" id="confirm-rollout">Approve staged rollout</button>`);
- $('#confirm-rollout').onclick=async()=>{try{const result=await api('/operations/rollouts','POST',{hosts:hostIds,packages:packageNames,expected_recovery_policies:policies});toast('Rollout queued: '+result.jobs.length+' servers');$('#modal').close();}catch(error){toast(error.message);}};
+ $('#confirm-rollout').onclick=async()=>{const confirmButton=$('#confirm-rollout');confirmButton.disabled=true;try{const result=await api('/operations/rollouts','POST',{hosts:hostIds,packages:packageNames,expected_recovery_policies:policies});$('#modal').close();toast('Rollout queued: '+result.jobs.length+' servers');}catch(error){confirmButton.disabled=false;toast(error.message);}};
  }catch(error){toast(error.message);}};
  $('#advisory-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const result=await api('/operations/'+f.get('host')+'/advisories','POST',{packages:lines(f.get('packages'))});$('#advisory-result').textContent=JSON.stringify(result,null,2);}catch(error){toast(error.message);}};
 });
