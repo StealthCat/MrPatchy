@@ -67,6 +67,18 @@ def test_missing_references_roles_csrf_reason_and_host_lock(seeded):
 
 
 
+def test_related_evidence_citations_resolve_or_are_out_of_scope(seeded):
+    with Session() as s:
+        row=s.get(Plan,'one-plan');row.content={'steps':[{'evidence_ids':['one','scans:one-scan','executions:x1','inspections:i1','scans:gone']}]};s.commit()
+    scope=export(seeded).json()['record']['scope']
+    assert scope['missing_evidence_references']==['scans:gone'] and not scope['primary_references_complete']
+    assert scope['out_of_scope_evidence_references']==['executions:x1','inspections:i1']
+    with Session() as s:
+        row=s.get(Plan,'one-plan');row.content={'steps':[{'evidence_ids':['one','scans:one-scan','executions:x1']}]};s.commit()
+    scope=export(seeded).json()['record']['scope']
+    assert scope['missing_evidence_references']==[] and scope['primary_references_complete']
+
+
 def test_unresolved_plan_references_and_oversize_findings_are_explicit(seeded):
     with Session() as s:
         row=s.get(Plan,'one-plan');row.content={'steps':[{'evidence_ids':['missing-evidence']}]};s.commit()
