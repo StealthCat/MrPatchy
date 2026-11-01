@@ -16,8 +16,19 @@ function toast(message,global=false){
  target.textContent=message;target.classList.remove('hidden');target.style.display='block';
  clearTimeout(toastTimer);toastTimer=setTimeout(()=>{target.style.display='none';},6000);
 }
+// Success feedback for a navigation is shown once the matching hashchange render has finished.
+let pendingNavToast=null;
+async function navigateWithToast(hash,message){
+ if(location.hash===hash){await render();toast(message);return;}
+ pendingNavToast={hash,message,session:sessionRevision};location.hash=hash;
+}
+function flushNavToast(revision){
+ const pending=pendingNavToast;if(!pending||revision!==renderRevision)return;
+ pendingNavToast=null;
+ if(pending.session===sessionRevision&&location.hash===pending.hash&&!$('#shell').classList.contains('hidden'))toast(pending.message);
+}
 function showLogin(){
- sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
+ pendingNavToast=null;sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
  packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';cfg={};currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
  $('#toast').style.display='none';clearTimeout(toastTimer);
@@ -63,6 +74,7 @@ async function render(){
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   $('#content').innerHTML=PatchyUI.loading();
   await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics}[page])(revision);
+  flushNavToast(revision);
  }catch(error){if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
 // Fleet contact is an observation, never a component readiness or protection claim.
@@ -221,8 +233,7 @@ function finishServer(id){
      hosts=list;selected=id;enrollmentProgress(null);
      // Keep the verified confirmation on the destination, including after refresh.
      sessionStorage.setItem('mrpatchy-enrollment-success:'+currentUser.username,id);
-     modalRevision++;$('#modal').close();{const link=serverLink(id);if(location.hash===link)await render();else location.hash=link;}
-     toast('Installation verified for '+host.name+'. Monitoring data will arrive shortly.');return;
+     modalRevision++;$('#modal').close();await navigateWithToast(serverLink(id),'Installation verified for '+host.name+'. Monitoring data will arrive shortly.');return;
     }
     if(['failed','interrupted','cancelled'].includes(state.state)){
      stopTracking.hidden=true;enrollmentProgress(null);progress=null;button.disabled=false;button.textContent='Retry installation after reviewing Activity';
