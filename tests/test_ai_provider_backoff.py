@@ -112,3 +112,34 @@ def test_nontransient_provider_error_does_not_create_global_backoff(admin, monke
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff,'global')
         assert row.failures==0 and row.blocked_until==0
+
+
+def test_huge_retry_after_is_capped_and_admin_can_clear_it_with_audit(admin, monkeypatch):
+    configure(mode='rate')
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: response(headers={'retry-after': '300000000'}))
+    with pytest.raises(ai.AIError) as failed:
+        with ai_runs.track('triage', 'fixture-model'):ai.request(payload(), 'fixture-key')
+    cap=ai_provider_backoff.MAX_PROVIDER_DELAY
+    assert failed.value.provider_retry_after==cap
+    with Session() as session:
+        row=session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert cap-5 < row.blocked_until-time.time() <= cap
+        assert 'capped' in ai_provider_backoff.status(session)['reason']
+    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': True}
+    with Session() as session:
+        assert not ai_provider_backoff.status(session)['blocked']
+        from app.db import Audit
+        assert any(a.action=='clear AI provider backoff' for a in session.scalars(select(Audit)))
+    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': False}
+
+
+def test_internal_backoff_is_not_stored_as_provider_retry_after(admin, monkeypatch):
+    configure(mode='rate')
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: response())
+    with pytest.raises(ai.AIError) as failed:
+        with ai_runs.track('triage', 'fixture-model'):ai.request(payload(), 'fixture-key')
+    assert failed.value.retry_after>0 and failed.value.provider_retry_after==0
+
+
+def test_clear_provider_backoff_requires_admin(client):
+    assert client.post('/api/ai/provider-backoff/clear').status_code in (401, 403)

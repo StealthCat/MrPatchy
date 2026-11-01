@@ -9,6 +9,9 @@ from .coordination import Lock
 from .db import Base, Session
 
 
+MAX_PROVIDER_DELAY=86400  # a longer provider Retry-After is capped and flagged for administrator review
+
+
 class ProviderBackoff(Base):
     __tablename__='ai_provider_backoff'
     id: Mapped[str]=mapped_column(String(20),primary_key=True)
@@ -40,11 +43,15 @@ def failed(error,now=None):
                 row=ProviderBackoff(id='global');session.add(row)
             if not row.updated or now-row.updated>3600:row.failures=0
             row.failures=(row.failures or 0)+1
-            provider=float(getattr(error,'retry_after',0) or 0)
+            provider=float(getattr(error,'provider_retry_after',getattr(error,'retry_after',0)) or 0)
+            capped=provider>MAX_PROVIDER_DELAY
+            provider=min(provider,MAX_PROVIDER_DELAY)
+            error.provider_retry_after=provider
             delay=provider if provider>0 else random.uniform(30,min(1800,60*2**(row.failures-1)))
             row.blocked_until=max(row.blocked_until or 0,now+delay)
             row.updated=now
-            row.reason=('Provider Retry-After floor is active.' if provider>0 else
+            row.reason=('Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.' if capped else
+                'Provider Retry-After floor is active.' if provider>0 else
                 'Transient provider or transport failure; bounded exponential backoff is active.')
             session.commit()
             return max(0,row.blocked_until-now)
@@ -59,6 +66,19 @@ def succeeded(request_started=None,now=None):
             if row and (request_started is None or row.updated<=request_started):
                 row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
                 session.commit()
+
+
+def clear(now=None):
+    """Administrator reset of the shared floor; returns whether a floor was active."""
+    now=time.time() if now is None else now
+    with Lock('ai-provider-backoff'):
+        with Session() as session:
+            row=session.get(ProviderBackoff,'global')
+            active=bool(row and row.blocked_until>now)
+            if row:
+                row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
+                session.commit()
+            return active
 
 
 def status(session,now=None):

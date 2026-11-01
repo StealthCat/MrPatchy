@@ -23,6 +23,7 @@ class AIError(RuntimeError):
         super().__init__(message)
         self.transient=transient
         self.retry_after=retry_after
+        self.provider_retry_after=retry_after  # provider-sent delay only; retry_after may later include local backoff
         self.policy_wait=policy_wait
 
 
