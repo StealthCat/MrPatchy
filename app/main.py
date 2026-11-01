@@ -169,7 +169,10 @@ class Login(BaseModel):
     password:str=Field(max_length=1024)
     otp:str=Field(default='',max_length=6)
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+# Failures per account by source address, used only to detect guessing spread across addresses (never to block).
+login_account_failures={}
 LOGIN_BUCKET_LIMIT=10000
+LOGIN_SUSPICIOUS_ADDRESSES=5
 # Verified when an account is missing or disabled so response time does not reveal which usernames exist.
 DUMMY_PASSWORD_HASH=password_hash('mrpatchy-timing-equaliser','00'*16)
 def audit_login_event(action,username,ip,reason):
@@ -188,6 +191,9 @@ def login(body:Login,request:Request,response:Response):
             if not login_attempts[key]: del login_attempts[key]
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
+        for key in list(login_account_failures):
+            login_account_failures[key]={a:x for a,x in login_account_failures[key].items() if now-x<300}
+            if not login_account_failures[key]: del login_account_failures[key]
         recent=login_attempts.get(bucket,[])
         ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
         if len(recent)>=10 or ip_attempts>=50:
@@ -221,6 +227,15 @@ def login(body:Login,request:Request,response:Response):
             login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
+        suspicious=False
+        with login_lock:
+            # Detect, never block: a hard per-account limit would let an attacker lock out a real administrator.
+            if body.username in login_account_failures or len(login_account_failures)<LOGIN_BUCKET_LIMIT:
+                seen=login_account_failures.setdefault(body.username,{}); seen[ip]=now
+                scope='suspicious:'+body.username
+                if len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES and scope not in login_throttle_logged:
+                    login_throttle_logged[scope]=now; suspicious=True
+        if suspicious: audit_login_event('login suspicious',body.username,ip,'failures from '+str(LOGIN_SUSPICIOUS_ADDRESSES)+' or more addresses')
         raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
