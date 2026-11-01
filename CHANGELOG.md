@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.66 — 2026-11-01
+
+1. [PR #257](https://github.com/StealthCat/MrPatchy/pull/257): Return HTTP 409 consistently for disabled/deleted-server and busy-state conflicts, and HTTP 429 for the existing 50-operation server-queue limit, using dedicated centrally handled exceptions.
+2. Compatibility: API consumers that expected HTTP 400 for these conflicts or capacity refusals must handle 409/429. Ordinary invalid input remains 400; queue capacity, lifecycle checks, roles and runtime response approvals are unchanged. No schema change.
+
 ## 1.35.65 — 2026-11-01
 
 1. [PR #260](https://github.com/StealthCat/MrPatchy/pull/260): A validated helper `not_started` process-response receipt restores the matching approval's prior state and process hold, resolving a stuck hold after a lost reply. Retain the receipt and `observed_not_started` audit event; a new suspension still requires fresh typed approval.

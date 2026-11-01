@@ -303,10 +303,25 @@ def test_inactive_investigation_actions_and_update_provider_are_blocked(admin,mo
         s.merge(Setting(key='config',value={'ai_enabled':True,'ai_updates_enabled':True,'ai_model':'fixture'}))
         s.merge(Setting(key='openai_key',value={'encrypted':seal('test-secret')}));s.commit()
     assert change(admin,identifier,False).status_code==200
-    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True}).status_code==400
-    assert admin.post('/api/investigations/inactive-behavior/retry',json={}).status_code==400
+    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True}).status_code==409
+    assert admin.post('/api/investigations/inactive-behavior/retry',json={}).status_code==409
     monkeypatch.setattr(ai,'request',lambda *a,**k:pytest.fail('Disabled/deleted packages must not be sent for AI scoring'))
     update_scores.run_one()
     assert remove(admin,identifier).status_code==200
     update_scores.run_one()
     with Session() as s:assert not s.get(Behavior,'inactive-behavior').approved
+
+
+def test_queue_full_is_429_and_inactive_server_is_409_across_routes(admin):
+    identifier=create(admin,'Status code fixture')
+    with Session() as s:
+        s.get(Host,identifier).fingerprint='SHA256:'+'A'*43
+        for _ in range(50):s.add(Job(id=str(uuid.uuid4()),host_id=identifier,action='agent-check',payload={}))
+        s.commit()
+    full=admin.post('/api/hosts/'+identifier+'/actions/refresh',json={})
+    assert full.status_code==429 and 'queue is full' in full.json()['detail'],full.text
+    other=create(admin,'Status code disabled')
+    with Session() as s:s.get(Host,other).fingerprint='SHA256:'+'B'*43;s.commit()
+    assert change(admin,other,False).status_code==200
+    inactive=admin.post('/api/hosts/'+other+'/actions/refresh',json={})
+    assert inactive.status_code==409,inactive.text

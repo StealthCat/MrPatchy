@@ -68,7 +68,7 @@ def enqueue(s,host_id,action,payload=None):
 def _enqueue_active(s,host_id,action,payload=None):
     host=s.get(Host,host_id)
     if host and not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
-    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise ValueError('Server queue is full (50 operations)')
+    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
     job=Job(id=str(uuid.uuid4()),host_id=host_id,action=action,payload=payload or {})
     s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
 
