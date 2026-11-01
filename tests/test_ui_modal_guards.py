@@ -77,3 +77,9 @@ def test_related_mutation_handlers_use_the_same_modal_guard():
     for marker in ['#confirm-delete-schedule', '#save-schedule']:
         start = SCHEDULES.index(marker)
         assert 'modalRequest()' in SCHEDULES[max(0, start - 500):start + 1200]
+
+
+def test_patch_calendar_defaults_to_day_view_on_phones_and_weekday_row_sticks():
+    assert "matchMedia('(max-width:700px)').matches)?'day':'month'" in SCHEDULES
+    css = (ROOT / 'app/static/style.css').read_text()
+    assert re.search(r"\.calendar-weekday \{[^}]*position: sticky; top: 0", css)
