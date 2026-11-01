@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.43'
+APP_VERSION='1.35.44'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -676,7 +676,7 @@ class ConfigInput(BaseModel):
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_updates_enabled:bool=True
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
-    ai_control_mode:str=Field(default='rate',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
+    ai_control_mode:str=Field(default='legacy',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
@@ -686,15 +686,24 @@ class ConfigInput(BaseModel):
 def settings_save(body:ConfigInput,user=Depends(admin_user)):
     from . import ai_budget
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()): raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
+    supplied=set(body.model_fields_set)  # capture before normalizing: assignment would mark omitted fields as sent
     body.ai_model=body.ai_model.strip();body.api_key=body.api_key.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    with Session() as s:
-        if body.ai_enabled and (not body.ai_model or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
-        s.merge(Setting(key='config',value=body.model_dump(exclude={'api_key'})))
-        if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
-        audit(s,'update settings','Patch policy, cadence or AI configuration changed'); s.commit(); return {'ok':True}
+    # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
+    sent=body.model_dump(exclude={'api_key'},include=supplied)
+    with worker.Lock('settings-config'):
+        with Session() as s:
+            previous=config(s);merged=previous|sent
+            if merged['ai_enabled'] and (not merged['ai_model'] or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
+            raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
+            if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
+            detail='Patch policy, cadence or AI configuration changed ('+(', '.join(sorted(k for k in sent if previous.get(k)!=sent[k])) or 'no stored values changed')+')'
+            if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
+            if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
+            if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
+            audit(s,'update settings',detail); s.commit(); return {'ok':True}
 
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
