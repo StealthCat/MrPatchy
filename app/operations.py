@@ -66,9 +66,17 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     if publication_response_id:processes=processes.where(ProcessResponse.quarantine_id!=publication_response_id)
     return s.scalar(processes.limit(1)) is not None
 
-def recovery_policy(s,host_id):
-    row=s.get(Setting,'recovery:'+host_id)
+def _recovery_flags(row):
     return {name:bool(row and row.value.get(name)) for name in ('reboot','rollback')}
+
+def recovery_policy(s,host_id):
+    return _recovery_flags(s.get(Setting,'recovery:'+host_id))
+
+def recovery_policies(s,host_ids):
+    """Recovery policies for many hosts using one Setting query."""
+    host_ids=list(host_ids)
+    rows={row.key:row for row in s.scalars(select(Setting).where(Setting.key.in_(['recovery:'+h for h in host_ids])))} if host_ids else {}
+    return {h:_recovery_flags(rows.get('recovery:'+h)) for h in host_ids}
 
 def eligible(s,job):
     if job.payload.get('_schedule'):
