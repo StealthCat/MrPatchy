@@ -77,6 +77,8 @@ module.exports=async function modalRaces(page){
     assert.equal(await page.locator('#toast').isVisible(),false);
     await page.locator('[name=password]').fill('ui-test-password-long');
     await page.getByRole('button',{name:'Open your workspace'}).click();
+    await page.locator('#shell').waitFor({state:'visible'});
+    await page.locator('[data-nav=overview]').click();
     await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
   }finally{releaseSignedOut();await page.unroute('**/api/hosts/modal-signout/repositories',signedOut);}
 
