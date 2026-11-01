@@ -1037,8 +1037,6 @@ def vendor_inspect(manifest):
         if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or str(Path(path))!=path or '..' in Path(path).parts or path in seen or len(path)>4096 or any(ord(c)<32 for c in path):raise ValueError('Invalid vendor file path')
         if not re.fullmatch('[a-f0-9]{64}',entry.get('sha256','')) or type(entry.get('size')) is not int or not 0<=entry['size']<=32*1024*1024:raise ValueError('Invalid vendor file hash or size')
         seen.add(path)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
     result={'state':'incomplete','package':manifest['package'],'version':version,'architecture':manifest['architecture'],
             'scope_files':len(entries),'examined':0,'findings':[],'gaps':[],'trust_basis':'controller_authenticated_rpm_artifact' if manager=='rpm' else 'controller_authenticated_debian_artifact'}
     deadline=time.monotonic()+120;total=0

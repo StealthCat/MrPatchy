@@ -197,6 +197,11 @@ def parse_policy(text):
                 result[current]['origin']+=line+'\n'
     return result
 
+def auto_priority(origin,candidate):
+    # Feed absence is not a severity rating. Origin is a scheduling heuristic only.
+    return 'high' if candidate and ('-security' in origin or '/security' in origin) else 'normal'
+
+
 def refresh(host_id,inv,access=None):
     root,cfg=prepare(host_id,inv,access)
     log=run(cfg,['apt-get','update'])
@@ -213,6 +218,5 @@ def refresh(host_id,inv,access=None):
     for p,newer in zip(pkgs,debian_versions.newer_flags(pairs)):
         candidate=p['candidate']
         p['candidate']=candidate if newer else ''
-        # Feed absence is not a severity rating. Origin is a scheduling heuristic only.
-        p['priority']='high' if newer and ('-security' in p['origin'] or '/security' in p['origin']) else 'normal'
+        p['priority']=auto_priority(p['origin'],newer and candidate)
     return pkgs,log

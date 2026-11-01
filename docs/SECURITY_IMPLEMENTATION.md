@@ -27,6 +27,18 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+## Dependency update coverage (partial #201)
+
+PR #284 configures weekly Dependabot updates for pip, npm, GitHub Actions and
+Docker at the root, deploy and test-fixture manifest locations. Tracked Dockerfile
+location coverage has regression tests; live Dependabot update generation has not
+been exercised as part of this delivery. This is update configuration, not code
+or dependency vulnerability scanning. Base images remain tag-based, Python
+requirements lack install hashes, and Actions references remain tag-based rather
+than commit-SHA pinned. Digest/hash/SHA pinning, code scanning and additional
+Compose sandboxing remain unfinished under #201; no runtime response authority
+or deployment sandbox boundary is changed.
+
 ## Scheduled development completion gate
 
 Before each scheduled development cycle, assess the current roadmap against current
