@@ -26,3 +26,36 @@ def test_legacy_put_settings_applies_sent_fields(admin):
         cfg=config(s)
         assert cfg['history_days'] == 10 and cfg['ai_control_mode'] == 'daily_cap'
         assert 'AI admission changed' in s.query(Audit).filter_by(action='update settings').one().detail
+
+
+def _seed_model(enabled):
+    from app.security import seal
+    with Session() as s:
+        s.merge(Setting(key='config', value={'ai_enabled': enabled, 'ai_model': 'saved-model', 'history_days': 365}))
+        s.merge(Setting(key='openai_key', value={'encrypted': seal('sk-fixture-key')}))
+        s.commit()
+
+
+def test_patch_only_update_keeps_saved_model_when_ai_disabled(admin):
+    _seed_model(False)
+    assert admin.put('/api/settings', json={'repo_minutes': 90, 'deadlines': DEADLINES}).status_code == 200
+    with Session() as s:
+        assert s.get(Setting, 'config').value['ai_model'] == 'saved-model'
+
+
+def test_patch_only_update_succeeds_when_ai_enabled_with_saved_model(admin):
+    _seed_model(True)
+    r=admin.put('/api/settings', json={'repo_minutes': 90, 'deadlines': DEADLINES})
+    assert r.status_code == 200, r.text
+    with Session() as s:
+        assert s.get(Setting, 'config').value['ai_model'] == 'saved-model'
+
+
+def test_supplied_model_is_trimmed_and_can_be_cleared(admin):
+    _seed_model(False)
+    assert admin.put('/api/settings', json={'repo_minutes': 60, 'deadlines': DEADLINES, 'ai_model': '  new-model '}).status_code == 200
+    with Session() as s:
+        assert s.get(Setting, 'config').value['ai_model'] == 'new-model'
+    assert admin.put('/api/settings', json={'repo_minutes': 60, 'deadlines': DEADLINES, 'ai_model': ''}).status_code == 200
+    with Session() as s:
+        assert s.get(Setting, 'config').value['ai_model'] == ''

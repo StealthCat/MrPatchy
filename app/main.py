@@ -647,12 +647,13 @@ class ConfigInput(BaseModel):
 def settings_save(body:ConfigInput,user=Depends(auth)):
     from . import ai_budget
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()): raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
+    supplied=set(body.model_fields_set)  # capture before normalizing: assignment would mark omitted fields as sent
     body.ai_model=body.ai_model.strip();body.api_key=body.api_key.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
-    sent=body.model_dump(exclude={'api_key'},include=set(body.model_fields_set))
+    sent=body.model_dump(exclude={'api_key'},include=supplied)
     with worker.Lock('settings-config'):
         with Session() as s:
             previous=config(s);merged=previous|sent
