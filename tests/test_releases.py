@@ -215,6 +215,8 @@ def test_package_defaults_are_read_from_deb_without_extracting_paths(tmp_path,mo
     import shutil,subprocess
     if not shutil.which('dpkg-deb'):pytest.skip('dpkg-deb required')
     package=tmp_path/'pkg';(package/'DEBIAN').mkdir(parents=True);(package/'etc/nginx').mkdir(parents=True)
+    # dpkg-deb rejects control dirs outside 0755..0775, so do not depend on the ambient umask.
+    for directory in (package,package/'DEBIAN',package/'etc',package/'etc/nginx'):directory.chmod(0o755)
     (package/'DEBIAN/control').write_text('Package: nginx\nVersion: 2\nArchitecture: all\nMaintainer: Test <test@example.invalid>\nDescription: fixture\n')
     (package/'etc/nginx/nginx.conf').write_text('vendor defaults\n')
     deb=tmp_path/'fixture.deb';subprocess.run(['dpkg-deb','--build',str(package),str(deb)],check=True,capture_output=True)
