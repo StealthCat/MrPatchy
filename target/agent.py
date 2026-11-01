@@ -184,15 +184,32 @@ def atomic(path, value):
     finally:
         if os.path.exists(name):os.unlink(name)
 
+SPOOL_READY=set()
+SPOOL_READY_LOCK=threading.Lock()
+
 @contextmanager
 def spool_db():
-    db=sqlite3.connect(ROOT/'events.db',timeout=5)
-    db.execute('PRAGMA journal_mode=WAL')
-    db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, observed REAL, payload TEXT)')
-    db.execute('CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER)')
+    path=ROOT/'events.db'
+    fresh=str(path) not in SPOOL_READY or not path.exists()
+    db=sqlite3.connect(path,timeout=5)
     try:
+        # WAL mode is persistent; schema and the running totals are prepared once per process.
+        if fresh:
+            with SPOOL_READY_LOCK:
+                db.execute('PRAGMA journal_mode=WAL')
+                db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, observed REAL, payload TEXT)')
+                db.execute('CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER)')
+                with db:
+                    # Spools created before the running totals existed are measured once.
+                    db.execute("INSERT OR IGNORE INTO counters SELECT 'queued_bytes',COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events")
+                    db.execute("INSERT OR IGNORE INTO counters SELECT 'queued_count',count(*) FROM events")
+                SPOOL_READY.add(str(path))
         with db: yield db
     finally: db.close()
+
+def spool_total(db,name):
+    row=db.execute('SELECT value FROM counters WHERE name=?',(name,)).fetchone()
+    return row[0] if row else 0
 
 def spool_counter(db,name,value=1):
     if value:
@@ -228,20 +245,22 @@ def spool(processes, observed):
         payloads,oversize=spool_payloads(processes)
         if oversize:spool_drop(db,'oversize',oversize,oversize)
         db.executemany('INSERT INTO events VALUES (?,?,?)',[(str(uuid.uuid4()),observed,payload) for payload in payloads])
-        size=db.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events').fetchone()[0]
+        size=spool_total(db,'queued_bytes')+sum(len(x.encode()) for x in payloads)
+        count=spool_total(db,'queued_count')+len(payloads)
         while size>SPOOL_CAPACITY_BYTES:
             row=db.execute('SELECT id,payload,length(CAST(payload AS BLOB)) FROM events ORDER BY rowid LIMIT 1').fetchone()
-            db.execute('DELETE FROM events WHERE id=?',(row[0],));size-=row[2]
+            db.execute('DELETE FROM events WHERE id=?',(row[0],));size-=row[2];count-=1
             try:lost=len(json.loads(row[1]).get('processes',[]))
             except (AttributeError,TypeError,ValueError):lost=0
             spool_drop(db,'capacity',1,lost)
+        db.executemany('INSERT INTO counters VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value',
+                       [('queued_bytes',size),('queued_count',count)])
 
 def pending_events():
     with spool_db() as db:
         rows=db.execute('SELECT id,observed,payload FROM events ORDER BY rowid LIMIT 8').fetchall()
         counters=dict(db.execute('SELECT name,value FROM counters').fetchall())
-        count=db.execute('SELECT count(*) FROM events').fetchone()[0]
-        queued_bytes=db.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events').fetchone()[0]
+        count=counters.get('queued_count',0);queued_bytes=counters.get('queued_bytes',0)
     oversize_batches=counters.get('dropped_oversize_batches',0);capacity_batches=counters.get('dropped_capacity_batches',0)
     dropped=counters.get('dropped',0)
     return {'events':[{'id':r[0],'observed':r[1],**json.loads(r[2])} for r in rows],
@@ -255,7 +274,13 @@ def pending_events():
 def acknowledge(ids):
     if not isinstance(ids,list) or len(ids)>8 or any(not isinstance(x,str) or len(x)!=36 for x in ids):
         raise ValueError('Invalid event acknowledgement')
-    with spool_db() as db: db.executemany('DELETE FROM events WHERE id=?',[(x,) for x in ids])
+    with spool_db() as db:
+        for x in ids:
+            row=db.execute('SELECT length(CAST(payload AS BLOB)) FROM events WHERE id=?',(x,)).fetchone()
+            if row:
+                db.execute('DELETE FROM events WHERE id=?',(x,))
+                db.execute("UPDATE counters SET value=MAX(0,value-?) WHERE name='queued_bytes'",(row[0],))
+                db.execute("UPDATE counters SET value=MAX(0,value-1) WHERE name='queued_count'")
     return {'acknowledged':len(ids)}
 
 def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
@@ -374,7 +399,9 @@ def decode_bpf_events(pending,chunk):
     if any(len(line)>65536 for line in lines):raise ValueError('Oversized bpftrace event')
     return [json.loads(line) for line in lines[:-1] if line],lines[-1]
 
-def ebpf_process(data,proc_root=Path('/proc')):
+EBPF_HASH_CACHE_LIMIT=4096
+
+def ebpf_process(data,proc_root=Path('/proc'),cache=None):
     """Convert one bpftrace exec record to the canonical collector protocol."""
     pid_text,uid_text,filename=data.rstrip('\n').split('\t',2)
     if (not re.fullmatch(r'(?:0|[1-9][0-9]{0,9})',pid_text) or not 0<int(pid_text)<=2**31-1
@@ -382,7 +409,11 @@ def ebpf_process(data,proc_root=Path('/proc')):
         raise ValueError('Invalid bpftrace process identity')
     pid=int(pid_text);uid=int(uid_text);proc=proc_root/str(pid);sha=None
     try:
-        if os.readlink(proc/'exe')==filename:sha=hash_artifact(proc/'exe',{})
+        if os.readlink(proc/'exe')==filename:
+            # The cache key includes inode, mtime, ctime and size; identity is re-checked on every hit.
+            if cache is None:cache={}
+            elif len(cache)>=EBPF_HASH_CACHE_LIMIT:cache.clear()
+            sha=hash_artifact(proc/'exe',cache)
     except (OSError,ValueError):pass
     event_process={'pid':pid,'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
                    'connections':[],'capture':'ebpf','identity_verified':sha is not None}
@@ -440,7 +471,7 @@ def ebpf_loop():
             threading.Thread(target=diagnostics,daemon=True).start()
             import selectors
             selector=selectors.DefaultSelector();selector.register(process.stdout,selectors.EVENT_READ)
-            pending=b'';ended=False
+            pending=b'';ended=False;hash_cache={};last_status=0.0
             while not ended:
                 current=json.loads(config_path.read_text()) if config_path.exists() else {}
                 if not current.get('ebpf'):process.terminate();break
@@ -450,13 +481,15 @@ def ebpf_loop():
                     events,pending=decode_bpf_events(pending,chunk)
                     for event in events:
                         if event.get('type')!='printf':continue
-                        event_process=ebpf_process(event['data'])
+                        event_process=ebpf_process(event['data'],cache=hash_cache)
                         spool([event_process],time.time())
                         with EBPF_DIAGNOSTIC_LOCK:
                             # The first delivered event proves this run recovered; earlier
                             # warnings become history, later ones remain current.
                             if status.current!=('active',instance):retire_ebpf_diagnostic('recovered',instance)
-                            status('active',instance,last_event=time.time())
+                            # Rewrite the fsynced status file about once a second, not per event.
+                            if status.current!=('active',instance) or time.monotonic()-last_status>=1:
+                                status('active',instance,last_event=time.time());last_status=time.monotonic()
             selector.close()
             try:process.wait(timeout=5)
             except subprocess.TimeoutExpired:process.kill();process.wait()
