@@ -97,7 +97,7 @@ module.exports=async function modalRaces(page){
   try{
     await page.locator('[data-nav=schedules]').click();
     await page.getByRole('heading',{name:'Patching, on your calendar.'}).waitFor();
-    await page.getByText('Race schedule',{exact:true}).waitFor();
+    await page.locator('.schedule-item h3').filter({hasText:'Race schedule'}).waitFor();
     await page.locator('[data-delete-schedule]').click();
     await page.locator('#confirm-delete-schedule').evaluate(button=>{button.click();button.click();});
     await scheduleStart;
