@@ -35,6 +35,10 @@ module.exports=async(page,capture)=>{
    await page.locator('.server-pagination button',{hasText:'Next'}).click();await page.getByText('/srv/p52',{exact:true}).waitFor();
    assert.equal(await page.locator('#content .card.investigation').count(),3);assert.deepEqual(queries[queries.length-1],['50','50',null]);
    assert.equal(await page.locator('.server-pagination button',{hasText:'Next'}).isDisabled(),true);
+   // The offset is remembered per view: Refresh and leaving/returning keep page 2.
+   await page.locator('#refresh-page').click();await page.getByText('/srv/p52',{exact:true}).waitFor();assert.deepEqual(queries[queries.length-1],['50','50',null]);
+   await page.goto(new URL('/#overview',page.url()).href);await page.getByRole('heading',{name:/./}).first().waitFor();
+   await page.goto(new URL('/#investigations',page.url()).href);await page.getByText('/srv/p52',{exact:true}).waitFor();assert.deepEqual(queries[queries.length-1],['50','50',null]);
   }finally{await page.unroute('**/api/investigations?*',paged);}
  }finally{
   await page.setViewportSize({width:1440,height:1000});
