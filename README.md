@@ -56,6 +56,12 @@ Administrators can **Disable server** or **Delete server** from **Servers → Op
 
 [Server tabs and permissions](docs/SERVER_WORKSPACES.md) · [Patching timeline preview](docs/screenshots/server-patching.jpg)
 
+Interactive SSH checks and configuration requests return HTTP 409 promptly when lifecycle communication is busy; retry after the active operation finishes. Background jobs keep their operation-duration exclusion. Lock refusal stops before target contact, and failures after a remote mutation starts retain their existing recovery safeguards.
+
+Sign-in verifies a password hash for unknown and disabled accounts as well as active accounts. Password hashing runs outside the global login lock; current identity/password and MFA are checked before session creation. The bounded throttle table evicts its oldest buckets instead of locking out all users when full.
+
+Fleet **Investigations** shows 50 behaviors per page with Previous/Next controls. Each fleet or server view remembers its page across Refresh and navigation within the signed-in session; signing out clears that page state.
+
 ## Quick start
 
 Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Configure Caddy's published interface/ports with `BIND_IP`, `HTTP_PORT` and `HTTPS_PORT`; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
@@ -151,6 +157,8 @@ Deadlines start at first discovery of an outstanding update and do not reset whe
 ## Update importance, expected installation and package history
 
 Enable **AI update importance scores** in Settings alongside AI investigations. Pending updates receive an advisory **0–100** score with an expandable explanation, limitations, model and assessment time. Assessments bind to the exact installed/candidate versions and policy evidence; a changed candidate needs a new assessment. The default separate allowance is 20 batches/hour, with up to five updates per call. Scores use package metadata and repository classification, carry **low confidence**, and do not claim verified CVE/changelog evidence or change your patch schedule/priority.
+
+Update-score eligibility is read in bounded ordered chunks, reducing database work when a fleet already has completed or future-deferred assessments. Exact evidence matching, durable deferrals, oldest-first batches and existing AI admission/spend limits still apply.
 
 **Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**. File, process, replacement-publication and service-monitoring holds explain the review needed before a start can be estimated; dates remain unknown until a separately authorized release. Recovery, offline targets and unknown dependency completion also explain why a date cannot be given. All times displayed in the table use your browser's timezone.
 
@@ -276,7 +284,7 @@ refused as a whole. See [response-record scope and limits](docs/SECURITY_IMPLEME
 
 ## Accounts, SSO, notifications and keys
 
-**Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring.
+**Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring. The fleet Investigations queue summary remains visible to non-admins, while AI budget, spend, provider errors, admission and capacity diagnostics (including the full `/api/investigation-status` response) are administrator-only.
 
 Account and Sign out remain available in the header on mobile. Navigation and action controls reflect the signed-in role; the API independently enforces permissions. Password verification and MFA setup/confirmation share a limit of ten attempts per account in five minutes. A failed verification leaves the current session intact; successful password/MFA changes and session revocation require signing in again.
 

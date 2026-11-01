@@ -44,7 +44,7 @@ module.exports=async function modalRaces(page){
   const trustStart=new Promise(resolve=>trustStarted=resolve);
   const investigations=route=>route.fulfill({json:[{id:'modal-race-trust',host_id:'modal-race',evidence:{executable:'/usr/bin/race',uid:1000},last_seen:Date.now()/1000,verdict:'unknown',approved:false,analysis:'Review this fixture.'}]});
   const trust=async route=>{trustPuts++;trustStarted();await trustWait;await route.fulfill({status:409,json:{detail:'Trust decision became stale'}});};
-  await page.route('**/api/investigations',investigations);
+  await page.route('**/api/investigations?*',investigations);
   await page.route('**/api/investigations/modal-race-trust',trust);
   try{
     await page.locator('[data-nav=investigations]').click();
@@ -57,7 +57,7 @@ module.exports=async function modalRaces(page){
     await assertAccountUnaffected(accountTitle);
     assert.equal(trustPuts,1);
     await page.locator('#close-modal').click();
-  }finally{releaseTrust();await page.unroute('**/api/investigations/modal-race-trust',trust);await page.unroute('**/api/investigations',investigations);}
+  }finally{releaseTrust();await page.unroute('**/api/investigations/modal-race-trust',trust);await page.unroute('**/api/investigations?*',investigations);}
 
   // Session changes suppress feedback and UI mutations from the obsolete
   // operation. The intercepted write never reaches a target.

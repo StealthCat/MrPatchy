@@ -2,10 +2,11 @@ import copy
 import json
 import time
 import uuid
+from types import SimpleNamespace
 import pytest
 from sqlalchemy import select,create_engine,text
 from sqlalchemy.orm import Session as DatabaseSession
-from app import host_lifecycle as lifecycle,worker,ssh,incidents,persistence,response_monitor,service_monitor,scheduling,operations,ai,update_scores
+from app import host_lifecycle as lifecycle,worker,ssh,incidents,persistence,response_monitor,service_monitor,scheduling,operations,ai,update_scores,coordination
 from app.db import Session,Host,Job,Setting,Package,Behavior,Audit,engine
 from app.identity import User
 from app.security import token_hash,seal
@@ -88,6 +89,68 @@ def test_lifecycle_change_refuses_inflight_activity_without_changing_state(admin
         assert remove(admin,identifier).status_code==409
     assert host(admin,identifier)['enabled'] and host(admin,identifier)['lifecycle_revision']==before['lifecycle_revision']
     assert change(admin,identifier,False).status_code==200
+
+
+def test_activity_refuses_failed_lock_without_entering_or_releasing(admin,monkeypatch):
+    identifier=create(admin)
+    events=[]
+    class RefusedLock:
+        def __init__(self,name):events.append(('created',name))
+        def acquire(self,blocking=True):events.append(('acquire',blocking));return False
+        def release(self):events.append(('release',))
+    monkeypatch.setattr(lifecycle,'Lock',RefusedLock)
+    with pytest.raises(lifecycle.Busy,match='active'):
+        with lifecycle.activity([identifier],'control'):
+            events.append(('entered',))
+    assert events==[('created','server-control:'+identifier),('acquire',True)]
+
+
+def test_interactive_ssh_refuses_busy_lifecycle_lock_as_conflict(admin,monkeypatch):
+    identifier=create(admin)
+    class RefusedLock:
+        def __init__(self,name):pass
+        def acquire(self,blocking=True):return False
+        def release(self):pytest.fail('An unowned lifecycle lock must not be released')
+    monkeypatch.setattr(lifecycle,'Lock',RefusedLock)
+    monkeypatch.setattr(ssh,'_call',lambda *a,**k:pytest.fail('Busy request must not start SSH'))
+    response=admin.get('/api/hosts/'+identifier+'/backups')
+    assert response.status_code==409
+    assert 'active' in response.json()['detail'].lower()
+
+
+def test_activity_fails_closed_when_mysql_named_lock_times_out(admin,monkeypatch):
+    identifier=create(admin);closed=[];created=[]
+    connection=SimpleNamespace(
+        execute=lambda *a,**k:SimpleNamespace(scalar=lambda:0),
+        close=lambda:closed.append(True),
+    )
+    engine=SimpleNamespace(url=SimpleNamespace(database='fixture'),dialect=SimpleNamespace(name='mysql'),connect=lambda:connection)
+    monkeypatch.setattr(coordination,'lock_engine',engine)
+    class CapturedLock(coordination.Lock):
+        def __init__(self,name):super().__init__(name);created.append(self)
+    monkeypatch.setattr(lifecycle,'Lock',CapturedLock)
+    with pytest.raises(lifecycle.Busy,match='active'):
+        with lifecycle.activity([identifier],'control'):
+            pytest.fail('A timed-out MySQL lock must not protect work')
+    assert closed==[True] and created[0].resource is None
+    assert created[0].local.acquire(False);created[0].local.release()
+
+
+def test_interactive_activity_uses_nonblocking_sqlite_lock(admin,monkeypatch):
+    identifier=create(admin);created=[];original=coordination.fcntl.flock
+    monkeypatch.setattr(coordination,'lock_engine',SimpleNamespace(url=SimpleNamespace(database='fixture'),dialect=SimpleNamespace(name='sqlite')))
+    def busy(stream,operation):
+        if operation & coordination.fcntl.LOCK_NB:raise BlockingIOError
+        return original(stream,operation)
+    monkeypatch.setattr(coordination.fcntl,'flock',busy)
+    class CapturedLock(coordination.Lock):
+        def __init__(self,name):super().__init__(name);created.append(self)
+    monkeypatch.setattr(lifecycle,'Lock',CapturedLock)
+    with pytest.raises(lifecycle.Busy,match='active'):
+        with lifecycle.activity([identifier],'control',blocking=False):
+            pytest.fail('A busy SQLite lock must not protect work')
+    assert created[0].resource is None
+    assert created[0].local.acquire(False);created[0].local.release()
 
 
 def test_running_jobs_and_response_holds_are_not_discarded(admin):
