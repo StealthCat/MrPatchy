@@ -74,14 +74,16 @@ def test_complete_current_scores_still_supersede_changed_deferred_history(admin,
         assert sum(r.state=='superseded' and r.next_at==0 for r in rows)==450
 
 
-def test_new_candidates_after_multiple_completed_chunks_keep_oldest_order_and_batch_limit(admin,monkeypatch):
-    ids=seed(513,completed=505);sent=capture_assessments(monkeypatch)
+@pytest.mark.parametrize('count,completed',[(513,505),(1000,0)])
+def test_new_candidates_after_multiple_completed_chunks_keep_oldest_order_and_batch_limit(admin,monkeypatch,count,completed):
+    ids=seed(count,completed=completed);sent=capture_assessments(monkeypatch)
     update_scores.run_one()
     with Session() as s:
-        expected=[update_scores.identity(s.get(Host,s.get(Package,p).host_id),s.get(Package,p)) for p in ids[505:510]]
+        expected=[update_scores.identity(s.get(Host,s.get(Package,p).host_id),s.get(Package,p)) for p in ids[completed:completed+5]]
         assert [r['id'] for r in sent]==expected
         assert all(s.get(update_scores.UpdateScore,identifier).state=='complete' for identifier in expected)
-        assert s.scalar(select(update_scores.UpdateScore).where(update_scores.UpdateScore.host_id=='bulk-0',update_scores.UpdateScore.name=='pkg0256')) is None
+        last=s.get(Package,ids[-1])
+        assert s.get(update_scores.UpdateScore,update_scores.identity(s.get(Host,last.host_id),last)) is None
 
 
 def test_due_deferred_items_across_chunk_boundaries_are_not_starved(admin,monkeypatch):
