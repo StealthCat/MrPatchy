@@ -174,6 +174,24 @@ def test_expired_patch_is_cancelled_and_failures_not_retried(fleet,monkeypatch):
     with Session() as s: assert all(j.state=='cancelled' for j in s.scalars(select(Job).where(Job.action=='patch')))
 
 
+def test_dispatcher_first_expiry_is_skipped_not_cancelled(fleet,monkeypatch):
+    monkeypatch.setattr(worker.time,'time',lambda:fleet)
+    sched.tick(fleet);complete_refreshes(fleet);sched.tick(fleet)
+    late=fleet+7201
+    with Session() as s:
+        for job in s.scalars(select(Job).where(Job.action=='patch')):
+            assert sched.job_guard(s,job,late) is False
+            assert job.state=='cancelled' and 'expired' in job.output and 'authorization' not in job.output
+    assert all(r.state=='skipped' and 'expired' in r.detail for r in runs())
+    sched.tick(late)
+    assert all(r.state=='skipped' for r in runs())
+    operations.collect_alerts()
+    with Session() as s:
+        Alert=operations.Alert
+        kinds={a.kind for a in s.scalars(select(Alert))}
+        assert 'scheduled patching' in kinds
+
+
 def test_failed_refresh_never_patches(fleet):
     sched.tick(fleet)
     with Session() as s:
