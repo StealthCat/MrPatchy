@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.35.57 — 2026-10-31
+
+1. [PR #235](https://github.com/StealthCat/MrPatchy/pull/235): create a fresh urgent high/critical attempt when a previous run was skipped after its window expired without ever queuing a patch job. Reconsider it only after host telemetry, health and the approved maintenance-window/bypass rules allow.
+2. Retain deterministic attempt identities and previous run history. Existing active, failed or patch-queued attempts stop the reissue chain, preserving no-replay behavior and one patch batch per eligible attempt. Preserve the dispatcher-first expiry reporting delivered in PR #231.
+3. Compatibility: urgent work previously stranded after an unstarted expired window can become eligible again. Current repository revalidation, policy, host locks, recovery and response authorization remain required; no schema or target-helper change, major remains 1.
+
+## 1.35.56 — 2026-10-31
+
+1. [PR #231](https://github.com/StealthCat/MrPatchy/pull/231): record an otherwise-authorized scheduled patch whose start window expired as a skipped run even when the job dispatcher notices before the schedule tick. Retain the expiry reason so history and scheduled-patching alerts report the missed window.
+2. Keep authorization revocation separate: disabled or revised schedules, missing runs and mismatched host scope retain cancellation behavior. Expired queued jobs are cancelled before execution; running work is not replayed.
+3. Compatibility: expired runs previously shown as cancelled now show skipped and participate in existing missed-window alerting. No schema, roles, target-helper or response-authority change; major remains 1.
+
 ## 1.35.55 — 2026-10-31
 
 1. [PR #241](https://github.com/StealthCat/MrPatchy/pull/241): bind repository source/key/access, investigation trust and schedule save/delete submissions to their originating dialog and session. Disable covered submissions while pending to prevent duplicate requests.

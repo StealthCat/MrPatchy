@@ -157,9 +157,17 @@ def allow_window(s, host_id, policy, trigger, now):
     return operations.in_window(row.value['windows'] if row else [], now)
 
 
-def add_run(s, schedule, host, trigger, due, key):
-    identity = hashlib.sha256(f'{schedule.id}:{schedule.revision}:{host.id}:{trigger}:{key}'.encode()).hexdigest()
-    if not s.get(PatchRun, identity):
+def add_run(s, schedule, host, trigger, due, key, reissue=False):
+    base = f'{schedule.id}:{schedule.revision}:{host.id}:{trigger}:{key}'
+    identity = hashlib.sha256(base.encode()).hexdigest()
+    attempt = 0
+    existing = s.get(PatchRun, identity)
+    # An urgent run that expired without ever queuing a patch job never executed; once gates allow, issue a fresh attempt.
+    while reissue and existing and existing.state == 'skipped' and not existing.job_id:
+        attempt += 1
+        identity = hashlib.sha256(f'{base}:attempt{attempt}'.encode()).hexdigest()
+        existing = s.get(PatchRun, identity)
+    if not existing:
         s.add(PatchRun(id=identity, schedule_id=schedule.id, revision=schedule.revision, host_id=host.id,
                        trigger=trigger, due=due, expires=due+schedule.policy['window_minutes']*60))
         s.flush()
@@ -172,6 +180,11 @@ def job_guard(s, job, now=None):
     now = time.time() if now is None else now
     run = s.get(PatchRun, ref['run_id'])
     schedule = s.get(PatchSchedule, run.schedule_id) if run else None
+    if (run and schedule and schedule.policy['enabled'] and schedule.revision == run.revision and
+            run.host_id == job.host_id and now >= run.expires):
+        # An expired window is a missed run (alerting), not an authorization change.
+        job.state = 'cancelled'; job.output = 'Scheduled start window expired'
+        run.state = 'skipped'; run.detail = 'Scheduled start window expired before execution'; s.commit(); return False
     if (not run or not schedule or not schedule.policy['enabled'] or schedule.revision != run.revision or
             run.host_id != job.host_id or now >= run.expires):
         job.state = 'cancelled'; job.output = 'Scheduled authorization changed or start window expired'; s.commit(); return False
@@ -256,7 +269,9 @@ def tick(now=None):
                         packages = candidates(s, host.id, policy, priority, now)
                         if packages:
                             key = json.dumps([(p.name, p.candidate, p.available_since) for p in packages])
-                            add_run(s, schedule, host, priority, now, key)
+                            ready = (host.state == 'online' and now-host.last_seen <= 120 and not host.integrity and
+                                     allow_window(s, host.id, policy, priority, now))
+                            add_run(s, schedule, host, priority, now, key, reissue=ready)
             runs = list(s.scalars(select(PatchRun).where(PatchRun.state.in_(ACTIVE))))
             for run in sorted(runs, key=lambda r: ({'critical':0,'high':1,'regular':2}[r.trigger],r.due,r.id)):
                 advance(s, run, now)
