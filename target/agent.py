@@ -796,7 +796,11 @@ def security_scan(paths,yara_rules=None):
         except TimeoutError:
             flush_clam_batch(pending)
             gap('Traversal','Scan budget exhausted; remaining entries not examined')
-        finally:iterator.close()
+        finally:
+            iterator.close()
+            for record in pending:
+                os.close(record['fd']);os.close(record['directory_fd'])
+            pending.clear()
     return finish()
 
 

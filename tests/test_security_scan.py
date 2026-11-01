@@ -64,6 +64,25 @@ def test_clamav_batch_maps_mixed_per_file_outcomes(tmp_path,monkeypatch):
     assert result['findings'][0]['evidence'].endswith('Fixture.Signature FOUND')
 
 
+def test_clamav_batch_rejects_only_the_replaced_path(tmp_path,monkeypatch):
+    files=[tmp_path/f'file-{index}' for index in range(3)]
+    for index,file in enumerate(files):file.write_text(f'original {index}')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        files[1].unlink();files[1].write_text('replacement')
+        return SimpleNamespace(stdout='\n'.join(target+': Fixture.Signature FOUND' for target in targets),returncode=1)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert result['scanned']==2 and result['state']=='incomplete'
+    assert {finding['path'] for finding in result['findings']}=={str(files[0]),str(files[2])}
+    assert {finding['sha256'] for finding in result['findings']}=={
+        agent.hashlib.sha256(b'original 0').hexdigest(),agent.hashlib.sha256(b'original 2').hexdigest()}
+
+
 def test_clamav_batches_are_bounded(tmp_path,monkeypatch):
     for index in range(65):(tmp_path/f'file-{index:02d}').write_text('fixture')
     monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
@@ -96,6 +115,23 @@ def test_clamav_batch_bytes_are_bounded(tmp_path,monkeypatch):
     result=agent.security_scan([str(tmp_path)])
 
     assert result['scanned']==3 and batch_sizes==[2,1]
+
+
+def test_clamav_finding_limit_closes_pending_descriptors(tmp_path,monkeypatch):
+    for index in range(105):(tmp_path/f'file-{index:03d}').write_text('x')
+    monkeypatch.setattr('shutil.which',lambda name:'/test/clamscan')
+    monkeypatch.setattr(agent,'CLAMAV_BATCH_BYTES',2)
+    def scan(args,**kwargs):
+        if '--version' in args:return SimpleNamespace(stdout='Fixture engine',returncode=0)
+        targets=[item for item in args if item.startswith('/proc/self/fd/')]
+        return SimpleNamespace(stdout='\n'.join(target+': Fixture.Signature FOUND' for target in targets),returncode=1)
+    monkeypatch.setattr(agent.subprocess,'run',scan)
+    descriptors=len(os.listdir('/proc/self/fd'))
+
+    result=agent.security_scan([str(tmp_path)])
+
+    assert len(result['findings'])==100
+    assert len(os.listdir('/proc/self/fd'))==descriptors
 
 
 def test_clamav_ambiguous_batch_output_falls_back_per_file(tmp_path,monkeypatch):
