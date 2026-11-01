@@ -280,12 +280,54 @@ def _prepare(profiles, validate=True):
         raise
 
 
+_STATE = re.compile(r'^# mrpatchy-state: ([a-f0-9-]{36})$', re.M)
+
+
+def _live_state():
+    path = directory() / 'Caddyfile'
+    try:
+        match = _STATE.search(path.read_text())
+    except OSError:
+        return None
+    return match[1] if match else None
+
+
+def _shred(folder):
+    """Best-effort overwrite of secret files before removing a stale state folder."""
+    for item in folder.rglob('*'):
+        try:
+            if item.is_file() and not item.is_symlink():
+                with open(item, 'r+b') as stream:
+                    stream.write(b'\0' * stream.seek(0, os.SEEK_END))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+        except OSError:
+            pass
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def _prune(*keep):
+    """After a confirmed activation keep only the live and rollback state; never recovery-required folders."""
+    keep = {str(name) for name in keep if name}
+    try:
+        entries = list(directory().iterdir())
+    except OSError:
+        return
+    for folder in entries:
+        if folder.name in keep or folder.is_symlink() or not folder.is_dir():
+            continue
+        if not re.fullmatch(r'[a-f0-9-]{36}', folder.name) or (folder / 'recovery-required').exists():
+            continue
+        _shred(folder)
+
+
 def apply(payload, profile='internal'):
     if profile not in PROFILES:
         raise ValueError('Unknown HTTPS profile')
     with _lock:
         profiles = read_profiles()
         profiles[profile] = _merge(profiles[profile], payload)
+        previous = _live_state()
         folder, content = _prepare(profiles)
         try:
             _activate(folder, content)
@@ -293,6 +335,7 @@ def apply(payload, profile='internal'):
             if not (folder / 'recovery-required').exists():
                 shutil.rmtree(folder, ignore_errors=True)
             raise
+        _prune(folder.name, previous)
         return _public(profiles)
 
 
@@ -334,9 +377,11 @@ def bootstrap():
     # Re-render environment-derived ports while preserving saved profiles/material.
     # Caddy reads this generation after the app's startup health check.
     # Expiry must not prevent access to the UI for replacing an existing certificate.
+    previous = _live_state()
     folder, _ = _prepare(profiles, validate=False)
     (folder / 'Caddyfile.pending').replace(path)
     _sync_directory(directory())
+    _prune(folder.name, previous)
 
 
 if __name__ == '__main__':

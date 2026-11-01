@@ -59,3 +59,43 @@ def test_concurrent_tls_changes_are_serialized(tmp_path,monkeypatch):
         list(pool.map(lambda n:tls.apply({'domain':n+'.example.org','mode':'internal'}),['one','two']))
     assert counts['maximum']==1
     assert (tmp_path/'Caddyfile').read_text()==calls[-1]
+
+def _state_folders(tmp_path):
+    return [p for p in tmp_path.iterdir() if p.is_dir()]
+
+def test_successful_apply_prunes_stale_state_folders_with_old_secrets(tmp_path,monkeypatch):
+    monkeypatch.setenv('TLS_DIR',str(tmp_path))
+    monkeypatch.setattr(tls.httpx,'post',lambda *a,**kw:OK())
+    for key in ('eab-secret-one','eab-secret-two','eab-secret-three'):
+        tls.apply({'domain':'patchy.example.org','mode':'acme','acme_url':'https://ca.example.org/directory','eab_id':'id','eab_key':key})
+    tls.apply({'domain':'patchy.example.org','mode':'acme','acme_url':'https://ca.example.org/directory','clear_eab':True})
+    folders=_state_folders(tmp_path)
+    assert len(folders)==2
+    assert 'eab-secret-one' not in ''.join(p.joinpath('profiles.json').read_text() for p in folders)
+    assert tls.directory().joinpath('Caddyfile').read_text().count(folders[0].name)+tls.directory().joinpath('Caddyfile').read_text().count(folders[1].name)==1
+
+def test_pruning_keeps_recovery_required_folders(tmp_path,monkeypatch):
+    monkeypatch.setenv('TLS_DIR',str(tmp_path))
+    monkeypatch.setattr(tls.httpx,'post',lambda *a,**kw:OK())
+    stale=tmp_path/'11111111-1111-1111-1111-111111111111';stale.mkdir()
+    (stale/'recovery-required').write_text('x');(stale/'profiles.json').write_text('{}')
+    tls.apply({'domain':'a.example.org','mode':'internal'})
+    tls.apply({'domain':'b.example.org','mode':'internal'})
+    tls.apply({'domain':'c.example.org','mode':'internal'})
+    assert (stale/'profiles.json').exists()
+    assert len(_state_folders(tmp_path))==3
+
+def test_failed_apply_does_not_prune_previous_state(tmp_path,monkeypatch):
+    monkeypatch.setenv('TLS_DIR',str(tmp_path))
+    monkeypatch.setattr(tls.httpx,'post',lambda *a,**kw:OK())
+    tls.apply({'domain':'a.example.org','mode':'internal'})
+    tls.apply({'domain':'b.example.org','mode':'internal'})
+    before={p.name for p in _state_folders(tmp_path)}
+    calls=[]
+    def boom(*a,**kw):
+        calls.append(1)
+        if len(calls)==1: raise httpx.ConnectError('down')
+        return OK()
+    monkeypatch.setattr(tls.httpx,'post',boom)
+    with pytest.raises(httpx.ConnectError): tls.apply({'domain':'c.example.org','mode':'internal'})
+    assert {p.name for p in _state_folders(tmp_path)}==before
