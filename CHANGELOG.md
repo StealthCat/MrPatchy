@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.69 — 2026-11-01
+
+1. [PR #271](https://github.com/StealthCat/MrPatchy/pull/271): Share the automatic package-priority rule between repository refresh and the manual reset-to-auto action. A security-origin package is high only when it has a newer candidate; no-candidate packages remain normal instead of temporarily becoming high.
+2. Compatibility: no schema/API/configuration/role or runtime-approval change; explicit manual priorities remain unchanged. This delivers only the auto-priority drift fix from #188. Patch-validation reuse, rollout queue/audit consolidation and response-idle dedup remain open and are not claimed complete.
+
 ## 1.35.68 — 2026-11-01
 
 1. [PR #269](https://github.com/StealthCat/MrPatchy/pull/269): Check newly busy servers before dispatch evaluation and reuse exact response-hold scopes and ordinary patch-window results within each worker iteration. Skip later ordinary patch work after a closed window while retaining scheduled and non-patch paths, reducing repeated per-job database queries.
