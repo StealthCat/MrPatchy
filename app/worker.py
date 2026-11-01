@@ -392,6 +392,24 @@ def execute(job_id,reserved_lock=None):
         ai_admission.end_scope(admission_token);lock.release()
 
 
+def response_hold_scope(job):
+    """Exemptions from the host response hold for one job (pure; shared by admission and execution)."""
+    from . import quarantine,process_response
+    action,payload=job.action,job.payload
+    service_watch=action=='response-service-health' and payload.get('_service_watch') is True
+    response_id=payload.get('quarantine_id') if action in quarantine.RECOVERY_ACTIONS and not service_watch else None
+    publication_id=payload.get('publication_id') if action in ('trusted-repair-publish','trusted-repair-publish-status') else None
+    return dict(
+        response_id=response_id,
+        process_id=payload.get('process_id') if action in process_response.RECOVERY_ACTIONS else None,
+        read_only_response_id=payload.get('quarantine_id') if action in ('trusted-repair-prepare','response-service-health') and not service_watch else None,
+        staging_response_id=payload.get('quarantine_id') if action in ('trusted-repair-stage','trusted-repair-stage-status') else None,
+        publication_id=publication_id,
+        publication_response_id=response_id if publication_id else None,
+        local_observation=action=='evidence-archive-status',
+        service_response_id=response_id if action=='response-service-health' else None)
+
+
 def execute_locked(job_id):
     with Session() as s:
         job=s.get(Job,job_id)
@@ -409,12 +427,7 @@ def execute_locked(job_id):
         resuming=job.action=='release-upgrade' and job.state=='running'
         if job.state!='queued' and not resuming:return
         from . import quarantine,process_response
-        response_id=job.payload.get('quarantine_id') if job.action in quarantine.RECOVERY_ACTIONS and not (job.action=='response-service-health' and job.payload.get('_service_watch') is True) else None
-        process_id=job.payload.get('process_id') if job.action in process_response.RECOVERY_ACTIONS else None
-        read_only_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-prepare','response-service-health') and not (job.action=='response-service-health' and job.payload.get('_service_watch') is True) else None
-        staging_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
-        publication_id=job.payload.get('publication_id') if job.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=job.action=='evidence-archive-status',service_response_id=response_id if job.action=='response-service-health' else None):return
+        if operations.host_quarantined(s,job.host_id,exclude=job.id,**response_hold_scope(job)):return
         if not resuming and not operations.eligible(s,job): return
         claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued',Job.next_at<=time.time()).values(state='running')).rowcount
         s.commit()
@@ -877,17 +890,10 @@ def _loop(reporter):
                         if j.host_id in busy_hosts:continue
                         if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
                         if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
-                        from . import quarantine,process_response
-                        response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
-                        process_id=j.payload.get('process_id') if j.action in process_response.RECOVERY_ACTIONS else None
-                        read_only_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-prepare','response-service-health') and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
-                        staging_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
-                        publication_id=j.payload.get('publication_id') if j.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-                        hold_scope=(j.host_id,response_id,process_id,read_only_response_id,staging_response_id,publication_id,
-                                    response_id if publication_id else None,j.action=='evidence-archive-status',
-                                    response_id if j.action=='response-service-health' else None)
+                        scope=response_hold_scope(j)
+                        hold_scope=(j.host_id,*scope.values())
                         if hold_scope not in hold_cache:
-                            hold_cache[hold_scope]=operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None)
+                            hold_cache[hold_scope]=operations.host_quarantined(s,j.host_id,exclude=j.id,**scope)
                         if hold_cache[hold_scope]:continue
                         eligible=operations.eligible(s,j,window_cache)
                         if not eligible and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule') and window_cache.get(j.host_id) is False:

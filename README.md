@@ -184,7 +184,7 @@ See [scheduling behavior, daylight saving, safety checks and failure handling](d
 
 ## Reboot, rollback and interrupted operations
 
-Queued dispatch reuses matching response-hold and ordinary maintenance-window results only within one worker iteration, and skips work for servers already busy in that iteration. The executor rechecks holds and eligibility before claiming work; dispatch caching does not authorize an operation or bypass a response pause.
+Queued dispatch reuses matching response-hold and ordinary maintenance-window results only within one worker iteration, and skips work for servers already busy in that iteration. Admission and execution share the same action-specific response-hold rules. The executor independently rechecks current holds and eligibility before claiming work; dispatch caching does not authorize an operation or bypass a response pause.
 
 API clients receive HTTP 409 for disabled/deleted-server or busy-state conflicts, and HTTP 429 when the server queue reaches its existing 50-operation limit. Handle these separately from HTTP 400 invalid input; rejected requests do not authorize or enqueue additional work.
 
@@ -204,6 +204,8 @@ A host that never returns over SSH cannot be automatically repaired from the cen
 ## Distribution release upgrades
 
 Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
+
+While a plan stays in the same planning, approved or running state, background polling updates status and output in place, preserving expanded transaction/configuration details, scroll position and dialog messages. State changes rebuild the review and reapply expanded details; **Refresh progress** explicitly reloads it.
 
 Cancelling a queued planning or upgrade job also cancels its linked plan. Prepare a fresh plan before another GO; cancellation does not preserve approval.
 

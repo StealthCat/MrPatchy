@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.35.75 — 2026-11-01
+
+1. [PR #282](https://github.com/StealthCat/MrPatchy/pull/282): Remove the unused frontend configuration cache and unreferenced confirmation-free deploy-action branch. Share the existing HTML escape routine through PatchyUI, and reuse common page slicing, labels, buttons and pager bindings for Overview and Servers.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Existing enrollment confirmation, refresh actions, filter/reset behavior, 12/24-item page sizes, scrolling and escaping for current consumers are retained. This is preventive maintenance of existing UI behavior; the release-review polling improvements remain intact.
+
+## 1.35.74 — 2026-11-01
+
+1. [PR #266](https://github.com/StealthCat/MrPatchy/pull/266): Update release-upgrade review status and progress in place during unchanged-state background polls, retaining open package/configuration details, scroll position and dialog messages. Reapply expanded-detail flags when a plan state transition rebuilds the review; add a browser regression covering polling and completion.
+2. Synchronize the eBPF diagnostic test fixture with recorded collector recovery before emitting its late warning, and cover delayed event processing while retaining every original diagnostic assertion. Runtime collector behavior is unchanged.
+3. Compatibility: no schema/API/role or runtime-response authorization change. Plan state transitions and explicit manual refresh can still rebuild the dialog; request/modal/session stale-response guards and the separately reviewed GO workflow remain intact.
+
+## 1.35.73 — 2026-11-01
+
+1. [PR #278](https://github.com/StealthCat/MrPatchy/pull/278): Share one pure, action-specific response-hold scope resolver between worker admission and execution, and derive the dispatch hold-cache key from that scope. Add table-driven coverage for response, process, read-only, staging, publication, local-observation and service exemptions.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Execution still checks current holds independently before claiming work; strict service-watch distinctions, separate hold IDs, per-host serialization, approvals and existing dispatch-cache boundaries are retained.
+
 ## 1.35.72 — 2026-11-01
 
 1. [PR #280](https://github.com/StealthCat/MrPatchy/pull/280): Count sign-in attempts against the exact client address instead of a text prefix. Attempts from a different IPv6 address sharing that prefix no longer exhaust another address's sign-in window; same-address limits and audit-once behavior remain covered by regression tests. This coordinator integration preserves the implementation and history from PR #277.
