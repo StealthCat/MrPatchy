@@ -150,7 +150,7 @@ Explicit installation refreshes target metadata and requests the recorded exact 
 | Normal | 168 hours |
 | Low | 720 hours |
 
-Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates default to high; others default to normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
+Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates with a newer candidate default to high; others default to normal. Resetting a package to **auto** uses the same rule; a package without a newer candidate stays normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
 
@@ -183,6 +183,8 @@ Review and explicitly approve unattended installation before enabling a schedule
 See [scheduling behavior, daylight saving, safety checks and failure handling](docs/PATCH_SCHEDULES.md). Distribution release upgrades still use their separate reviewed GO workflow.
 
 ## Reboot, rollback and interrupted operations
+
+Queued dispatch reuses matching response-hold and ordinary maintenance-window results only within one worker iteration, and skips work for servers already busy in that iteration. The executor rechecks holds and eligibility before claiming work; dispatch caching does not authorize an operation or bypass a response pause.
 
 API clients receive HTTP 409 for disabled/deleted-server or busy-state conflicts, and HTTP 429 when the server queue reaches its existing 50-operation limit. Handle these separately from HTTP 400 invalid input; rejected requests do not authorize or enqueue additional work.
 
@@ -340,14 +342,16 @@ Schema initialization is idempotent. MySQL upgrades need ALTER privileges for ex
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt -r requirements-lint.txt
+ruff check --no-cache --select F app target scripts tools
+ruff check --no-cache --select F821 tests
 python -m pytest -q
 npm ci
 npx playwright install chromium
 npm run test:ui
 ```
 
-CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
+CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
 
 Repository, trust and schedule dialog submissions are one-shot while pending. Opening another dialog keeps it intact; an earlier result is shown globally for the same signed-in session and is suppressed after sign-out. Closing a dialog does not cancel the submitted operation.
 
@@ -553,6 +557,11 @@ remaining and next-reset values in Settings and AI worker status. The administra
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
 changes are audited. Estimates use published token prices and may differ from the
 provider invoice.
+
+Daily accounting groups repeated amounts without loading every ledger entry as an
+application object. This reduces memory use, especially when amounts repeat, but
+many distinct amounts still increase work under the shared admission lock. A bounded
+summary and broader SQLite/MySQL concurrency evidence remain open work.
 
 Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
 alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL

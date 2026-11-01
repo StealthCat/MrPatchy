@@ -9,14 +9,12 @@ import time
 import uuid
 import math
 import re
-import subprocess
-from sqlalchemy import select, delete, update, func
+from sqlalchemy import select, delete, update
 from . import host_lifecycle
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend
+from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
 from .security import unseal
-import httpx
 from .coordination import Lock
 log=logging.getLogger(__name__)
 stop=threading.Event()
@@ -873,8 +871,11 @@ def _loop(reporter):
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
                         if len(active_jobs)>=capacity['jobs']:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
+                    hold_cache={};window_cache={};closed_patch_windows=set()
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.next_at<=now,Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=capacity['jobs']: break
+                        if j.host_id in busy_hosts:continue
+                        if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
                         if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
                         from . import quarantine,process_response
                         response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
@@ -882,8 +883,16 @@ def _loop(reporter):
                         read_only_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-prepare','response-service-health') and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
                         staging_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
                         publication_id=j.payload.get('publication_id') if j.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None):continue
-                        if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
+                        hold_scope=(j.host_id,response_id,process_id,read_only_response_id,staging_response_id,publication_id,
+                                    response_id if publication_id else None,j.action=='evidence-archive-status',
+                                    response_id if j.action=='response-service-health' else None)
+                        if hold_scope not in hold_cache:
+                            hold_cache[hold_scope]=operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None)
+                        if hold_cache[hold_scope]:continue
+                        eligible=operations.eligible(s,j,window_cache)
+                        if not eligible and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule') and window_cache.get(j.host_id) is False:
+                            closed_patch_windows.add(j.host_id)
+                        if j.id not in active_jobs and eligible:
                             submit_job(jobs,j,active_jobs,busy_hosts)
                 if is_leader and now-last_cleanup>3600:
                     with Session() as s:
@@ -925,7 +934,7 @@ def start():
     t=threading.Thread(target=loop,daemon=True); t.start(); return t
 
 if __name__=='__main__':
-    from . import identity,operations
+    from . import operations
     from .db import init
     import signal
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
