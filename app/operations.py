@@ -77,7 +77,7 @@ def recovery_policies(s,host_ids):
     rows={row.key:row for row in s.scalars(select(Setting).where(Setting.key.in_(['recovery:'+h for h in host_ids])))} if host_ids else {}
     return {h:_recovery_flags(rows.get('recovery:'+h)) for h in host_ids}
 
-def eligible(s,job):
+def eligible(s,job,window_cache=None):
     if job.payload.get('_schedule'):
         from .scheduling import job_guard
         return job_guard(s,job)
@@ -90,8 +90,11 @@ def eligible(s,job):
         if previous.state=='recovery_required':
             job.state='blocked';job.output='Canary requires recovery reconciliation';s.commit();return False
         if previous.state!='complete':return False
+    if window_cache is not None and job.host_id in window_cache:return window_cache[job.host_id]
     row=s.get(Setting,'window:'+job.host_id)
-    return in_window(row.value['windows'] if row else [])
+    result=in_window(row.value['windows'] if row else [])
+    if window_cache is not None:window_cache[job.host_id]=result
+    return result
 
 def collect_alerts():
     with Session() as s:
