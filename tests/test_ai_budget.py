@@ -156,3 +156,19 @@ def test_status_totals_use_sql_aggregates_without_loading_ledger(admin):
     assert result['uncertain_usd']=='0.35'
     assert result['counted_usd']=='0.7500009'
     assert result['remaining_usd']=='99.2499991'
+
+
+def test_unrecognized_status_rows_stay_counted_and_block_admission(admin):
+    import time
+    configure(mode='daily_cap', cap=Decimal('1'))
+    now=time.time()
+    with Session() as session:
+        session.add(ai_budget.BudgetEntry(id='00000000-0000-0000-0000-000000000001',created=now,updated=now,reset_at=now+3600,
+            timezone='UTC',model='m',status='legacy_pending',reservation_usd=Decimal('1'),pricing_version='v',pricing_source='s'))
+        session.commit()
+        result=ai_budget.status(session,now)
+    assert result['counted_usd']=='1' and result['remaining_usd']=='0'
+    with pytest.raises(ai.AIError, match='safe reservation'):
+        ai_budget.reserve(payload())
+    with Session() as session:
+        assert session.query(ai_budget.BudgetEntry).count()==1

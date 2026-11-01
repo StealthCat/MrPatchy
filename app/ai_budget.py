@@ -55,7 +55,7 @@ def _money(value):
 def _state(session,cfg,now):
     mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
-    groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')}
+    groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
     if enabled:
         # Group by status and per-row amount in SQL so the ledger is never loaded row by row;
         # exact Decimal(amount)*count keeps the sums exact on SQLite and MySQL.
@@ -63,9 +63,11 @@ def _state(session,cfg,now):
         query=select(BudgetEntry.status,amount,func.count()).where(BudgetEntry.created>=start,BudgetEntry.created<reset,
             BudgetEntry.status!='released').group_by(BudgetEntry.status,amount)
         for key,value,count in session.execute(query):
-            if key in groups:groups[key]+=Decimal(value or 0)*count
-    # Settled rows count actual cost; sent/reserved/uncertain count their safe ceiling.
-    counted=sum(groups.values(),Decimal(0));cap=Decimal(str(cfg['ai_daily_cap_usd']))
+            total=Decimal(value or 0)*count;counted+=total
+            if key in groups:groups[key]+=total
+    # Settled rows count actual cost; every other unreleased row, including an unrecognized
+    # status, counts its safe ceiling so unknown durable state never becomes zero spend.
+    cap=Decimal(str(cfg['ai_daily_cap_usd']))
     return enabled,name,start,reset,groups,counted,cap
 
 
