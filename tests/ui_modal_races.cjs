@@ -88,18 +88,15 @@ module.exports=async function modalRaces(page){
   let scheduleDeletes=0,releaseSchedule,scheduleStarted;
   const scheduleWait=new Promise(resolve=>releaseSchedule=resolve);
   const scheduleStart=new Promise(resolve=>scheduleStarted=resolve);
-  const schedules=async route=>{
-    const request=route.request(),url=new URL(request.url());
-    if(url.pathname==='/api/schedules/calendar')return route.fulfill({json:{events:[]}});
-    if(url.pathname==='/api/schedules/modal-race-schedule'&&request.method()==='DELETE'){
-      scheduleDeletes++;scheduleStarted();await scheduleWait;return route.fulfill({json:{}});
-    }
-    if(url.pathname==='/api/schedules')return route.fulfill({json:{schedules:[schedule],runs:[],host_policies:{}}});
-    return route.fallback();
-  };
-  await page.route('**/api/schedules**',schedules);
+  const scheduleList=route=>route.fulfill({json:{schedules:[schedule],runs:[],host_policies:{}}});
+  const scheduleCalendar=route=>route.fulfill({json:{events:[]}});
+  const scheduleDelete=async route=>{scheduleDeletes++;scheduleStarted();await scheduleWait;return route.fulfill({json:{}});};
+  await page.route('**/api/schedules',scheduleList);
+  await page.route('**/api/schedules/calendar?*',scheduleCalendar);
+  await page.route('**/api/schedules/modal-race-schedule',scheduleDelete);
   try{
     await page.locator('[data-nav=schedules]').click();
+    await page.getByRole('heading',{name:'Patching, on your calendar.'}).waitFor();
     await page.getByText('Race schedule',{exact:true}).waitFor();
     await page.locator('[data-delete-schedule]').click();
     await page.locator('#confirm-delete-schedule').evaluate(button=>{button.click();button.click();});
@@ -110,5 +107,10 @@ module.exports=async function modalRaces(page){
     await assertAccountUnaffected(accountTitle);
     assert.equal(scheduleDeletes,1);
     await page.locator('#close-modal').click();
-  }finally{releaseSchedule();await page.unroute('**/api/schedules**',schedules);}
+  }finally{
+    releaseSchedule();
+    await page.unroute('**/api/schedules/modal-race-schedule',scheduleDelete);
+    await page.unroute('**/api/schedules/calendar?*',scheduleCalendar);
+    await page.unroute('**/api/schedules',scheduleList);
+  }
 };
