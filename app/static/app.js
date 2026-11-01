@@ -1,5 +1,5 @@
 'use strict';
-const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=s=>document.querySelector(s), esc=PatchyUI.esc;
 const packageViewContext=new Map();
 const aiListContext=new Map();
 const startupViewContext=new Map();
@@ -7,7 +7,7 @@ const historyViewContext=new Map();
 const activityViewContext=new Map();const investigationViewContext=new Map();
 const fleetReviewContext={q:'',filter:'attention',offset:0};
 const serverListContext={q:"",state:"all",offset:0};
-let csrf='',hosts=[],selected='',page='overview',cfg={},toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
+let csrf='',hosts=[],selected='',page='overview',toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
 const badge=s=>`<span class="badge ${esc(s)}">${esc(s)}</span>`;
 async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});let data=await r.json();if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin();throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail));}return data;}
@@ -18,7 +18,7 @@ function toast(message,global=false){
 }
 function showLogin(){
  sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
- packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';cfg={};currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
+ packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
  $('#toast').style.display='none';clearTimeout(toastTimer);
  $('#login').classList.remove('hidden');$('#shell').classList.add('hidden');
@@ -108,16 +108,23 @@ async function overview(revision=renderRevision){
  const state=fleetReviewContext,search=$('#fleet-review-search'),filter=$('#fleet-review-filter');filter.value=state.filter;
  const draw=()=>{
   const q=state.q.toLocaleLowerCase(),rows=observations.filter(row=>(state.filter==='all'||(state.filter==='attention'?!['recent','disabled'].includes(row.kind):row.kind===state.filter))&&[row.host.name,row.host.address].some(value=>String(value||'').toLocaleLowerCase().includes(q)));
-  state.offset=Math.min(state.offset,Math.max(0,Math.ceil(rows.length/12)-1)*12);
+  const visible=pagedRows(state,rows,12,'#fleet-review');
   $('#fleet-review-count').textContent=rows.length+' matching of '+snapshot.length+' servers. Reasons describe stored observations at page load.';
-  $('#fleet-review-cards').innerHTML=rows.length?'<div class="fleet-observation-grid">'+rows.slice(state.offset,state.offset+12).map(tile).join('')+'</div>':empty(snapshot.length?'No servers in this view':'No servers enrolled yet',snapshot.length?'Change the filters to inspect other groups. No matches does not certify full protection.':'Add and verify a server to begin collecting observations.');
-  $('#fleet-review-page').textContent=rows.length?'Page '+(state.offset/12+1)+' of '+Math.ceil(rows.length/12):'No results';
-  $('#fleet-review-prev').disabled=!state.offset;$('#fleet-review-next').disabled=state.offset+12>=rows.length;
+  $('#fleet-review-cards').innerHTML=rows.length?'<div class="fleet-observation-grid">'+visible.map(tile).join('')+'</div>':empty(snapshot.length?'No servers in this view':'No servers enrolled yet',snapshot.length?'Change the filters to inspect other groups. No matches does not certify full protection.':'Add and verify a server to begin collecting observations.');
  };
  search.oninput=()=>{state.q=search.value;state.offset=0;draw();};filter.onchange=()=>{state.filter=filter.value;state.offset=0;draw();};
  $('#fleet-review-reset').onclick=()=>{Object.assign(state,{q:'',filter:'attention',offset:0});search.value='';filter.value='attention';draw();search.focus();};
- for(const [selector,step] of [['#fleet-review-prev',-12],['#fleet-review-next',12]])$(selector).onclick=()=>{state.offset+=step;draw();$('#fleet-review-count').scrollIntoView({block:'nearest'});};
+ bindPager(state,12,'#fleet-review',draw);
  draw();
+}
+function pagedRows(state,rows,size,prefix){
+ state.offset=Math.min(state.offset,Math.max(0,Math.ceil(rows.length/size)-1)*size);
+ $(prefix+'-page').textContent=rows.length?'Page '+(state.offset/size+1)+' of '+Math.ceil(rows.length/size):'No results';
+ $(prefix+'-prev').disabled=state.offset===0;$(prefix+'-next').disabled=state.offset+size>=rows.length;
+ return rows.slice(state.offset,state.offset+size);
+}
+function bindPager(state,size,prefix,draw){
+ for(const [suffix,step] of [['prev',-size],['next',size]])$(prefix+'-'+suffix).onclick=()=>{state.offset+=step;draw();$(prefix+'-count').scrollIntoView({block:'nearest'});};
 }
 async function servers(revision=renderRevision){
  if(location.hash==='#servers/deleted')return deletedServers(revision);
@@ -128,16 +135,14 @@ async function servers(revision=renderRevision){
  const search=$('#server-list-search'),filter=$('#server-list-state');filter.value=state.state;
  const draw=()=>{
   const q=state.q.toLocaleLowerCase(),rows=hosts.filter(h=>(state.state==='all'||(state.state==='enabled'?h.enabled!==false:h.enabled===false))&&[h.name,h.address,h.architecture,h.package_manager].some(value=>String(value||'').toLocaleLowerCase().includes(q)));
-  state.offset=Math.min(state.offset,Math.max(0,Math.ceil(rows.length/24)-1)*24);
+  const visible=pagedRows(state,rows,24,'#server-list');
   $('#server-list-count').textContent=rows.length+' matching of '+hosts.length+' managed servers. Status is the latest stored observation.';
-  $('#server-list-cards').innerHTML=rows.length?`<div class="server-directory-grid">${rows.slice(state.offset,state.offset+24).map(serverDirectoryCard).join('')}</div>`:empty(hosts.length?'No matching servers':'No servers enrolled yet',hosts.length?'Change or reset the filters to see your fleet.':'Add a server, prepare its target and verify installation before monitoring begins.');
-  $('#server-list-page').textContent=rows.length?'Page '+(state.offset/24+1)+' of '+Math.ceil(rows.length/24):'No results';
-  $('#server-list-prev').disabled=state.offset===0;$('#server-list-next').disabled=state.offset+24>=rows.length;
+  $('#server-list-cards').innerHTML=rows.length?`<div class="server-directory-grid">${visible.map(serverDirectoryCard).join('')}</div>`:empty(hosts.length?'No matching servers':'No servers enrolled yet',hosts.length?'Change or reset the filters to see your fleet.':'Add a server, prepare its target and verify installation before monitoring begins.');
   $('#server-list-clear').disabled=!state.q&&state.state==='all'&&state.offset===0;
  };
  search.oninput=()=>{state.q=search.value;state.offset=0;draw();};filter.onchange=()=>{state.state=filter.value;state.offset=0;draw();};
  $('#server-list-clear').onclick=()=>{Object.assign(state,{q:'',state:'all',offset:0});search.value='';filter.value='all';draw();search.focus();};
- for(const [selector,step] of [['#server-list-prev',-24],['#server-list-next',24]])$(selector).onclick=()=>{state.offset+=step;draw();$('#server-list-count').scrollIntoView({block:'nearest'});};
+ bindPager(state,24,'#server-list',draw);
  draw();
 }
 function serverDirectoryCard(h){
@@ -357,14 +362,14 @@ async function tlsModal(){
    try{
     for(const key of ['ca','certificate','private_key']){const file=f.get(key);if(file.size>100000)throw Error('Each PEM upload must be at most 100 KB');body[key]=file.size?await file.text():'';}
     const saved=await api('/tls/'+profile,'PUT',body);if(!form.isConnected)return;
-    state=saved;cfg.tls=saved;draw();toast('HTTPS profile applied. Certificate issuance may continue in the background.');
+    state=saved;draw();toast('HTTPS profile applied. Certificate issuance may continue in the background.');
    }catch(error){if(form.isConnected)toast(error.message);}finally{if(button.isConnected)button.disabled=false;if(selector.isConnected)selector.disabled=false;}
   };
   $('#modal').scrollTop=0;
  };
  $('#tls-profile').onchange=draw;draw();
 }
-document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset,revision=renderRevision;try{if(action==='retry-investigation'){b.disabled=true;try{const result=await api('/investigations/'+id+'/retry','POST');toast(result.detail);if(revision===renderRevision)await render();}finally{if(b.isConnected)b.disabled=false;}return;}if(action==='retriage-investigation')return requestInvestigationRetriage(id);if(action==='revoke-known-good')return requestKnownGoodRevocation(b.dataset.fingerprint,b.dataset.version,b.dataset.linked);if(action==='add')return addServer();if(action==='inspect')return inspect(id);if(['deploy','refresh'].includes(action)){await api(`/hosts/${id}/actions/${action}`,'POST');toast('Operation queued. See Activity for progress.');return;}if(action==='trust'){const approved=b.dataset.approved!=='true';modal(approved?'Approve known-good behavior':'Revoke behavior approval',`<p>${approved?'Record this exact behavior as reviewed and trusted? Its AI assessment alone is not proof of safety.':'This behavior will no longer be marked as trusted.'}</p><button class="primary" id="confirm-trust">${approved?'Approve behavior':'Revoke approval'}</button>`);const request=modalRequest();$('#confirm-trust').onclick=async event=>{const button=event.currentTarget;if(button.disabled)return;button.disabled=true;try{await api('/investigations/'+id,'PUT',{approved});request.close(approved?'Behavior approval saved':'Behavior approval revoked');if(request.sameSession()&&revision===renderRevision)await render();}catch(error){request.error(error);if(request.active())button.disabled=false;}};}}catch(e){toast(e.message);}});
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset,revision=renderRevision;try{if(action==='retry-investigation'){b.disabled=true;try{const result=await api('/investigations/'+id+'/retry','POST');toast(result.detail);if(revision===renderRevision)await render();}finally{if(b.isConnected)b.disabled=false;}return;}if(action==='retriage-investigation')return requestInvestigationRetriage(id);if(action==='revoke-known-good')return requestKnownGoodRevocation(b.dataset.fingerprint,b.dataset.version,b.dataset.linked);if(action==='add')return addServer();if(action==='inspect')return inspect(id);if(action==='refresh'){await api(`/hosts/${id}/actions/refresh`,'POST');toast('Operation queued. See Activity for progress.');return;}if(action==='trust'){const approved=b.dataset.approved!=='true';modal(approved?'Approve known-good behavior':'Revoke behavior approval',`<p>${approved?'Record this exact behavior as reviewed and trusted? Its AI assessment alone is not proof of safety.':'This behavior will no longer be marked as trusted.'}</p><button class="primary" id="confirm-trust">${approved?'Approve behavior':'Revoke approval'}</button>`);const request=modalRequest();$('#confirm-trust').onclick=async event=>{const button=event.currentTarget;if(button.disabled)return;button.disabled=true;try{await api('/investigations/'+id,'PUT',{approved});request.close(approved?'Behavior approval saved':'Behavior approval revoked');if(request.sameSession()&&revision===renderRevision)await render();}catch(error){request.error(error);if(request.active())button.disabled=false;}};}}catch(e){toast(e.message);}});
 $('#close-modal').onclick=()=>{modalRevision++;releaseRequest++;$('#modal').close();};$('#modal').addEventListener('cancel',()=>{modalRevision++;releaseRequest++;});$('#refresh-page').onclick=render;$('#logout').onclick=async()=>{try{await api('/logout','POST');showLogin();}catch(e){toast(e.message);}};$('#login-form').onsubmit=async e=>{e.preventDefault();try{const d=await api('/login','POST',{password:new FormData(e.target).get('password'),username:new FormData(e.target).get('username')||'admin',otp:new FormData(e.target).get('otp')||''});csrf=d.csrf;e.target.reset();showShell();await render();resumeEnrollment();}catch(e){$('#login-error').textContent=e.message;}};window.addEventListener('hashchange',()=>{modalRevision++;releaseRequest++;$('#modal').close();window.scrollTo(0,0);render();});(async()=>{try{csrf=(await api('/session')).csrf;showShell();await render();resumeEnrollment();}catch{showLogin();}})();
 
 setInterval(()=>{if(!$('#shell').classList.contains('hidden')&&!$('#modal').open&&!document.activeElement?.closest('#server-list-controls,#fleet-review-controls')&&document.visibilityState==='visible'&&(page==='overview'||(page==='servers'&&(!location.hash.startsWith('#servers/')||location.hash.endsWith('/overview')))))render();},30000);

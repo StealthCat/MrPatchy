@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.75 — 2026-11-01
+
+1. [PR #282](https://github.com/StealthCat/MrPatchy/pull/282): Remove the unused frontend configuration cache and unreferenced confirmation-free deploy-action branch. Share the existing HTML escape routine through PatchyUI, and reuse common page slicing, labels, buttons and pager bindings for Overview and Servers.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Existing enrollment confirmation, refresh actions, filter/reset behavior, 12/24-item page sizes, scrolling and escaping for current consumers are retained. This is preventive maintenance of existing UI behavior; the release-review polling improvements remain intact.
+
 ## 1.35.74 — 2026-11-01
 
 1. [PR #266](https://github.com/StealthCat/MrPatchy/pull/266): Update release-upgrade review status and progress in place during unchanged-state background polls, retaining open package/configuration details, scroll position and dialog messages. Reapply expanded-detail flags when a plan state transition rebuilds the review; add a browser regression covering polling and completion.
