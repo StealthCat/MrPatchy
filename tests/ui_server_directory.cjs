@@ -2,12 +2,14 @@ const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
  const now=Date.now()/1000;let writes=0;
  let rows=Array.from({length:29},(_,i)=>({id:'directory-'+i,name:'Node '+String(i+1).padStart(2,'0'),address:'192.0.2.'+(i+1),port:22,architecture:'amd64',package_manager:'apt',state:i===28?'disabled':'online',enabled:i!==28,last_seen:now,integrity:[],error:''}));
+ rows[1].address='2001:db8:85a3::8a2e:370:7334';rows[1].port=2222;
  rows[0].name='Node <img src=x onerror="window.__directoryInjected=true">';rows[0].error='Diagnostic <svg onload="window.__directoryInjected=true">';
  const handler=route=>{if(route.request().method()!=='GET')writes++;return route.fulfill({json:rows});};
  await page.route('**/api/hosts',handler);
  try{
   await page.goto(new URL('/#servers',page.url()).href);await page.locator('.server-directory-card').first().waitFor();
   assert.equal(await page.locator('.server-directory-card').count(),24);
+  assert.equal(await page.locator('.server-directory-card small').filter({hasText:'2001:db8'}).textContent(),'[2001:db8:85a3::8a2e:370:7334]:2222');
   assert.equal(await page.locator('#content img[src=x],#content svg[onload]').count(),0);
   assert.equal(await page.evaluate(()=>window.__directoryInjected),undefined);
   await page.locator('#server-list-next').click();assert.equal(await page.locator('.server-directory-card').count(),5);

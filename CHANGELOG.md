@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.52 — 2026-10-31
+
+1. [PR #228](https://github.com/StealthCat/MrPatchy/pull/228): render IPv6 server endpoints as [address]:port through one shared presentation helper in the server directory, enrollment verification, management dialog, workspace heading and system facts.
+2. Preserve hostname/IPv4 formatting and existing HTML escaping. Connection settings, request payloads, roles, audit and response authorization are unchanged; this is a display correction.
+3. Add a browser regression asserting a long IPv6 address with port 2222 renders with brackets in the server directory. Major remains 1.
+
 ## 1.35.51 — 2026-10-31
 
 1. [PR #225](https://github.com/StealthCat/MrPatchy/pull/225): reject explicit public-URL port 0, empty ports and out-of-range ports with a clear error before creating .env. Use HTTPS port 443 only when no port is supplied, avoiding silent fallback or a Python traceback.
