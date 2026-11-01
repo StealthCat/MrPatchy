@@ -5641,3 +5641,10 @@ This preserves the owner's corrected bebc0c9 handoff; legacy candidate versions
 are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
+
+## Password hashes and secret-key handling
+
+- Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
+- The Fernet instance is cached and reloaded only when `secret.key` changes (inode, size or mtime).
+- The OIDC flow-cookie secret is derived from `secret.key` with HKDF-SHA256 and a purpose label; the Fernet key material is not reused directly.
+- Threat model: `secret.key` lives on the same `/data` volume as the database. Encryption of stored secrets therefore only helps when the database is leaked without the volume (for example a database-only dump to MySQL). It does not protect against a compromise of the data volume.
