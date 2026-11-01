@@ -189,3 +189,36 @@ def test_staging_restore_revalidates_durable_coverage(recovery,tmp_path,monkeypa
     monkeypatch.setattr(recovery,'run',restore)
     with pytest.raises(ValueError,match='contents differ'):
         recovery.restore('latest',tmp_path/'staging')
+
+
+def test_activate_fills_preexisting_mounted_destinations(recovery,tmp_path,monkeypatch):
+    """Mount points cannot be removed; activation must fill them in place (#151)."""
+    data,others=deployment(tmp_path,ssh_dir=False)
+    recovery.backup(data,*others)
+    bundle,=recovery.bundles
+    target=tmp_path/'restored';target.mkdir()
+    mounts=[target/name for name in ('tls','caddy-data','caddy-config')]
+    for mount in mounts:mount.mkdir()
+    def busy(self):
+        if self in mounts:raise OSError(16,'Device or resource busy')
+        raise AssertionError('unexpected rmdir')
+    monkeypatch.setattr(Path,'rmdir',busy)
+    recovery.activate(bundle,target/'data',*mounts,uid=os.getuid())
+    for mount,name in zip(mounts,('tls','caddy-data','caddy-config')):
+        assert (mount/'fixture').read_text()==name
+    assert (target/'data'/'secret.key').is_file()
+
+
+def test_activate_checks_destinations_before_writing_data(recovery,tmp_path,monkeypatch):
+    data,others=deployment(tmp_path,ssh_dir=False)
+    recovery.backup(data,*others)
+    bundle,=recovery.bundles
+    target=tmp_path/'restored';target.mkdir()
+    real=recovery.tempfile.TemporaryFile
+    def probe(*args,**kwargs):
+        if Path(kwargs.get('dir','')).name=='tls':raise OSError(30,'Read-only file system')
+        return real(*args,**kwargs)
+    monkeypatch.setattr(recovery.tempfile,'TemporaryFile',probe)
+    with pytest.raises(ValueError,match='not writable'):
+        recovery.activate(bundle,target/'data',target/'tls',target/'caddy-data',target/'caddy-config',uid=os.getuid())
+    assert not any((target/'data').iterdir())  # Nothing written, so a rerun is still allowed.
