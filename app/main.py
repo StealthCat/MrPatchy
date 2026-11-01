@@ -925,7 +925,9 @@ def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(admin_
 @app.get('/api/investigation-status')
 def investigation_status(user=Depends(viewer_user)):
     with Session() as s:
-        return ai_runs.status(s)
+        full=ai_runs.status(s)
+    if user.get('role')=='admin': return full
+    return {k:full[k] for k in ('pending','oldest','enabled')}
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
