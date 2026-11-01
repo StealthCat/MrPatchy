@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.35.49 — 2026-10-31
+
+1. [PR #220](https://github.com/StealthCat/MrPatchy/pull/220): return verified cached artifact hashes after the shared collection deadline instead of marking later processes unverified solely because their hashes are already cached.
+2. Apply the initial time-budget guard inside the cache-miss branch before any data read, including empty files; retain per-chunk budgets and device/inode/mtime/ctime/size identity checks. Cover expired cached hits and empty/nonempty uncached misses with zero-read assertions.
+3. Deploy the updated target agent through the existing reviewed helper-maintenance workflow. No receipt-format, role, schema or response-authority change; major remains 1.
+
 ## 1.35.48 — 2026-10-31
 
 1. [PR #210](https://github.com/StealthCat/MrPatchy/pull/210): exclude soft-deleted server records from the Prometheus mrpatchy_hosts gauge by filtering deleted_at==0 in SQL.
