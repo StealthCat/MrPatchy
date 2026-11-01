@@ -141,3 +141,29 @@ def test_password_hashing_does_not_hold_the_login_lock(client, monkeypatch):
     login_attempts.clear()
     assert client.post('/api/login', json={'username': 'admin', 'password': PASSWORD}).status_code == 200
     assert held == [False]
+
+
+def test_failures_from_many_addresses_are_flagged_once_without_blocking(client):
+    from fastapi.testclient import TestClient
+    from app import main
+    login_attempts.clear()
+    main.login_account_failures.clear()
+    main.login_throttle_logged.clear()
+    for n in range(8):
+        with TestClient(main.app, client=('203.0.113.' + str(n + 1), 5000)) as other:
+            assert other.post('/api/login', json={'username': 'admin', 'password': 'bad'}).status_code == 401
+    [detail] = entries('login suspicious')  # once per window, however many further addresses fail
+    assert detail.startswith('admin ') and 'bad' not in detail
+    # A legitimate sign-in from an address that did not fail is still accepted.
+    with TestClient(main.app, client=('198.51.100.9', 5000)) as good:
+        assert good.post('/api/login', json={'password': PASSWORD}).status_code == 200
+    assert len(entries('login')) == 1
+
+
+def test_failures_from_one_address_are_not_flagged_as_suspicious(client):
+    from app import main
+    login_attempts.clear()
+    main.login_account_failures.clear()
+    for _ in range(6):
+        client.post('/api/login', json={'username': 'admin', 'password': 'bad'})
+    assert entries('login suspicious') == []
