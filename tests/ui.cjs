@@ -62,6 +62,7 @@ const assert=require('assert/strict');
     await page.getByRole('button',{name:'Repository access',exact:true}).click();
     assert.equal(await page.locator('#access-form [name=default_release]').inputValue(),'stable');
     await page.locator('#close-modal').click();
+    await require('./ui_modal_races.cjs')(page);
     // Reproduce a delayed A response arriving after switching the selector to B.
     const ids=await page.evaluate(async()=>{
       const session=await (await fetch('/api/session')).json();
@@ -150,6 +151,26 @@ const assert=require('assert/strict');
     await page.evaluate(({host,id})=>{reviewRelease(host,id);},{host:ids.a,id:slowId});
     await planStart;await page.locator('#close-modal').click();resolvePlan();await page.waitForTimeout(100);
     assert.equal(await page.locator('#modal').evaluate(node=>node.open),false);
+    // Background polling must not rebuild the dialog: open diffs, progress and messages survive,
+    // and a changed plan state rebuilds while keeping the open <details>.
+    {
+      const pollId='e'.repeat(36);let pollState='running',pollHits=0;
+      await page.route('**/api/jobs/poll-release-job',route=>route.fulfill({json:{state:'running',output:'tick '+pollHits}}));
+      await page.route('**/api/hosts/*/releases/'+pollId,route=>{pollHits++;return route.fulfill({json:{id:pollId,state:pollState,digest:newDigest,job_id:'poll-release-job',plan:{target:{distribution:'Debian',from_version:'12',version:'13'},edits:[{path:'/etc/poll.conf',diff:'+poll'}],authorization:'poll'}}});});
+      await page.evaluate(({host,id})=>reviewRelease(host,id),{host:ids.a,id:pollId});
+      await page.waitForFunction(()=>document.querySelector('#release-progress')?.textContent.startsWith('running'));
+      await page.locator('#modal-body details.source summary',{hasText:'/etc/poll.conf'}).click();
+      await page.evaluate(()=>{window.__releaseDialog=document.querySelector('#modal-body details.source');});
+      const hits=pollHits;
+      await page.waitForTimeout(5600);
+      assert.ok(pollHits>hits,'dialog should have polled');
+      assert.equal(await page.evaluate(()=>window.__releaseDialog===document.querySelector('#modal-body details.source')&&window.__releaseDialog.open),true);
+      pollState='complete';
+      await page.waitForTimeout(5600);
+      assert.equal(await page.locator('#modal-body .toolbar .badge').innerText(),'complete');
+      assert.equal(await page.locator('#modal-body details.source').first().evaluate(x=>x.open),true);
+      await page.locator('#close-modal').click();
+    }
     await require('./ui_review.cjs')(page,ids,capture);
     {
       // Illustrative fixture responses also exercise populated mobile tables in CI.
@@ -172,11 +193,13 @@ const assert=require('assert/strict');
     await capture('mobile');
     await page.setViewportSize({width:1440,height:1000});
     await require('./ui_fleet.cjs')(page,capture);
+    await require('./ui_rollout_toast.cjs')(page);
     await require('./ui_ai_costs.cjs')(page,capture);
     await require('./ui_ai_retry.cjs')(page,capture);
     await require('./ui_assessments.cjs')(page,capture);
     await require('./ui_workers.cjs')(page,capture);
     await require('./ui_activity_pages.cjs')(page,capture);
+    await require('./ui_response_cancellation.cjs')(page);
     await require('./ui_fleet_overview.cjs')(page,capture);
     await require('./ui_startup_pages.cjs')(page,capture);
     await require('./ui_server_directory.cjs')(page,capture);
