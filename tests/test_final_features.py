@@ -178,3 +178,40 @@ def test_sso_callback_state_is_consumed_once(client,monkeypatch):
     result=client.get('/auth/sso/callback',params={'state':state})
     assert result.status_code==400 and 'reused' in result.json()['detail']
     assert calls==['exchange']
+
+def sso_failure_setup(monkeypatch,validate,authorize):
+    import time
+    from app.security import token_hash
+    monkeypatch.setattr(sso,'issuer','https://issuer.example')
+    sso.failure_logged.clear()
+    monkeypatch.setattr(sso,'validate_provider',validate)
+    monkeypatch.setattr(sso,'oauth',SimpleNamespace(provider=SimpleNamespace(authorize_access_token=authorize)))
+    def state(name):
+        with Session() as session:
+            session.add(Setting(key='oidc-state:'+token_hash(name),value={'expires':time.time()+300}));session.commit()
+        return name
+    return state
+
+def sso_audits():
+    from sqlalchemy import select
+    from app.db import Audit
+    with Session() as s:return [a.detail for a in s.scalars(select(Audit).where(Audit.action=='SSO login failed'))]
+
+def test_sso_callback_failures_are_logged_and_audited(client,monkeypatch,caplog):
+    from fastapi import HTTPException
+    async def bad_discovery():raise HTTPException(400,'OIDC discovery issuer mismatch')
+    async def ok():return {}
+    async def unassigned(request):return {'userinfo':{'iss':sso.issuer,'sub':'secret-subject-value'}}
+    state=sso_failure_setup(monkeypatch,bad_discovery,unassigned)
+    with caplog.at_level('WARNING',logger='mrpatchy.sso'):
+        r=client.get('/auth/sso/callback',params={'state':state('s1')})
+    assert r.status_code==400 and r.json()['detail']=='SSO validation failed or account is not assigned'
+    assert 'discovery or endpoint validation failed' in caplog.text and 'HTTPException' in caplog.text
+    assert any('issuer https://issuer.example' in d and 'discovery' in d for d in sso_audits())
+    monkeypatch.setattr(sso,'validate_provider',ok)
+    for name in ('s2','s3'):
+        assert client.get('/auth/sso/callback',params={'state':state(name)}).status_code==400
+    details=sso_audits()
+    unassigned_rows=[d for d in details if 'no enabled account binding' in d]
+    assert len(unassigned_rows)==1  # repeat of the same reason+subject is rate limited
+    assert 'secret-subject-value' not in ' '.join(details)
