@@ -62,6 +62,7 @@ const assert=require('assert/strict');
     await page.getByRole('button',{name:'Repository access',exact:true}).click();
     assert.equal(await page.locator('#access-form [name=default_release]').inputValue(),'stable');
     await page.locator('#close-modal').click();
+    await require('./ui_modal_races.cjs')(page);
     // Reproduce a delayed A response arriving after switching the selector to B.
     const ids=await page.evaluate(async()=>{
       const session=await (await fetch('/api/session')).json();
@@ -177,6 +178,7 @@ const assert=require('assert/strict');
     await require('./ui_assessments.cjs')(page,capture);
     await require('./ui_workers.cjs')(page,capture);
     await require('./ui_activity_pages.cjs')(page,capture);
+    await require('./ui_response_cancellation.cjs')(page);
     await require('./ui_fleet_overview.cjs')(page,capture);
     await require('./ui_startup_pages.cjs')(page,capture);
     await require('./ui_server_directory.cjs')(page,capture);
