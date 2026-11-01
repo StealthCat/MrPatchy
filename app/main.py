@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.58'
+APP_VERSION='1.35.59'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -55,6 +55,8 @@ from .security import cipher
 from . import sso
 app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
+@app.exception_handler(host_lifecycle.Busy)
+async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=409)
 @app.exception_handler(ValueError)
 async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
 static=Path(__file__).parent/'static'
@@ -356,7 +358,8 @@ def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
         if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
-        try: ssh.call(h,{'action':'snapshot'},timeout=30)
+        try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
+        except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
@@ -903,7 +906,8 @@ def history(host_id:str,kind:str='inventory',offset:int=0,limit:int=50,user=Depe
 def repository_backups(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
-        try: return ssh.call(h,{'action':'backups'})
+        try: return ssh.call(h,{'action':'backups'},lifecycle_blocking=False)
+        except host_lifecycle.Busy:raise
         except Exception as e: raise HTTPException(502,str(e)[:1000])
 
 class RepositoryAccess(BaseModel):
@@ -1245,7 +1249,7 @@ class RecoveryPolicy(BaseModel):
 def recovery_policy(host_id:str,body:RecoveryPolicy,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
-        status=ssh.call(h,{'action':'recovery-status'})
+        status=ssh.call(h,{'action':'recovery-status'},lifecycle_blocking=False)
         if body.rollback and not status['rollback_adapter']:raise HTTPException(409,'Install and validate a root-owned rollback adapter on this target first')
         if body.reboot and not status['systemd']:raise HTTPException(409,'Automatic reboot requires systemd')
         s.merge(Setting(key='recovery:'+host_id,value=body.model_dump()));audit(s,'set recovery policy',host_id);s.commit()
@@ -1255,7 +1259,7 @@ class ObservabilityInput(BaseModel): ebpf:bool=False
 @app.put('/api/operations/{host_id}/observability')
 def observability(host_id:str,body:ObservabilityInput,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
-        h=host_or_404(s,host_id);result=ssh.call(h,{'action':'observability','ebpf':body.ebpf})
+        h=host_or_404(s,host_id);result=ssh.call(h,{'action':'observability','ebpf':body.ebpf},lifecycle_blocking=False)
         path='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
         baseline=dict(h.baseline)
         if body.ebpf:baseline[path]=hashlib.sha256(b'[Service]\nProtectSystem=false\nNoNewPrivileges=false\nRestrictAddressFamilies=AF_UNIX AF_NETLINK\n').hexdigest()
@@ -1279,7 +1283,7 @@ def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         job=s.get(Job,job_id);h=host_or_404(s,host_id)
         if job.state not in operations.QUARANTINE_STATES:raise HTTPException(409,'Only running or recovery-required jobs require reconciliation')
-        if not advisory and ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
+        if not advisory and ssh.call(h,{'action':'operation-status'},lifecycle_blocking=False).get('busy'):raise HTTPException(409,'Target operation is still running')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(worker.releases.ReleasePlan,job.payload.get('plan_id'))
             if plan:plan.state='interrupted'
