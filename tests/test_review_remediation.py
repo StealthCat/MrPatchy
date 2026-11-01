@@ -352,3 +352,18 @@ def test_cached_hash_is_returned_after_deadline(tmp_path):
                 agent.hash_artifact(target,{},deadline=agent.time.monotonic()-1)
         finally:agent.os.fdopen=real
         assert reads==[]
+
+
+def test_poll_ingests_each_event_batch_once(admin,tmp_path,monkeypatch):
+    monkeypatch.setattr(agent,'ROOT',tmp_path)
+    for _ in range(3):agent.spool([],time.time())
+    snapshot=agent.pending_events();acked=[];ingested=[]
+    real=worker.ingest_events
+    monkeypatch.setattr(worker,'ingest_events',lambda s,h,snap:ingested.append(1) or real(s,h,snap))
+    def call(h,request,**kw):
+        assert request['action']=='ack';acked.append(request['ids']);return agent.acknowledge(request['ids'])
+    monkeypatch.setattr(worker.ssh,'call',call)
+    with Session() as s:
+        ids=[event['id'] for event in snapshot['events']]
+        worker.drain_events(s,SimpleNamespace(id='once'),snapshot,ingested_ids=ids)
+    assert not ingested and acked==[ids]
