@@ -45,8 +45,13 @@ if not Path('.env').exists():
     parsed=urlsplit(url)
     if not re.fullmatch(r'https://[A-Za-z0-9.\-:\[\]]+/?',url) or parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ('','/') or parsed.query or parsed.fragment or any(c.isspace() for c in url):
         raise SystemExit('Provide --public-url with an HTTPS origin for a fresh install')
-    port=parsed.port or 443
+    try:port=parsed.port
+    except ValueError:raise SystemExit('Invalid public port')
+    if parsed.netloc.endswith(':'):raise SystemExit('Invalid public port')
+    if port is None:port=443
     if not 1<=port<=65535:raise SystemExit('Invalid public port')
+elif url:
+    print('Warning: existing .env kept; --public-url ignored.',file=sys.stderr)
 if credentials:
     directory=Path(credentials).resolve(strict=True)
     if directory.is_relative_to(Path.cwd()):raise SystemExit('Keep credential files outside the repository and Docker build context')
