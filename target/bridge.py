@@ -502,15 +502,7 @@ def handle(req):
         return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists() or (rpm_backend() and (ROOT/'rpm-reboot-required').is_file() and (ROOT/'rpm-reboot-required').read_text().strip()==boot_id()),
                 'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
     if action == 'agent-status':return agent_status()
-    if action == 'verify':
-        sys.path.insert(0,'/usr/local/lib/mrpatchy')
-        from agent import MANAGED,digest
-        files={}
-        optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
-        for path in MANAGED+([optional] if Path(optional).exists() else []):
-            info=Path(path).stat()
-            files[path]={'sha256':digest(path),'uid':info.st_uid,'gid':info.st_gid,'mode':info.st_mode & 0o7777}
-        return {'files':files,'active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
+    if action == 'verify':return agent_status()  # legacy alias; never stats or follows unchecked paths
     if action == 'deploy':
         code = base64.b64decode(req['agent'],validate=True)
         if len(code)>1_000_000 or hashlib.sha256(code).hexdigest()!=req['sha256']: raise ValueError('Invalid agent digest')
