@@ -110,11 +110,11 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
     if result.get('error'): raise RemoteFailure(result['error'])
     return result
 
-def call(host, payload, timeout=60, key_file=None):
+def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
     from . import host_lifecycle
     if not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
     kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
-    with host_lifecycle.activity([host.id],kind):
+    with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking):
         stage={'started':False}
         try:return _call(host,payload,timeout,key_file,stage)
         except Exception as error:
