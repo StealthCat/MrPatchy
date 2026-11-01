@@ -90,6 +90,10 @@ def acquire(owner=None):
                 recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
+            # Read-only gate: do not create runs/attempts for work that the shared
+            # rate gate, provider backoff or daily budget cannot admit right now.
+            from . import ai_admission,ai_budget,ai_provider_backoff
+            if any(gate.waiting(s,now) for gate in (ai_admission,ai_provider_backoff,ai_budget)):return None
             signature=ai_retry.configuration(s)
             # One process investigation per host preserves lifecycle/provider
             # serialization and prevents a noisy host occupying every slot.

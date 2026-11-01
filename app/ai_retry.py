@@ -7,7 +7,7 @@ import hashlib
 import json
 import random
 import time
-from sqlalchemy import String, Double, Integer, Text, and_, or_
+from sqlalchemy import String, Double, Integer, Text, and_, or_, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Behavior, Setting, config
 
@@ -58,6 +58,12 @@ def failed(s,row,error,now):
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
+        if error.retry_after:
+            # Stagger waiters so about one wakes per admission slot.
+            slot=s.scalar(select(func.count()).select_from(TriageRetry).where(TriageRetry.subject!=row.id,
+                TriageRetry.state=='deferred',TriageRetry.next_at>=retry.next_at)) or 0
+            cfg=config(s);rate=cfg['ai_rate_per_hour'] if cfg['ai_control_mode'] in ('rate','rate_and_daily') else 120
+            retry.next_at+=slot*3600.0/max(1,rate)
         retry.reason=('Waiting for shared AI rate eligibility; no provider request was sent.' if error.retry_after else
             'Waiting for AI policy resume; eligibility is rechecked before every provider call.')
     elif isinstance(error,AIError) and error.transient:

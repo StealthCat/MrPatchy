@@ -62,6 +62,13 @@ def admit(model):
             return {'mode':'rate','admitted':True,'next_at':row.next_at}
 
 
+def waiting(session,now):
+    """Read-only: the instant the shared rate gate reopens, or 0 when open."""
+    if config(session)['ai_control_mode'] not in ('rate','rate_and_daily'):return 0
+    row=session.get(Admission,'global')
+    return row.next_at if row and row.next_at>now else 0
+
+
 def status(session):
     settings=config(session);row=session.get(Admission,'global')
     return {'mode':settings['ai_control_mode'],'rate_per_hour':settings['ai_rate_per_hour'],
