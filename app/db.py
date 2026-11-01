@@ -12,6 +12,8 @@ engine = create_engine(URL, pool_pre_ping=True, **({'connect_args': {'check_same
 if URL.startswith('sqlite'):
     @event.listens_for(engine, 'connect')
     def sqlite_setup(conn, _):
+        from .sqlite_money import MoneySum
+        conn.create_aggregate('mrpatchy_money_sum', 1, MoneySum)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
 Session = sessionmaker(engine, expire_on_commit=False)

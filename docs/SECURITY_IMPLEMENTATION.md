@@ -74,6 +74,29 @@ The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
 
+### Bounded budget aggregation follow-up (#133, worker candidate)
+
+The follow-up to partial #273 replaces grouping by distinct receipt amount with
+at most five status buckets, including a conservative bucket for every unknown
+unreleased status. MySQL uses native DECIMAL summation. SQLite uses a registered
+bounded-memory integer nano-dollar aggregate, normalizing each value at the same
+nine-place precision as the previous SQLAlchemy Numeric reader and returning text
+to avoid an additional floating-point sum. This does not change SQLite's existing
+NUMERIC storage precision, ledger retention, admission locks or timezone membership.
+
+On a disposable SQLite database with 10,000 distinct settled receipts, five actual
+reserve() calls returned 10,000–10,001 aggregate rows on main versus 1–2 on the
+candidate. With tracemalloc enabled for both measurements, median held-lock time
+was 0.1497 seconds versus 0.0493 seconds; peak traced Python allocation was
+3,335,400 versus 157,231 bytes. These are local fixture measurements, not a fleet
+throughput or MySQL benchmark. Focused tests cover exact retained-money equivalence,
+unknown states, bounded result cardinality and parallel near-cap admission.
+
+Acceptance remains pending exact-head CI/MySQL validation and coordinator review.
+PR #240 separately owns timezone-window membership; integration must preserve its
+predicate correction and this aggregate without discarding either branch. The wider
+faster-triage program and its end-to-end acceptance gate remain unfinished.
+
 Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
 restoration now support protected files under `/srv` and `/opt`. Retained-response

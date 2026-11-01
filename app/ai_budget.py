@@ -57,13 +57,17 @@ def _state(session,cfg,now):
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
     groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
     if enabled:
-        # Group by status and per-row amount in SQL so the ledger is never loaded row by row;
-        # exact Decimal(amount)*count keeps the sums exact on SQLite and MySQL.
+        # At most five result rows, regardless of receipt amounts or unknown statuses.
+        # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
+        # MySQL performs the sum in native DECIMAL without a float intermediate.
         amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),else_=BudgetEntry.reservation_usd)
-        query=select(BudgetEntry.status,amount,func.count()).where(BudgetEntry.created>=start,BudgetEntry.created<reset,
-            BudgetEntry.status!='released').group_by(BudgetEntry.status,amount)
-        for key,value,count in session.execute(query):
-            total=Decimal(value or 0)*count;counted+=total
+        bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
+        total=(func.mrpatchy_money_sum(amount,type_=String) if session.get_bind().dialect.name=='sqlite'
+            else func.sum(amount,type_=Numeric(38,9)))
+        query=select(bucket,total).where(BudgetEntry.created>=start,BudgetEntry.created<reset,
+            BudgetEntry.status!='released').group_by(bucket)
+        for key,value in session.execute(query):
+            total=Decimal(value or 0);counted+=total
             if key in groups:groups[key]+=total
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
