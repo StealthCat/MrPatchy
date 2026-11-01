@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.59'
+APP_VERSION='1.35.60'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -169,6 +169,9 @@ class Login(BaseModel):
     password:str=Field(max_length=1024)
     otp:str=Field(default='',max_length=6)
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+LOGIN_BUCKET_LIMIT=10000
+# Verified when an account is missing or disabled so response time does not reveal which usernames exist.
+DUMMY_PASSWORD_HASH=password_hash('mrpatchy-timing-equaliser','00'*16)
 def audit_login_event(action,username,ip,reason):
     # Usernames are pattern-restricted by Login; never record the submitted password or OTP.
     with Session() as s:
@@ -187,20 +190,29 @@ def login(body:Login,request:Request,response:Response):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
         recent=login_attempts.get(bucket,[])
         ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
-        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000:
-            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit') if ip_attempts>=50 else ('global','global limit')
+        if len(recent)>=10 or ip_attempts>=50:
+            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit')
             # One audit entry per limit and window, so rejected requests cannot flood the log.
             throttled=reason if scope not in login_throttle_logged else ''
             login_throttle_logged.setdefault(scope,now)
-        else: login_attempts[bucket]=recent+[now]
+        else:
+            # Evict the buckets idle longest instead of rejecting every user at the cap.
+            if bucket not in login_attempts and len(login_attempts)>=LOGIN_BUCKET_LIMIT:
+                for key in sorted(login_attempts,key=lambda k:login_attempts[k][-1])[:len(login_attempts)-LOGIN_BUCKET_LIMIT+1]: del login_attempts[key]
+            login_attempts[bucket]=recent+[now]
     if throttled is not None:
         if throttled: audit_login_event('login throttled',body.username,ip,throttled)
         raise HTTPException(429,'Too many attempts. Try again in five minutes.')
     failure=None
+    # Hash outside login_lock so password guesses cannot serialize other sign-ins. Always hash, even for missing accounts.
+    with Session() as s:
+        identity=s.get(User,body.username)
+        stored=identity.password if identity and identity.enabled else None
+    password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
     with login_lock, Session() as s:
         identity=s.get(User,body.username)
-        if not identity or not identity.enabled: failure='unknown or disabled account'
-        elif not verify(body.password,identity.password): failure='bad password'
+        if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
+        elif not password_ok or identity.password!=stored: failure='bad password'
         elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
         else:
             token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
