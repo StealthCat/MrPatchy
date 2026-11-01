@@ -5,7 +5,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, select
+from sqlalchemy import String, Text, Double, Numeric, and_, case, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -52,20 +52,21 @@ def _money(value):
     return rendered if rendered and rendered!='-0' else '0'
 
 
-def _amount(row):
-    if row.status=='released':return Decimal(0)
-    if row.status=='settled' and row.actual_usd is not None:return Decimal(row.actual_usd)
-    return Decimal(row.reservation_usd)
-
-
 def _state(session,cfg,now):
     mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
-    rows=list(session.scalars(select(BudgetEntry).where(BudgetEntry.created>=start,BudgetEntry.created<reset))) if enabled else []
-    groups={key:sum((_amount(row) for row in rows if row.status==key),Decimal(0)) for key in ('reserved','sent','settled','uncertain')}
+    groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')}
+    if enabled:
+        # Group by status and per-row amount in SQL so the ledger is never loaded row by row;
+        # exact Decimal(amount)*count keeps the sums exact on SQLite and MySQL.
+        amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),else_=BudgetEntry.reservation_usd)
+        query=select(BudgetEntry.status,amount,func.count()).where(BudgetEntry.created>=start,BudgetEntry.created<reset,
+            BudgetEntry.status!='released').group_by(BudgetEntry.status,amount)
+        for key,value,count in session.execute(query):
+            if key in groups:groups[key]+=Decimal(value or 0)*count
     # Settled rows count actual cost; sent/reserved/uncertain count their safe ceiling.
-    counted=sum((_amount(row) for row in rows),Decimal(0));cap=Decimal(str(cfg['ai_daily_cap_usd']))
-    return enabled,name,start,reset,rows,groups,counted,cap
+    counted=sum(groups.values(),Decimal(0));cap=Decimal(str(cfg['ai_daily_cap_usd']))
+    return enabled,name,start,reset,groups,counted,cap
 
 
 def reserve(payload):
@@ -78,7 +79,7 @@ def reserve(payload):
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
-            now=time.time();enabled,name,start,reset,rows,groups,counted,cap=_state(session,cfg,now)
+            now=time.time();enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
             amount=quote['amount_usd']
             if counted+amount>cap:
                 raise AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
@@ -137,12 +138,10 @@ def mark_uncertain(identifier,reason):
 
 def status(session,now=None):
     now=time.time() if now is None else now;cfg=config(session)
-    enabled,name,start,reset,rows,groups,counted,cap=_state(session,cfg,now)
+    enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
-    uncertain=sum((_amount(row) for row in rows if row.status in ('sent','uncertain')),Decimal(0))
-    reserved=sum((_amount(row) for row in rows if row.status=='reserved'),Decimal(0))
-    settled=sum((_amount(row) for row in rows if row.status=='settled'),Decimal(0))
+    uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
         'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),

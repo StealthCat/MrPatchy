@@ -124,3 +124,35 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
     assert state['ai_budget']['timezone']=='America/New_York'
     body['ai_budget_timezone']='Not/A_Zone'
     assert admin.put('/api/settings/ai',json=body).status_code==400
+
+
+def test_status_totals_use_sql_aggregates_without_loading_ledger(admin):
+    import time
+    from sqlalchemy import event
+    configure(mode='daily_cap', cap=Decimal('100'))
+    now=time.time()
+    def entry(i,status,reserve,actual=None):
+        return ai_budget.BudgetEntry(id=f'00000000-0000-0000-0000-{i:012d}',created=now,updated=now,reset_at=now+3600,
+            timezone='UTC',model='m',status=status,reservation_usd=Decimal(reserve),actual_usd=actual,
+            pricing_version='v',pricing_source='s')
+    rows=[entry(i,'settled','0.1',Decimal('0.000000003')) for i in range(300)]
+    rows+=[entry(1000+i,'reserved','0.002') for i in range(200)]
+    rows+=[entry(2000+i,'sent','0.003') for i in range(50)]
+    rows+=[entry(3000+i,'uncertain','0.004') for i in range(50)]
+    rows+=[entry(4000+i,'released','5') for i in range(100)]
+    with Session() as session:
+        session.add_all(rows);session.commit()
+    loaded=[]
+    def on_load(*args):loaded.append(1)
+    event.listen(ai_budget.BudgetEntry,'load',on_load)
+    try:
+        with Session() as session:
+            result=ai_budget.status(session,now)
+    finally:
+        event.remove(ai_budget.BudgetEntry,'load',on_load)
+    assert not loaded
+    assert result['settled_usd']=='0.0000009'
+    assert result['reserved_usd']=='0.4'
+    assert result['uncertain_usd']=='0.35'
+    assert result['counted_usd']=='0.7500009'
+    assert result['remaining_usd']=='99.2499991'
