@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_
+from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_, or_, case
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -264,8 +264,21 @@ def status(s):
     from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,ai_provider_backoff,worker_registry
     from .update_scores import UpdateScore
     now=time.time(); cfg=config(s)
-    query=select(Behavior.attempted,Behavior.first_seen,Behavior.host_id,ai_retry.TriageRetry).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
-    rows=list(s.execute(query)); recent=list(s.scalars(select(Behavior.attempted).where(Behavior.attempted>now-3600)))
+    signature=ai_retry.configuration(s)
+    TR=ai_retry.TriageRetry
+    pending_where=(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
+    unpaused=Behavior.host_id.not_in(ai_policy.paused_ids())
+    base=select(func.count()).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id).where(*pending_where)
+    ready_sql=ai_retry.eligible(signature,now)
+    blocked_sql=and_(TR.subject.is_not(None),or_(TR.state=='blocked',and_(TR.state=='interrupted',TR.attempts>=ai_retry.MAX_ATTEMPTS)),~ready_sql)
+    wake=case((TR.subject.is_(None),Behavior.attempted+3600),(TR.next_at!=0,TR.next_at),else_=TR.provider_until)
+    pending_count,oldest=s.execute(select(func.count(),func.min(Behavior.first_seen)).where(*pending_where)).one()
+    unpaused_count=s.scalar(base.where(unpaused))
+    ready=s.scalar(base.where(unpaused,ready_sql))
+    blocked=s.scalar(base.where(unpaused,blocked_sql))
+    paused=pending_count-unpaused_count
+    retry=s.scalar(select(func.min(wake)).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id).where(*pending_where,unpaused,~blocked_sql,wake>now))
+    recent_count,recent_min=s.execute(select(func.count(),func.min(Behavior.attempted)).where(Behavior.attempted>now-3600)).one()
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
     running=s.scalar(select(AIRun).where(AIRun.purpose=='triage',AIRun.state=='running').order_by(AIRun.started.desc()).limit(1))
     active_count=s.scalar(select(func.count()).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now))
@@ -273,13 +286,8 @@ def status(s):
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
     latest=s.scalar(select(AIRun).where(AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1))
     run_count=s.scalar(select(func.count()).select_from(AIRun).where(AIRun.purpose=='triage',AIRun.started>now-3600))
-    used=max(len(recent),run_count)
+    used=max(recent_count,run_count)
     oldest_run=s.scalar(select(func.min(AIRun.started)).where(AIRun.purpose=='triage',AIRun.started>now-3600))
-    paused_ids=set(s.scalars(ai_policy.paused_ids()));signature=ai_retry.configuration(s)
-    states=[ai_retry.summary(r.TriageRetry,signature,now,r.attempted) for r in rows if r.host_id not in paused_ids]
-    ready=sum(r['state']=='ready' for r in states)
-    blocked=sum(r['state']=='blocked' for r in states);paused=len(rows)-len(states)
-    retry=min((r['next_at'] for r in states if r['state']!='blocked' and r['next_at']>now),default=None)
     admission=ai_admission.status(s)
     budget=ai_budget.status(s,now)
     provider_backoff=ai_provider_backoff.status(s,now)
@@ -289,11 +297,10 @@ def status(s):
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
     scoring_deferred=s.scalar(select(func.count()).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
     scoring_next=s.scalar(select(func.min(UpdateScore.next_at)).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
-    plan_rows=list(s.scalars(select(Job).where(Job.action.in_(('security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()))))
-    plan_rows=[row for row in plan_rows if row.payload.get('_ai_deferred') is True]
-    plan_deferred=len(plan_rows)
-    plan_next=min((row.next_at for row in plan_rows if row.next_at>now),default=None)
-    plan_ready=sum(row.next_at<=now and row.host_id not in paused_ids for row in plan_rows)
+    plan_where=(Job.action.in_(('security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
+        Job.payload['_ai_deferred'].as_boolean()==True)
+    plan_deferred,plan_next=s.execute(select(func.count(),func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where)).one()
+    plan_ready=s.scalar(select(func.count()).where(*plan_where,Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids())))
     if scoring_next and scoring_next>now:retry=min([value for value in (retry,scoring_next) if value is not None])
     if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
     if provider_backoff['blocked']:
@@ -305,22 +312,22 @@ def status(s):
     elif not seen or now-seen>90: reason='worker_unavailable'; message='No recent scheduler heartbeat. Check app/worker container logs and DISABLE_SCHEDULER.'
     elif running: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running.stage
     elif provider_backoff['blocked']:reason='backoff';message='Shared provider backoff is waiting for retry eligibility after a transient failure.'
-    elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min(recent+([oldest_run] if oldest_run else []))+3600
+    elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min([v for v in (recent_min,oldest_run) if v is not None])+3600
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
     elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
-    elif not rows and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
-    elif not rows and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
-    elif not rows and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
-    elif not rows and scoring_deferred and scoring_next>now:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
-    elif not rows and scoring_deferred:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
-    elif not rows: reason='idle'; message='No unapproved pending behaviors. Collectors must report observations before triage can run.'
+    elif not pending_count and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
+    elif not pending_count and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
+    elif not pending_count and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
+    elif not pending_count and scoring_deferred and scoring_next>now:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
+    elif not pending_count and scoring_deferred:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
+    elif not pending_count: reason='idle'; message='No unapproved pending behaviors. Collectors must report observations before triage can run.'
     elif not ready and retry: reason='backoff'; message='Transient or interrupted investigations are waiting for retry eligibility. Configuration failures require review.'
     elif not ready: reason='blocked'; message='Investigations need configuration review, explicit retry or server AI resume. No automatic call is eligible.'
     else: reason='ready'; message='Pending behaviors are eligible; waiting for the next AI worker slot.'
-    return {'pending':len(rows),'oldest':min((r.first_seen for r in rows),default=None),'hourly_limit':cfg['ai_hourly_limit'],
+    return {'pending':pending_count,'oldest':oldest,'hourly_limit':cfg['ai_hourly_limit'],
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
-            'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
+            'active':active_count,'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,

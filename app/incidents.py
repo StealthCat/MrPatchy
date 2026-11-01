@@ -5,7 +5,7 @@ import json
 import math
 import time
 import uuid
-from sqlalchemy import String, JSON, Double, Text, select
+from sqlalchemy import String, JSON, Double, Text, select, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Setting, audit
 
@@ -222,8 +222,8 @@ def auto_plan_tick(now=None):
         with Session() as s:
             cfg=config(s)
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not s.get(Setting,'openai_key'):return
-            recent=list(s.scalars(select(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600)))
-            remaining=10-len(recent) if cfg['ai_control_mode']=='legacy' else 10
+            recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
+            remaining=10-recent if cfg['ai_control_mode']=='legacy' else 10
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
             from . import ai_policy
