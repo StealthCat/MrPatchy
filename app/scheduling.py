@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import String, JSON, Double, Integer, select, update, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, load_only
 from .db import Base, Session, Host, Package, Job, config, audit
 from .coordination import Lock
 from . import operations
@@ -110,6 +110,27 @@ def hosts_for(s, policy):
     return list(s.scalars(query))
 
 
+def tick_hosts(s, policy):
+    # The scheduler tick only reads these columns; skip the inventory/telemetry/baseline JSON blobs.
+    query = select(Host).options(load_only(Host.id, Host.state, Host.last_seen, Host.integrity)).where(
+        Host.enabled==True, Host.deleted_at==0).order_by(Host.name, Host.id)
+    if not policy['all_hosts']: query = query.where(Host.id.in_(policy['host_ids']))
+    return list(s.scalars(query))
+
+
+def candidate_packages(s, host_ids, policy):
+    """Outstanding candidates for many hosts in one query, grouped by host id (same filters as candidates())."""
+    wanted = [p for p in ('critical', 'high') if policy[p]['enabled']]
+    grouped = {host_id: [] for host_id in host_ids}
+    if not wanted or not host_ids: return grouped
+    priorities = set(wanted)
+    for start in range(0, len(host_ids), 500):
+        rows = s.scalars(select(Package).where(Package.host_id.in_(host_ids[start:start+500]), Package.candidate != '',
+                                               Package.held == False, Package.priority.in_(priorities)).order_by(Package.name))
+        for row in rows: grouped[row.host_id].append(row)
+    return grouped
+
+
 def serialize(row):
     return {'id': row.id, 'revision': row.revision, 'updated': row.updated, **row.policy}
 
@@ -142,10 +163,12 @@ def cancel_pending(s, schedule_id, reason):
         if not job or job.state != 'running': run.state = 'cancelled'; run.detail = reason
 
 
-def candidates(s, host_id, policy, trigger, now):
+def candidates(s, host_id, policy, trigger, now, preloaded=None):
     priorities = policy['priorities'] if trigger == 'regular' else [trigger]
-    rows = s.scalars(select(Package).where(Package.host_id == host_id, Package.candidate != '',
-                                         Package.held == False, Package.priority.in_(priorities)).order_by(Package.name))
+    if preloaded is not None: rows = [p for p in preloaded if p.priority in priorities]
+    else:
+        rows = s.scalars(select(Package).where(Package.host_id == host_id, Package.candidate != '',
+                                             Package.held == False, Package.priority.in_(priorities)).order_by(Package.name))
     return [p for p in rows if p.dpkg_state.endswith(' installed') and (trigger == 'regular' or
             p.available_since > 0 and now >= p.available_since + policy[trigger]['after_minutes']*60)]
 
@@ -261,12 +284,14 @@ def tick(now=None):
             for schedule in s.scalars(select(PatchSchedule)):
                 policy = schedule.policy
                 if not policy['enabled']: continue
-                for host in hosts_for(s, policy):
+                targets = tick_hosts(s, policy)
+                pending = candidate_packages(s, [h.id for h in targets], policy)
+                for host in targets:
                     for due in occurrences(policy, max(schedule.updated, now-policy['window_minutes']*60), now+0.001):
                         add_run(s, schedule, host, 'regular', due, str(int(due)))
                     for priority in ('critical', 'high'):
                         if not policy[priority]['enabled']: continue
-                        packages = candidates(s, host.id, policy, priority, now)
+                        packages = candidates(s, host.id, policy, priority, now, pending[host.id])
                         if packages:
                             key = json.dumps([(p.name, p.candidate, p.available_since) for p in packages])
                             ready = (host.state == 'online' and now-host.last_seen <= 120 and not host.integrity and

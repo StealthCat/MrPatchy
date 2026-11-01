@@ -114,8 +114,9 @@ def update_repos(s,h):
         else:
             save_inventory(s,h,inv);s.commit()
     packages,output=package_backend.refresh(h.id,inv,repository_access(s,h.id))
+    known={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     for item in packages:
-        p=s.get(Package,h.id+':'+item['name'])
+        p=known.get(item['name'])
         if not p: continue
         # Superseding a still-outstanding update must not postpone its deadline.
         if not item['candidate']: p.available_since=0
