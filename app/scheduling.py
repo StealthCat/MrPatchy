@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import String, JSON, Double, Integer, select, update, func
 from sqlalchemy.orm import Mapped, mapped_column
-from .db import Base, Session, Host, Package, Job, config, audit
+from .db import Base, Session, Host, Package, Job, audit
 from .coordination import Lock
 from . import operations
 

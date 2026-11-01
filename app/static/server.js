@@ -480,7 +480,7 @@ async function editHostLifecycle(host,deleting=false){
  const revision=modalRevision,form=$('#host-lifecycle-form');form.onsubmit=async event=>{event.preventDefault();if(deleting&&form.elements.confirmation.value!==host.name){toast('Type the server name exactly.');return;}const save=form.querySelector('button');save.disabled=true;try{
   const body={expected_revision:host.lifecycle_revision||'',reason:form.elements.reason.value};if(deleting)body.confirmation=form.elements.confirmation.value;else body.enabled=host.enabled===false;
   const data=await api('/hosts/'+host.id+(deleting?'':'/lifecycle'),deleting?'DELETE':'PUT',body);
-  if(revision!==modalRevision)return;$('#modal').close();if(deleting){location.hash='#servers';await render();toast('Server deleted from management. Retained history is available under Deleted servers.');}else{await render();toast(action==='Disable'?'Server disabled. '+data.cancelled_jobs+' queued job(s) cancelled.':'Server enabled. Fresh polling will resume.');}
+  if(revision!==modalRevision)return;$('#modal').close();if(deleting){await navigateWithToast('#servers','Server deleted from management. Retained history is available under Deleted servers.');}else{await render();toast(action==='Disable'?'Server disabled. '+data.cancelled_jobs+' queued job(s) cancelled.':'Server enabled. Fresh polling will resume.');}
  }catch(error){if(revision===modalRevision)toast(error.message);}finally{if(save.isConnected)save.disabled=false;}};
 }
 

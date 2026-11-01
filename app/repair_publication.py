@@ -3,7 +3,7 @@ import time
 import uuid
 from sqlalchemy import String,Double,Boolean,JSON,Text,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from .db import Base,Job,audit
+from .db import Base,audit
 from . import incidents,quarantine,repair_staging,repair_preparation,vendor,ssh,operations
 
 ACTIONS=('trusted-repair-publish','trusted-repair-publish-status')
