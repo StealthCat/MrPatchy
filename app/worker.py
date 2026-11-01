@@ -1,6 +1,7 @@
 import concurrent.futures
 import copy
 import hashlib
+import importlib
 import json
 import logging
 import threading
@@ -417,6 +418,9 @@ def execute_locked(job_id):
         if claimed!=1:return
         s.refresh(job)
         h=s.get(Host,job.host_id);protected=job.action=='release-upgrade';result={}
+        # Ordinary patch progress: None before the package request is sent,
+        # then 'sent', 'received' (target receipt) and 'observed' (inventory).
+        patch_stage=None;patch_receipt=None
         try:
             if not h: raise ValueError('Host no longer exists')
             health=s.get(Setting,'agent-status:'+h.id)
@@ -577,12 +581,16 @@ def execute_locked(job_id):
                         job.payload={**job.payload,'_patch_original':original};s.commit()
                         request['original']=original
                     request.update(action='protected-patch',job_id=job.id,policy=policy)
+                ordinary_patch=job.action=='patch' and not protected
+                if ordinary_patch:patch_stage='sent'
                 result=ssh.call(h,request,timeout=7500 if protected else 3700)
                 if protected:result=finish_recovery(s,h,job,result,policy)
                 job.output=json.dumps(result)
+                if ordinary_patch:patch_stage='received';patch_receipt=job.output
                 token=package_history.operation.set({'job_id':job.id,'actor':job.payload.get('_actor','system')})
                 try:save_inventory(s,h,ssh.call(h,{'action':'inventory'}));h.last_repo=0;s.commit()
                 finally:package_history.operation.reset(token)
+                if ordinary_patch:patch_stage='observed'
                 if job.action=='patch' and '_depends_on' in job.payload:
                     health=ssh.call(h,{'action':'health'})
                     comparison=operations.patch_health_comparison(health_before,health)
@@ -605,7 +613,8 @@ def execute_locked(job_id):
                 job.output=('AI planning remains queued until '+('the saved shared eligibility time.' if eligible else 'AI is resumed for this server and globally.'))
                 audit(s,'deferred '+job.action,job.host_id+' controlled AI wait')
                 s.commit();return
-            job.state='recovery_required' if protected else 'failed'
+            uncertain=patch_outcome_uncertain(patch_stage,e)
+            job.state='recovery_required' if protected or uncertain else 'failed'
             if job.action in ('security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
@@ -636,12 +645,26 @@ def execute_locked(job_id):
                 plan=s.get(releases.ReleasePlan,job.payload['plan_id'])
                 if plan:plan.state=job.state;plan.error=str(e)[:1000]
             receipt=job.output if protected or job.action=='agent-update' else ''
+            if patch_receipt is not None:receipt='Patch receipt: '+patch_receipt
+            if uncertain:
+                receipt=('Package changes may have been applied: '+('the target returned a patch receipt, but the post-patch inventory could not be read.' if patch_stage=='received' else 'the patch request was sent without a trustworthy completion receipt.')
+                    +' Server changes are paused and the patch will not be replayed automatically. Verify installed package state on the target, then review this operation in Activity.\n'+receipt)
             job.output=(str(e)+'\n'+receipt).encode()[:48000].decode(errors='ignore')
             if h:
                 h.error=str(e)[:4000]
                 if job.action=='refresh': h.repo_error=str(e)[:16000]
-            audit(s,'failed '+job.action,str(e)[:4000])
+            audit(s,('uncertain ' if uncertain else 'failed ')+job.action,(job.id+' ' if uncertain else '')+str(e)[:4000])
         s.commit()
+
+def patch_outcome_uncertain(stage,error):
+    """Whether an ordinary patch failure may have left package changes behind.
+
+    Pre-send failures and errors raised before the remote command started are
+    known-unstarted. A structured target failure receipt is a verified remote
+    failure. Lost/invalid receipts and a missing post-patch inventory are not."""
+    if stage=='received':return True
+    if stage!='sent':return False
+    return not (ssh.request_unstarted(error) or isinstance(error,ssh.RemoteFailure))
 
 def validate_patch(s,h,specs):
     cfg=config(s)
@@ -761,13 +784,35 @@ def loop(role="embedded"):
             _loop(reporter)
     finally:ai.transport.close()
 
+def periodic_ticks(now,state):
+    """Isolate independent leader producers; retry failures without a hot loop."""
+    from .worker_registry import IdentityLost
+    callbacks=(('patch schedules','scheduling','tick'),('scanner schedules','incidents','schedule_tick'),
+               ('startup schedules','persistence','schedule_tick'),('incident AI plans','incidents','auto_plan_tick'),
+               ('response monitoring','response_monitor','schedule_tick'),('service monitoring','service_monitor','schedule_tick'),
+               ('execution scans','execution_scans','schedule_tick'))
+    for name,module,attribute in callbacks:
+        due,failures=state.get(name,(0,0))
+        if now<due:continue
+        try:
+            callback=getattr(importlib.import_module('.'+module,__package__),attribute)
+            callback(now)
+        except IdentityLost:raise  # Control-plane identity loss must still stop admission.
+        except Exception:
+            failures=min(failures+1,5)
+            delay=min(300,30*2**(failures-1))
+            state[name]=(now+delay,failures)
+            log.exception('Periodic %s tick failed; retry in %ss',name,delay)
+        else:state[name]=(now+30,0)
+
+
 def _loop(reporter):
     from .worker_registry import IdentityLost,capacities
     capacity=getattr(reporter,'capacity',None) or capacities()
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; last_schedule=0; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
+        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
@@ -806,13 +851,7 @@ def _loop(reporter):
                     ai_transport.close(wait=False)
                     continue
                 busy_hosts={host_id for _,host_id in active_jobs.values()}
-                if is_leader and now-last_schedule>=30:
-                    scheduling.tick(now); incidents.schedule_tick(now);
-                    from .persistence import schedule_tick as persistence_tick
-                    from .response_monitor import schedule_tick as response_tick
-                    from .service_monitor import schedule_tick as service_tick
-                    from .execution_scans import schedule_tick as execution_tick
-                    persistence_tick(now); incidents.auto_plan_tick(now);response_tick(now);service_tick(now);execution_tick(now); last_schedule=now
+                if is_leader:periodic_ticks(now,tick_state)
                 with Session() as s:
                     busy_hosts.update(s.scalars(select(Job.host_id).where(Job.state.in_(operations.QUARANTINE_STATES))))
                     if is_leader and now-last_poll>=30:
