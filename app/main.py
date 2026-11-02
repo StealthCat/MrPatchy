@@ -1129,7 +1129,8 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
         worker.validate_patch(s,h,specs)
         if package_backend.is_rpm(h.inventory):
             return {'plan':'Reviewed RPM candidates:\n'+'\n'.join(specs),'packages':specs,'warning':'Candidate review only. Native DNF resolves dependencies and verifies signatures on the target before installation; removals and downgrades are prohibited.'}
-        cfgfile=apt.DATA/'apt'/host_id/'apt.conf'
+        # Use the persisted identity: the URL text may differ (e.g. case-insensitive collation) and must never reach a filesystem path.
+        cfgfile=apt.DATA/'apt'/h.id/'apt.conf'
         if not cfgfile.exists():raise HTTPException(409,'Refresh repositories first')
         result=apt.run(cfgfile,['apt-get','--simulate','--no-remove','--only-upgrade','install','--',*specs])
         return {'plan':result[-48000:],'packages':specs,'warning':'Central simulation; target and repositories are revalidated at execution.'}
