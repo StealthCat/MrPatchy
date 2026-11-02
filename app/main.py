@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.104'
+APP_VERSION='1.35.105'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -523,7 +523,7 @@ def repositories(host_id:str,user=Depends(admin_user)):
                 active=package_backend.sources(content,path,h.inventory,access)
                 state='disabled' if not active else ('check_failed' if h.repo_error else ('checked' if h.last_repo else 'unverified'))
                 detail='Central package metadata check includes this source' if active else 'No active repositories'
-            except ValueError as e: state='blocked';detail=str(e)
+            except ValueError as e: state='blocked';detail=package_backend.source_rejection(e)
             health.append({'path':path,'state':state,'detail':detail})
         return {'package_manager':h.inventory.get('package_manager','apt'),'editable_paths':[path for path in h.inventory.get('files',{}) if package_backend.source_path(path,h.inventory)],'files':h.inventory.get('files',{}),'keys':list(h.inventory.get('keys',{})),'last_checked':h.last_repo,'error':h.repo_error,'health':health}
 class RepoInput(BaseModel):

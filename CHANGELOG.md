@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.105 — 2026-11-02
+
+1. [PR #317](https://github.com/StealthCat/MrPatchy/pull/317): Expose only explicitly controlled, bounded diagnostics from repository health and AI connection/model-discovery failures. Give APT and RPM repository validators dedicated controlled exception types, retain actionable intentional validation messages, and replace arbitrary plain, subclass or library exception text with fixed public fallbacks; persist only the explicit AIError diagnostic. Compatibility: API shapes and successful behavior are unchanged, while unexpected failure details are intentionally less specific. No schema, role, provider request, package action or runtime-response authorization change. Completes #309's reported exception-text exposure; successful changed-code scanning does not establish complete repository-wide live-alert closure.
+
 ## 1.35.104 — 2026-11-02
 
 1. [PR #315](https://github.com/StealthCat/MrPatchy/pull/315): Build the central APT patch-preview configuration path from the persisted server identity rather than request-path text, so case-insensitive Host and Package lookups use the repository configuration that refresh actually saved. Add regressions for missing configuration, the exact simulation command, unknown servers and differently cased request/stored identities. Compatibility: matching-case requests are unchanged; differently cased requests now use the canonical stored directory. No schema, API, role, package-selection, target command or runtime-response authorization change. Completes #310's reported path construction defect; successful changed-code scanning does not establish complete repository-wide live-alert closure.
