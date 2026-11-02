@@ -4,7 +4,7 @@ import uuid
 from sqlalchemy import String,Double,Boolean,JSON,Text
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
-from . import quarantine,response_processes,incidents,ssh
+from . import quarantine,response_processes,incidents,ssh,response_rejection
 
 ACTIONS=('process-prepare','process-suspend','process-status','process-resume')
 RECOVERY_ACTIONS=('process-suspend','process-status','process-resume')
@@ -85,12 +85,8 @@ def validate_receipt(receipt,row):
 
 
 def reject_unstarted(s,job):
-    row=s.get(ProcessResponse,job.payload.get('process_id'))
-    if row and row.host_id==job.host_id and row.state in ('queued','resume_queued'):
-        approval=s.get(Approval,row.approval_id)
-        row.state='rejected' if row.state=='queued' else (approval.before_state if approval else 'uncertain')
-        row.hold=approval.before_hold if approval else True
-        event(s,row,'rejected',job.payload.get('_actor','system'),{'job_id':job.id})
+    response_rejection.reject_unstarted(s,job,model=ProcessResponse,approval_model=Approval,
+        payload_key='process_id',recovery_state='resume_queued',event=event,actor_from_approval=False)
 
 
 def execute(s,host,job):
