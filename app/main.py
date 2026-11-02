@@ -19,7 +19,7 @@ from .db import Session, Host, Package, Behavior, Job, Setting, Audit, Inventory
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections,host_lifecycle
+from . import operations, incidents, connections,host_lifecycle, os_upgrade
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -245,7 +245,7 @@ def dashboard(user=Depends(viewer_user)):
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
-    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name))]
+    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt'),'os_upgrade':os_upgrade.status(h)} for h in s.scalars(select(Host).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name))]
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
@@ -307,7 +307,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
         behaviors=list(s.execute(select(Behavior.verdict,Behavior.approved).where(Behavior.host_id==host_id)))
         jobs=dict(s.execute(select(Job.state,func.count()).where(Job.host_id==host_id).group_by(Job.state)).all())
         last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='patch').order_by(Job.created.desc(),Job.id).limit(1))
-        return {'host':object_dict(h,('inventory','telemetry','baseline')),
+        return {'host':object_dict(h,('inventory','telemetry','baseline'))|{'os_upgrade':os_upgrade.status(h)},
                 'system':{k:h.inventory.get(k) for k in ('os','architecture','foreign_architectures','package_manager','machine_id','collected')},
                 'collector':{'collected':h.telemetry.get('collected'), 'hashed_at':h.telemetry.get('hashed_at'),
                              'processes':len(h.telemetry.get('processes',[])), 'managed_files':len(h.telemetry.get('managed',{}))},

@@ -42,5 +42,7 @@ window.PatchyUI=(()=>{
  document.querySelectorAll('[data-icon]').forEach(node=>node.innerHTML=icon(node.dataset.icon));
  document.querySelectorAll('[data-mascot-portrait]').forEach(node=>node.innerHTML=portrait());
  const endpoint=(address,port)=>{const a=String(address??'');return (a.includes(':')&&!a.startsWith('[')?'['+a+']':a)+(port===undefined||port===null||port===''?'':':'+port);};
- return {esc,icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation,endpoint};
+ function upgradeLabel(h){const u=h&&h.os_upgrade;return u&&u.status==='available'?`Distribution upgrade available: ${u.distribution} ${u.from_version} to ${u.to_version}`:'';}
+ function upgradeBadge(h){const label=upgradeLabel(h);return label?` <span class="upgrade-badge" role="img" aria-label="${esc(label)}" title="${esc(label)}">⬆</span>`:'';}
+ return {esc,icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation,endpoint,upgradeBadge,upgradeLabel};
 })();
