@@ -522,10 +522,14 @@ def repository(host_id:str,body:RepoInput,user=Depends(admin_user)):
         if not package_backend.source_path(body.path,h.inventory): raise HTTPException(400,'Unsupported repository path for this target')
         package_backend.sources(body.content,body.path,h.inventory,worker.repository_access(s,host_id))
         return {'job_id':worker.enqueue(s,host_id,'repository',body.model_dump())}
-class KeyInput(BaseModel): name:str; data:str=Field(max_length=3_000_000)
+class KeyInput(BaseModel): name:str=Field(max_length=255); data:str=Field(max_length=3_000_000)
+def key_filename(name):
+    # Suffix and stem are checked separately so no repeated class competes with a literal suffix.
+    stem,dot,suffix=name.rpartition('.')
+    return bool(dot) and suffix in ('gpg','asc') and re.fullmatch(r'[A-Za-z0-9_-]+',stem) is not None
 @app.put('/api/hosts/{host_id}/keys')
 def key_upload(host_id:str,body:KeyInput,user=Depends(admin_user)):
-    if not re.fullmatch(r'[A-Za-z0-9_-]+\.(gpg|asc)',body.name): raise HTTPException(400,'Use a .gpg or .asc filename')
+    if not key_filename(body.name): raise HTTPException(400,'Use a .gpg or .asc filename')
     try: base64.b64decode(body.data,validate=True)
     except ValueError: raise HTTPException(400,'Invalid base64 key data')
     with Session() as s:
