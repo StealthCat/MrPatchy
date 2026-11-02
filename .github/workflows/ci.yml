@@ -100,13 +100,15 @@ jobs:
       - run: docker build -t mrpatchy:test .
       - name: Native Caddy dual-issuer adapter checks
         run: |
-          docker create --name mrpatchy-caddy-adapter caddy:2.10
+          docker create --name mrpatchy-caddy-adapter caddy:2.10@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
           docker cp mrpatchy-caddy-adapter:/usr/bin/caddy /tmp/mrpatchy-caddy
           docker rm mrpatchy-caddy-adapter
           CADDY_BIN=/tmp/mrpatchy-caddy python -m pytest tests/test_tls_profiles.py -k native_caddy -q
       - name: Compose HTTPS startup smoke test
         run: |
           printf '%s\n' 'ADMIN_PASSWORD=ci-disposable-password-only' 'DOMAIN=localhost' 'PUBLIC_URL=https://localhost' > .env.ci
+          docker compose --env-file .env.ci config --quiet
+          GCP_PROJECT=ci-disposable-project GCP_ZONE=us-central1-a docker compose --env-file .env.ci -f compose.yaml -f compose.gcp.yaml config --quiet
           docker compose --env-file .env.ci up --build -d --wait
           for attempt in $(seq 1 20); do
             docker compose --env-file .env.ci cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/mrpatchy-ci-root.crt && break
