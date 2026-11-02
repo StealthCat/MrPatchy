@@ -69,6 +69,20 @@ This gate takes precedence over instructions to always continue development or
 produce another PR. Judge completion from the current repository and latest merged
 work rather than stale milestone numbers or repeated historical requests.
 
+### Runtime Python dependency hash lock — partial #201 checkpoint
+
+This source checkpoint supersedes every older #201 status statement in this
+historical document, including entries located later in the file, that production
+Python installs remain unhashed. A generated Python 3.12 lock pins the complete
+production dependency graph and records SHA-256 hashes for the available
+distributions. Container builds now install that lock with pip's
+`--require-hashes` enforcement; focused tests require exact direct pins, hashed
+transitive entries and the enforced Docker install path. The development/test
+dependency range remains outside this production-runtime slice. Base-image digest
+pinning, code scanning and the other #201 controls remain independently tracked;
+this checkpoint does not add vulnerability scanning or alter runtime response
+authority.
+
 ## Development-cycle work budget
 
 When the completion gate identifies remaining work, select a coherent batch of

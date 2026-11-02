@@ -3,9 +3,9 @@ LABEL org.opencontainers.image.licenses="LicenseRef-MrPatchy-Personal-Commercial
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DATA_DIR=/data TLS_DIR=/tls
 RUN apt-get update && apt-get install -y --no-install-recommends apt gnupg ca-certificates gosu tzdata python3 python3-dnf python3-rpm rpm && rm -rf /var/lib/apt/lists/* && useradd --system --uid 10001 --create-home mrpatchy
 WORKDIR /app
-COPY requirements.txt .
+COPY requirements.txt requirements.lock ./
 COPY LICENSE COMMERCIAL.md ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY app ./app
 COPY target ./target
 COPY deploy/entrypoint.sh /entrypoint.sh

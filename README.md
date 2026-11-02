@@ -73,8 +73,10 @@ Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, an
 Production Python and Caddy image references retain readable tags plus immutable
 multi-platform index digests. Update tag/digest pairs together and keep deployed
 Caddy aligned with its CI adapter fixture; review the refresh procedure in
-[the security checkpoint](docs/SECURITY_IMPLEMENTATION.md). Base/proxy pins do not
-lock apt, pip or GCP CLI package resolution during builds.
+[the security checkpoint](docs/SECURITY_IMPLEMENTATION.md). Production Python
+packages install from `requirements.lock` with pip `--require-hashes`; regenerate
+and review the lock and hashes when updating dependencies. APT and GCP CLI packages
+and source-build inputs remain outside these locks.
 
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
