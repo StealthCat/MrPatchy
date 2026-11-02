@@ -36,10 +36,13 @@ def test_central_apt_verifies_signatures_and_package_hashes(tmp_path,monkeypatch
     message |= signing.sign(message,hash=HashAlgorithm.SHA256)
     (dist/'InRelease').write_text(str(message))
     class Quiet(http.server.SimpleHTTPRequestHandler):
+        # HTTP/1.1 keeps the TLS connection lifecycle well-formed (Content-Length framing, clean close);
+        # HTTP/1.0 closes abruptly and newer OpenSSL/apt reject that as an unexpected EOF.
+        protocol_version='HTTP/1.1'
         def log_message(self,*args): pass
         def do_GET(self):
             if private=='https-auth-mirror' and self.headers.get('Authorization')!='Basic '+base64.b64encode(b'test:secret').decode():
-                self.send_response(401);self.end_headers();return
+                self.send_response(401);self.send_header('Content-Length','0');self.end_headers();return
             super().do_GET()
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Quiet,directory=str(repo)))
     access={}
