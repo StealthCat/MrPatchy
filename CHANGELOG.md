@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.102 — 2026-11-02
+
+1. [PR #314](https://github.com/StealthCat/MrPatchy/pull/314): Validate signing-key filename stems and response service-unit names without ambiguous regular expressions, retaining the existing accepted character/suffix languages and service-unit bounds. Bound key filenames to 255 characters at request validation. Compatibility: longer key names now return HTTP 422 before host work; valid names and service-health approval behavior remain unchanged. No schema, role, command or runtime-response authorization change. Completes #308's reported validator remediation; PR CodeQL results do not establish a complete repository-wide live-alert inventory or closure.
+
 ## 1.35.101 — 2026-11-02
 
 1. [PR #316](https://github.com/StealthCat/MrPatchy/pull/316): Create central APT auth.conf and recovery MySQL option files with owner-only 0600 permissions from the initial exclusive, no-follow open, replacing the existing final directory entry instead of following a symlink. Validate remote MySQL CA configuration before writing credential content, and retain creation-mode/symlink/failure regressions without altering os.open test semantics. Compatibility: required plaintext formats, locations and final modes remain unchanged; destination symlinks are now replaced rather than written through. No encryption, schema, API, role or runtime-response authorization change is introduced. Completes #311; fresh PR CodeQL evidence does not establish complete repository-wide live-alert closure.
