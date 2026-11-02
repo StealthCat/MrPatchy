@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.98 — 2026-11-02
+
+1. [PR #303](https://github.com/StealthCat/MrPatchy/pull/303): Pin the production Python 3.12 and Caddy 2.10 multi-platform image indexes by immutable digest while retaining readable tags, keep deployed Caddy and its adapter fixture aligned, and validate both default and GCP-override Compose configurations before startup. Document coordinated tag/digest refresh and remaining build-input limits. Compatibility: no runtime version-family, schema, API, role or response-authorization change; pinning fixes selected base/proxy bytes but does not establish native acceptance on every platform, independent signing, vulnerability-free images or a fully reproducible apt/pip/GCP build. Partial #201 remains open.
+
 ## 1.35.97 — 2026-11-02
 
 1. [PR #275](https://github.com/StealthCat/MrPatchy/pull/275): Batch scheduled candidate-package reads and selected fleet alert hold/run/recovery lookups, and preload existing packages during repository refresh, with query-count regressions that also prevent deferred Host attributes from adding per-host SELECTs. Preserve alert, scheduling, lifecycle, hold and executor authorization semantics. Compatibility: no schema, API, configuration, role or runtime-response authorization change; scheduler readiness still loads required inventory, while telemetry/baseline remain deferred, and separate per-host assessments continue to query. Completes #181.

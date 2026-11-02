@@ -70,6 +70,12 @@ Fleet **Investigations** shows 50 behaviors per page with Previous/Next controls
 
 Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Configure Caddy's published interface/ports with `BIND_IP`, `HTTP_PORT` and `HTTPS_PORT`; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
 
+Production Python and Caddy image references retain readable tags plus immutable
+multi-platform index digests. Update tag/digest pairs together and keep deployed
+Caddy aligned with its CI adapter fixture; review the refresh procedure in
+[the security checkpoint](docs/SECURITY_IMPLEMENTATION.md). Base/proxy pins do not
+lock apt, pip or GCP CLI package resolution during builds.
+
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
 cd MrPatchy
