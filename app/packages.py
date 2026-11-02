@@ -47,14 +47,20 @@ SOURCE_REJECTED='Repository source failed validation. Open it in the editor and 
 def source_rejection(error):
     """Diagnostic shown for a rejected source in repository health.
 
-    Source validators raise plain ValueError with a fixed, administrator-facing
-    message. Library subclasses (decode, codec, parse errors) can quote arbitrary
-    input or internals, so they get a fixed message instead of their text."""
-    if type(error) is ValueError and len(error.args)==1 and isinstance(error.args[0],str):return error.args[0][:1000]
+    Only apt.SourceRejected, raised by our own source validators with a fixed,
+    administrator-facing message, is shown. Any other ValueError (plain or a
+    library subclass such as decode/codec/parse errors) can quote arbitrary input
+    or internals, so it gets a fixed message instead of its text."""
+    if type(error) is apt.SourceRejected and len(error.args)==1 and isinstance(error.args[0],str):return error.args[0][:1000]
     return SOURCE_REJECTED
 
 
 def sources(content,path,inv,access):
-    if is_rpm(inv):return rpm_support.repositories({path:content},inv.get('rpm_vars',{}))
+    if is_rpm(inv):
+        try:return rpm_support.repositories({path:content},inv.get('rpm_vars',{}))
+        except ValueError as e:
+            # The RPM validator lives in the target package and raises plain ValueError with fixed messages.
+            if type(e) is ValueError and len(e.args)==1 and isinstance(e.args[0],str):raise apt.SourceRejected(e.args[0]) from None
+            raise
     rewritten=apt.rewrite(content,access);apt.validate_source(rewritten,path.endswith('.sources'))
     return list(apt.source_options(rewritten,path.endswith('.sources')))

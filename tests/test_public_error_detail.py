@@ -1,12 +1,13 @@
 import binascii
-from app import ai,ai_runs,packages
+from app import ai,ai_runs,apt,packages
 from app.db import Session,Host
 
 
 def test_source_rejection_shows_only_plain_validator_messages():
-    assert packages.source_rejection(ValueError('Repository weakens signature verification'))=='Repository weakens signature verification'
-    assert packages.source_rejection(ValueError('x'*5000))=='x'*1000
-    assert packages.source_rejection(ValueError('two','args'))==packages.SOURCE_REJECTED
+    assert packages.source_rejection(apt.SourceRejected('Repository weakens signature verification'))=='Repository weakens signature verification'
+    assert packages.source_rejection(apt.SourceRejected('x'*5000))=='x'*1000
+    assert packages.source_rejection(apt.SourceRejected('two','args'))==packages.SOURCE_REJECTED
+    assert packages.source_rejection(ValueError('password=secret'))==packages.SOURCE_REJECTED
     assert packages.source_rejection(ValueError(object()))==packages.SOURCE_REJECTED
     assert packages.source_rejection(UnicodeDecodeError('utf-8',b'\xff secret',0,1,'invalid start byte'))==packages.SOURCE_REJECTED
     assert packages.source_rejection(binascii.Error('Incorrect padding near secret'))==packages.SOURCE_REJECTED
@@ -35,3 +36,14 @@ def test_repository_health_hides_unexpected_exception_text(admin,monkeypatch):
     health={item['path']:item for item in admin.get('/api/hosts/health-host/repositories').json()['health']}
     assert health['/etc/apt/sources.list.d/other.list']['state']=='blocked'
     assert health['/etc/apt/sources.list.d/other.list']['detail']==packages.SOURCE_REJECTED
+
+
+def test_repository_health_hides_plain_value_error_text(admin,monkeypatch):
+    with Session() as s:
+        s.add(Host(id='plain-host',name='Plain',address='192.0.2.11',fingerprint='SHA256:'+'v'*43,state='online',
+                   inventory={'package_manager':'apt','files':{'/etc/apt/sources.list':'deb https://example.org/debian stable main\n'}}))
+        s.commit()
+    def failing(content,path,inv,access):raise ValueError('password=secret')
+    monkeypatch.setattr(packages,'sources',failing)
+    item=admin.get('/api/hosts/plain-host/repositories').json()['health'][0]
+    assert item['state']=='blocked' and item['detail']==packages.SOURCE_REJECTED and 'secret' not in str(item)
