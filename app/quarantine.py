@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 from sqlalchemy import String,Double,Boolean,JSON,Text
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
-from . import incidents,ssh,evidence_archive,response_rejection
+from . import incidents,ssh,evidence_archive,response_rejection,response_status
 from .evidence_vault import EvidenceCopy,EvidenceArchive,validate_snapshot,incident
 
 ACTIONS=('quarantine-prepare','quarantine-apply','quarantine-status','quarantine-restore','quarantine-audit','quarantine-processes')
@@ -146,6 +146,5 @@ def execute(s,host,job):
         return {'id':row.id,'state':row.state,'server_changes_paused':row.hold,'outcome':'response_incomplete' if incomplete else 'observed'}
     except Exception:
         s.rollback();row=s.get(Quarantine,row.id)
-        row.state='uncertain';row.hold=True;row.receipt={};row.observed=time.time()
-        event(s,row,'observation_failed',actor,{'job_id':job.id});s.commit()
+        response_status.mark_status_failed(s,row,actor,job.id,event=event,clock=time.time);s.commit()
         raise
