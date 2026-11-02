@@ -571,13 +571,15 @@ full ceiling counted. Unsent failures release their reservation. The separate le
 is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
 remaining and next-reset values in Settings and AI worker status. The administrator
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
-changes are audited. Estimates use published token prices and may differ from the
-provider invoice.
+changes are audited. Changing the reset timezone retains unreleased spend while
+its original admission window is still open, alongside spend in the current local
+day; it does not silently restore that budget. Estimates use published token prices
+and may differ from the provider invoice.
 
-Daily accounting groups repeated amounts without loading every ledger entry as an
-application object. This reduces memory use, especially when amounts repeat, but
-many distinct amounts still increase work under the shared admission lock. A bounded
-summary and broader SQLite/MySQL concurrency evidence remain open work.
+Daily accounting returns at most five exact-money status totals without loading
+ledger entries as application objects. SQLite preserves the existing nine-place
+Numeric read precision; MySQL sums native DECIMAL values. Eligible ledger scanning
+remains O(N) under the shared admission lock; broader concurrency work remains open.
 
 Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
 alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
