@@ -47,3 +47,33 @@ def test_repository_health_hides_plain_value_error_text(admin,monkeypatch):
     monkeypatch.setattr(packages,'sources',failing)
     item=admin.get('/api/hosts/plain-host/repositories').json()['health'][0]
     assert item['state']=='blocked' and item['detail']==packages.SOURCE_REJECTED and 'secret' not in str(item)
+
+
+def _rpm_host(host_id,content):
+    with Session() as s:
+        s.add(Host(id=host_id,name=host_id,address='192.0.2.12',fingerprint='SHA256:'+host_id[0]*43,state='online',
+                   inventory={'package_manager':'rpm','os':{'id':'fedora','version_id':'44'},'files':{'/etc/yum.repos.d/example.repo':content}}))
+        s.commit()
+
+
+def test_repository_health_hides_unexpected_rpm_backend_error_text(admin,monkeypatch):
+    _rpm_host('rpm-backend','[example]\nbaseurl=https://example.org/rpm\n')
+    def failing(files,variables):raise ValueError('password=secret-review-canary')
+    monkeypatch.setattr(packages.rpm_support,'repositories',failing)
+    item=admin.get('/api/hosts/rpm-backend/repositories').json()['health'][0]
+    assert item['state']=='blocked' and item['detail']==packages.SOURCE_REJECTED and 'secret' not in str(item)
+
+
+def test_repository_health_hides_rpm_subclass_error_text(admin,monkeypatch):
+    class Other(ValueError):pass
+    _rpm_host('rpm-subclass','[example]\nbaseurl=https://example.org/rpm\n')
+    def failing(files,variables):raise Other('token=secret-review-canary')
+    monkeypatch.setattr(packages.rpm_support,'repositories',failing)
+    item=admin.get('/api/hosts/rpm-subclass/repositories').json()['health'][0]
+    assert item['detail']==packages.SOURCE_REJECTED
+
+
+def test_repository_health_shows_intentional_rpm_validation_message(admin):
+    _rpm_host('rpm-invalid','[example]\nbaseurl=https://example.org/rpm\ngpgcheck=0\n')
+    item=admin.get('/api/hosts/rpm-invalid/repositories').json()['health'][0]
+    assert item['state']=='blocked' and item['detail']=='RPM package signature and TLS verification must remain enabled'

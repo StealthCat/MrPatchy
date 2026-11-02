@@ -59,8 +59,8 @@ def sources(content,path,inv,access):
     if is_rpm(inv):
         try:return rpm_support.repositories({path:content},inv.get('rpm_vars',{}))
         except ValueError as e:
-            # The RPM validator lives in the target package and raises plain ValueError with fixed messages.
-            if type(e) is ValueError and len(e.args)==1 and isinstance(e.args[0],str):raise apt.SourceRejected(e.args[0]) from None
+            # Only the RPM validators' own RepositoryRejected carries a displayable message; any other ValueError stays generic.
+            if type(e) is rpm_support.RepositoryRejected and len(e.args)==1 and isinstance(e.args[0],str):raise apt.SourceRejected(e.args[0]) from None
             raise
     rewritten=apt.rewrite(content,access);apt.validate_source(rewritten,path.endswith('.sources'))
     return list(apt.source_options(rewritten,path.endswith('.sources')))
