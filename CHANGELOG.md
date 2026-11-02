@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.93 — 2026-11-02
+
+1. [PR #292](https://github.com/StealthCat/MrPatchy/pull/292): Pin every third-party action reference in the validation workflow to a full commit SHA with a readable major-version comment, add regression coverage that rejects unpinned workflow actions, and update the security checkpoint to distinguish these pins from unfinished supply-chain work. Compatibility: CI, tests and documentation only; no application schema, persisted data, API, UI, deployment behavior, role, audit, target action or runtime-response authorization change. Dependabot continues to propose GitHub Actions updates; base-image digests, hash-pinned Python installs, code scanning and additional Compose sandboxing remain open under partial #201.
+
 ## 1.35.92 — 2026-11-02
 
 1. [PR #300](https://github.com/StealthCat/MrPatchy/pull/300): Share the controller-local failed response-observation transition across file and process handlers and worker backstops while preserving every caller's host, row, started/status and duplicate-event guards, actor and job attribution, uncertainty hold, receipt clearing, clock and event writer, and caller-owned transaction boundaries. Compatibility: no schema, persisted-data, API, UI, configuration, audit, role, actor-attribution, target-action or runtime-response authorization change. This is partial #189; shared advisory-plan generation, unmerged pricing consolidation and other undelivered rows remain open.
