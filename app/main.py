@@ -19,7 +19,7 @@ from .db import Session, Host, Package, Behavior, Job, Setting, Audit, Inventory
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections,host_lifecycle
+from . import operations, incidents, connections, host_lifecycle, notifications as notification_events
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.36.1'
+APP_VERSION='1.37.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -242,6 +242,54 @@ def dashboard(user=Depends(viewer_user)):
         cfg=config(s); hosts=list(s.scalars(select(Host).where(Host.enabled==True,Host.deleted_at==0))); packages=list(s.scalars(select(Package).where(Package.host_id.in_(host_lifecycle.active_ids())))); now=time.time()
         updates=[p for p in packages if p.candidate]
         return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+
+@app.get('/api/notifications')
+def notification_list(unread_only:bool=False,include_dismissed:bool=False,
+                      limit:int=50,offset:int=0,user=Depends(self_user)):
+    """Return a bounded, current-role-filtered page for the signed-in user."""
+    with Session() as s:
+        items=notification_events.list_for_user(
+            s,user['username'],unread_only=unread_only,
+            include_dismissed=include_dismissed,limit=limit,offset=offset)
+        total=notification_events.count_for_user(
+            s,user['username'],unread_only=unread_only,
+            include_dismissed=include_dismissed)
+        return {'items':items,'offset':offset,'limit':limit,'total':total,
+                'more':offset+len(items)<total}
+
+@app.get('/api/notifications/unread-count')
+def notification_unread_count(user=Depends(self_user)):
+    with Session() as s:
+        return {'unread':notification_events.unread_count(s,user['username'])}
+
+class NotificationStateInput(BaseModel):
+    revision:int=Field(strict=True,ge=1)
+
+def _notification_event_id(event_id):
+    if not re.fullmatch(r'[0-9a-f]{64}',event_id):
+        raise HTTPException(404,'Notification not found')
+    return event_id
+
+def _notification_state(event_id,body,user,mutation):
+    event_id=_notification_event_id(event_id)
+    with Session() as s:
+        try:
+            state=mutation(s,user['username'],event_id,body.revision)
+        except PermissionError:
+            raise HTTPException(404,'Notification not found')
+        s.commit()
+        return {'id':event_id,'revision':body.revision,
+                'read_revision':state.read_revision,
+                'dismissed_revision':state.dismissed_revision}
+
+@app.post('/api/notifications/{event_id}/read')
+def notification_read(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    return _notification_state(event_id,body,user,notification_events.mark_read)
+
+@app.post('/api/notifications/{event_id}/dismiss')
+def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    return _notification_state(event_id,body,user,notification_events.dismiss)
+
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
