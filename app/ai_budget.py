@@ -5,7 +5,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, and_, case, func, select
+from sqlalchemy import String, Text, Double, Numeric, and_, case, func, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -64,8 +64,10 @@ def _state(session,cfg,now):
         bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
         total=(func.mrpatchy_money_sum(amount,type_=String) if session.get_bind().dialect.name=='sqlite'
             else func.sum(amount,type_=Numeric(38,9)))
-        query=select(bucket,total).where(BudgetEntry.created>=start,BudgetEntry.created<reset,
-            BudgetEntry.status!='released').group_by(bucket)
+        # A row also counts while the window it was admitted under (its own reset_at) is still
+        # open, so changing the reset timezone cannot hand back spend from that window.
+        query=select(bucket,total).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
         for key,value in session.execute(query):
             total=Decimal(value or 0);counted+=total
             if key in groups:groups[key]+=total

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.35.99 — 2026-11-02
+
+1. [PR #306](https://github.com/StealthCat/MrPatchy/pull/306): Hash-lock the complete 31-package Python 3.12 production dependency graph with 607 published-artifact SHA-256 hashes and enforce pip --require-hashes in controller image builds, preserving the delivered Python/Caddy image pins and unchanged direct runtime versions. Add lock/install regression coverage and document reviewed regeneration. Compatibility: transitive runtime versions are now explicit and dependency changes require regenerating/reviewing the lock; no schema, API, UI, role or runtime-response authorization change. This does not establish native ARM execution, independent signing, vulnerability-free dependencies or fully reproducible apt/GCP/source-build inputs. Partial #201 remains open for the remaining supply-chain and sandbox work.
+
+## 1.35.98 — 2026-11-02
+
+1. [PR #303](https://github.com/StealthCat/MrPatchy/pull/303): Pin the production Python 3.12 and Caddy 2.10 multi-platform image indexes by immutable digest while retaining readable tags, keep deployed Caddy and its adapter fixture aligned, and validate both default and GCP-override Compose configurations before startup. Document coordinated tag/digest refresh and remaining build-input limits. Compatibility: no runtime version-family, schema, API, role or response-authorization change; pinning fixes selected base/proxy bytes but does not establish native acceptance on every platform, independent signing, vulnerability-free images or a fully reproducible apt/pip/GCP build. Partial #201 remains open.
+
+## 1.35.97 — 2026-11-02
+
+1. [PR #275](https://github.com/StealthCat/MrPatchy/pull/275): Batch scheduled candidate-package reads and selected fleet alert hold/run/recovery lookups, and preload existing packages during repository refresh, with query-count regressions that also prevent deferred Host attributes from adding per-host SELECTs. Preserve alert, scheduling, lifecycle, hold and executor authorization semantics. Compatibility: no schema, API, configuration, role or runtime-response authorization change; scheduler readiness still loads required inventory, while telemetry/baseline remain deferred, and separate per-host assessments continue to query. Completes #181.
+
+## 1.35.96 — 2026-11-02
+
+1. [PR #240](https://github.com/StealthCat/MrPatchy/pull/240): Keep unreleased AI spend counted while its original admission window remains open, as well as within the current reset-timezone day, so changing the reset timezone cannot silently regrant that spend. Preserve bounded exact-money status aggregation, conservative unknown/transmitted charges and atomic admission. Compatibility: no schema, API, provider-routing, role or runtime-response authorization change; timezone switches may retain counted spend until its applicable window expires. Completes #162.
+
 ## 1.35.95 — 2026-11-02
 
 1. [PR #302](https://github.com/StealthCat/MrPatchy/pull/302): Add a least-privilege, SHA-pinned CodeQL workflow that analyzes Python with the security-extended query suite on pull requests targeting `main`, pushes to `main` and a bounded weekly schedule, with regression coverage for its triggers, action pins, timeout and upload permissions. Compatibility: CI, tests and documentation only; no application schema, persisted data, API, UI, deployment behavior, role, audit, target action or runtime-response authorization change. Findings remain advisory repository evidence rather than runtime remediation; future scheduled/default-branch execution and absence of findings are not established by this delivery, and base-image digests, hash-pinned Python installs, dependency-vulnerability scanning policy and additional Compose/container sandboxing remain open under partial #201.
