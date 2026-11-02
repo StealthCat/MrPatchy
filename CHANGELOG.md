@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.97 — 2026-11-02
+
+1. [PR #275](https://github.com/StealthCat/MrPatchy/pull/275): Batch scheduled candidate-package reads and selected fleet alert hold/run/recovery lookups, and preload existing packages during repository refresh, with query-count regressions that also prevent deferred Host attributes from adding per-host SELECTs. Preserve alert, scheduling, lifecycle, hold and executor authorization semantics. Compatibility: no schema, API, configuration, role or runtime-response authorization change; scheduler readiness still loads required inventory, while telemetry/baseline remain deferred, and separate per-host assessments continue to query. Completes #181.
+
 ## 1.35.96 — 2026-11-02
 
 1. [PR #240](https://github.com/StealthCat/MrPatchy/pull/240): Keep unreleased AI spend counted while its original admission window remains open, as well as within the current reset-timezone day, so changing the reset timezone cannot silently regrant that spend. Preserve bounded exact-money status aggregation, conservative unknown/transmitted charges and atomic admission. Compatibility: no schema, API, provider-routing, role or runtime-response authorization change; timezone switches may retain counted spend until its applicable window expires. Completes #162.
