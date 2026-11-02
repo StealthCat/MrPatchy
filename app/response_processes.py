@@ -1,9 +1,9 @@
 """Append-only, metadata-only observations of references to a retained inode."""
 import time
-from sqlalchemy import String,Double,JSON,Index,select,func
+from sqlalchemy import String,Double,JSON,Index
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base
-from . import incidents,quarantine,ssh
+from . import incidents,quarantine,ssh,latest_records
 
 STATES=('quarantined','uncertain','not_found','console_recovered','replaced','replacement_uncertain')
 GAPS=('entry_limit','process_limit','match_limit','time_limit','procfs_unavailable',
@@ -26,8 +26,7 @@ class Observation(Base):
 def latest(s,rows):
     if not rows:return {}
     host_id=rows[0].host_id;ids=[r.id for r in rows]
-    rank=select(Observation.id,func.row_number().over(partition_by=Observation.quarantine_id,order_by=(Observation.created.desc(),Observation.id)).label('rank')).where(Observation.host_id==host_id,Observation.quarantine_id.in_(ids)).subquery()
-    return {r.quarantine_id:r for r in s.scalars(select(Observation).where(Observation.id.in_(select(rank.c.id).where(rank.c.rank==1))))}
+    return latest_records.latest_by(s,Observation,'quarantine_id',ids,Observation.host_id==host_id)
 
 
 def valid(host,row,payload):

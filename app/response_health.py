@@ -1,10 +1,10 @@
 """Immutable, explicitly requested service observations. No service mutations."""
 import re
 import time
-from sqlalchemy import String,Double,JSON,Text,Index,select,func
+from sqlalchemy import String,Double,JSON,Text,Index
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,Host
-from . import incidents,quarantine,repair_publication,ssh
+from . import incidents,quarantine,repair_publication,ssh,latest_records
 from target.agent import response_service_units,response_service_properties,response_service_state
 
 ACTION='response-service-health'
@@ -27,8 +27,7 @@ class Observation(Base):
 def latest(s,rows):
     if not rows:return {}
     ids=[row.id for row in rows];host_id=rows[0].host_id
-    rank=select(Observation.id,func.row_number().over(partition_by=Observation.quarantine_id,order_by=(Observation.created.desc(),Observation.id)).label('rank')).where(Observation.host_id==host_id,Observation.quarantine_id.in_(ids)).subquery()
-    return {row.quarantine_id:row for row in s.scalars(select(Observation).where(Observation.id.in_(select(rank.c.id).where(rank.c.rank==1))))}
+    return latest_records.latest_by(s,Observation,'quarantine_id',ids,Observation.host_id==host_id)
 
 
 def binding(s,host,row):
