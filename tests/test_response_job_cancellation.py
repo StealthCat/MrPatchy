@@ -2,7 +2,7 @@
 import time
 import pytest
 from sqlalchemy import select
-from app import quarantine,process_response,worker
+from app import quarantine,process_response,response_rejection,worker
 from app.db import Session,Host,Job,Audit
 from app.identity import User
 
@@ -11,6 +11,19 @@ CASES=[('quarantine-apply','queued','prepared','rejected'),
        ('quarantine-restore','restore_queued','quarantined','quarantined'),
        ('process-suspend','queued','prepared','rejected'),
        ('process-resume','resume_queued','suspended','suspended')]
+
+
+@pytest.mark.parametrize('module,model,key,recovery_state,actor_from_approval',[
+    (quarantine,quarantine.Quarantine,'quarantine_id','restore_queued',True),
+    (process_response,process_response.ProcessResponse,'process_id','resume_queued',False),
+])
+def test_response_rejection_wrappers_delegate_to_shared_transition(monkeypatch,module,model,key,recovery_state,actor_from_approval):
+    calls=[]
+    monkeypatch.setattr(response_rejection,'reject_unstarted',lambda *args,**kwargs:calls.append((args,kwargs)))
+    session=object();job=object()
+    module.reject_unstarted(session,job)
+    assert calls==[((session,job),{'model':model,'approval_model':module.Approval,'payload_key':key,
+                                  'recovery_state':recovery_state,'event':module.event,'actor_from_approval':actor_from_approval})]
 
 
 def seed(action,state,before_state,before_hold,*,job_state='queued',row_host=HOST,approval=True):
@@ -91,6 +104,8 @@ def test_missing_approval_never_releases_a_hold(admin,action,state,before,after)
     with Session() as s:
         row=s.get(Model,'response')
         assert row.hold and row.state==('rejected' if state=='queued' else 'uncertain')
+        event=s.scalar(select(module.Event).where(module.Event.kind=='rejected'))
+        assert event.actor==('original-approver' if module is process_response else 'system')
 
 
 @pytest.mark.parametrize('role',['viewer','operator'])
