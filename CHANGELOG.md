@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.0 — 2026-11-02
+
+1. [PR #325](https://github.com/StealthCat/MrPatchy/pull/325): Add authenticated, current-role-filtered notification list and unread-count APIs plus CSRF-protected, revision-bound per-user read and dismiss mutations. Responses expose only retained safe summaries, hide higher-role events, audit state changes and remain independent of global alert acknowledgement, incident state, AI approval and response authorization; a second exact 60-second enrollment-window fixture is also made deterministic across SQLite/MySQL timestamp round trips without changing runtime admission behavior. Compatibility: additive authenticated APIs and test/CI stabilization only; existing schema, alert delivery/lifecycle and runtime behavior remain compatible. Notification producers, retention/pruning, live cross-controller delivery/replay, shell/center UI and full end-to-end acceptance remain future work. Completes #324.
+
 ## 1.36.1 — 2026-11-02
 
 1. [PR #323](https://github.com/StealthCat/MrPatchy/pull/323): Make the enrollment-download capacity/expiry boundary regression deterministic across SQLite and MySQL timestamp round trips by freezing its clock at an exactly representable whole second. Preserve the exact 60-second Retry-After assertion and all active-quota, finite-source-capacity, eviction, expiry and recovery checks. Compatibility: test and CI behavior only; production admission code, quotas, persisted state, APIs, roles and runtime-response authorization are unchanged. Completes #322 and unblocks dependent PR validation without weakening the boundary.

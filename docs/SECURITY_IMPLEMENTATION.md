@@ -2608,7 +2608,7 @@ milestone 1: producer transactions, cross-worker concurrent publication recovery
 retention/pruning policy and broader existing-alert lifecycle integration remain,
 as do the live transport, UI and end-to-end milestones 2–4.
 
-Implementation checkpoint (issue #324, pending integration): the next bounded
+Implementation checkpoint (issue #324, integrated in v1.37.0): the next bounded
 increment exposes authenticated, current-role-filtered notification pages and unread
 counts plus CSRF-protected per-user read/dismiss mutations. The server derives the
 recipient from the active session, returns only the safe retained public payload and
