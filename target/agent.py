@@ -25,7 +25,7 @@ SPOOL_CAPACITY_BYTES = 48_000_000
 
 def response_service_units(units):
     if (not isinstance(units,list) or not 1<=len(units)<=16 or
-        any(not isinstance(unit,str) or len(unit)>128 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@:\-]*\.service',unit) for unit in units) or len(set(units))!=len(units)):
+        any(not isinstance(unit,str) or len(unit)>128 or not unit.endswith('.service') or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@:\-]*',unit[:-len('.service')]) for unit in units) or len(set(units))!=len(units)):
         raise ValueError('Select 1–16 unique explicit .service unit names without paths, patterns or options')
     return units
 

@@ -120,18 +120,26 @@ def read_manifest(bundle):
     print('External recovery dependencies must be supplied separately: '+'; '.join(EXTERNAL_DEPENDENCIES)+'.',file=sys.stderr,flush=True)
     return manifest
 
+def private_file(path,text):
+    """Write a credential file that is mode 0600 from creation; never follow or reuse an existing entry."""
+    path=Path(path);path.unlink(missing_ok=True)
+    descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+    with os.fdopen(descriptor,'w') as stream:
+        os.fchmod(stream.fileno(),0o600);stream.write(text)
+    return path
+
 def mysql_options(url,directory):
     if url.get_backend_name()!='mysql' or not url.database or url.database.startswith('-'):raise ValueError('A named MySQL database is required')
     path=Path(directory)/'mysql.cnf'
     def escape(value):
         if any(c in value for c in '\r\n\x00'):raise ValueError('Invalid MySQL option')
         return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
-    path.write_text('[client]\n'+''.join(k+'='+escape(str(v))+'\n' for k,v in {'host':url.host or 'localhost','port':url.port or 3306,'user':url.username or '', 'password':url.password or ''}.items()))
+    options='[client]\n'+''.join(k+'='+escape(str(v))+'\n' for k,v in {'host':url.host or 'localhost','port':url.port or 3306,'user':url.username or '', 'password':url.password or ''}.items())
     if url.host not in (None,'localhost','127.0.0.1','::1'):
         ca=os.environ.get('MYSQL_SSL_CA')
         if not ca:raise ValueError('Remote MySQL backup/restore requires MYSQL_SSL_CA (MariaDB client)')
-        with path.open('a') as stream:stream.write('ssl-ca='+escape(ca)+'\nssl-verify-server-cert=1\n')
-    path.chmod(0o600);return path
+        options+='ssl-ca='+escape(ca)+'\nssl-verify-server-cert=1\n'
+    return private_file(path,options)
 def active_database_url(data):
     data=Path(data)
     profile=data/'database-active.json'
