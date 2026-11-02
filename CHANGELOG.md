@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.35.88 — 2026-11-02
+
+1. [PR #296](https://github.com/StealthCat/MrPatchy/pull/296): Share the controller-local transition that rejects an unstarted response job across file quarantine and process-response paths, while preserving each path's actor attribution, host/state guards, hold clearing and transactional rollback behavior. Compatibility: no schema, API, UI, configuration, target-action or runtime-response authorization change; this is partial #189, whose remaining advisory-plan, response/status/query and duplicate-stub consolidation stays open.
+
+## 1.35.87 — 2026-11-02
+
+1. [PR #295](https://github.com/StealthCat/MrPatchy/pull/295): Bound daily AI spend accounting to at most five exact-money status totals regardless of distinct receipt amounts, retaining conservative unknown, sent and uncertain charges, released-row exclusion, durable ledger evidence and atomic cap admission. Compatibility: no schema, API, provider-call, UI, role or runtime-response authorization change; SQLite retains its existing nine-place NUMERIC read precision and MySQL uses native DECIMAL summation. Eligible ledger rows are still scanned in SQL, so database work remains O(N); later #240 integration must preserve both its timezone-membership predicate and this aggregation. Completes #133.
+
 ## 1.35.86 — 2026-11-01
 
 1. [PR #294](https://github.com/StealthCat/MrPatchy/pull/294): Share one bounded, strong-digest gpgv verification boundary across Debian vendor-package and YARA-bundle authentication, preserving signer fingerprints and the existing SHA-224/256/384/512 acceptance set while normalizing command, timeout, output-limit and status failures to a redacted `ValueError` subtype. Compatibility: failed YARA gpgv commands now use the shared failure type instead of exposing a `RuntimeError`; no schema, API, target helper, UI, role, audit or runtime-response authorization change. This is partial #189; advisory-plan, response/status/query and duplicate-stub consolidation remain open.
