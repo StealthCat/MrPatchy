@@ -191,3 +191,30 @@ def test_parallel_requests_preserve_allowance_and_usage_numbers(admin, download)
         events = s.scalars(select(Audit).where(Audit.action == 'enrollment installer prepared').order_by(Audit.id)).all()
         assert len(events) == 10
         assert ['use=' + str(n) + ' ' in event.detail for n, event in enumerate(events, 1)] == [True] * 10
+
+
+def test_lifecycle_fence_and_audit_use_canonical_persisted_identity(admin, download, monkeypatch):
+    from contextlib import contextmanager
+    host, path, calls = download
+    alias = host.upper()
+    key = 'enroll:' + token_hash(path.rsplit('/', 1)[-1])
+    with Session() as s:
+        row = s.get(Setting, key)
+        row.value = {**row.value, 'host_id': alias}; s.commit()
+    # Model MySQL's case-insensitive PK lookup while retaining SQLite coverage.
+    resolve = main.host_or_404
+    monkeypatch.setattr(main, 'host_or_404', lambda s, identifier: resolve(s, host if identifier == alias else identifier))
+    activity = main.host_lifecycle.activity
+    fenced = []
+    @contextmanager
+    def capture(ids, *args, **kwargs):
+        fenced.extend(ids)
+        with activity(ids, *args, **kwargs) as revisions:
+            yield revisions
+    monkeypatch.setattr(main.host_lifecycle, 'activity', capture)
+    assert admin.get(path).status_code == 200
+    assert fenced == [host] and calls == [host]
+    with Session() as s:
+        assert s.get(Setting, key).value['host_id'] == host
+        event = s.scalar(select(Audit).where(Audit.action == 'enrollment installer prepared'))
+        assert event.detail.startswith(host + ' ')

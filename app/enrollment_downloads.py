@@ -58,10 +58,10 @@ def admit(source):
         lock.release()
 
 
-def prepared(session, row, source):
+def prepared(session, row, source, host_id):
     """Record preparation, not proof that a client received/executed the body."""
     uses = row.value.get('downloads', 0) + 1
-    row.value = {**row.value, 'downloads': uses}
+    row.value = {**row.value, 'host_id': host_id, 'downloads': uses}
     audit(session, 'enrollment installer prepared',
           f"{row.value['host_id']} link={row.key.removeprefix('enroll:')[:16]} "
           f"source={source} use={uses} {'first' if uses == 1 else 'retry'}")

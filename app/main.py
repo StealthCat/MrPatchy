@@ -436,6 +436,7 @@ def enroll(token:str,request:Request):
         host_id=row.value['host_id']
         h=host_or_404(s,host_id)
         if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
+        host_id=h.id  # Lock the persisted identity, including case-insensitive DB lookups.
     with host_lifecycle.activity([host_id],'control'),Session() as s:
         # Re-read after the lifecycle fence: concurrent preparations must not
         # lose usage counts, and a revoked/expired link must not be reused.
@@ -444,7 +445,7 @@ def enroll(token:str,request:Request):
         h=host_or_404(s,host_id)
         if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
         body=ssh.bootstrap(h)
-        enrollment_downloads.prepared(s,row,source);s.commit()
+        enrollment_downloads.prepared(s,row,source,host_id);s.commit()
         return PlainTextResponse(body)
 def enqueue_host_action(host_id,action):
     with Session() as s:
