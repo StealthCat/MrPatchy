@@ -35,9 +35,9 @@ location coverage has regression tests; live Dependabot update generation has no
 been exercised as part of this delivery. This is update configuration, not code
 or dependency vulnerability scanning. Base images remain tag-based, Python
 requirements lack install hashes, and Actions references remain tag-based rather
-than commit-SHA pinned. Digest/hash/SHA pinning, code scanning and additional
-Compose sandboxing remain unfinished under #201; no runtime response authority
-or deployment sandbox boundary is changed.
+than commit-SHA pinned. At that checkpoint, digest/hash/SHA pinning, code scanning
+and additional Compose sandboxing remained unfinished under #201; no runtime
+response authority or deployment sandbox boundary was changed.
 
 Code-scanning status after this checkpoint: a separate least-privilege CodeQL
 workflow analyzes Python on pull requests targeting `main`, pushes to `main` and
