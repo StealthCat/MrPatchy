@@ -1,10 +1,11 @@
 """Explicit publication of one authenticated staged inode; no automatic recovery."""
 import time
 import uuid
-from sqlalchemy import String,Double,Boolean,JSON,Text,select,func
+from types import SimpleNamespace
+from sqlalchemy import String,Double,Boolean,JSON,Text,select
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
-from . import incidents,quarantine,repair_staging,repair_preparation,vendor,ssh,operations
+from . import incidents,quarantine,repair_staging,repair_preparation,vendor,ssh,operations,latest_records
 
 ACTIONS=('trusted-repair-publish','trusted-repair-publish-status')
 FACTS=('intent_verified','held_verified','parents_match','published_verified','private_present','package_matches','owner_matches','rechecked','completion_recorded')
@@ -64,8 +65,8 @@ def active(s,quarantine_id):
 def latest(s,records):
     if not records:return {}
     host_id=records[0].host_id;ids=[r.id for r in records]
-    rank=select(Publication.id,func.row_number().over(partition_by=Publication.quarantine_id,order_by=(Publication.created.desc(),Publication.id)).label('rank')).where(Publication.host_id==host_id,Publication.quarantine_id.in_(ids),Publication.state.not_in(('rejected','console_recovered'))).subquery()
-    return {r.quarantine_id:r for r in s.scalars(select(Publication).where(Publication.id.in_(select(rank.c.id).where(rank.c.rank==1))))}
+    return latest_records.latest_by(s,Publication,'quarantine_id',ids,Publication.host_id==host_id,
+        Publication.state.not_in(('rejected','console_recovered')))
 
 
 def bound(s,host,row):
@@ -104,8 +105,7 @@ def validate(receipt,row):
     if facts['completion_recorded'] and not facts['intent_verified']:raise ValueError('Missing publication intent')
     if receipt['readiness'] is not None:
         from . import repair_preparation
-        class Original:pass
-        original=Original();original.id=row.quarantine_id;original.plan=row.plan['stage_plan']['quarantine_plan']
+        original=SimpleNamespace(id=row.quarantine_id,plan=row.plan['stage_plan']['quarantine_plan'])
         repair_preparation.validate(receipt['readiness'],original,row.plan['stage_plan']['manifest'])
     if receipt['state']=='blocked' and (facts['intent_verified'] or not receipt['readiness'] or receipt['readiness']['state']!='blocked'):raise ValueError('Unbound blocked publication')
 

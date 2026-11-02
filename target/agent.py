@@ -14,6 +14,7 @@ import sqlite3
 import tempfile
 import threading
 from contextlib import contextmanager
+from types import SimpleNamespace
 import uuid
 import re
 
@@ -497,6 +498,8 @@ def main():
 SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine','/var/lib/mrpatchy-evidence','/var/lib/mrpatchy-process-response','/var/lib/mrpatchy-repair-staging')
 SCAN_MAX_ENTRIES = 10000
 SCAN_MAX_DEPTH = 32
+CLAMAV_BATCH_FILES = 32
+CLAMAV_BATCH_BYTES = 128*1024*1024
 SIGNATURE_MAX_AGE = 7*86400
 
 
@@ -650,12 +653,100 @@ def security_scan(paths,yara_rules=None):
             for root,fd in handles:
                 yield from scan_entries(fd,root,report,deadline,gap)
         iterator=entries()
+        clam_options=[engine,'--stdout','--no-summary','--alert-exceeds-max=yes','--alert-encrypted=yes',
+                      '--follow-file-symlinks=2','--max-filesize=32M','--max-scansize=64M','--max-recursion=16']
+
+        def accept_result(record,result,identifiers=None):
+            """Verify the same opened object is still named, then retain its result."""
+            path=record['path'];fd=record['fd'];before=record['before']
+            try:
+                after=os.fstat(fd)
+                with scan_root(record['directory']) as current_dir:
+                    current_info=os.fstat(current_dir);original_info=os.fstat(record['directory_fd'])
+                    if (current_info.st_dev,current_info.st_ino)!=(original_info.st_dev,original_info.st_ino):
+                        gap(path,'Parent directory changed during scanning');return False
+                named=os.stat(record['name'],dir_fd=record['directory_fd'],follow_symlinks=False)
+                if (named.st_dev,named.st_ino)!=(before.st_dev,before.st_ino):
+                    gap(path,'File path replaced during scanning');return False
+                if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+                    gap(path,'File changed during scanning');return False
+                if result.returncode not in (0,1):gap(path,'Scanner failed');return False
+                if 'Heuristics.Limits.Exceeded' in result.stdout or 'Heuristics.Encrypted' in result.stdout:
+                    gap(path,'Scanner inspection limit or encrypted content prevented complete inspection')
+                report['scanned']+=1
+                if result.returncode==1:
+                    finding={'path':str(path),'sha256':record['digest'].hexdigest(),'device':before.st_dev,
+                             'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,
+                             'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:]}
+                    if identifiers is not None:finding['rule_ids']=identifiers
+                    report['findings'].append(finding)
+                    if len(report['findings'])>=100:
+                        gap(path,'Finding limit reached; scan stopped');return True
+                return False
+            except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:
+                gap(path,type(error).__name__);return False
+            finally:
+                os.close(fd);os.close(record['directory_fd'])
+
+        def parse_clam_batch(records,result):
+            if result.returncode not in (0,1):return None
+            lines=[line for line in result.stdout.splitlines() if line]
+            if len(lines)!=len(records):return None
+            parsed={}
+            for record in records:
+                target=f"/proc/self/fd/{record['fd']}"
+                matches=[line for line in lines if line.startswith(target+': ')]
+                if len(matches)!=1:return None
+                evidence=matches[0]
+                if evidence.endswith(': OK'):code=0
+                elif evidence.endswith(' FOUND'):code=1
+                else:return None
+                parsed[record['fd']]=SimpleNamespace(returncode=code,stdout=evidence)
+            if result.returncode!=int(any(item.returncode for item in parsed.values())):return None
+            return parsed
+
+        def flush_clam_batch(records):
+            """Scan open descriptors together; ambiguous batch output safely retries per file."""
+            if not records:return False
+            parsed=None
+            try:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise TimeoutError()
+                fds=tuple(record['fd'] for record in records)
+                result=subprocess.run(clam_options+[f'/proc/self/fd/{fd}' for fd in fds],pass_fds=fds,
+                                      capture_output=True,text=True,timeout=min(120,max(1,remaining)))
+                parsed=parse_clam_batch(records,result)
+            except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):
+                parsed=None
+            stop=False
+            for record in records:
+                if stop:
+                    os.close(record['fd']);os.close(record['directory_fd']);continue
+                result=parsed.get(record['fd']) if parsed is not None else None
+                if result is None:
+                    try:
+                        remaining=deadline-time.monotonic()
+                        if remaining<=0:raise TimeoutError()
+                        os.lseek(record['fd'],0,0)
+                        result=subprocess.run(clam_options+[f"/proc/self/fd/{record['fd']}"],
+                                              pass_fds=(record['fd'],),capture_output=True,text=True,
+                                              timeout=min(30,max(1,remaining)))
+                    except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:
+                        gap(record['path'],type(error).__name__)
+                        os.close(record['fd']);os.close(record['directory_fd']);continue
+                stop=accept_result(record,result) or stop
+            records.clear()
+            return stop
+
         try:
+            pending=[];pending_bytes=0;stop_scan=False
             for directory_fd,directory,name in iterator:
                 path=directory/name;report['examined']+=1
                 if report['examined']>2000 or time.monotonic()>deadline:
+                    stop_scan=flush_clam_batch(pending) or stop_scan
                     gap(path,'Scan budget exhausted; remaining files not examined');return finish()
                 fd=None
+                record=None
                 try:
                     fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory_fd)
                     before=os.fstat(fd)
@@ -670,44 +761,46 @@ def security_scan(paths,yara_rules=None):
                         digest.update(chunk)
                         if time.monotonic()>deadline:raise TimeoutError()
                     os.lseek(fd,0,0)
+                    record={'path':path,'directory':directory,'name':name,'fd':fd,
+                            'directory_fd':os.dup(directory_fd),'before':before,'digest':digest}
+                    fd=None
                     if yara_rules is not None:
                         try:from bridge import bounded
                         except ImportError:from target.bridge import bounded
                         os.lseek(rules_file.fileno(),0,0)
-                        output,errors,status=bounded([engine,'-a','10',f'/proc/self/fd/{rules_file.fileno()}',f'/proc/self/fd/{fd}'],pass_fds=(rules_file.fileno(),fd),timeout=min(15,max(1,deadline-time.monotonic())),limit=64000,return_status=True,memory_limit=512*1024*1024,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','TZ':'UTC'})
+                        output,errors,status=bounded([engine,'-a','10',f'/proc/self/fd/{rules_file.fileno()}',f"/proc/self/fd/{record['fd']}"],pass_fds=(rules_file.fileno(),record['fd']),timeout=min(15,max(1,deadline-time.monotonic())),limit=64000,return_status=True,memory_limit=512*1024*1024,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','TZ':'UTC'})
                         if errors:raise ValueError('YARA diagnostics prevented complete inspection')
                         identifiers=[]
                         for line in output.splitlines():
-                            match=re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]{0,127}) '+re.escape(f'/proc/self/fd/{fd}'),line)
+                            match=re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]{0,127}) '+re.escape(f"/proc/self/fd/{record['fd']}"),line)
                             if not match or len(identifiers)>=100:raise ValueError('Unexpected or excessive YARA matches')
                             identifiers.append(match[1])
-                        from types import SimpleNamespace
                         result=SimpleNamespace(returncode=1 if identifiers else 0,stdout='YARA rules: '+', '.join(identifiers))
+                        stop_scan=accept_result(record,result,identifiers)
+                        record=None
                     else:
-                        result=subprocess.run([engine,'--stdout','--no-summary','--alert-exceeds-max=yes','--alert-encrypted=yes','--follow-file-symlinks=2','--max-filesize=32M','--max-scansize=64M','--max-recursion=16',f'/proc/self/fd/{fd}'],pass_fds=(fd,),capture_output=True,text=True,timeout=min(30,max(1,deadline-time.monotonic())))
-                    after=os.fstat(fd)
-                    with scan_root(directory) as current_dir:
-                        current_info=os.fstat(current_dir);original_info=os.fstat(directory_fd)
-                        if (current_info.st_dev,current_info.st_ino)!=(original_info.st_dev,original_info.st_ino):
-                            gap(path,'Parent directory changed during scanning');continue
-                    named=os.stat(name,dir_fd=directory_fd,follow_symlinks=False)
-                    if (named.st_dev,named.st_ino)!=(before.st_dev,before.st_ino):
-                        gap(path,'File path replaced during scanning');continue
-                    if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
-                        gap(path,'File changed during scanning');continue
-                    if result.returncode not in (0,1):gap(path,'Scanner failed');continue
-                    if 'Heuristics.Limits.Exceeded' in result.stdout or 'Heuristics.Encrypted' in result.stdout:gap(path,'Scanner inspection limit or encrypted content prevented complete inspection')
-                    report['scanned']+=1
-                    if result.returncode==1:
-                        report['findings'].append({'path':str(path),'sha256':digest.hexdigest(),'device':before.st_dev,'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:],**({'rule_ids':identifiers} if yara_rules is not None else {})})
-                        if len(report['findings'])>=100:
-                            gap(path,'Finding limit reached; scan stopped');return finish()
+                        if pending and (len(pending)>=CLAMAV_BATCH_FILES or pending_bytes+before.st_size>CLAMAV_BATCH_BYTES):
+                            stop_scan=flush_clam_batch(pending) or stop_scan;pending_bytes=0
+                        pending.append(record);pending_bytes+=before.st_size
+                        record=None
+                        if len(pending)>=CLAMAV_BATCH_FILES:
+                            stop_scan=flush_clam_batch(pending) or stop_scan;pending_bytes=0
+                    if stop_scan:return finish()
 
                 except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:gap(path,type(error).__name__)
                 finally:
                     if fd is not None:os.close(fd)
-        except TimeoutError:gap('Traversal','Scan budget exhausted; remaining entries not examined')
-        finally:iterator.close()
+                    if record is not None:
+                        os.close(record['fd']);os.close(record['directory_fd'])
+            flush_clam_batch(pending)
+        except TimeoutError:
+            flush_clam_batch(pending)
+            gap('Traversal','Scan budget exhausted; remaining entries not examined')
+        finally:
+            iterator.close()
+            for record in pending:
+                os.close(record['fd']);os.close(record['directory_fd'])
+            pending.clear()
     return finish()
 
 
