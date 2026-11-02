@@ -1772,10 +1772,14 @@ def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExpo
             'Content-Disposition':'attachment; filename="mrpatchy-response-'+identifier+'.json"',
             'X-Response-Record-SHA256':digest,'Cache-Control':'no-store'})
 
-def response_idle(s,host_id,response_id=None):
+def pending_response_work(s,host_id,exclude_audit=True):
     from .quarantine import ACTIONS
+    actions=tuple(action for action in ACTIONS if not exclude_audit or action!='quarantine-audit')
+    return bool(s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)))
+
+def response_idle(s,host_id,response_id=None):
     if operations.host_quarantined(s,host_id,response_id=response_id):raise HTTPException(409,'Another operation or file response requires reconciliation')
-    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(ACTIONS),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'File response work is pending; reconcile interrupted running jobs in Activity first')
+    if pending_response_work(s,host_id,exclude_audit=False):raise HTTPException(409,'File response work is pending; reconcile interrupted running jobs in Activity first')
 
 @app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/quarantine')
 def prepare_quarantine(host_id:str,archive_id:str,user=Depends(admin_user)):
@@ -1816,12 +1820,11 @@ class RepairPreparationInput(BaseModel):
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/repair-preparations')
 def prepare_trusted_replacement(host_id:str,quarantine_id:str,body:RepairPreparationInput,user=Depends(admin_user)):
-    from . import repair_preparation,quarantine
+    from . import repair_preparation
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
         if operations.host_quarantined(s,host_id,response_id=row.id,read_only_response_id=row.id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
-        actions=tuple(action for action in quarantine.ACTIONS if action!='quarantine-audit')
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending')
         preparation=repair_preparation.Preparation(id=str(uuid.uuid4()),host_id=host_id,quarantine_id=row.id,bundle_id=body.bundle_id,
             path=row.plan['file']['path'],actor=user['username'],fingerprint=host.fingerprint,response_plan_digest=body.plan_digest)
         repair_preparation.source(s,host,preparation);s.add(preparation)
@@ -1840,10 +1843,8 @@ def trusted_replacement_history(host_id:str,offset:int=0,user=Depends(admin_user
         return {'items':[object_dict(r)|{'report_digest':incidents.digest(r.report),'stage_id':stages.get(r.id)} for r in rows[:20]],'more':len(rows)>20}
 
 def staging_idle(s,host_id,quarantine_id):
-    from .quarantine import ACTIONS
     if operations.host_quarantined(s,host_id,response_id=quarantine_id,staging_response_id=quarantine_id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
-    actions=tuple(action for action in ACTIONS if action!='quarantine-audit')
-    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted work in Activity first')
+    if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending; reconcile interrupted work in Activity first')
 
 class RepairStagingApproval(BaseModel):
     report_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -1910,10 +1911,8 @@ def publication_row(s,host_id,publication_id):
     return row
 
 def publication_idle(s,row):
-    from .quarantine import ACTIONS
     if operations.host_quarantined(s,row.host_id,response_id=row.quarantine_id,publication_id=row.id,publication_response_id=row.quarantine_id):raise HTTPException(409,'Another operation or response requires reconciliation')
-    actions=tuple(a for a in ACTIONS if a!='quarantine-audit')
-    if s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
+    if pending_response_work(s,row.host_id):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
 
 @app.post('/api/hosts/{host_id}/security/repair-stages/{stage_id}/publish')
 def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingApproval,user=Depends(admin_user)):
@@ -1924,8 +1923,7 @@ def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingA
         # Before a publication exists, use its response scope without bypassing
         # any existing publication hold. Related process pauses remain active.
         if operations.host_quarantined(s,host_id,response_id=staged.quarantine_id,publication_response_id=staged.quarantine_id):raise HTTPException(409,'An unrelated operation or response requires reconciliation')
-        from .quarantine import ACTIONS
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(tuple(a for a in ACTIONS if a!='quarantine-audit')),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending')
         row=repair_publication.approve(s,host,stage_id,body.report_digest,user['username'],body.reason.strip())
         return {'publication_id':row.id,'publication_hold':True,'job_id':worker.enqueue(s,host_id,'trusted-repair-publish',{'publication_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
 
