@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.90 — 2026-11-02
+
+1. [PR #298](https://github.com/StealthCat/MrPatchy/pull/298): Replace the duplicate staging and publication readiness `Original` carrier classes with the standard-library `SimpleNamespace`, preserving the original quarantine identity, exact plan and manifest references, receipt validation, state gates and runtime-response authorization boundaries. Compatibility: no schema, persisted-data, API, UI, configuration, audit, actor-attribution, target-action or deployment change. This is partial #189; advisory-plan generation, failed-status handling, unmerged pricing consolidation and other undelivered rows remain open.
+
 ## 1.35.89 — 2026-11-02
 
 1. [PR #297](https://github.com/StealthCat/MrPatchy/pull/297): Share one newest-record query helper across process observations, service-health observations and repair publications, while preserving each caller's host and publication-state filters, newest-created/ascending-ID tie-break, empty-input behavior and result mapping. Compatibility: no schema, API, UI, configuration, deployment, role, audit, target-action or runtime-response authorization change. This is partial #189; shared advisory-plan generation, failed-status handling, the duplicated `Original` stub and other undelivered rows remain open.

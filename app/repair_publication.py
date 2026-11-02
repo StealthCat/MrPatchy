@@ -1,6 +1,7 @@
 """Explicit publication of one authenticated staged inode; no automatic recovery."""
 import time
 import uuid
+from types import SimpleNamespace
 from sqlalchemy import String,Double,Boolean,JSON,Text,select
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
@@ -104,8 +105,7 @@ def validate(receipt,row):
     if facts['completion_recorded'] and not facts['intent_verified']:raise ValueError('Missing publication intent')
     if receipt['readiness'] is not None:
         from . import repair_preparation
-        class Original:pass
-        original=Original();original.id=row.quarantine_id;original.plan=row.plan['stage_plan']['quarantine_plan']
+        original=SimpleNamespace(id=row.quarantine_id,plan=row.plan['stage_plan']['quarantine_plan'])
         repair_preparation.validate(receipt['readiness'],original,row.plan['stage_plan']['manifest'])
     if receipt['state']=='blocked' and (facts['intent_verified'] or not receipt['readiness'] or receipt['readiness']['state']!='blocked'):raise ValueError('Unbound blocked publication')
 
