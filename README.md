@@ -70,6 +70,14 @@ Fleet **Investigations** shows 50 behaviors per page with Previous/Next controls
 
 Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Configure Caddy's published interface/ports with `BIND_IP`, `HTTP_PORT` and `HTTPS_PORT`; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
 
+Production Python and Caddy image references retain readable tags plus immutable
+multi-platform index digests. Update tag/digest pairs together and keep deployed
+Caddy aligned with its CI adapter fixture; review the refresh procedure in
+[the security checkpoint](docs/SECURITY_IMPLEMENTATION.md). Production Python
+packages install from `requirements.lock` with pip `--require-hashes`; regenerate
+and review the lock and hashes when updating dependencies. APT and GCP CLI packages
+and source-build inputs remain outside these locks.
+
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
 cd MrPatchy
@@ -126,6 +134,15 @@ Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed alrea
 1. **Endpoint:** select **Add server** and enter a name, IP/hostname and SSH port.
 2. **Prepare:** download the personalized Bash script, transfer it to the target and run `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, its public SSH key, the root-owned bridge and restricted sudo permissions. The script performs no downloads, APT queries or callbacks. Click **I ran the script · Proceed to step 3**. Curl and ordinary-download delivery use the same bootstrap; curl links expire after one hour. In curl mode, select **Fetch from HTTPS endpoint**: the default `PUBLIC_URL`, **Internal HTTPS**, or **External HTTPS**. Enabled profiles use their configured hostname and browser-facing port. Choose an address reachable from the target; for a private CA, use curl’s `--cacert /path/to/ca.pem` with a trusted bundle for the site certificate.
 3. **Connect and verify:** verify the printed ED25519 SHA256 host fingerprint through a trusted console, enter it, and click **Finish and verify installation**. Mr Patchy installs its collector/service over SSH and verifies file hashes, ownership, modes and service state.
+
+Public curl links remain reusable for one hour for download retries. Public
+downloads share ten attempts per sixty seconds per client address across
+controllers; clients behind the same NAT share that allowance. HTTP 429 carries
+`Retry-After` when over quota, and admission-lock contention returns HTTP 503 with
+a one-second retry. Wait for that delay before retrying. Trusted ASGI proxy
+configuration still determines the client address; raw forwarding headers are not
+used by this route. Valid first/retry installer preparations are audited without
+bearer tokens; preparation does not prove completed delivery or execution.
 
 **Servers → Manage → Download Bash installer** is available for enabled servers. A fresh download contains the server's current SSH identity; download again after key rotation. Re-running an old saved script can reinstall its old public key.
 
