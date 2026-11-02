@@ -2598,6 +2598,16 @@ Track this addition in the scheduled development task and UI design guide. Prese
 issue-first priority, the current AI performance program, the fixed major-1 policy,
 the cycle budget and exact-final-commit version/CI/merge requirements.
 
+Implementation checkpoint (issue #320, pending integration): the first bounded
+event-model increment adds stable source/kind/subject event identities, retained
+safe payload revisions, unchanged-observation deduplication, resolution/reopening
+revisions, current-role filtering and independent per-user read/dismiss revisions.
+Read/dismiss mutations remain separate from operational acknowledgement, incident
+state, AI approval and response authorization. This checkpoint does not complete
+milestone 1: producer transactions, cross-worker concurrent publication recovery,
+retention/pruning policy and broader existing-alert lifecycle integration remain,
+as do the live transport, UI and end-to-end milestones 2–4.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
