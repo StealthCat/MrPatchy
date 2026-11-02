@@ -2598,7 +2598,7 @@ Track this addition in the scheduled development task and UI design guide. Prese
 issue-first priority, the current AI performance program, the fixed major-1 policy,
 the cycle budget and exact-final-commit version/CI/merge requirements.
 
-Implementation checkpoint (issue #320, pending integration): the first bounded
+Implementation checkpoint (issue #320, integrated in v1.36.0): the first bounded
 event-model increment adds stable source/kind/subject event identities, retained
 safe payload revisions, unchanged-observation deduplication, resolution/reopening
 revisions, current-role filtering and independent per-user read/dismiss revisions.
@@ -2607,6 +2607,16 @@ state, AI approval and response authorization. This checkpoint does not complete
 milestone 1: producer transactions, cross-worker concurrent publication recovery,
 retention/pruning policy and broader existing-alert lifecycle integration remain,
 as do the live transport, UI and end-to-end milestones 2–4.
+
+Implementation checkpoint (issue #324, pending integration): the next bounded
+increment exposes authenticated, current-role-filtered notification pages and unread
+counts plus CSRF-protected per-user read/dismiss mutations. The server derives the
+recipient from the active session, returns only the safe retained public payload and
+keeps stale-tab revisions from marking a newer event revision read. Hidden events
+fail closed and read/dismiss remains independent of global alert acknowledgement,
+incident state, AI approval and response authorization. This does not complete the
+notification program: producers, retention, live cross-controller delivery, UI and
+end-to-end SQLite/MySQL/browser acceptance remain planned.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use

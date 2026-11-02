@@ -210,7 +210,13 @@ def list_for_user(session, username, *, unread_only=False,
 
 
 def unread_count(session, username):
-    query = _query(session, username, unread_only=True, include_dismissed=False)
+    return count_for_user(session, username, unread_only=True, include_dismissed=False)
+
+
+def count_for_user(session, username, *, unread_only=False, include_dismissed=False):
+    """Count only the current revisions visible to the user's current role."""
+    query = _query(session, username, unread_only=unread_only,
+                   include_dismissed=include_dismissed)
     if query is None:
         return 0
     return session.scalar(select(func.count()).select_from(query.subquery()))
