@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.97'
+APP_VERSION='1.35.104'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -426,13 +426,27 @@ def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=No
         return {'url':url,'endpoint':endpoint,'expires_in':3600,
                 'command':f'f=$(mktemp) && curl -fsSL {shlex.quote(url)} -o "$f" && sudo bash "$f"; rm -f "$f"'}
 @app.get('/enroll/{token}')
-def enroll(token:str):
+def enroll(token:str,request:Request):
+    from . import enrollment_downloads
+    source=enrollment_downloads.source_id(request)
+    enrollment_downloads.admit(source)
     with Session() as s:
         row=s.get(Setting,'enroll:'+token_hash(token))
         if not row or row.value['expires']<time.time(): raise HTTPException(404,'Enrollment link expired')
-        h=host_or_404(s,row.value['host_id'])
+        host_id=row.value['host_id']
+        h=host_or_404(s,host_id)
         if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
-        with host_lifecycle.activity([h.id],'control'):return PlainTextResponse(ssh.bootstrap(h))
+        host_id=h.id  # Lock the persisted identity, including case-insensitive DB lookups.
+    with host_lifecycle.activity([host_id],'control'),Session() as s:
+        # Re-read after the lifecycle fence: concurrent preparations must not
+        # lose usage counts, and a revoked/expired link must not be reused.
+        row=s.get(Setting,'enroll:'+token_hash(token))
+        if not row or row.value['expires']<time.time():raise HTTPException(404,'Enrollment link expired')
+        h=host_or_404(s,host_id)
+        if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
+        body=ssh.bootstrap(h)
+        enrollment_downloads.prepared(s,row,source,host_id);s.commit()
+        return PlainTextResponse(body)
 def enqueue_host_action(host_id,action):
     with Session() as s:
         h=host_or_404(s,host_id)
@@ -522,10 +536,14 @@ def repository(host_id:str,body:RepoInput,user=Depends(admin_user)):
         if not package_backend.source_path(body.path,h.inventory): raise HTTPException(400,'Unsupported repository path for this target')
         package_backend.sources(body.content,body.path,h.inventory,worker.repository_access(s,host_id))
         return {'job_id':worker.enqueue(s,host_id,'repository',body.model_dump())}
-class KeyInput(BaseModel): name:str; data:str=Field(max_length=3_000_000)
+class KeyInput(BaseModel): name:str=Field(max_length=255); data:str=Field(max_length=3_000_000)
+def key_filename(name):
+    # Suffix and stem are checked separately so no repeated class competes with a literal suffix.
+    stem,dot,suffix=name.rpartition('.')
+    return bool(dot) and suffix in ('gpg','asc') and re.fullmatch(r'[A-Za-z0-9_-]+',stem) is not None
 @app.put('/api/hosts/{host_id}/keys')
 def key_upload(host_id:str,body:KeyInput,user=Depends(admin_user)):
-    if not re.fullmatch(r'[A-Za-z0-9_-]+\.(gpg|asc)',body.name): raise HTTPException(400,'Use a .gpg or .asc filename')
+    if not key_filename(body.name): raise HTTPException(400,'Use a .gpg or .asc filename')
     try: base64.b64decode(body.data,validate=True)
     except ValueError: raise HTTPException(400,'Invalid base64 key data')
     with Session() as s:
@@ -1129,7 +1147,8 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
         worker.validate_patch(s,h,specs)
         if package_backend.is_rpm(h.inventory):
             return {'plan':'Reviewed RPM candidates:\n'+'\n'.join(specs),'packages':specs,'warning':'Candidate review only. Native DNF resolves dependencies and verifies signatures on the target before installation; removals and downgrades are prohibited.'}
-        cfgfile=apt.DATA/'apt'/host_id/'apt.conf'
+        # Use the persisted identity: the URL text may differ (e.g. case-insensitive collation) and must never reach a filesystem path.
+        cfgfile=apt.DATA/'apt'/h.id/'apt.conf'
         if not cfgfile.exists():raise HTTPException(409,'Refresh repositories first')
         result=apt.run(cfgfile,['apt-get','--simulate','--no-remove','--only-upgrade','install','--',*specs])
         return {'plan':result[-48000:],'packages':specs,'warning':'Central simulation; target and repositories are revalidated at execution.'}

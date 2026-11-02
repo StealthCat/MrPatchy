@@ -70,6 +70,14 @@ Fleet **Investigations** shows 50 behaviors per page with Previous/Next controls
 
 Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Configure Caddy's published interface/ports with `BIND_IP`, `HTTP_PORT` and `HTTPS_PORT`; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
 
+Production Python and Caddy image references retain readable tags plus immutable
+multi-platform index digests. Update tag/digest pairs together and keep deployed
+Caddy aligned with its CI adapter fixture; review the refresh procedure in
+[the security checkpoint](docs/SECURITY_IMPLEMENTATION.md). Production Python
+packages install from `requirements.lock` with pip `--require-hashes`; regenerate
+and review the lock and hashes when updating dependencies. APT and GCP CLI packages
+and source-build inputs remain outside these locks.
+
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
 cd MrPatchy
@@ -127,6 +135,15 @@ Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed alrea
 2. **Prepare:** download the personalized Bash script, transfer it to the target and run `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, its public SSH key, the root-owned bridge and restricted sudo permissions. The script performs no downloads, APT queries or callbacks. Click **I ran the script · Proceed to step 3**. Curl and ordinary-download delivery use the same bootstrap; curl links expire after one hour. In curl mode, select **Fetch from HTTPS endpoint**: the default `PUBLIC_URL`, **Internal HTTPS**, or **External HTTPS**. Enabled profiles use their configured hostname and browser-facing port. Choose an address reachable from the target; for a private CA, use curl’s `--cacert /path/to/ca.pem` with a trusted bundle for the site certificate.
 3. **Connect and verify:** verify the printed ED25519 SHA256 host fingerprint through a trusted console, enter it, and click **Finish and verify installation**. Mr Patchy installs its collector/service over SSH and verifies file hashes, ownership, modes and service state.
 
+Public curl links remain reusable for one hour for download retries. Public
+downloads share ten attempts per sixty seconds per client address across
+controllers; clients behind the same NAT share that allowance. HTTP 429 carries
+`Retry-After` when over quota, and admission-lock contention returns HTTP 503 with
+a one-second retry. Wait for that delay before retrying. Trusted ASGI proxy
+configuration still determines the client address; raw forwarding headers are not
+used by this route. Valid first/retry installer preparations are audited without
+bearer tokens; preparation does not prove completed delivery or execution.
+
 **Servers → Manage → Download Bash installer** is available for enabled servers. A fresh download contains the server's current SSH identity; download again after key rotation. Re-running an old saved script can reinstall its old public key.
 
 ![Offline enrollment wizard](docs/screenshots/enrollment.jpg)
@@ -145,7 +162,7 @@ Package discovery runs native APT or DNF **centrally**, using isolated target in
 
 In **Packages**, select a server, review candidates and choose updates. **Select all eligible updates** selects the current filtered view, up to 500 packages per reviewed batch; held, broken and already queued packages are excluded. Clear selection is available beside it. Confirmation displays the effective reboot and snapshot-rollback policy. That policy is recorded with the job; if it changes before execution, the job fails for reapproval rather than silently adopting different behavior. Staged rollouts require the same policy review for every server.
 
-Explicit installation refreshes target metadata and requests the recorded exact versions. Package removal and forced changes to holds are prohibited; APT retains existing configuration files with `--force-confold`; RPM follows native config-file flags and may create `.rpmnew`/`.rpmsave` files. RPM preview shows candidates; dependency resolution runs on the target before installation. Maintainer scripts may restart services. **Automatic reboot is available only under an explicitly reviewed, enabled policy.**
+Explicit installation refreshes target metadata and requests the recorded exact versions. APT preview uses the repository configuration saved for the persisted server identity, including when a case-insensitive database lookup resolves differently cased request text. Package removal and forced changes to holds are prohibited; APT retains existing configuration files with `--force-confold`; RPM follows native config-file flags and may create `.rpmnew`/`.rpmsave` files. RPM preview shows candidates; dependency resolution runs on the target before installation. Maintainer scripts may restart services. **Automatic reboot is available only under an explicitly reviewed, enabled policy.**
 
 ![Patch approval showing reboot and rollback policy](docs/screenshots/patch-review.jpg)
 
@@ -230,6 +247,8 @@ A tested release-capable snapshot adapter is mandatory. Generic root-only Snappe
 ## Repository management
 
 Use **Repositories** to inspect, add, edit or disable sources, upload signing keys and restore reviewed source backups. **Repository access** configures scoped HTTPS credentials, private CA bundles, proxies, default release and exact-URI mirror mappings. Secrets are encrypted in the database and staged in a private central APT auth file.
+
+Uploaded signing-key filenames are limited to 255 characters; longer names return HTTP 422 before any host work is queued. Existing filename character and `.gpg`/`.asc` suffix rules still apply.
 
 HTTP(S) repositories are supported directly. Local/media sources require an administrator-provisioned HTTP(S) mirror containing the same signed metadata. Arbitrary target `apt.conf` hooks and executable authentication/transport helpers are never imported. Deb822 field names must use canonical spelling without spaces or tabs before the colon; ambiguous or duplicate fields are rejected before native APT. Unsupported configurations remain visible and fail closed; “all repositories” is not an unconditional transport-compatibility claim.
 

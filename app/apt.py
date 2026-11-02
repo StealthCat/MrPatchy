@@ -114,6 +114,13 @@ def key_destination(root,name):
 def public_key_path(name):
     return name.startswith('/') and '..' not in Path(name).parts and bool(re.fullmatch(r'/[A-Za-z0-9_./+\-]+\.(asc|gpg)',name))
 
+def private_file(path, text):
+    """Write repository credentials at mode 0600 from creation; never follow or reuse an existing entry."""
+    path.unlink(missing_ok=True)
+    descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+    with os.fdopen(descriptor,'w') as stream:
+        os.fchmod(stream.fileno(),0o600);stream.write(text)
+
 def prepare(host_id, inv, access=None):
     access=validate_access(access or {})
     root=DATA/'apt'/host_id; root.mkdir(parents=True,exist_ok=True)
@@ -168,8 +175,7 @@ APT::Update::Error-Mode "any";
 APT::Sandbox::User "{pwd.getpwuid(os.geteuid()).pw_name}";
 ''')
     auth=root/'etc/apt/auth.conf'
-    auth.write_text(''.join('machine '+x['machine']+' login '+x['login']+' password '+x['password']+'\n' for x in access.get('credentials',[])))
-    auth.chmod(0o600)
+    private_file(auth,''.join('machine '+x['machine']+' login '+x['login']+' password '+x['password']+'\n' for x in access.get('credentials',[])))
     ca=root/'repository-ca.pem';ca.unlink(missing_ok=True)
     with cfg.open('a') as stream:
         stream.write('Dir::Etc::netrc "'+str(auth)+'";\n')
