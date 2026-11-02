@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.101 — 2026-11-02
+
+1. [PR #316](https://github.com/StealthCat/MrPatchy/pull/316): Create central APT auth.conf and recovery MySQL option files with owner-only 0600 permissions from the initial exclusive, no-follow open, replacing the existing final directory entry instead of following a symlink. Validate remote MySQL CA configuration before writing credential content, and retain creation-mode/symlink/failure regressions without altering os.open test semantics. Compatibility: required plaintext formats, locations and final modes remain unchanged; destination symlinks are now replaced rather than written through. No encryption, schema, API, role or runtime-response authorization change is introduced. Completes #311; fresh PR CodeQL evidence does not establish complete repository-wide live-alert closure.
+
 ## 1.35.100 — 2026-11-02
 
 1. [PR #313](https://github.com/StealthCat/MrPatchy/pull/313): Bound public enrollment-installer preparation with a shared persistent ten-attempt sliding sixty-second quota per ASGI client address, finite retained source state and nonblocking admission contention; audit first/retry preparations without bearer tokens and recheck link expiry/revocation under the canonical stored-host lifecycle fence. Compatibility: links remain reusable for one hour, but excess requests now return 429/Retry-After and admission-lock contention returns 503/Retry-After:1; shared-NAT clients share an address quota and trusted ASGI proxy configuration still applies. Installer content, schema, roles and runtime-response approvals are unchanged. Preparation is not proof of delivery/execution; this is partial #202, whose independent route-exception-header item remains open in #264.
