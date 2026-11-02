@@ -2,7 +2,6 @@ import hashlib
 import hmac
 import os
 import secrets
-import time
 from .db import DATA
 from cryptography.fernet import Fernet
 

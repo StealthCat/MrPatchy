@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import String, JSON, Double, Integer, select, update, func
 from sqlalchemy.orm import Mapped, mapped_column, load_only
-from .db import Base, Session, Host, Package, Job, config, audit
+from .db import Base, Session, Host, Package, Job, audit
 from .coordination import Lock
 from . import operations
 
@@ -111,8 +111,10 @@ def hosts_for(s, policy):
 
 
 def tick_hosts(s, policy):
-    # The scheduler tick only reads these columns; skip the inventory/telemetry/baseline JSON blobs.
-    query = select(Host).options(load_only(Host.id, Host.state, Host.last_seen, Host.integrity)).where(
+    # Load every column advance()/host_lifecycle read, so no attribute becomes a per-host lazy-load SELECT;
+    # the telemetry/baseline JSON blobs stay deferred.
+    query = select(Host).options(load_only(Host.id, Host.state, Host.last_seen, Host.integrity, Host.enabled,
+                                           Host.deleted_at, Host.fingerprint, Host.inventory, Host.lifecycle_revision)).where(
         Host.enabled==True, Host.deleted_at==0).order_by(Host.name, Host.id)
     if not policy['all_hosts']: query = query.where(Host.id.in_(policy['host_ids']))
     return list(s.scalars(query))

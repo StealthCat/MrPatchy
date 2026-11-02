@@ -39,6 +39,10 @@ def test_scheduler_tick_query_count_is_independent_of_host_count(admin, counted)
     sched.tick(now)
     package_reads = [sql for sql in counted if 'FROM packages' in sql]
     assert len(package_reads) <= 2, len(package_reads)
+    # Deferred Host attributes must not turn into one SELECT per attribute per host (coordinator return on #275).
+    host_reads = [sql for sql in counted if 'FROM hosts' in sql]
+    assert len(host_reads) < HOSTS, len(host_reads)
+    assert len(counted) < 15 * HOSTS, len(counted)
     with Session() as s:
         assert s.scalar(select(sched.PatchRun.id).where(sched.PatchRun.trigger == 'critical').limit(1))
 

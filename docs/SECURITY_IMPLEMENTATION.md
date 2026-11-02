@@ -27,6 +27,20 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+## Dependency update coverage (partial #201)
+
+PR #284 configures weekly Dependabot updates for pip, npm, GitHub Actions and
+Docker at the root, deploy and test-fixture manifest locations. Tracked Dockerfile
+location coverage has regression tests; live Dependabot update generation has not
+been exercised as part of this delivery. This is update configuration, not code
+or dependency vulnerability scanning. PR #292 pins the CI workflow's
+`actions/checkout`, `actions/setup-python` and `actions/setup-node` references to
+full commit SHAs with version comments, covered by a regression test. Base images
+remain tag-based and Python requirements lack install hashes. Image digest and
+hash pinning, code scanning and additional Compose sandboxing remain unfinished
+under #201; no runtime response authority or deployment sandbox boundary is
+changed.
+
 ## Scheduled development completion gate
 
 Before each scheduled development cycle, assess the current roadmap against current
@@ -61,6 +75,30 @@ several small related items when appropriate.
 The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
+
+### Bounded budget aggregation follow-up (#133)
+
+The follow-up to partial #273 replaces grouping by distinct receipt amount with
+at most five status buckets, including a conservative bucket for every unknown
+unreleased status. MySQL uses native DECIMAL summation. SQLite uses a registered
+bounded-memory integer nano-dollar aggregate, normalizing each value at the same
+nine-place precision as the previous SQLAlchemy Numeric reader and returning text
+to avoid an additional floating-point sum. This does not change SQLite's existing
+NUMERIC storage precision, ledger retention, admission locks or timezone membership.
+
+On disposable 10,000-receipt fixtures, exact-head SQLite and MySQL checks reduced
+aggregation results from 10,000 rows to one. The recorded locked aggregation times
+were 0.0295 to 0.0176 seconds on SQLite and 0.0487 to 0.0107 seconds on MySQL.
+Separately, five actual reserve() calls on SQLite measured median held-lock time of
+0.1497 versus 0.0493 seconds and peak traced allocation of 3,335,400 versus 157,231
+bytes. These are single fixture measurements without a timing guarantee or fleet
+throughput claim. Exact-head SQLite/MySQL, precision and concurrent near-cap tests
+retain exact money totals and atomic admission.
+
+PR #240 separately owns timezone-window membership; its later integration must
+preserve both its predicate correction and this aggregate. Eligible ledger scanning
+remains O(N), and the wider faster-triage program and its end-to-end acceptance gate
+remain unfinished.
 
 Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
@@ -98,7 +136,7 @@ New tables are included in the offline SQLite/MySQL migration metadata. Security
 
 Prerequisites: install ClamAV and current signatures on the managed target and redeploy the Mr Patchy collector/bridge using the existing reviewed installation workflow. No scanner installation or signature updates are performed automatically. Engine version is captured with the scan report.
 
-Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, four-minute overall work budget and 30-second per-file scanner timeout. Symlinks are not followed during traversal. Virtual filesystem directories and the reserved quarantine directory are excluded. Exclusions and failures are reported as incomplete coverage. Scanning uses an opened descriptor and checks metadata before accepting the result. A compromised root/kernel remains outside this trust boundary. Reports never claim the server is clean.
+Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file and a four-minute overall work budget. ClamAV groups at most 32 already-open file descriptors and 128 MiB of source bytes into one local `clamscan` process with a 120-second batch timeout. An engine failure or output that cannot be mapped exactly back to every descriptor falls back to the prior 30-second per-file invocation while the overall deadline remains. This does not enable or connect to a ClamAV daemon. Symlinks are not followed during traversal. Virtual filesystem directories and the reserved quarantine directory are excluded. Exclusions and failures are reported as incomplete coverage. Scanning uses opened file and parent-directory descriptors and checks metadata before accepting each result. A compromised root/kernel remains outside this trust boundary. Reports never claim the server is clean.
 
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
@@ -146,7 +184,9 @@ Traversal opens each root ancestor with `O_DIRECTORY|O_NOFOLLOW`, then descends 
 
 New incident evidence includes a bounded scan coverage summary (engine, freshness, counts, timestamps and up to 20 shortened gap messages). AI proposals see these limitations, and the existing evidence digest binds them into plan generation and review. Full immutable receipts remain available in scan history. Historical incidents/approvals are not silently rewritten; their signature context remains unknown until a new scan supplies it. Plans still require review and remain advisory only.
 
-After updating the controller, use the existing **Finish / verify installation** workflow to redeploy the updated collector to managed targets. Old collectors continue producing legacy receipts without freshness metadata. Automated tests simulate engine output, signature drift, path replacement, parent symlink races, empty-directory budgets, descriptor cleanup and AI evidence binding. A live ClamAV engine with production databases was not available in this development environment.
+After updating the controller, use the existing **Finish / verify installation** workflow to redeploy the updated collector to managed targets. Old collectors continue producing legacy receipts without freshness metadata. Automated tests simulate bounded multi-file ClamAV invocations, mixed clean/detection mapping, ambiguous-output fallback, engine output, signature drift, path replacement, parent symlink races, finding-limit descriptor cleanup, empty-directory budgets and AI evidence binding.
+
+A disposable supported-target ClamAV 1.5.3 run used the complete cryptographically verified production set: `main.cvd` version 63 (3,287,027 signatures), `daily.cvd` version 28171 (355,841 signatures, built 2026-11-01) and `bytecode.cvd` version 339. Loading that set and scanning one benign file took 8.070–8.640 seconds across three launches with about 987,312 KiB peak child RSS. Scanning the same 20 benign files separately took 173.018 seconds / 20 launches; one bounded batch took 9.382 seconds / one launch (18.4x elapsed improvement). Both modes scanned 20/20 files with no gaps or detections and the same 987,460 KiB peak child RSS. An end-to-end `security_scan()` run also used one descriptor batch, scanned 20/20 files in 9.625 seconds, reported recent signatures and no coverage gaps, and retained the before/after engine-version checks.
 
 ## Read-only package and persistence inspection
 

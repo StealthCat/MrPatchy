@@ -3,12 +3,11 @@ import datetime
 import hashlib
 import json
 import time
-import uuid
 import httpx
-from sqlalchemy import String,Text,Double,JSON,select,func
+from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
 from . import host_lifecycle
-from .db import Base,Session,Setting,Host,Package,Job,Audit,config
+from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
 class Alert(Base):

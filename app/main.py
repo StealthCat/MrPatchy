@@ -20,7 +20,7 @@ from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations, incidents, connections,host_lifecycle
-from .identity import User,actor,consume_otp,new_secret
+from .identity import User,consume_otp,new_secret
 from .security import unseal
 
 @asynccontextmanager
@@ -47,7 +47,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.69'
+APP_VERSION='1.35.94'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -192,7 +192,9 @@ def login(body:Login,request:Request,response:Response):
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
         recent=login_attempts.get(bucket,[])
-        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
+        # Usernames cannot contain ':', so the address is everything before the last one.
+        # A prefix match would also count other IPv6 addresses, e.g. ::1:2 under ::1.
+        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.rsplit(':',1)[0]==ip)
         if len(recent)>=10 or ip_attempts>=50:
             scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit')
             # One audit entry per limit and window, so rejected requests cannot flood the log.
@@ -1194,7 +1196,7 @@ def rollout(body:RolloutInput,user=Depends(admin_user)):
             h=host_or_404(s,host_id);specs=[]
             if not host_lifecycle.active(h):raise HTTPException(409,'A selected server is disabled or deleted')
             policy=reviewed_policy(s,host_id,(body.expected_recovery_policies or {}).get(host_id))
-            if s.scalar(select(func.count()).select_from(Job).where(Job.host_id==host_id,Job.state.in_(['queued','running'])))>=50:raise HTTPException(429,'Server queue is full')
+            worker.ensure_queue_capacity(s,host_id)
             for name in body.packages:
                 p=s.get(Package,host_id+':'+name)
                 if not p or not p.candidate:raise HTTPException(400,'Missing candidate on '+h.name+': '+name)
@@ -1203,8 +1205,7 @@ def rollout(body:RolloutInput,user=Depends(admin_user)):
         # One transaction: no partial rollout submission. The first server is the canary.
         ids=[]
         for host_id,specs,policy,revision in prepared:
-            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_host_revision':revision,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']})
-            s.add(job);ids.append(job.id)
+            ids.append(worker.stage_job(s,host_id,'patch',{'packages':specs,'_host_revision':revision,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']}))
         audit(s,'create staged rollout',user['username']+' '+','.join(ids));s.commit()
         return {'jobs':ids,'canary':ids[0]}
 
@@ -1771,14 +1772,17 @@ def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExpo
             'Content-Disposition':'attachment; filename="mrpatchy-response-'+identifier+'.json"',
             'X-Response-Record-SHA256':digest,'Cache-Control':'no-store'})
 
-def response_idle(s,host_id,response_id=None):
+def pending_response_work(s,host_id,exclude_audit=True):
     from .quarantine import ACTIONS
+    actions=tuple(action for action in ACTIONS if not exclude_audit or action!='quarantine-audit')
+    return bool(s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)))
+
+def response_idle(s,host_id,response_id=None):
     if operations.host_quarantined(s,host_id,response_id=response_id):raise HTTPException(409,'Another operation or file response requires reconciliation')
-    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(ACTIONS),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'File response work is pending; reconcile interrupted running jobs in Activity first')
+    if pending_response_work(s,host_id,exclude_audit=False):raise HTTPException(409,'File response work is pending; reconcile interrupted running jobs in Activity first')
 
 @app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/quarantine')
 def prepare_quarantine(host_id:str,archive_id:str,user=Depends(admin_user)):
-    from . import quarantine
     from .evidence_vault import EvidenceArchive,EvidenceCopy,incident
     with host_change(host_id),Session() as s:
         host_or_404(s,host_id);archive=s.get(EvidenceArchive,archive_id)
@@ -1816,12 +1820,11 @@ class RepairPreparationInput(BaseModel):
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/repair-preparations')
 def prepare_trusted_replacement(host_id:str,quarantine_id:str,body:RepairPreparationInput,user=Depends(admin_user)):
-    from . import repair_preparation,quarantine
+    from . import repair_preparation
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
         if operations.host_quarantined(s,host_id,response_id=row.id,read_only_response_id=row.id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
-        actions=tuple(action for action in quarantine.ACTIONS if action!='quarantine-audit')
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending')
         preparation=repair_preparation.Preparation(id=str(uuid.uuid4()),host_id=host_id,quarantine_id=row.id,bundle_id=body.bundle_id,
             path=row.plan['file']['path'],actor=user['username'],fingerprint=host.fingerprint,response_plan_digest=body.plan_digest)
         repair_preparation.source(s,host,preparation);s.add(preparation)
@@ -1840,10 +1843,8 @@ def trusted_replacement_history(host_id:str,offset:int=0,user=Depends(admin_user
         return {'items':[object_dict(r)|{'report_digest':incidents.digest(r.report),'stage_id':stages.get(r.id)} for r in rows[:20]],'more':len(rows)>20}
 
 def staging_idle(s,host_id,quarantine_id):
-    from .quarantine import ACTIONS
     if operations.host_quarantined(s,host_id,response_id=quarantine_id,staging_response_id=quarantine_id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
-    actions=tuple(action for action in ACTIONS if action!='quarantine-audit')
-    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted work in Activity first')
+    if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending; reconcile interrupted work in Activity first')
 
 class RepairStagingApproval(BaseModel):
     report_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -1910,10 +1911,8 @@ def publication_row(s,host_id,publication_id):
     return row
 
 def publication_idle(s,row):
-    from .quarantine import ACTIONS
     if operations.host_quarantined(s,row.host_id,response_id=row.quarantine_id,publication_id=row.id,publication_response_id=row.quarantine_id):raise HTTPException(409,'Another operation or response requires reconciliation')
-    actions=tuple(a for a in ACTIONS if a!='quarantine-audit')
-    if s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
+    if pending_response_work(s,row.host_id):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
 
 @app.post('/api/hosts/{host_id}/security/repair-stages/{stage_id}/publish')
 def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingApproval,user=Depends(admin_user)):
@@ -1924,8 +1923,7 @@ def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingA
         # Before a publication exists, use its response scope without bypassing
         # any existing publication hold. Related process pauses remain active.
         if operations.host_quarantined(s,host_id,response_id=staged.quarantine_id,publication_response_id=staged.quarantine_id):raise HTTPException(409,'An unrelated operation or response requires reconciliation')
-        from .quarantine import ACTIONS
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(tuple(a for a in ACTIONS if a!='quarantine-audit')),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending')
         row=repair_publication.approve(s,host,stage_id,body.report_digest,user['username'],body.reason.strip())
         return {'publication_id':row.id,'publication_hold':True,'job_id':worker.enqueue(s,host_id,'trusted-repair-publish',{'publication_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
 
