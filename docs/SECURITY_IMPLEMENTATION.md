@@ -101,6 +101,29 @@ The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
 
+### Enrollment installer downloads (partial #202)
+
+Enrollment links retain their one-hour expiry and support repeated downloads for
+partial-download retries. Public download requests, including invalid tokens,
+share a ten-attempt sliding sixty-second window per ASGI client address across
+controllers using the existing SQLite/shared-filesystem or MySQL coordination.
+Admission is persisted in one settings row with at most 1,024 active source hashes
+and ten timestamps per source. Active sources are never evicted to admit new ones;
+when capacity is full, new sources receive HTTP 429 until a slot expires. Requests
+over quota return 429 with Retry-After before installer generation; lock contention
+returns 503 with a one-second retry. The limiter does not authorize enrollment or
+alter the installer or managed-target actions. Proxy trust remains the deployment's
+ASGI configuration; the route does not consume raw forwarding headers.
+
+Every successfully prepared valid installer records its first/retry use number,
+host ID, non-bearer link identifier and hashed client address in the audit history.
+Preparation is not proof of full delivery or execution. Expired/revoked links,
+inactive hosts, generation failures and throttled requests do not record a prepared
+installer. Tokens and installer content are not included in these audit records.
+The independent route-exception-header item remains in PR #264, and #202 stays
+open pending both deliveries. No new schema, runtime response authority or source
+version is introduced by this worker slice.
+
 ### Bounded budget aggregation follow-up (#133)
 
 The follow-up to partial #273 replaces grouping by distinct receipt amount with
