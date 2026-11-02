@@ -145,7 +145,9 @@ def test_rotating_sources_cannot_evict_active_quota_and_storage_recovers(admin, 
     from fastapi import HTTPException
     from app import enrollment_downloads as downloads
     monkeypatch.setattr(downloads, 'SOURCE_LIMIT', 2)
-    now = time.time()
+    # Keep the exact 60-second ceiling assertion deterministic after a
+    # fractional timestamp is persisted and read back by SQLite or MySQL.
+    now = 1_700_000_000.0
     monkeypatch.setattr(downloads.time, 'time', lambda: now)
     for _ in range(10):
         downloads.admit('source-a')
