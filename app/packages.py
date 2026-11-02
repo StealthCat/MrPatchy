@@ -41,6 +41,19 @@ def refresh(host_id,inv,access=None):
 def source_path(path,inv):return rpm_support.source_path(path) if is_rpm(inv) else apt.source_path(path)
 
 
+SOURCE_REJECTED='Repository source failed validation. Open it in the editor and save to review the exact error.'
+
+
+def source_rejection(error):
+    """Diagnostic shown for a rejected source in repository health.
+
+    Source validators raise plain ValueError with a fixed, administrator-facing
+    message. Library subclasses (decode, codec, parse errors) can quote arbitrary
+    input or internals, so they get a fixed message instead of their text."""
+    if type(error) is ValueError and len(error.args)==1 and isinstance(error.args[0],str):return error.args[0][:1000]
+    return SOURCE_REJECTED
+
+
 def sources(content,path,inv,access):
     if is_rpm(inv):return rpm_support.repositories({path:content},inv.get('rpm_vars',{}))
     rewritten=apt.rewrite(content,access);apt.validate_source(rewritten,path.endswith('.sources'))
