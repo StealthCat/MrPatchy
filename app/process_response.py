@@ -4,7 +4,7 @@ import uuid
 from sqlalchemy import String,Double,Boolean,JSON,Text
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
-from . import quarantine,response_processes,incidents,ssh,response_rejection
+from . import quarantine,response_processes,incidents,ssh,response_rejection,response_status
 
 ACTIONS=('process-prepare','process-suspend','process-status','process-resume')
 RECOVERY_ACTIONS=('process-suspend','process-status','process-resume')
@@ -129,6 +129,5 @@ def execute(s,host,job):
         if started or status:
             s.rollback();row=s.get(ProcessResponse,payload['process_id'])
             if row and row.host_id==host.id:
-                row.state='uncertain';row.hold=True;row.receipt={};row.observed=time.time()
-                event(s,row,'observation_failed',actor,{'job_id':job.id});s.commit()
+                response_status.mark_status_failed(s,row,actor,job.id,event=event,clock=time.time);s.commit()
         raise

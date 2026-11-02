@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle
+from . import host_lifecycle,response_status
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -648,13 +648,11 @@ def execute_locked(job_id):
             if job.action=='process-status':
                 response=s.get(process_response.ProcessResponse,job.payload.get('process_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    process_response.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=process_response.event,clock=time.time)
             if job.action=='quarantine-status':
                 response=s.get(quarantine.Quarantine,job.payload.get('quarantine_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    quarantine.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=quarantine.event,clock=time.time)
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
