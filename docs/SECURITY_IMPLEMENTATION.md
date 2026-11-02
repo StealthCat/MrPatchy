@@ -5679,3 +5679,49 @@ This preserves the owner's corrected bebc0c9 handoff; legacy candidate versions
 are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
+
+
+### Production image digests — partial #201 checkpoint
+
+This source checkpoint supersedes older statements in this historical log that
+production Python/Caddy references remain tag-only. The application Dockerfile
+keeps the existing `python:3.12-slim-bookworm` tag and binds it to the official
+Docker Hub OCI image-index digest
+`sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337`.
+The deployed Compose Caddy image keeps `caddy:2.10`, bound to index digest
+`sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb`.
+The CI Caddy adapter fixture uses that same complete image reference, so its
+adapter/TLS checks cannot silently test a newer floating tag than deployment.
+Focused regression tests reject missing/malformed digests and fixture drift.
+
+Both pins are multi-platform index digests, not an amd64-only child manifest.
+Direct official-registry reads on 2026-11-02 UTC verified the SHA-256 of the raw
+index bytes against Docker-Content-Digest, and both indexes include Linux amd64
+and arm64. Python also includes Linux arm/v7; Caddy includes arm/v6 and arm/v7.
+Index availability is not a claim that every architecture was built or tested.
+A digest fixes the selected bytes; it is not independent vendor signing or proof
+of a vulnerability-free image. No runtime version family or response authority
+is changed.
+
+Refresh procedure: inspect the intended official tag with
+`docker buildx imagetools inspect python:3.12-slim-bookworm` or
+`docker buildx imagetools inspect caddy:2.10`; verify the index digest and required
+platforms before updating the tag/digest pair. Update Caddy in both compose.yaml
+and the CI adapter fixture together. Keep the readable tag, run the focused pin
+and supply-chain tests, review upstream changes and run the full exact-head CI
+including Compose configuration, production/GCP builds and real Caddy HTTPS
+checks before coordinator integration. Existing Dependabot Docker coverage can
+propose application Dockerfile changes; this checkpoint does not claim automatic
+Compose digest refresh. Manual review remains required, including when a Python
+minor-version proposal such as #287 needs a different matching digest and real
+compatibility/build acceptance. Never pair a new tag with the old tag's digest.
+
+Limits: apt, pip and the GCP CLI installation still resolve packages during the
+build, so this is not a fully reproducible or hash-locked application build.
+Python install hashes, dependency-vulnerability scanning policy and Compose
+sandbox/resource hardening remain unfinished. The GCP Dockerfile's local
+`BASE_IMAGE=mrpatchy:base`, Compose's locally built `mrpatchy:gcp`, and explicitly
+parameterized SSH/RPM test-fixture bases remain build/test inputs, not falsely
+claimed registry digest pins. #292's Actions pins and #302's CodeQL coverage are
+separate deliveries whose history must be preserved during integration. #201
+stays partial/open; no broader deployment/security roadmap completion is claimed.
