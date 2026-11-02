@@ -4,7 +4,7 @@ One source of truth for the API and every UI location. Detection never starts
 an upgrade and never calls the target; it reads the saved inventory and the
 same adjacent-release table the reviewed release planner uses.
 """
-import time
+import math, time
 from target import release
 
 STALE_AFTER=7*86400
@@ -18,6 +18,11 @@ def status(host,now=None):
     if not inv.get('os'):
         return {'status':'unknown','message':'No operating-system inventory has been collected yet.'}
     collected=inv.get('collected') or 0
+    files=inv.get('files',{})
+    if (not isinstance(collected,(int,float)) or isinstance(collected,bool) or not math.isfinite(collected)
+            or not isinstance(inv.get('os'),str) or not isinstance(inv.get('status',''),str)
+            or not isinstance(files,dict) or not all(isinstance(k,str) and isinstance(v,str) for k,v in files.items())):
+        return {'status':'unknown','message':'Inventory is malformed; upgrade availability is not asserted.'}
     result={'checked':collected or None}
     if not collected or now-collected>STALE_AFTER or collected>now+3600:
         return {**result,'status':'stale','message':'Inventory is older than 7 days; upgrade availability is not asserted.'}
@@ -26,6 +31,8 @@ def status(host,now=None):
     try:target=release.transition(inv)
     except ValueError as error:
         return {**result,'status':'unsupported','message':str(error)}
+    except Exception:
+        return {**result,'status':'unknown','message':'Upgrade availability could not be determined from this inventory.'}
     result.update(distribution=target['distribution'],from_version=target['from_version'],to_version=target['version'])
     if target['distribution']=='debian':
         result.update(status='available',message=f"Debian {target['from_version']} can move to Debian {target['version']} ({target['suite']}) through a reviewed release plan.")

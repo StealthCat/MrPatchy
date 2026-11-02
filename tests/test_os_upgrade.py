@@ -53,3 +53,24 @@ def test_ui_uses_one_badge_helper_in_every_server_reference():
     assert 'PatchyUI.upgradeBadge(h)' in (root/'app.js').read_text()
     server=(root/'server.js').read_text()
     assert 'PatchyUI.upgradeBadge(h)' in server and 'upgradeNotice' in server
+
+@pytest.mark.parametrize('bad',[{'collected':'not-a-timestamp'},{'collected':float('nan')},{'files':None},{'files':[]},{'files':{'a':1}},{'os':{'ID':'debian','VERSION_ID':'12'}},{'status':None}])
+def test_malformed_inventory_is_unknown_not_an_error(bad):
+    inv={'os':'ID=debian\nVERSION_ID="12"\n','status':'','files':{},'collected':NOW-60,**bad}
+    h=SimpleNamespace(inventory=inv,state='online',enabled=True,deleted_at=0)
+    assert os_upgrade.status(h,NOW)['status']=='unknown'
+
+def test_malformed_inventory_keeps_fleet_api_working(admin,client):
+    from app import worker
+    now=time.time()
+    with Session() as s:
+        for hid,bad in (('bad1',{'collected':'x'}),('bad2',{'files':None}),('bad3',{'os':{'ID':'debian'}}),('ok1',{})):
+            s.add(Host(id=hid,name=hid,address='192.0.2.60',fingerprint='fixture',state='online',last_seen=now))
+            s.flush();h=s.get(Host,hid)
+            worker.save_inventory(s,h,{'os':'ID=debian\nVERSION_ID="12"\n','status':'','files':{},'collected':now,**bad})
+        s.commit()
+    r=client.get('/api/hosts');assert r.status_code==200
+    rows={h['id']:h for h in r.json()}
+    assert rows['ok1']['os_upgrade']['status']=='available'
+    assert all(rows[i]['os_upgrade']['status']=='unknown' for i in ('bad1','bad2','bad3'))
+    assert client.get('/api/hosts/bad1/summary').status_code==200
