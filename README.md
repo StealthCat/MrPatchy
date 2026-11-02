@@ -70,6 +70,12 @@ Fleet **Investigations** shows 50 behaviors per page with Previous/Next controls
 
 Requirements: Linux with Docker Engine and Compose v2, SSH access to targets, and HTTP(S) access to their repositories. Configure Caddy's published interface/ports with `BIND_IP`, `HTTP_PORT` and `HTTPS_PORT`; keep the app and Caddy administration ports private. Compose trusts forwarded client addresses only from Caddy's dedicated control-network IP. If `172.30.254.0/24` overlaps your network, change `CONTROL_SUBNET`, `CADDY_CONTROL_IP` and `APP_CONTROL_IP` in `.env` before starting.
 
+Production Python and Caddy image references retain readable tags plus immutable
+multi-platform index digests. Update tag/digest pairs together and keep deployed
+Caddy aligned with its CI adapter fixture; review the refresh procedure in
+[the security checkpoint](docs/SECURITY_IMPLEMENTATION.md). Base/proxy pins do not
+lock apt, pip or GCP CLI package resolution during builds.
+
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
 cd MrPatchy
@@ -571,13 +577,15 @@ full ceiling counted. Unsent failures release their reservation. The separate le
 is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
 remaining and next-reset values in Settings and AI worker status. The administrator
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
-changes are audited. Estimates use published token prices and may differ from the
-provider invoice.
+changes are audited. Changing the reset timezone retains unreleased spend while
+its original admission window is still open, alongside spend in the current local
+day; it does not silently restore that budget. Estimates use published token prices
+and may differ from the provider invoice.
 
-Daily accounting groups repeated amounts without loading every ledger entry as an
-application object. This reduces memory use, especially when amounts repeat, but
-many distinct amounts still increase work under the shared admission lock. A bounded
-summary and broader SQLite/MySQL concurrency evidence remain open work.
+Daily accounting returns at most five exact-money status totals without loading
+ledger entries as application objects. SQLite preserves the existing nine-place
+Numeric read precision; MySQL sums native DECIMAL values. Eligible ledger scanning
+remains O(N) under the shared admission lock; broader concurrency work remains open.
 
 Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
 alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
