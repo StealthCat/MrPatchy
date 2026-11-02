@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.95 — 2026-11-02
+
+1. [PR #302](https://github.com/StealthCat/MrPatchy/pull/302): Add a least-privilege, SHA-pinned CodeQL workflow that analyzes Python with the security-extended query suite on pull requests targeting `main`, pushes to `main` and a bounded weekly schedule, with regression coverage for its triggers, action pins, timeout and upload permissions. Compatibility: CI, tests and documentation only; no application schema, persisted data, API, UI, deployment behavior, role, audit, target action or runtime-response authorization change. Findings remain advisory repository evidence rather than runtime remediation; future scheduled/default-branch execution and absence of findings are not established by this delivery, and base-image digests, hash-pinned Python installs, dependency-vulnerability scanning policy and additional Compose/container sandboxing remain open under partial #201.
+
 ## 1.35.94 — 2026-11-02
 
 1. [PR #301](https://github.com/StealthCat/MrPatchy/pull/301): Share one tracked request, strict structured-validation, evidence-bound persistence and durable AI-error deferral pipeline across scanner-incident and startup-change advisory plans, while preserving each domain's exact prompts, models, evidence and reference gates, secret timing, rechecks, transactions, audit/events and manual-only approval boundary. Compatibility: no schema, persisted-data, API, UI, configuration, provider-routing, role, target-action or runtime-response authorization change. This is partial #189; pricing consolidation in unmerged #283 and other duplicated logic remain open, and #103's closed-incident plan policy decision is unchanged.

@@ -41,6 +41,17 @@ hash pinning, code scanning and additional Compose sandboxing remain unfinished
 under #201; no runtime response authority or deployment sandbox boundary is
 changed.
 
+This checkpoint supersedes the code-scanning status immediately above: a
+separate least-privilege CodeQL workflow analyzes Python on pull requests
+targeting `main`, pushes to `main` and a bounded weekly schedule. Checkout and both
+CodeQL actions are pinned to full commit SHAs with readable version comments, and
+regression coverage keeps the triggers, Python/security-extended query suite,
+action pins, timeout and upload permission explicit. Results are repository
+security-analysis findings; they do not authorize runtime remediation. Base-image
+digests, hash-pinned Python
+installs, dependency-vulnerability scanning and additional Compose sandboxing
+remain unfinished under #201.
+
 ## Scheduled development completion gate
 
 Before each scheduled development cycle, assess the current roadmap against current
