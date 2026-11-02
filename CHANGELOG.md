@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.94 — 2026-11-02
+
+1. [PR #301](https://github.com/StealthCat/MrPatchy/pull/301): Share one tracked request, strict structured-validation, evidence-bound persistence and durable AI-error deferral pipeline across scanner-incident and startup-change advisory plans, while preserving each domain's exact prompts, models, evidence and reference gates, secret timing, rechecks, transactions, audit/events and manual-only approval boundary. Compatibility: no schema, persisted-data, API, UI, configuration, provider-routing, role, target-action or runtime-response authorization change. This is partial #189; pricing consolidation in unmerged #283 and other duplicated logic remain open, and #103's closed-incident plan policy decision is unchanged.
+
 ## 1.35.93 — 2026-11-02
 
 1. [PR #292](https://github.com/StealthCat/MrPatchy/pull/292): Pin every third-party action reference in the validation workflow to a full commit SHA with a readable major-version comment, add regression coverage that rejects unpinned workflow actions, and update the security checkpoint to distinguish these pins from unfinished supply-chain work. Compatibility: CI, tests and documentation only; no application schema, persisted data, API, UI, deployment behavior, role, audit, target action or runtime-response authorization change. Dependabot continues to propose GitHub Actions updates; base-image digests, hash-pinned Python installs, code scanning and additional Compose sandboxing remain open under partial #201.
