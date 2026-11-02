@@ -426,13 +426,26 @@ def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=No
         return {'url':url,'endpoint':endpoint,'expires_in':3600,
                 'command':f'f=$(mktemp) && curl -fsSL {shlex.quote(url)} -o "$f" && sudo bash "$f"; rm -f "$f"'}
 @app.get('/enroll/{token}')
-def enroll(token:str):
+def enroll(token:str,request:Request):
+    from . import enrollment_downloads
+    source=enrollment_downloads.source_id(request)
+    enrollment_downloads.admit(source)
     with Session() as s:
         row=s.get(Setting,'enroll:'+token_hash(token))
         if not row or row.value['expires']<time.time(): raise HTTPException(404,'Enrollment link expired')
-        h=host_or_404(s,row.value['host_id'])
+        host_id=row.value['host_id']
+        h=host_or_404(s,host_id)
         if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
-        with host_lifecycle.activity([h.id],'control'):return PlainTextResponse(ssh.bootstrap(h))
+    with host_lifecycle.activity([host_id],'control'),Session() as s:
+        # Re-read after the lifecycle fence: concurrent preparations must not
+        # lose usage counts, and a revoked/expired link must not be reused.
+        row=s.get(Setting,'enroll:'+token_hash(token))
+        if not row or row.value['expires']<time.time():raise HTTPException(404,'Enrollment link expired')
+        h=host_or_404(s,host_id)
+        if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
+        body=ssh.bootstrap(h)
+        enrollment_downloads.prepared(s,row,source);s.commit()
+        return PlainTextResponse(body)
 def enqueue_host_action(host_id,action):
     with Session() as s:
         h=host_or_404(s,host_id)
