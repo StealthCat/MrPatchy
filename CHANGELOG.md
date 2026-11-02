@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.104 — 2026-11-02
+
+1. [PR #315](https://github.com/StealthCat/MrPatchy/pull/315): Build the central APT patch-preview configuration path from the persisted server identity rather than request-path text, so case-insensitive Host and Package lookups use the repository configuration that refresh actually saved. Add regressions for missing configuration, the exact simulation command, unknown servers and differently cased request/stored identities. Compatibility: matching-case requests are unchanged; differently cased requests now use the canonical stored directory. No schema, API, role, package-selection, target command or runtime-response authorization change. Completes #310's reported path construction defect; successful changed-code scanning does not establish complete repository-wide live-alert closure.
+
 ## 1.35.103 — 2026-11-02
 
 1. [PR #312](https://github.com/StealthCat/MrPatchy/pull/312): Set an explicit TLS 1.2 minimum on the SNI integration client and native RPM HTTPS fixture, retaining certificate verification, hostname handling and fixture behavior while removing reliance on constructor defaults. Compatibility: test and CI policy only; production TLS configuration, schema, APIs, roles and runtime-response authorization are unchanged. Completes #307's reported test-context remediation; successful changed-code scanning does not establish a complete repository-wide live-alert inventory or closure.
