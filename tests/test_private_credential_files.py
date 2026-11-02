@@ -29,9 +29,9 @@ def test_apt_auth_file_is_private_from_creation_and_replaces_symlinks(tmp_path,m
     monkeypatch.setattr(apt,'DATA',tmp_path)
     created=[]
     real_open=os.open
-    def observed_open(path,flags,mode=0o777,**kwargs):
-        if str(path).endswith('auth.conf'):created.append((flags,mode))
-        return real_open(path,flags,mode,**kwargs)
+    def observed_open(path,flags,*args,**kwargs):
+        if str(path).endswith('auth.conf'):created.append((flags,args[0] if args else kwargs.get('mode')))
+        return real_open(path,flags,*args,**kwargs)
     monkeypatch.setattr(apt.os,'open',observed_open)
     access={'credentials':[{'machine':'https://example.org/debian','login':'user','password':'secret-one'}]}
     root,_=apt.prepare('host',inventory(),access)
