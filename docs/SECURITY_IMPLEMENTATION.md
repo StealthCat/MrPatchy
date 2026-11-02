@@ -33,11 +33,13 @@ PR #284 configures weekly Dependabot updates for pip, npm, GitHub Actions and
 Docker at the root, deploy and test-fixture manifest locations. Tracked Dockerfile
 location coverage has regression tests; live Dependabot update generation has not
 been exercised as part of this delivery. This is update configuration, not code
-or dependency vulnerability scanning. Base images remain tag-based, Python
-requirements lack install hashes, and Actions references remain tag-based rather
-than commit-SHA pinned. Digest/hash/SHA pinning, code scanning and additional
-Compose sandboxing remain unfinished under #201; no runtime response authority
-or deployment sandbox boundary is changed.
+or dependency vulnerability scanning. PR #292 pins the CI workflow's
+`actions/checkout`, `actions/setup-python` and `actions/setup-node` references to
+full commit SHAs with version comments, covered by a regression test. Base images
+remain tag-based and Python requirements lack install hashes. Image digest and
+hash pinning, code scanning and additional Compose sandboxing remain unfinished
+under #201; no runtime response authority or deployment sandbox boundary is
+changed.
 
 ## Scheduled development completion gate
 
