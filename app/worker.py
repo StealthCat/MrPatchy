@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle
+from . import host_lifecycle,response_status
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -119,8 +119,9 @@ def update_repos(s,h):
         else:
             save_inventory(s,h,inv);s.commit()
     packages,output=package_backend.refresh(h.id,inv,repository_access(s,h.id))
+    known={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     for item in packages:
-        p=s.get(Package,h.id+':'+item['name'])
+        p=known.get(item['name'])
         if not p: continue
         # Superseding a still-outstanding update must not postpone its deadline.
         if not item['candidate']: p.available_since=0
@@ -648,13 +649,11 @@ def execute_locked(job_id):
             if job.action=='process-status':
                 response=s.get(process_response.ProcessResponse,job.payload.get('process_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    process_response.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=process_response.event,clock=time.time)
             if job.action=='quarantine-status':
                 response=s.get(quarantine.Quarantine,job.payload.get('quarantine_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    quarantine.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=quarantine.event,clock=time.time)
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
@@ -695,8 +694,8 @@ def mutation_outcome_uncertain(stage,error):
     if stage!='sent':return False
     return not (ssh.request_unstarted(error) or isinstance(error,ssh.RemoteFailure))
 
-def validate_patch(s,h,specs):
-    cfg=config(s)
+def validate_patch(s,h,specs,cfg=None):
+    cfg=cfg or config(s)
     if h.repo_error or not h.last_repo or time.time()-h.last_repo>cfg['repo_minutes']*120:
         raise ValueError('Refresh repositories before patching; metadata is stale, changed, or the latest check failed')
     for spec in specs:
