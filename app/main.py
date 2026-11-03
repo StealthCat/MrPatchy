@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import defer
-from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
+from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
@@ -305,9 +305,17 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
     with Session() as s:
         # Read the three small inventory keys in SQL instead of decoding every host's full inventory, telemetry and baseline.
-        inv=Host.inventory
-        rows=s.execute(select(Host,inv['architecture'].as_string(),inv['os'].as_string(),inv['package_manager'].as_string()).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
-        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':a or '','os':o or '','package_manager':m if m is not None else 'apt'} for h,a,o,m in rows]
+        # A JSON null stays distinct from a missing key (null is returned as-is, missing falls back to the default).
+        keys=('architecture','os','package_manager'); cols=[]
+        for k in keys:
+            path='$."%s"'%k
+            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*(( path,) if engine.dialect.name=='sqlite' else ()))
+            cols+=[Host.inventory[k].as_string(),kind]
+        rows=s.execute(select(Host,*cols).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
+        def meta(value,kind,default):
+            if kind is None:return default
+            return None if str(kind).lower()=='null' else value
+        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt')} for h,a,ak,o,ok,m,mk in rows]
 
 class HostLifecycleInput(BaseModel):
     enabled:bool

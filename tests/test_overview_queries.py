@@ -49,3 +49,15 @@ def test_dashboard_counts_in_sql_without_loading_packages(admin):
     assert not any('SELECT packages.id' in q or 'packages.name' in q for q in statements)
     assert body['servers'] == 4 and body['packages'] == 3 and body['updates'] == 2
     assert body['overdue'] == 1 and body['integrity_alerts'] == 2
+
+
+def test_hosts_preserves_explicit_null_versus_missing_metadata(admin):
+    with Session() as s:
+        s.add(Host(id='nulls', name='nulls', address='192.0.2.1', fingerprint='',
+                   inventory={'architecture': None, 'os': None, 'package_manager': None}))
+        s.add(Host(id='partial', name='partial', address='192.0.2.1', fingerprint='', inventory={'os': 'Debian'}))
+        s.commit()
+    body, _ = capture(admin, '/api/hosts')
+    by = {h['id']: h for h in body}
+    assert (by['nulls']['architecture'], by['nulls']['os'], by['nulls']['package_manager']) == (None, None, None)
+    assert (by['partial']['architecture'], by['partial']['os'], by['partial']['package_manager']) == ('', 'Debian', 'apt')
