@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.8 — 2026-11-03
+
+1. [PR #286](https://github.com/StealthCat/MrPatchy/pull/286): Refuse existing symlink destinations for target-agent status and telemetry writes, fsync the parent directory after atomic replacement, and obtain managed-file hashes and ownership/mode metadata from the same descriptor to prevent split hash/stat observations. Compatibility: managed metadata retains its uid/gid/mode shape; no role or response-authorization change. Deploy the updated target agent through the existing reviewed maintenance workflow to receive the target-side behavior. Shared-helper consolidation and other duplication under #190 remain unfinished, so #190 stays open.
+
 ## 1.37.7 — 2026-11-03
 
 1. [PR #236](https://github.com/StealthCat/MrPatchy/pull/236): Wrap long unbroken server names, including FQDNs, inside page headings so phone-width screens do not scroll horizontally. Cover long headings at 320, 768 and 1440 pixels in the browser regression suite. Compatibility: layout-only fix; no API, role, audit or response-authorization change. Completes #176.
