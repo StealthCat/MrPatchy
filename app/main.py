@@ -395,6 +395,12 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
 
+@app.get('/api/spool-health')
+def fleet_spool_health(user=Depends(viewer_user)):
+    with Session() as s:
+        rows=s.scalars(readable_host_records(select(Host).where(Host.deleted_at==0,Host.enabled==True),Host.id,user)).all()  # noqa: E712
+        return agent_spool_health.fleet(rows)
+
 @app.get('/api/hosts/{host_id}/spool-health')
 def host_spool_health(host_id:str,user=Depends(viewer_user)):
     with Session() as s:

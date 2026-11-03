@@ -61,3 +61,34 @@ def health(host,now=None):
             'queue':{'pending_batches':pending,'queued_bytes':queued,'capacity_bytes':capacity,'utilization_percent':utilization,
                      'batch_limit_bytes':count(spool.get('batch_limit_bytes'))},
             'loss':{'dropped_batches':dropped,'lost_observations':lost_observations,'by_reason':loss,'unclassified_batches':unclassified}}
+
+
+FLEET_LIMIT=10
+_RANK={'critical':0,'warning':1}
+
+
+def fleet(hosts,now=None):
+    """Roll up per-server spool health for enabled, non-deleted servers.
+
+    Counts are exhaustive; only the most urgent servers are listed. Servers that
+    never reported counters are counted as unavailable, never as healthy.
+    """
+    counts={'total':0,'ok':0,'warning':0,'critical':0,'stale':0,'unavailable':0}
+    batches=observations=with_loss=0
+    listed=[]
+    for host in hosts:
+        if lifecycle(host)!='enabled':continue
+        item=health(host,now);counts['total']+=1
+        if item['status']==UNAVAILABLE:counts['unavailable']+=1;continue
+        if item['status']=='stale':counts['stale']+=1
+        elif item['pressure']=='ok':counts['ok']+=1
+        if item['pressure'] in ('warning','critical') and item['status']!='stale':counts[item['pressure']]+=1
+        loss=item['loss'];lost_b,lost_o=loss['dropped_batches'] or 0,loss['lost_observations'] or 0
+        batches+=lost_b;observations+=lost_o;with_loss+=bool(lost_b or lost_o)
+        if item['pressure'] in _RANK or item['status']=='stale' or lost_b or lost_o:
+            listed.append({'host_id':host.id,'name':host.name,'status':item['status'],'pressure':item['pressure'],
+                           'utilization_percent':item['queue']['utilization_percent'],'dropped_batches':lost_b,'lost_observations':lost_o})
+    listed.sort(key=lambda row:(_RANK.get(row['pressure'],2),row['status']!='stale',-row['lost_observations'],-row['dropped_batches'],row['name'] or '',row['host_id']))
+    return {'counts':counts,'loss':{'dropped_batches':batches,'lost_observations':observations,'servers_with_loss':with_loss},
+            'servers':listed[:FLEET_LIMIT],'more':max(0,len(listed)-FLEET_LIMIT),
+            'unavailable_metrics':['oldest_observation_age','ingest_rate','flush_rate','delivery_latency','retries']}
