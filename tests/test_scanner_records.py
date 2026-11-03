@@ -79,6 +79,21 @@ def test_related_evidence_citations_resolve_or_are_out_of_scope(seeded):
     assert scope['missing_evidence_references']==[] and scope['primary_references_complete']
 
 
+@pytest.mark.parametrize('malformed', ['executions:', 'inspections:'])
+def test_empty_related_evidence_citation_remains_missing(seeded, malformed):
+    with Session() as s:
+        row = s.get(Plan, 'one-plan')
+        row.content = {'steps': [{'evidence_ids': [
+            'one', 'scans:one-scan', 'executions:x1',
+            'inspections:i1', malformed,
+        ]}]}
+        s.commit()
+    scope = export(seeded).json()['record']['scope']
+    assert scope['missing_evidence_references'] == [malformed]
+    assert scope['out_of_scope_evidence_references'] == ['executions:x1', 'inspections:i1']
+    assert not scope['primary_references_complete']
+
+
 def test_unresolved_plan_references_and_oversize_findings_are_explicit(seeded):
     with Session() as s:
         row=s.get(Plan,'one-plan');row.content={'steps':[{'evidence_ids':['missing-evidence']}]};s.commit()
