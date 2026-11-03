@@ -69,7 +69,7 @@ def _text(name, value, limit, *, identifier=False, empty=False):
         raise ValueError(f'Invalid notification {name}')
     if any(ord(char) < 32 and char not in ('\n', '\t') for char in value):
         raise ValueError(f'Invalid notification {name}')
-    if identifier and not IDENTIFIER.fullmatch(value):
+    if identifier and value and not IDENTIFIER.fullmatch(value):
         raise ValueError(f'Invalid notification {name}')
     return value
 
@@ -156,7 +156,8 @@ def _allowed_roles(role):
     return [candidate for candidate, rank in ROLES.items() if rank <= ROLES[role]]
 
 
-def _query(session, username, *, unread_only=False, include_dismissed=False):
+def _query(session, username, *, unread_only=False, include_dismissed=False,
+           severity='', source='', host_id=''):
     user = _user(session, username)
     if not user:
         return None
@@ -176,17 +177,26 @@ def _query(session, username, *, unread_only=False, include_dismissed=False):
         query = query.where(read_revision < NotificationEvent.revision)
     if not include_dismissed:
         query = query.where(dismissed_revision < NotificationEvent.revision)
+    if severity:
+        query = query.where(NotificationRevision.severity == severity)
+    if source:
+        query = query.where(NotificationEvent.source == source)
+    if host_id:
+        query = query.where(NotificationEvent.host_id == host_id)
     return query
 
 
 def list_for_user(session, username, *, unread_only=False,
-                  include_dismissed=False, limit=50, offset=0):
+                  include_dismissed=False, severity='', source='', host_id='',
+                  limit=50, offset=0):
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('Notification limit must be between 1 and 100')
     if type(offset) is not int or offset < 0:
         raise ValueError('Notification offset must be non-negative')
+    severity, source, host_id = validate_filters(severity, source, host_id)
     query = _query(session, username, unread_only=unread_only,
-                   include_dismissed=include_dismissed)
+                   include_dismissed=include_dismissed, severity=severity,
+                   source=source, host_id=host_id)
     if query is None:
         return []
     rows = session.execute(query.order_by(
@@ -213,10 +223,21 @@ def unread_count(session, username):
     return count_for_user(session, username, unread_only=True, include_dismissed=False)
 
 
-def count_for_user(session, username, *, unread_only=False, include_dismissed=False):
+def validate_filters(severity='', source='', host_id=''):
+    if severity and severity not in SEVERITIES:
+        raise ValueError('Invalid notification severity filter')
+    source = _text('source filter', source, 40, identifier=True, empty=True)
+    host_id = _text('host filter', host_id, 36, empty=True)
+    return severity, source, host_id
+
+
+def count_for_user(session, username, *, unread_only=False, include_dismissed=False,
+                   severity='', source='', host_id=''):
     """Count only the current revisions visible to the user's current role."""
+    severity, source, host_id = validate_filters(severity, source, host_id)
     query = _query(session, username, unread_only=unread_only,
-                   include_dismissed=include_dismissed)
+                   include_dismissed=include_dismissed, severity=severity,
+                   source=source, host_id=host_id)
     if query is None:
         return 0
     return session.scalar(select(func.count()).select_from(query.subquery()))

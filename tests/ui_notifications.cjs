@@ -3,6 +3,7 @@ const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
   let unread=2;
   const mutations=[];
+  const listRequests=[];
   let holdMutation=false,releaseMutation,mutationStarted;
   const safeId='1'.repeat(64),unsafeId='2'.repeat(64);
   const items=[
@@ -10,7 +11,7 @@ module.exports=async(page,capture)=>{
     {id:unsafeId,revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'scan-9',host_id:'',severity:'high',reason:'<img src=x onerror="window.notificationInjected=true"> Untrusted finding',deep_link:'https://attacker.invalid/',lifecycle:'active',created:1699999000,read:false,dismissed:false},
   ];
   await page.route('**/api/notifications/unread-count',route=>route.fulfill({json:{unread}}));
-  await page.route(/\/api\/notifications\?/,route=>{const visible=items.filter(item=>!item.dismissed);return route.fulfill({json:{items:visible,offset:0,limit:8,total:visible.length,more:false}});});
+  await page.route(/\/api\/notifications\?/,route=>{const url=new URL(route.request().url());listRequests.push(url.search);let visible=items.filter(item=>url.searchParams.get('include_dismissed')==='true'||!item.dismissed);if(url.searchParams.get('unread_only')==='true')visible=visible.filter(item=>!item.read);for(const key of ['severity','source']){const value=url.searchParams.get(key);if(value)visible=visible.filter(item=>item[key]===value);}const host=url.searchParams.get('host_id');if(host)visible=visible.filter(item=>item.host_id===host);const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||8),total=visible.length;visible=visible.slice(offset,offset+limit);return route.fulfill({json:{items:visible,offset,limit,total,more:offset+visible.length<total}});});
   await page.route(/\/api\/notifications\/[0-9a-f]{64}\/(read|dismiss)$/,route=>{
     const url=route.request().url(),body=route.request().postDataJSON(),id=url.split('/').at(-2),item=items.find(candidate=>candidate.id===id);
     mutations.push({url,body});
@@ -43,6 +44,23 @@ module.exports=async(page,capture)=>{
   assert.deepEqual(mutations[0].body,{revision:3});
   assert.ok(mutations[1].url.endsWith(`/${unsafeId}/dismiss`));
   assert.deepEqual(mutations[1].body,{revision:1});
+
+  await panel.getByRole('link',{name:'View notification center'}).click();
+  await page.getByRole('heading',{name:'Your notification history.'}).waitFor();
+  assert.equal(await page.locator('#notification-center-list .notification-center-item').count(),1);
+  await page.locator('#notification-filters [name=include_dismissed]').check();
+  await page.locator('#notification-filters [name=source]').fill('scanner');
+  await page.getByRole('button',{name:'Apply filters'}).click();
+  await page.locator('#notification-center-list .notification-center-item').waitFor();
+  assert.equal(await page.getByText('Untrusted finding',{exact:false}).count(),1);
+  assert.equal(await page.locator('#notification-center-list img[src="x"]').count(),0);
+  assert.ok(listRequests.some(query=>query.includes('include_dismissed=true')&&query.includes('source=scanner')&&query.includes('limit=25')));
+  assert.equal(await page.getByRole('link',{name:'Open subject'}).count(),0,'unsafe cross-origin center links remain inert');
+  await capture('notification-center-desktop',false);
+  const locationHash=await page.evaluate(()=>location.hash);
+  assert.equal(locationHash,'#notifications');
+  await page.evaluate(()=>{location.hash='#overview';});
+  await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
 
   await bell.click();
   await page.getByRole('button',{name:'+ Add server',exact:true}).click();

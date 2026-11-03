@@ -60,7 +60,7 @@ async function render(){
  if(requested.startsWith('activity/'))requested='activity';
  if(requested.startsWith('settings/'))requested='settings';
  if(requested.startsWith('servers/'))requested='servers';
- if(!['security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs'].includes(requested))requested='overview';
+ if(!['security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
  try{
   const [me,list]=await Promise.all([api('/identity'),api('/hosts')]);
   if(revision!==renderRevision)return;
@@ -75,7 +75,7 @@ async function render(){
   document.title=PatchyUI.pages[page][0]+' · Mr Patchy';
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   $('#content').innerHTML=PatchyUI.loading();
-  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics}[page])(revision);
+  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:notificationCenter}[page])(revision);
   flushNavToast(revision);
  }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
