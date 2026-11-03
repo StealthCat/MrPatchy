@@ -222,3 +222,28 @@ def test_activate_checks_destinations_before_writing_data(recovery,tmp_path,monk
     with pytest.raises(ValueError,match='not writable'):
         recovery.activate(bundle,target/'data',target/'tls',target/'caddy-data',target/'caddy-config',uid=os.getuid())
     assert not any((target/'data').iterdir())  # Nothing written, so a rerun is still allowed.
+
+
+
+@pytest.mark.parametrize('destination', ['tls', 'caddy-data', 'caddy-config'])
+def test_activate_refuses_symlink_destination_roots_without_partial_writes(
+    recovery, tmp_path, destination,
+):
+    data, others = deployment(tmp_path, ssh_dir=False)
+    recovery.backup(data, *others)
+    bundle, = recovery.bundles
+    target = tmp_path / 'restored'
+    target.mkdir()
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (target / destination).symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='Unsafe activation destination'):
+        recovery.activate(
+            bundle, target / 'data', target / 'tls',
+            target / 'caddy-data', target / 'caddy-config', uid=os.getuid(),
+        )
+
+    # No database, secret key, SSH or external file can be written first.
+    assert not (target / 'data').exists()
+    assert list(outside.iterdir()) == []
