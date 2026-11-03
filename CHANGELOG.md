@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.5 — 2026-11-03
+
+1. [PR #331](https://github.com/StealthCat/MrPatchy/pull/331): Batch maintenance-window, recovery-policy, security-hold, active-job and existing-run lookups during patch-schedule ticks, reducing the open-window 40-host regression fixture from 844 to 57 SQL statements. Share newly queued work across schedules within each tick so two schedules cannot queue duplicate refresh or patch work for one host. Compatibility: no schema or scheduling-policy change; existing approval, lifecycle, maintenance-window, recovery and executor safeguards remain in force. Statement counts describe the regression fixture, not a fleet-wide latency guarantee. Completes #330.
+
 ## 1.37.4 — 2026-11-03
 
 1. [PR #329](https://github.com/StealthCat/MrPatchy/pull/329): Pin the scheduler query-count test to noon UTC outside its seeded maintenance window, preventing daily 02:00–04:00 UTC failures while preserving its query limits. Compatibility: test-fixture change only; production scheduling behavior is unchanged. The separate in-window scheduler query cost remains open under #330. Completes #328.
