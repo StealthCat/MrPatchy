@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.38.2 — 2026-11-03
+
+1. [PR #332](https://github.com/StealthCat/MrPatchy/pull/332): Add a read-only Agent event spool card to each server's Overview summary, showing stored queue pressure and utilization, pending batches, queued/capacity bytes, telemetry freshness and cumulative loss with per-reason detail; stale, unavailable and request-failure states remain explicit and warning/critical pressure links to Agent health. Compatibility: no API, schema, role, target-contact, deployment or operational/response-authorization change; the card consumes the existing permission-scoped spool-health API and performs no remote work. This is a partial #108 UI increment only: fleet-wide projection, oldest-observation age, rates, retries, delivery latency, alert producers/deduplication, counter continuity and durable loss history remain unfinished. This source update does not publish a Docker image.
+
 ## 1.38.1 — 2026-11-03
 
 1. [PR #289](https://github.com/StealthCat/MrPatchy/pull/289): Raise the development and CI pytest requirement from version 8 or newer to version 9.2.0 or newer while retaining the existing upper bound below 10. Compatibility: production dependencies and application behavior, APIs, roles, schemas and operational/response authorization are unchanged; local development and CI environments must use pytest 9.2.0–9.x and therefore inherit pytest 9 command, configuration and plugin compatibility requirements. This source update does not publish a Docker image.
