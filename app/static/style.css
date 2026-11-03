@@ -82,6 +82,37 @@ main { margin-left: calc(var(--sidebar) + 32px); padding: 0 32px; max-width: 190
 #refresh-page { display: flex; align-items: center; gap: 6px; }
 #refresh-page .icon { width: 16px; }
 #header-actions button { font-size: 12px; padding: 8px 12px; }
+.notification-shell { position:relative; }
+#notification-button { position:relative;display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:8px; }
+#notification-button .icon { width:19px;height:19px; }
+#notification-button[data-severity="high"],#notification-button[data-severity="critical"] { color:var(--red); }
+#notification-button[data-severity="medium"] { color:var(--amber); }
+#notification-badge { position:absolute;top:0;right:0;min-width:17px;height:17px;padding:0 4px;border-radius:10px;background:var(--red);color:#351016;border:2px solid var(--panel);font-size:9px;font-weight:800;line-height:13px;text-align:center;font-variant-numeric:tabular-nums; }
+#notification-panel { position:absolute;z-index:30;right:0;top:calc(100% + 12px);width:min(390px,calc(100vw - 32px));max-height:min(620px,calc(100dvh - 110px));overflow:auto;padding:16px;border:1px solid var(--line-bright);border-radius:18px;background:var(--glass-strong);box-shadow:0 22px 54px #020911aa; }
+.notification-panel-head { display:flex;align-items:center;gap:10px;padding-bottom:12px;border-bottom:1px solid var(--line); }
+.notification-panel-head .mascot-portrait { width:38px;height:38px;border-radius:12px; }
+.notification-panel-head .mascot-portrait .mascot { width:88px;left:-24px; }
+.notification-panel-head>div { min-width:0;flex:1; }
+.notification-panel-head strong,.notification-panel-head small { display:block; }
+.notification-panel-head small { color:var(--muted);font-size:10px; }
+#notification-close { font-size:20px;line-height:1;padding:7px 10px; }
+#notification-status { min-height:22px;margin:12px 0 4px;font-size:11px; }
+#notification-list { display:grid; }
+.notification-item { padding:14px 2px;border-top:1px solid var(--line); }
+.notification-item.is-read { opacity:.72; }
+.notification-item[data-severity="critical"] { border-left:3px solid var(--red);padding-left:11px; }
+.notification-meta { display:flex;align-items:center;gap:7px;color:var(--muted);font-size:10px;text-transform:capitalize; }
+.notification-meta time { margin-left:auto;text-transform:none;white-space:nowrap; }
+.notification-severity { padding:2px 7px;border-radius:8px;background:#a7bdc714;color:var(--muted);font-weight:750; }
+.notification-resolved { color:var(--mint); }
+.notification-item[data-severity="critical"] .notification-severity,.notification-item[data-severity="high"] .notification-severity { color:var(--red);background:#ffb1a814; }
+.notification-item[data-severity="medium"] .notification-severity { color:var(--amber);background:#f7cf8a14; }
+.notification-reason { margin:9px 0 11px;overflow-wrap:anywhere;color:var(--text);font-size:13px;line-height:1.5; }
+.notification-actions { display:flex;align-items:center;gap:6px;flex-wrap:wrap; }
+.notification-actions button,.notification-actions .button { padding:6px 9px;font-size:10px; }
+.notification-empty { padding:24px 8px 12px;text-align:center; }
+.notification-empty p { margin:5px 0; }
+.notification-coverage { margin:10px 0 0;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;line-height:1.5; }
 #content { min-height: calc(100vh - 165px); padding: 28px 0 36px; }
 footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 0 24px; border-top: 1px solid var(--line); color: #a5bdc6; font-size: 10px; }
 .footer-brand { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
@@ -91,6 +122,7 @@ footer { display: flex; align-items: center; justify-content: space-between; gap
 /* Page introductions and glass surfaces */
 .heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 170px; margin-bottom: 26px; padding: 8px 6px; }
 .heading-copy { min-width: 0; flex: 1; }
+.heading h1 { overflow-wrap: anywhere; }
 .heading p { color: var(--muted); font-size: 13px; max-width: 650px; line-height: 1.7; margin-bottom: 0; }
 .heading-actions { margin-top:22px;display:flex;align-items:center;flex-wrap:wrap;gap:10px; }
 .heading-actions .button { display:inline-flex;align-items:center; }
@@ -219,10 +251,13 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
   .enrollment-steps { gap: 6px; }.enrollment-steps li { flex-direction: column; align-items: flex-start; font-size: 10px; }.modal-head { gap: 10px; }.modal-head h2 { font-size: 17px; }.modal-head>span { display: none; }dialog { padding: 20px 17px; }.actions button { font-size: 12px; }
   .calendar-hour { grid-template-columns: 85px 1fr; }.calendar-hour time { padding: 12px 5px; }#patch-calendar { max-height: 560px; }.schedule-stats { gap: 10px; }.schedule-stats .card { padding: 16px 13px; }.schedule-stats .eyebrow { font-size: 8px; }
   #toast { left: 16px; right: 16px; bottom: 16px; max-width: none; font-size: 13px; }.login { padding: 22px; }.login-card { padding: 26px; }.login-card h1 { font-size: 28px; }.loading-state { padding: 20px; }.loading-dots { display: none; }
+  #notification-panel { position:fixed;left:16px;right:16px;top:132px;width:auto;max-height:calc(100dvh - 148px);padding:14px; }
+  .notification-meta { flex-wrap:wrap; }.notification-meta time { width:100%;margin-left:0; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
-@media (prefers-reduced-transparency: reduce) { .card, .stat, .sidebar, .login-card, dialog, .heading-overview { background: var(--panel); backdrop-filter: none; -webkit-backdrop-filter: none; } }
+@media (prefers-reduced-transparency: reduce) { .card, .stat, .sidebar, .login-card, dialog, .heading-overview, #notification-panel { background: var(--panel); backdrop-filter: none; -webkit-backdrop-filter: none; } }
 @media (forced-colors: active) { button, input, select, textarea, .card, .stat, .sidebar, .badge, nav a.active { border: 1px solid CanvasText; }nav a.active { outline: 2px solid Highlight; }.primary { background: ButtonFace; color: ButtonText; }.live-dot { background: CanvasText; } }
+@media (forced-colors: active) { #notification-panel, #notification-badge { border: 1px solid CanvasText; } }
 
 @media (max-width: 760px) { .mobile-nav-hint { display: block; text-align: right; font-size: 9px; color: var(--muted); margin-top: 2px; } }
 @media (max-width: 480px) {

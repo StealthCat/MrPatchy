@@ -29,6 +29,7 @@ function flushNavToast(revision){
  if(pending.session===sessionRevision&&location.hash===pending.hash&&!$('#shell').classList.contains('hidden'))toast(pending.message);
 }
 function showLogin(){
+ NotificationShell.reset();
  pendingNavToast=null;sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
  packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
@@ -37,7 +38,7 @@ function showLogin(){
 }
 function isAdmin(){return currentUser?.role==='admin';}
 function currentView(revision,name){return revision===renderRevision&&page===name&&!$('#shell').classList.contains('hidden');}
-function showShell(){$('#login').classList.add('hidden');$('#shell').classList.remove('hidden');}
+function showShell(){$('#login').classList.add('hidden');$('#shell').classList.remove('hidden');NotificationShell.start();}
 function heading(title,sub,button=''){return PatchyUI.heading(page,title,sub,button);}
 function empty(title,text,action=''){return PatchyUI.empty(title,text,action);}
 function serverSelect(){return `<select id="server-select" aria-label="Select server">${hosts.map(h=>`<option value="${h.id}" ${h.id===selected?'selected':''}>${esc(h.name)}</option>`).join('')}</select>`;}

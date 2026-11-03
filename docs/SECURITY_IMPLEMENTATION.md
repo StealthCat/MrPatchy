@@ -2618,6 +2618,22 @@ incident state, AI approval and response authorization. This does not complete t
 notification program: producers, retention, live cross-controller delivery, UI and
 end-to-end SQLite/MySQL/browser acceptance remain planned.
 
+Implementation checkpoint (issue #350): the authenticated shell now consumes
+those APIs through a persistent
+responsive bell, accessible unread/severity label and compact recent panel. Safe
+public payloads are rendered with text nodes, and a second client-side same-origin
+check rejects invalid deep links before creating an action. Read/dismiss sends the
+exact displayed revision through the existing CSRF API and remains account-local;
+logout, expiry and account switching clear the client state. A bounded 30-second
+poll plus visibility catch-up updates only the shell subtree, preserving page and
+dialog form state, scroll and focus, and explicitly labels polling as degraded
+coverage. Focused browser coverage exercises malicious text/links, exact-revision
+mutations, background form/focus preservation, Escape focus return and mobile
+layout. This does not complete milestone 3: the dedicated paginated/filterable
+center and live toasts remain planned. Event producers/retention, authenticated
+SSE with cursor replay/cross-controller delivery, multi-tab synchronization and
+end-to-end SQLite/MySQL/failover acceptance also remain milestones 1, 2 and 4.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -5749,6 +5765,13 @@ This preserves the owner's corrected bebc0c9 handoff; legacy candidate versions
 are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
+
+## Password hashes and secret-key handling
+
+- Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
+- The Fernet instance is cached and reloaded only when `secret.key` changes (inode, size or mtime).
+- The OIDC flow-cookie secret is derived from `secret.key` with HKDF-SHA256 and a purpose label; the Fernet key material is not reused directly.
+- Threat model: `secret.key` lives on the same `/data` volume as the database. Encryption of stored secrets therefore only helps when the database is leaked without the volume (for example a database-only dump to MySQL). It does not protect against a compromise of the data volume.
 
 
 ### Production image digests — partial #201 checkpoint
