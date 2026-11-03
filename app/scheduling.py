@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import String, JSON, Double, Integer, select, update, func
-from sqlalchemy.orm import Mapped, mapped_column
-from .db import Base, Session, Host, Package, Job, config, audit
+from sqlalchemy.orm import Mapped, mapped_column, load_only
+from .db import Base, Session, Host, Package, Job, audit
 from .coordination import Lock
 from . import operations
 
@@ -110,6 +110,29 @@ def hosts_for(s, policy):
     return list(s.scalars(query))
 
 
+def tick_hosts(s, policy):
+    # Load every column advance()/host_lifecycle read, so no attribute becomes a per-host lazy-load SELECT;
+    # the telemetry/baseline JSON blobs stay deferred.
+    query = select(Host).options(load_only(Host.id, Host.state, Host.last_seen, Host.integrity, Host.enabled,
+                                           Host.deleted_at, Host.fingerprint, Host.inventory, Host.lifecycle_revision)).where(
+        Host.enabled==True, Host.deleted_at==0).order_by(Host.name, Host.id)
+    if not policy['all_hosts']: query = query.where(Host.id.in_(policy['host_ids']))
+    return list(s.scalars(query))
+
+
+def candidate_packages(s, host_ids, policy):
+    """Outstanding candidates for many hosts in one query, grouped by host id (same filters as candidates())."""
+    wanted = [p for p in ('critical', 'high') if policy[p]['enabled']]
+    grouped = {host_id: [] for host_id in host_ids}
+    if not wanted or not host_ids: return grouped
+    priorities = set(wanted)
+    for start in range(0, len(host_ids), 500):
+        rows = s.scalars(select(Package).where(Package.host_id.in_(host_ids[start:start+500]), Package.candidate != '',
+                                               Package.held == False, Package.priority.in_(priorities)).order_by(Package.name))
+        for row in rows: grouped[row.host_id].append(row)
+    return grouped
+
+
 def serialize(row):
     return {'id': row.id, 'revision': row.revision, 'updated': row.updated, **row.policy}
 
@@ -142,34 +165,78 @@ def cancel_pending(s, schedule_id, reason):
         if not job or job.state != 'running': run.state = 'cancelled'; run.detail = reason
 
 
-def candidates(s, host_id, policy, trigger, now):
+def candidates(s, host_id, policy, trigger, now, preloaded=None):
     priorities = policy['priorities'] if trigger == 'regular' else [trigger]
-    rows = s.scalars(select(Package).where(Package.host_id == host_id, Package.candidate != '',
-                                         Package.held == False, Package.priority.in_(priorities)).order_by(Package.name))
+    if preloaded is not None: rows = [p for p in preloaded if p.priority in priorities]
+    else:
+        rows = s.scalars(select(Package).where(Package.host_id == host_id, Package.candidate != '',
+                                             Package.held == False, Package.priority.in_(priorities)).order_by(Package.name))
     return [p for p in rows if p.dpkg_state.endswith(' installed') and (trigger == 'regular' or
             p.available_since > 0 and now >= p.available_since + policy[trigger]['after_minutes']*60)]
 
 
-def allow_window(s, host_id, policy, trigger, now):
+def window_settings(s, host_ids):
+    """Maintenance windows for many hosts using one Setting query per 500 hosts, keyed by host id."""
+    from .db import Setting
+    host_ids = list(host_ids); found = {}
+    for start in range(0, len(host_ids), 500):
+        keys = ['window:'+h for h in host_ids[start:start+500]]
+        for row in s.scalars(select(Setting).where(Setting.key.in_(keys))): found[row.key[7:]] = row.value['windows']
+    return {h: found.get(h, []) for h in host_ids}
+
+
+def allow_window(s, host_id, policy, trigger, now, windows=None):
     if trigger != 'regular' and policy[trigger]['bypass_window']: return True
+    if windows is not None and host_id in windows: return operations.in_window(windows[host_id], now)
     from .db import Setting
     row = s.get(Setting, 'window:'+host_id)
     return operations.in_window(row.value['windows'] if row else [], now)
 
 
-def add_run(s, schedule, host, trigger, due, key, reissue=False):
-    base = f'{schedule.id}:{schedule.revision}:{host.id}:{trigger}:{key}'
-    identity = hashlib.sha256(base.encode()).hexdigest()
+def run_identity(schedule, host_id, trigger, key, attempt=0):
+    base = f'{schedule.id}:{schedule.revision}:{host_id}:{trigger}:{key}'
+    return hashlib.sha256((base+f':attempt{attempt}' if attempt else base).encode()).hexdigest()
+
+
+class TickCache:
+    """Per-tick lookups for the hosts of one schedule, so advance() issues no per-host existence queries."""
+    def __init__(self, s, host_ids, runs, shared=None):
+        host_ids = list(host_ids)
+        self.windows = window_settings(s, host_ids)
+        self.recovery = operations.recovery_policies(s, host_ids)
+        self.quarantined = operations.quarantined_hosts(s, host_ids)
+        if shared is not None:
+            # Tick-global sets: work queued for a host by one schedule is visible to every other schedule's runs.
+            self.busy, self.refreshing = shared.busy, shared.refreshing
+        else: self._load_active_jobs(s, host_ids)
+        # Load the runs' refresh jobs together; s.get() then finds them in the identity map.
+        ids = [r.refresh_id for r in runs if r.refresh_id and not r.job_id]
+        for start in range(0, len(ids), 500): list(s.scalars(select(Job).where(Job.id.in_(ids[start:start+500]))))
+
+    def _load_active_jobs(self, s, host_ids):
+        self.busy = set(); self.refreshing = set()
+        for start in range(0, len(host_ids), 500):
+            chunk = host_ids[start:start+500]
+            self.busy.update(s.scalars(select(Job.host_id).where(Job.host_id.in_(chunk),
+                             Job.state.in_(('queued', 'running', 'recovery_required')), Job.action != 'refresh').distinct()))
+            self.refreshing.update(s.scalars(select(Job.host_id).where(Job.host_id.in_(chunk), Job.action == 'refresh',
+                                   Job.state.in_(('queued', 'running'))).distinct()))
+
+
+def add_run(s, schedule, host, trigger, due, key, reissue=False, known=None):
     attempt = 0
-    existing = s.get(PatchRun, identity)
+    identity = run_identity(schedule, host.id, trigger, key)
+    existing = known[identity] if known is not None and identity in known else s.get(PatchRun, identity)
     # An urgent run that expired without ever queuing a patch job never executed; once gates allow, issue a fresh attempt.
     while reissue and existing and existing.state == 'skipped' and not existing.job_id:
         attempt += 1
-        identity = hashlib.sha256(f'{base}:attempt{attempt}'.encode()).hexdigest()
+        identity = run_identity(schedule, host.id, trigger, key, attempt)
         existing = s.get(PatchRun, identity)
     if not existing:
-        s.add(PatchRun(id=identity, schedule_id=schedule.id, revision=schedule.revision, host_id=host.id,
-                       trigger=trigger, due=due, expires=due+schedule.policy['window_minutes']*60))
+        run = PatchRun(id=identity, schedule_id=schedule.id, revision=schedule.revision, host_id=host.id,
+                       trigger=trigger, due=due, expires=due+schedule.policy['window_minutes']*60)
+        s.add(run)
+        if known is not None: known[identity] = run
         s.flush()
 
 
@@ -194,7 +261,7 @@ def job_guard(s, job, now=None):
     return allow_window(s, job.host_id, schedule.policy, run.trigger, now)
 
 
-def advance(s, run, now):
+def advance(s, run, now, cache=None):
     # Once queued, the executor owns the package transaction. Do not retry uncertain work.
     if run.job_id:
         if now >= run.expires:
@@ -216,23 +283,26 @@ def advance(s, run, now):
     host = s.get(Host, run.host_id)
     if not host_lifecycle.active(host):
         run.state = 'cancelled'; run.detail = 'Server management disabled or deleted'; return
-    if operations.host_quarantined(s,host.id):
+    if (host.id in cache.quarantined) if cache else operations.host_quarantined(s,host.id):
         run.detail='Waiting for operation or file response reconciliation';return
     if host.state != 'online' or now-host.last_seen > 120 or host.integrity or not host.fingerprint or not host.inventory:
         run.detail = 'Waiting for an enrolled, online server with fresh telemetry and no integrity findings'; return
-    if operations.recovery_policy(s, host.id) != policy['recovery']:
+    if (cache.recovery[host.id] if cache else operations.recovery_policy(s, host.id)) != policy['recovery']:
         run.state = 'blocked'; run.detail = 'Recovery policy differs from the approved schedule; review and save the schedule'; return
-    if not allow_window(s, host.id, policy, run.trigger, now):
+    if not allow_window(s, host.id, policy, run.trigger, now, cache.windows if cache else None):
         run.detail = 'Waiting for the server maintenance window'; return
-    busy = s.scalar(select(Job.id).where(Job.host_id == host.id,
+    busy = (host.id in cache.busy) if cache else s.scalar(select(Job.id).where(Job.host_id == host.id,
                     Job.state.in_(('queued', 'running', 'recovery_required')),
                     Job.action != 'refresh').limit(1))
     if busy: run.detail = 'Waiting for existing work or recovery reconciliation'; return
     if not run.refresh_id:
-        existing = s.scalar(select(Job.id).where(Job.host_id == host.id, Job.action == 'refresh', Job.state.in_(('queued', 'running'))).limit(1))
+        existing = (host.id in cache.refreshing) if cache else s.scalar(select(Job.id).where(Job.host_id == host.id, Job.action == 'refresh', Job.state.in_(('queued', 'running'))).limit(1))
         if existing: run.detail = 'Waiting for the existing repository check'; return
         job = Job(id=str(uuid.uuid4()), host_id=host.id, action='refresh', payload={'_schedule': {'run_id':run.id},'_host_revision':host.lifecycle_revision})
-        s.add(job); run.refresh_id = job.id; run.state = 'refreshing'; run.detail = 'Refreshing signed repository metadata'; return
+        s.add(job); run.refresh_id = job.id; run.state = 'refreshing'
+        run.detail = 'Refreshing signed repository metadata'
+        if cache: cache.refreshing.add(host.id)
+        return
     refresh = s.get(Job, run.refresh_id)
     if not refresh or refresh.state in ('failed', 'blocked', 'cancelled', 'interrupted', 'recovery_required'):
         run.state = 'failed'; run.detail = 'Repository refresh did not complete; inspect Activity'; return
@@ -248,7 +318,9 @@ def advance(s, run, now):
         run.state = 'failed'; run.detail = str(error)[:1000]; return
     job = Job(id=str(uuid.uuid4()), host_id=host.id, action='patch', payload={
         'packages':specs, '_host_revision':host.lifecycle_revision, '_actor':'schedule:'+schedule.id, '_recovery_policy':policy['recovery'], '_schedule':{'run_id':run.id}, '_schedule_policy':policy, '_depends_on':[]})
-    s.add(job); run.job_id = job.id; run.state = 'queued'; run.detail = f'{len(specs)} exact-version updates queued'
+    s.add(job); run.job_id = job.id; run.state = 'queued'
+    run.detail = f'{len(specs)} exact-version updates queued'
+    if cache: cache.busy.add(host.id)
     audit(s, 'queue scheduled patch', run.id+' '+host.id+' '+run.trigger)
 
 
@@ -261,20 +333,38 @@ def tick(now=None):
             for schedule in s.scalars(select(PatchSchedule)):
                 policy = schedule.policy
                 if not policy['enabled']: continue
-                for host in hosts_for(s, policy):
+                targets = tick_hosts(s, policy)
+                ids = [h.id for h in targets]
+                pending = candidate_packages(s, ids, policy)
+                windows = window_settings(s, ids)
+                plans = []
+                for host in targets:
                     for due in occurrences(policy, max(schedule.updated, now-policy['window_minutes']*60), now+0.001):
-                        add_run(s, schedule, host, 'regular', due, str(int(due)))
+                        plans.append((host, 'regular', due, str(int(due)), False))
                     for priority in ('critical', 'high'):
                         if not policy[priority]['enabled']: continue
-                        packages = candidates(s, host.id, policy, priority, now)
+                        packages = candidates(s, host.id, policy, priority, now, pending[host.id])
                         if packages:
                             key = json.dumps([(p.name, p.candidate, p.available_since) for p in packages])
                             ready = (host.state == 'online' and now-host.last_seen <= 120 and not host.integrity and
-                                     allow_window(s, host.id, policy, priority, now))
-                            add_run(s, schedule, host, priority, now, key, reissue=ready)
+                                     allow_window(s, host.id, policy, priority, now, windows))
+                            plans.append((host, priority, now, key, ready))
+                # Look up every planned run together; add_run() then needs no per-run SELECT.
+                wanted = [run_identity(schedule, h.id, trigger, key) for h, trigger, _, key, _ in plans]
+                known = {}
+                for start in range(0, len(wanted), 500):
+                    known.update({r.id: r for r in s.scalars(select(PatchRun).where(PatchRun.id.in_(wanted[start:start+500])))})
+                for host, trigger, due, key, reissue in plans: add_run(s, schedule, host, trigger, due, key, reissue=reissue, known=known)
             runs = list(s.scalars(select(PatchRun).where(PatchRun.state.in_(ACTIVE))))
+            caches = {}; shared = None
+            for schedule in s.scalars(select(PatchSchedule)):
+                waiting = [r for r in runs if r.schedule_id == schedule.id and not r.job_id]
+                if schedule.policy['enabled'] and waiting:
+                    if shared is None:
+                        shared = TickCache(s, {r.host_id for r in runs if not r.job_id}, [])
+                    caches[schedule.id] = TickCache(s, {r.host_id for r in waiting}, waiting, shared)
             for run in sorted(runs, key=lambda r: ({'critical':0,'high':1,'regular':2}[r.trigger],r.due,r.id)):
-                advance(s, run, now)
+                advance(s, run, now, caches.get(run.schedule_id))
                 s.flush()
             s.commit()
     finally: lock.release()

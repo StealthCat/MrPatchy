@@ -13,6 +13,10 @@ from .db import DATA
 from . import debian_versions
 from .repository_access import validate as validate_access, rewrite
 
+
+class SourceRejected(ValueError):
+    """Controlled, administrator-facing validation message; the only ValueError text repository health may show."""
+
 def paragraphs(text):
     for block in re.split(r'\n\s*\n',text.strip()):
         item={}; key=None
@@ -24,8 +28,8 @@ def paragraphs(text):
                 # APT tolerates whitespace before ':'. Reject it rather than let
                 # validation and native APT disagree about security fields.
                 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*',key):
-                    raise ValueError('Invalid Deb822 field name')
-                if key.lower() in {k.lower() for k in item}: raise ValueError('Duplicate Deb822 field: '+key)
+                    raise SourceRejected('Invalid Deb822 field name')
+                if key.lower() in {k.lower() for k in item}: raise SourceRejected('Duplicate Deb822 field: '+key)
                 item[key]=value.strip()
         if item: yield item
 
@@ -48,9 +52,9 @@ def source_options(content, deb822=False):
             if fields.get('enabled', 'yes').lower() in FALSE_VALUES:
                 continue
             if not fields.get('types') or not set(fields['types'].split()) <= {'deb', 'deb-src'}:
-                raise ValueError('Invalid repository Types')
+                raise SourceRejected('Invalid repository Types')
             if not fields.get('suites') or not fields.get('uris'):
-                raise ValueError('Repository requires URIs and Suites')
+                raise SourceRejected('Repository requires URIs and Suites')
             for uri in fields['uris'].split(): validate_uri(uri)
             yield fields
     else:
@@ -58,14 +62,14 @@ def source_options(content, deb822=False):
             line = line.strip()
             if not line or line.startswith('#'): continue
             match = re.match(r'^(deb|deb-src)\s+(?:\[([^\]]+)\]\s+)?(\S+)\s+(\S+)', line)
-            if not match: raise ValueError('Invalid one-line APT source')
+            if not match: raise SourceRejected('Invalid one-line APT source')
             validate_uri(match[3])
             fields = {}
             for option in (match[2] or '').split():
-                if '=' not in option: raise ValueError('Invalid APT source option')
+                if '=' not in option: raise SourceRejected('Invalid APT source option')
                 key, value = option.split('=', 1)
                 key = key.lower()
-                if key in fields: raise ValueError('Duplicate APT source option: '+key)
+                if key in fields: raise SourceRejected('Duplicate APT source option: '+key)
                 fields[key] = value
             yield fields
 
@@ -75,30 +79,30 @@ def signing_refs(value):
     refs = []
     for token in re.split(r'[\s,]+', value.strip()):
         if token.startswith('/'):
-            if not public_key_path(token): raise ValueError('Unsupported signing key path: '+token)
+            if not public_key_path(token): raise SourceRejected('Unsupported signing key path: '+token)
             refs.append(token)
         elif token and not re.fullmatch(r'[A-Fa-f0-9]{40}!?', token):
-            raise ValueError('Signed-By must use a captured key path, fingerprint, or inline public key')
+            raise SourceRejected('Signed-By must use a captured key path, fingerprint, or inline public key')
     return refs
 
 def validate_source(content, deb822=False):
     for fields in source_options(content, deb822):
         for name in ('trusted', 'allow-insecure', 'allow-weak', 'allow-downgrade-to-insecure'):
             if name in fields and fields[name].strip().lower() not in FALSE_VALUES:
-                raise ValueError('Repository weakens signature verification')
+                raise SourceRejected('Repository weakens signature verification')
         for name in ('check-valid-until', 'check-date'):
             if name in fields and fields[name].strip().lower() not in TRUE_VALUES:
-                raise ValueError('Repository weakens expiry verification')
+                raise SourceRejected('Repository weakens expiry verification')
         if any(name in fields for name in ('valid-until-min', 'valid-until-max', 'date-max-future')):
-            raise ValueError('Repository overrides signed metadata validity policy')
+            raise SourceRejected('Repository overrides signed metadata validity policy')
         signing_refs(fields.get('signed-by', ''))
     return content
 
 def validate_uri(uri):
     parsed=urlsplit(uri)
     if parsed.scheme not in ('https','http') or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError('Only HTTP(S) repositories without embedded credentials are supported')
-    if any(x in uri for x in ['"','\\','\x00']): raise ValueError('Invalid repository URI')
+        raise SourceRejected('Only HTTP(S) repositories without embedded credentials are supported')
+    if any(x in uri for x in ['"','\\','\x00']): raise SourceRejected('Invalid repository URI')
 
 def source_path(name):
     return name=='/etc/apt/sources.list' or bool(re.fullmatch(r'/etc/apt/sources\.list\.d/[A-Za-z0-9_.-]+\.(list|sources)',name))
@@ -109,6 +113,13 @@ def key_destination(root,name):
 
 def public_key_path(name):
     return name.startswith('/') and '..' not in Path(name).parts and bool(re.fullmatch(r'/[A-Za-z0-9_./+\-]+\.(asc|gpg)',name))
+
+def private_file(path, text):
+    """Write repository credentials at mode 0600 from creation; never follow or reuse an existing entry."""
+    path.unlink(missing_ok=True)
+    descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+    with os.fdopen(descriptor,'w') as stream:
+        os.fchmod(stream.fileno(),0o600);stream.write(text)
 
 def prepare(host_id, inv, access=None):
     access=validate_access(access or {})
@@ -137,13 +148,13 @@ def prepare(host_id, inv, access=None):
             # Every absolute key path must resolve to captured signing material.
             refs=[ref for fields in source_options(value,name.endswith('.sources')) for ref in signing_refs(fields.get('signed-by',''))]
             for ref in sorted(set(refs),key=len,reverse=True):
-                if ref not in inv['keys']: raise ValueError('Signing key was not captured from target: '+ref)
+                if ref not in inv['keys']: raise SourceRejected('Signing key was not captured from target: '+ref)
                 value=value.replace(ref,str(key_destination(root,ref)))
         elif name!='/etc/apt/preferences' and not re.fullmatch(r'/etc/apt/preferences.d/[A-Za-z0-9_.-]+',name): continue
         p=root/name.lstrip('/'); p.write_text(value)
     (root/'var/lib/dpkg/status').write_text(inv['status'])
     arch=inv['architecture']; arches=[arch]+inv.get('foreign_architectures',[])
-    if any(not re.fullmatch(r'[a-z0-9-]+',a) for a in arches): raise ValueError('Invalid architecture')
+    if any(not re.fullmatch(r'[a-z0-9-]+',a) for a in arches): raise SourceRejected('Invalid architecture')
     cfg=root/'apt.conf'
     cfg.write_text(f'''Dir "{root}";
 Dir::Etc "{root}/etc/apt";
@@ -164,8 +175,7 @@ APT::Update::Error-Mode "any";
 APT::Sandbox::User "{pwd.getpwuid(os.geteuid()).pw_name}";
 ''')
     auth=root/'etc/apt/auth.conf'
-    auth.write_text(''.join('machine '+x['machine']+' login '+x['login']+' password '+x['password']+'\n' for x in access.get('credentials',[])))
-    auth.chmod(0o600)
+    private_file(auth,''.join('machine '+x['machine']+' login '+x['login']+' password '+x['password']+'\n' for x in access.get('credentials',[])))
     ca=root/'repository-ca.pem';ca.unlink(missing_ok=True)
     with cfg.open('a') as stream:
         stream.write('Dir::Etc::netrc "'+str(auth)+'";\n')
@@ -197,6 +207,11 @@ def parse_policy(text):
                 result[current]['origin']+=line+'\n'
     return result
 
+def auto_priority(origin,candidate):
+    # Feed absence is not a severity rating. Origin is a scheduling heuristic only.
+    return 'high' if candidate and ('-security' in origin or '/security' in origin) else 'normal'
+
+
 def refresh(host_id,inv,access=None):
     root,cfg=prepare(host_id,inv,access)
     log=run(cfg,['apt-get','update'])
@@ -213,6 +228,5 @@ def refresh(host_id,inv,access=None):
     for p,newer in zip(pkgs,debian_versions.newer_flags(pairs)):
         candidate=p['candidate']
         p['candidate']=candidate if newer else ''
-        # Feed absence is not a severity rating. Origin is a scheduling heuristic only.
-        p['priority']='high' if newer and ('-security' in p['origin'] or '/security' in p['origin']) else 'normal'
+        p['priority']=auto_priority(p['origin'],newer and candidate)
     return pkgs,log
