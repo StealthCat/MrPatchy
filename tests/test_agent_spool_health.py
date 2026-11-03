@@ -61,6 +61,29 @@ def test_non_finite_pending_is_unavailable_without_persisting_it():
     assert result['status']=='unavailable' and 'queue' not in result
 
 
+@pytest.mark.parametrize('field',['pending','queued_bytes'])
+def test_fractional_queue_counters_are_unavailable(field):
+    host=Host(id='x',telemetry={'collected':time.time(),'spool':spool(**{field:1.9})})
+    result=health.health(host)
+    assert result['status']=='unavailable' and 'queue' not in result
+
+
+@pytest.mark.parametrize('field',['dropped','dropped_observations','batch_limit_bytes'])
+def test_fractional_optional_counters_are_null_not_truncated(field):
+    host=Host(id='x',telemetry={'collected':time.time(),'spool':spool(**{field:2.5})})
+    result=health.health(host)
+    assert health.count(2.5) is None and health.count(3.0)==3
+    flat=[result['loss']['dropped_batches'],result['loss']['lost_observations'],result['queue']['batch_limit_bytes']]
+    assert 2 not in flat
+
+
+def test_fractional_loss_reason_counters_are_null():
+    reasons={'oversize':{'batches':1.5,'observations':2.5},'capacity':{'batches':3,'observations':5}}
+    host=Host(id='x',telemetry={'collected':time.time(),'spool':spool(drop_reasons=reasons)})
+    loss=health.health(host)['loss']['by_reason']
+    assert loss['oversize']=={'batches':None,'observations':None} and loss['capacity']['batches']==3
+
+
 def test_payloads_and_unknown_keys_never_returned(admin):
     secret='/private/executable-secret'
     value=spool(extra_key=secret,events=[{'executable':secret}])

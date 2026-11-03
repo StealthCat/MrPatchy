@@ -16,7 +16,7 @@ UNAVAILABLE='unavailable'
 def count(value):
     """Return a non-negative finite integer, or None when the value is unusable."""
     if isinstance(value,bool) or not isinstance(value,(int,float)):return None
-    if isinstance(value,float) and not math.isfinite(value):return None
+    if isinstance(value,float) and (not math.isfinite(value) or not value.is_integer()):return None
     if value<0 or value>2**53:return None
     return int(value)
 
