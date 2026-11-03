@@ -171,8 +171,10 @@ class Login(BaseModel):
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
 # Failures per account by source address, used only to detect guessing spread across addresses (never to block).
 login_account_failures={}
+login_account_next_sweep=0.0
 LOGIN_BUCKET_LIMIT=10000
 LOGIN_SUSPICIOUS_ADDRESSES=5
+LOGIN_ACCOUNT_SWEEP_SECONDS=30
 # Verified when an account is missing or disabled so response time does not reveal which usernames exist.
 DUMMY_PASSWORD_HASH=password_hash('mrpatchy-timing-equaliser','00'*16)
 def audit_login_event(action,username,ip,reason):
@@ -181,6 +183,7 @@ def audit_login_event(action,username,ip,reason):
         audit(s,action,username+' '+ip+' '+reason); s.commit()
 @app.post('/api/login')
 def login(body:Login,request:Request,response:Response):
+    global login_account_next_sweep
     ip=request.client.host; now=time.time()
     # Reserve an attempt before expensive password hashing; remove it only on success.
     bucket=ip+':'+body.username
@@ -191,9 +194,14 @@ def login(body:Login,request:Request,response:Response):
             if not login_attempts[key]: del login_attempts[key]
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
-        for key in list(login_account_failures):
-            login_account_failures[key]={a:x for a,x in login_account_failures[key].items() if now-x<300}
-            if not login_account_failures[key]: del login_account_failures[key]
+        # Sweep global detector state periodically, not on every authentication request.
+        # The per-account failure path below still enforces the exact rolling window.
+        if now>=login_account_next_sweep:
+            for key,seen in list(login_account_failures.items()):
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                if not seen: del login_account_failures[key]
+            login_account_next_sweep=now+LOGIN_ACCOUNT_SWEEP_SECONDS
         recent=login_attempts.get(bucket,[])
         ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
         if len(recent)>=10 or ip_attempts>=50:
@@ -231,7 +239,14 @@ def login(body:Login,request:Request,response:Response):
         with login_lock:
             # Detect, never block: a hard per-account limit would let an attacker lock out a real administrator.
             if body.username in login_account_failures or len(login_account_failures)<LOGIN_BUCKET_LIMIT:
-                seen=login_account_failures.setdefault(body.username,{}); seen[ip]=now
+                seen=login_account_failures.setdefault(body.username,{})
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                # Only the most recent distinct sources are needed to recognize
+                # the threshold; never retain an unbounded rotating-IP history.
+                if ip not in seen and len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES:
+                    del seen[min(seen,key=seen.get)]
+                seen[ip]=now
                 scope='suspicious:'+body.username
                 if len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES and scope not in login_throttle_logged:
                     login_throttle_logged[scope]=now; suspicious=True
