@@ -418,7 +418,7 @@ Human-attention events and significant triage findings should arrive through aut
 
 Verify actual asynchronous updates, multi-session read synchronization, replay/deduplication/reopening, role/session boundaries, keyboard/live-region behavior and mobile/tablet/desktop renders. This remains planned until the runtime and acceptance milestones are delivered.
 
-Issue #350 adds a bounded shell checkpoint pending coordinator integration: the
+Issue #350 adds a bounded shell checkpoint: the
 desktop/tablet/mobile header has a persistent bell, count/severity cue and compact
 glass recent panel using the existing mascot portrait. Notification text is inserted
 as text, links receive a defensive same-origin check, and exact-revision read/dismiss

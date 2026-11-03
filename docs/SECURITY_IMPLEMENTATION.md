@@ -2618,8 +2618,8 @@ incident state, AI approval and response authorization. This does not complete t
 notification program: producers, retention, live cross-controller delivery, UI and
 end-to-end SQLite/MySQL/browser acceptance remain planned.
 
-Implementation checkpoint (issue #350, worker increment pending coordinator
-integration): the authenticated shell now consumes those APIs through a persistent
+Implementation checkpoint (issue #350): the authenticated shell now consumes
+those APIs through a persistent
 responsive bell, accessible unread/severity label and compact recent panel. Safe
 public payloads are rendered with text nodes, and a second client-side same-origin
 check rejects invalid deep links before creating an action. Read/dismiss sends the
