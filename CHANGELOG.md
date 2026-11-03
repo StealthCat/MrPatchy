@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.37.5 — 2026-11-03
+
+1. [PR #331](https://github.com/StealthCat/MrPatchy/pull/331): Batch maintenance-window, recovery-policy, security-hold, active-job and existing-run lookups during patch-schedule ticks, reducing the open-window 40-host regression fixture from 844 to 57 SQL statements. Share newly queued work across schedules within each tick so two schedules cannot queue duplicate refresh or patch work for one host. Compatibility: no schema or scheduling-policy change; existing approval, lifecycle, maintenance-window, recovery and executor safeguards remain in force. Statement counts describe the regression fixture, not a fleet-wide latency guarantee. Completes #330.
+
+## 1.37.4 — 2026-11-03
+
+1. [PR #329](https://github.com/StealthCat/MrPatchy/pull/329): Pin the scheduler query-count test to noon UTC outside its seeded maintenance window, preventing daily 02:00–04:00 UTC failures while preserving its query limits. Compatibility: test-fixture change only; production scheduling behavior is unchanged. The separate in-window scheduler query cost remains open under #330. Completes #328.
+
+## 1.37.3 — 2026-11-03
+
+1. [PR #327](https://github.com/StealthCat/MrPatchy/pull/327): Reduce overview API memory and decoding work by projecting the three displayed host metadata fields in SQL, deferring inventory/telemetry/baseline blobs, and counting packages, updates and overdue updates in SQL instead of materializing every Package row. Preserve explicit JSON nulls separately from missing-key defaults, existing response shapes, role and deleted/disabled-host filtering, deadline comparisons and integrity counts. Compatibility: no schema, API contract, UI, configuration or runtime-response authorization change. Database work still scans eligible rows and the dashboard retains the Host fields needed for its counts; this is not a constant-time or fleet-latency guarantee. Continues and preserves #253's implementation history, corrects its nullable-metadata boundary, and completes #147.
+
+## 1.37.2 — 2026-11-03
+
+1. [PR #270](https://github.com/StealthCat/MrPatchy/pull/270): Store passwords in a versioned scrypt format with stronger bounded-cost parameters, continue verifying legacy hashes and upgrade them after a successful sign-in, cap concurrent KDF work, reject unsupported or malformed stored parameters before hashing, cache the Fernet key until its file changes, and derive the short-lived OIDC flow-cookie secret with purpose-bound HKDF instead of reusing Fernet signing material. Compatibility: existing credentials continue to work, but older releases cannot verify hashes upgraded by this release and in-flight OIDC sign-ins must be restarted once after upgrade. The default four concurrent current-cost hashes can consume roughly 512 MiB in aggregate; `secret.key` still shares the data volume with the database, so encryption does not protect against compromise of that volume. Completes #200.
+
 ## 1.37.1 — 2026-11-03
 
 1. [PR #326](https://github.com/StealthCat/MrPatchy/pull/326): Add a read-only per-server agent spool-health API that derives freshness, lifecycle, queue pressure and cumulative loss by reason from already stored telemetry, rejects malformed or fractional counters without exposing payloads or unknown keys, and preserves viewer/deleted-server access boundaries. Compatibility: additive authenticated API only; no schema, target-agent, remote-call or runtime-response authorization change. The endpoint cannot report metrics the agent does not collect, including oldest-observation age, rates, retries and delivery latency; UI, alerts, additional agent metrics and durable loss history remain unfinished under partial #108.

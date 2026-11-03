@@ -33,8 +33,13 @@ def seed(now):
         s.commit()
 
 
+def outside_schedule_window():
+    """Today 12:00 UTC: the seeded daily 02:00 UTC schedule (120 minute window) is idle, whatever the wall clock says (#328)."""
+    return time.time() // 86400 * 86400 + 12 * 3600
+
+
 def test_scheduler_tick_query_count_is_independent_of_host_count(admin, counted):
-    now = time.time(); seed(now)
+    now = outside_schedule_window(); seed(now)
     sched.tick(now); counted.clear()
     sched.tick(now)
     package_reads = [sql for sql in counted if 'FROM packages' in sql]
