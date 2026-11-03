@@ -21,7 +21,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health
+from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, freezes
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -1180,6 +1180,22 @@ def get_window(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'window:'+host_id)
         return row.value if row else {'windows':[]}
+
+class FreezeInput(BaseModel): freezes:list[dict]=Field(default_factory=list,max_length=50)
+def freeze_view(s):
+    now=time.time()
+    return {'freezes':freezes.load(s),'active':freezes.active(s,now),'clear_at':freezes.clear_at(s,now),
+            'precedence':'A change freeze blocks scheduled, manual and urgent patch/repair/release-upgrade dispatch until it ends; maintenance windows and holds apply afterwards.'}
+@app.get('/api/operations/freezes')
+def get_freezes(user=Depends(admin_user)):
+    with Session() as s: return freeze_view(s)
+@app.put('/api/operations/freezes')
+def save_freezes(body:FreezeInput,user=Depends(admin_user)):
+    try: rows=freezes.clean(body.freezes,user['username'])
+    except ValueError as error: raise HTTPException(400,str(error))
+    with Session() as s:
+        s.merge(Setting(key=freezes.KEY,value={'freezes':rows}));audit(s,'change freezes',f"{user['username']} saved {len(rows)} change freeze(s)");s.commit()
+        return freeze_view(s)
 
 class NotificationInput(BaseModel):
     enabled:bool=False

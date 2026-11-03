@@ -14,7 +14,7 @@ from sqlalchemy import String, JSON, Double, Integer, select, update, func
 from sqlalchemy.orm import Mapped, mapped_column, load_only
 from .db import Base, Session, Host, Package, Job, audit
 from .coordination import Lock
-from . import operations
+from . import operations, freezes
 
 UTC = dt.timezone.utc
 PRIORITIES = ('critical', 'high', 'normal', 'low')
@@ -186,6 +186,8 @@ def window_settings(s, host_ids):
 
 
 def allow_window(s, host_id, policy, trigger, now, windows=None):
+    # A change freeze outranks maintenance windows and urgent/bypass triggers.
+    if freezes.blocked(s, now): return False
     if trigger != 'regular' and policy[trigger]['bypass_window']: return True
     if windows is not None and host_id in windows: return operations.in_window(windows[host_id], now)
     from .db import Setting

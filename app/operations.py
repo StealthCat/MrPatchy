@@ -105,6 +105,12 @@ def eligible(s,job,window_cache=None):
         if previous.state=='recovery_required':
             job.state='blocked';job.output='Canary requires recovery reconciliation';s.commit();return False
         if previous.state!='complete':return False
+    from . import freezes
+    if window_cache is None:frozen=freezes.blocked(s)
+    else:
+        if '*freeze' not in window_cache:window_cache['*freeze']=freezes.blocked(s)
+        frozen=window_cache['*freeze']
+    if frozen:return False
     if window_cache is not None and job.host_id in window_cache:return window_cache[job.host_id]
     row=s.get(Setting,'window:'+job.host_id)
     result=in_window(row.value['windows'] if row else [])
