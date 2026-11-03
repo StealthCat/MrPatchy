@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.1 — 2026-11-03
+
+1. [PR #326](https://github.com/StealthCat/MrPatchy/pull/326): Add a read-only per-server agent spool-health API that derives freshness, lifecycle, queue pressure and cumulative loss by reason from already stored telemetry, rejects malformed or fractional counters without exposing payloads or unknown keys, and preserves viewer/deleted-server access boundaries. Compatibility: additive authenticated API only; no schema, target-agent, remote-call or runtime-response authorization change. The endpoint cannot report metrics the agent does not collect, including oldest-observation age, rates, retries and delivery latency; UI, alerts, additional agent metrics and durable loss history remain unfinished under partial #108.
+
 ## 1.37.0 — 2026-11-02
 
 1. [PR #325](https://github.com/StealthCat/MrPatchy/pull/325): Add authenticated, current-role-filtered notification list and unread-count APIs plus CSRF-protected, revision-bound per-user read and dismiss mutations. Responses expose only retained safe summaries, hide higher-role events, audit state changes and remain independent of global alert acknowledgement, incident state, AI approval and response authorization; a second exact 60-second enrollment-window fixture is also made deterministic across SQLite/MySQL timestamp round trips without changing runtime admission behavior. Compatibility: additive authenticated APIs and test/CI stabilization only; existing schema, alert delivery/lifecycle and runtime behavior remain compatible. Notification producers, retention/pruning, live cross-controller delivery/replay, shell/center UI and full end-to-end acceptance remain future work. Completes #324.
