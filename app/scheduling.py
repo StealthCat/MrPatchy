@@ -200,11 +200,20 @@ def run_identity(schedule, host_id, trigger, key, attempt=0):
 
 class TickCache:
     """Per-tick lookups for the hosts of one schedule, so advance() issues no per-host existence queries."""
-    def __init__(self, s, host_ids, runs):
+    def __init__(self, s, host_ids, runs, shared=None):
         host_ids = list(host_ids)
         self.windows = window_settings(s, host_ids)
         self.recovery = operations.recovery_policies(s, host_ids)
         self.quarantined = operations.quarantined_hosts(s, host_ids)
+        if shared is not None:
+            # Tick-global sets: work queued for a host by one schedule is visible to every other schedule's runs.
+            self.busy, self.refreshing = shared.busy, shared.refreshing
+        else: self._load_active_jobs(s, host_ids)
+        # Load the runs' refresh jobs together; s.get() then finds them in the identity map.
+        ids = [r.refresh_id for r in runs if r.refresh_id and not r.job_id]
+        for start in range(0, len(ids), 500): list(s.scalars(select(Job).where(Job.id.in_(ids[start:start+500]))))
+
+    def _load_active_jobs(self, s, host_ids):
         self.busy = set(); self.refreshing = set()
         for start in range(0, len(host_ids), 500):
             chunk = host_ids[start:start+500]
@@ -212,9 +221,6 @@ class TickCache:
                              Job.state.in_(('queued', 'running', 'recovery_required')), Job.action != 'refresh').distinct()))
             self.refreshing.update(s.scalars(select(Job.host_id).where(Job.host_id.in_(chunk), Job.action == 'refresh',
                                    Job.state.in_(('queued', 'running'))).distinct()))
-        # Load the runs' refresh jobs together; s.get() then finds them in the identity map.
-        ids = [r.refresh_id for r in runs if r.refresh_id and not r.job_id]
-        for start in range(0, len(ids), 500): list(s.scalars(select(Job).where(Job.id.in_(ids[start:start+500]))))
 
 
 def add_run(s, schedule, host, trigger, due, key, reissue=False, known=None):
@@ -350,11 +356,13 @@ def tick(now=None):
                     known.update({r.id: r for r in s.scalars(select(PatchRun).where(PatchRun.id.in_(wanted[start:start+500])))})
                 for host, trigger, due, key, reissue in plans: add_run(s, schedule, host, trigger, due, key, reissue=reissue, known=known)
             runs = list(s.scalars(select(PatchRun).where(PatchRun.state.in_(ACTIVE))))
-            caches = {}
+            caches = {}; shared = None
             for schedule in s.scalars(select(PatchSchedule)):
                 waiting = [r for r in runs if r.schedule_id == schedule.id and not r.job_id]
                 if schedule.policy['enabled'] and waiting:
-                    caches[schedule.id] = TickCache(s, {r.host_id for r in waiting}, waiting)
+                    if shared is None:
+                        shared = TickCache(s, {r.host_id for r in runs if not r.job_id}, [])
+                    caches[schedule.id] = TickCache(s, {r.host_id for r in waiting}, waiting, shared)
             for run in sorted(runs, key=lambda r: ({'critical':0,'high':1,'regular':2}[r.trigger],r.due,r.id)):
                 advance(s, run, now, caches.get(run.schedule_id))
                 s.flush()

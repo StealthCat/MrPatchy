@@ -91,3 +91,20 @@ def test_quarantined_hosts_matches_host_quarantined(admin):
         s.commit()
         ids = [f'h{n:03d}' for n in range(HOSTS)]
         assert operations.quarantined_hosts(s, ids) == {i for i in ids if operations.host_quarantined(s, i)} == {'h003'}
+
+
+def test_two_schedules_on_one_host_queue_one_refresh(admin):
+    # Per-schedule caches must see work queued by another schedule in the same tick (#331 review).
+    import datetime as dt
+    from app.db import Job
+    now = dt.datetime(2026, 11, 3, 2, 30, tzinfo=dt.timezone.utc).timestamp(); seed(now)
+    with Session() as s:
+        for h in s.scalars(select(Host).where(Host.id != 'h000')): s.delete(h)
+        s.commit()
+        policy = s.get(sched.PatchSchedule, 'schedule').policy
+        s.add(sched.PatchSchedule(id='schedule-b', policy={**policy, 'name': 'Second'}, revision=1, updated=now - 86400))
+        s.commit()
+    sched.tick(now)
+    with Session() as s:
+        refreshes = list(s.scalars(select(Job).where(Job.host_id == 'h000', Job.action == 'refresh')))
+    assert len(refreshes) == 1, len(refreshes)
