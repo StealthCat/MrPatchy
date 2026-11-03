@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle
+from . import host_lifecycle,response_status
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -63,12 +63,19 @@ def enqueue(s,host_id,action,payload=None):
         if host_id in revisions:body['_host_revision']=revisions[host_id]
         return _enqueue_active(s,host_id,action,body)
 
-def _enqueue_active(s,host_id,action,payload=None):
+def ensure_queue_capacity(s,host_id):
+    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
+
+def stage_job(s,host_id,action,payload=None):
+    """Add a queued job with its per-job audit entry; the caller commits."""
     host=s.get(Host,host_id)
     if host and not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
-    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
+    ensure_queue_capacity(s,host_id)
     job=Job(id=str(uuid.uuid4()),host_id=host_id,action=action,payload=payload or {})
-    s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
+    s.add(job); audit(s,'queue '+action,host_id); return job.id
+
+def _enqueue_active(s,host_id,action,payload=None):
+    job_id=stage_job(s,host_id,action,payload); s.commit(); return job_id
 
 def save_inventory(s,h,inv):
     items=package_backend.installed(inv)
@@ -112,8 +119,9 @@ def update_repos(s,h):
         else:
             save_inventory(s,h,inv);s.commit()
     packages,output=package_backend.refresh(h.id,inv,repository_access(s,h.id))
+    known={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     for item in packages:
-        p=s.get(Package,h.id+':'+item['name'])
+        p=known.get(item['name'])
         if not p: continue
         # Superseding a still-outstanding update must not postpone its deadline.
         if not item['candidate']: p.available_since=0
@@ -641,13 +649,11 @@ def execute_locked(job_id):
             if job.action=='process-status':
                 response=s.get(process_response.ProcessResponse,job.payload.get('process_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    process_response.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=process_response.event,clock=time.time)
             if job.action=='quarantine-status':
                 response=s.get(quarantine.Quarantine,job.payload.get('quarantine_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    quarantine.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=quarantine.event,clock=time.time)
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
