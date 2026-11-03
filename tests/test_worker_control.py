@@ -112,7 +112,6 @@ def test_scheduler_drain_releases_coordinator_finishes_assigned_and_resumes(admi
     monkeypatch.setattr(worker.operations,'collect_alerts',lambda:None)
     monkeypatch.setattr(worker.operations,'deliver_one',lambda:None)
     monkeypatch.setattr(worker,'poll_host',lambda *a:None)
-    monkeypatch.setattr(worker,'ai_cycle',lambda:None)
     with Session() as s:
         for n in range(3):
             host=Host(id='control-host-'+str(n),name='Control fixture',address='192.0.2.1',fingerprint='');s.add(host)

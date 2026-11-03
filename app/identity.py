@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from sqlalchemy import String, Boolean, Integer
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base
-from .security import seal,unseal
+from .security import unseal
 
 actor=ContextVar('actor',default='system')
 class User(Base):

@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import os
 import secrets
-import time
+import threading
 from .db import DATA
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
@@ -26,8 +26,10 @@ def derive_key(purpose):
 def seal(value): return cipher().encrypt(value.encode()).decode()
 def unseal(value): return cipher().decrypt(value.encode()).decode()
 SCRYPT_N,SCRYPT_R,SCRYPT_P=2**17,8,1
+_KDF_SLOTS=threading.BoundedSemaphore(int(os.getenv('KDF_CONCURRENCY','4')))
 def _scrypt(password,salt,n,r,p):
-    return hashlib.scrypt(password.encode(),salt=bytes.fromhex(salt),n=n,r=r,p=p,maxmem=128*n*r+(1<<22)).hex()
+    # Bound aggregate KDF memory/CPU: at most KDF_CONCURRENCY hashes (~128 MiB each at N=2^17) run at once.
+    with _KDF_SLOTS: return hashlib.scrypt(password.encode(),salt=bytes.fromhex(salt),n=n,r=r,p=p,maxmem=128*n*r+(1<<22)).hex()
 def password_hash(password,salt=None):
     salt=salt or secrets.token_hex(16)
     return f'scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt}${_scrypt(password,salt,SCRYPT_N,SCRYPT_R,SCRYPT_P)}'
