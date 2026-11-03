@@ -33,11 +33,24 @@ PR #284 configures weekly Dependabot updates for pip, npm, GitHub Actions and
 Docker at the root, deploy and test-fixture manifest locations. Tracked Dockerfile
 location coverage has regression tests; live Dependabot update generation has not
 been exercised as part of this delivery. This is update configuration, not code
-or dependency vulnerability scanning. Base images remain tag-based, Python
-requirements lack install hashes, and Actions references remain tag-based rather
-than commit-SHA pinned. Digest/hash/SHA pinning, code scanning and additional
-Compose sandboxing remain unfinished under #201; no runtime response authority
-or deployment sandbox boundary is changed.
+or dependency vulnerability scanning. PR #292 pins the CI workflow's
+`actions/checkout`, `actions/setup-python` and `actions/setup-node` references to
+full commit SHAs with version comments, covered by a regression test. Base images
+remain tag-based and Python requirements lack install hashes. Image digest and
+hash pinning, code scanning and additional Compose sandboxing remain unfinished
+under #201; no runtime response authority or deployment sandbox boundary is
+changed.
+
+This checkpoint supersedes the code-scanning status immediately above: a
+separate least-privilege CodeQL workflow analyzes Python on pull requests
+targeting `main`, pushes to `main` and a bounded weekly schedule. Checkout and both
+CodeQL actions are pinned to full commit SHAs with readable version comments, and
+regression coverage keeps the triggers, Python/security-extended query suite,
+action pins, timeout and upload permission explicit. Results are repository
+security-analysis findings; they do not authorize runtime remediation. Base-image
+digests, hash-pinned Python
+installs, dependency-vulnerability scanning and additional Compose sandboxing
+remain unfinished under #201.
 
 ## Scheduled development completion gate
 
@@ -56,6 +69,20 @@ This gate takes precedence over instructions to always continue development or
 produce another PR. Judge completion from the current repository and latest merged
 work rather than stale milestone numbers or repeated historical requests.
 
+### Runtime Python dependency hash lock — partial #201 checkpoint
+
+This source checkpoint supersedes every older #201 status statement in this
+historical document, including entries located later in the file, that production
+Python installs remain unhashed. A generated Python 3.12 lock pins the complete
+production dependency graph and records SHA-256 hashes for the available
+distributions. Container builds now install that lock with pip's
+`--require-hashes` enforcement; focused tests require exact direct pins, hashed
+transitive entries and the enforced Docker install path. The development/test
+dependency range remains outside this production-runtime slice. Base-image digest
+pinning, code scanning and the other #201 controls remain independently tracked;
+this checkpoint does not add vulnerability scanning or alter runtime response
+authority.
+
 ## Development-cycle work budget
 
 When the completion gate identifies remaining work, select a coherent batch of
@@ -73,6 +100,53 @@ several small related items when appropriate.
 The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
+
+### Enrollment installer downloads (partial #202)
+
+Enrollment links retain their one-hour expiry and support repeated downloads for
+partial-download retries. Public download requests, including invalid tokens,
+share a ten-attempt sliding sixty-second window per ASGI client address across
+controllers using the existing SQLite/shared-filesystem or MySQL coordination.
+Admission is persisted in one settings row with at most 1,024 active source hashes
+and ten timestamps per source. Active sources are never evicted to admit new ones;
+when capacity is full, new sources receive HTTP 429 until a slot expires. Requests
+over quota return 429 with Retry-After before installer generation; lock contention
+returns 503 with a one-second retry. The limiter does not authorize enrollment or
+alter the installer or managed-target actions. Proxy trust remains the deployment's
+ASGI configuration; the route does not consume raw forwarding headers.
+
+Every successfully prepared valid installer records its first/retry use number,
+host ID, non-bearer link identifier and hashed client address in the audit history.
+Preparation is not proof of full delivery or execution. Expired/revoked links,
+inactive hosts, generation failures and throttled requests do not record a prepared
+installer. Tokens and installer content are not included in these audit records.
+The independent route-exception-header item remains in PR #264, and #202 stays
+open pending both deliveries. No new schema, runtime response authority or source
+version is introduced by this worker slice.
+
+### Bounded budget aggregation follow-up (#133)
+
+The follow-up to partial #273 replaces grouping by distinct receipt amount with
+at most five status buckets, including a conservative bucket for every unknown
+unreleased status. MySQL uses native DECIMAL summation. SQLite uses a registered
+bounded-memory integer nano-dollar aggregate, normalizing each value at the same
+nine-place precision as the previous SQLAlchemy Numeric reader and returning text
+to avoid an additional floating-point sum. This does not change SQLite's existing
+NUMERIC storage precision, ledger retention, admission locks or timezone membership.
+
+On disposable 10,000-receipt fixtures, exact-head SQLite and MySQL checks reduced
+aggregation results from 10,000 rows to one. The recorded locked aggregation times
+were 0.0295 to 0.0176 seconds on SQLite and 0.0487 to 0.0107 seconds on MySQL.
+Separately, five actual reserve() calls on SQLite measured median held-lock time of
+0.1497 versus 0.0493 seconds and peak traced allocation of 3,335,400 versus 157,231
+bytes. These are single fixture measurements without a timing guarantee or fleet
+throughput claim. Exact-head SQLite/MySQL, precision and concurrent near-cap tests
+retain exact money totals and atomic admission.
+
+PR #240 separately owns timezone-window membership; its later integration must
+preserve both its predicate correction and this aggregate. Eligible ledger scanning
+remains O(N), and the wider faster-triage program and its end-to-end acceptance gate
+remain unfinished.
 
 Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
@@ -110,7 +184,7 @@ New tables are included in the offline SQLite/MySQL migration metadata. Security
 
 Prerequisites: install ClamAV and current signatures on the managed target and redeploy the Mr Patchy collector/bridge using the existing reviewed installation workflow. No scanner installation or signature updates are performed automatically. Engine version is captured with the scan report.
 
-Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, four-minute overall work budget and 30-second per-file scanner timeout. Symlinks are not followed during traversal. Virtual filesystem directories and the reserved quarantine directory are excluded. Exclusions and failures are reported as incomplete coverage. Scanning uses an opened descriptor and checks metadata before accepting the result. A compromised root/kernel remains outside this trust boundary. Reports never claim the server is clean.
+Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file and a four-minute overall work budget. ClamAV groups at most 32 already-open file descriptors and 128 MiB of source bytes into one local `clamscan` process with a 120-second batch timeout. An engine failure or output that cannot be mapped exactly back to every descriptor falls back to the prior 30-second per-file invocation while the overall deadline remains. This does not enable or connect to a ClamAV daemon. Symlinks are not followed during traversal. Virtual filesystem directories and the reserved quarantine directory are excluded. Exclusions and failures are reported as incomplete coverage. Scanning uses opened file and parent-directory descriptors and checks metadata before accepting each result. A compromised root/kernel remains outside this trust boundary. Reports never claim the server is clean.
 
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
@@ -158,7 +232,9 @@ Traversal opens each root ancestor with `O_DIRECTORY|O_NOFOLLOW`, then descends 
 
 New incident evidence includes a bounded scan coverage summary (engine, freshness, counts, timestamps and up to 20 shortened gap messages). AI proposals see these limitations, and the existing evidence digest binds them into plan generation and review. Full immutable receipts remain available in scan history. Historical incidents/approvals are not silently rewritten; their signature context remains unknown until a new scan supplies it. Plans still require review and remain advisory only.
 
-After updating the controller, use the existing **Finish / verify installation** workflow to redeploy the updated collector to managed targets. Old collectors continue producing legacy receipts without freshness metadata. Automated tests simulate engine output, signature drift, path replacement, parent symlink races, empty-directory budgets, descriptor cleanup and AI evidence binding. A live ClamAV engine with production databases was not available in this development environment.
+After updating the controller, use the existing **Finish / verify installation** workflow to redeploy the updated collector to managed targets. Old collectors continue producing legacy receipts without freshness metadata. Automated tests simulate bounded multi-file ClamAV invocations, mixed clean/detection mapping, ambiguous-output fallback, engine output, signature drift, path replacement, parent symlink races, finding-limit descriptor cleanup, empty-directory budgets and AI evidence binding.
+
+A disposable supported-target ClamAV 1.5.3 run used the complete cryptographically verified production set: `main.cvd` version 63 (3,287,027 signatures), `daily.cvd` version 28171 (355,841 signatures, built 2026-11-01) and `bytecode.cvd` version 339. Loading that set and scanning one benign file took 8.070–8.640 seconds across three launches with about 987,312 KiB peak child RSS. Scanning the same 20 benign files separately took 173.018 seconds / 20 launches; one bounded batch took 9.382 seconds / one launch (18.4x elapsed improvement). Both modes scanned 20/20 files with no gaps or detections and the same 987,460 KiB peak child RSS. An end-to-end `security_scan()` run also used one descriptor batch, scanned 20/20 files in 9.625 seconds, reported recent signatures and no coverage gaps, and retained the before/after engine-version checks.
 
 ## Read-only package and persistence inspection
 
@@ -2521,6 +2597,26 @@ the existing external delivery configuration and alert lifecycle.
 Track this addition in the scheduled development task and UI design guide. Preserve
 issue-first priority, the current AI performance program, the fixed major-1 policy,
 the cycle budget and exact-final-commit version/CI/merge requirements.
+
+Implementation checkpoint (issue #320, integrated in v1.36.0): the first bounded
+event-model increment adds stable source/kind/subject event identities, retained
+safe payload revisions, unchanged-observation deduplication, resolution/reopening
+revisions, current-role filtering and independent per-user read/dismiss revisions.
+Read/dismiss mutations remain separate from operational acknowledgement, incident
+state, AI approval and response authorization. This checkpoint does not complete
+milestone 1: producer transactions, cross-worker concurrent publication recovery,
+retention/pruning policy and broader existing-alert lifecycle integration remain,
+as do the live transport, UI and end-to-end milestones 2–4.
+
+Implementation checkpoint (issue #324, integrated in v1.37.0): the next bounded
+increment exposes authenticated, current-role-filtered notification pages and unread
+counts plus CSRF-protected per-user read/dismiss mutations. The server derives the
+recipient from the active session, returns only the safe retained public payload and
+keeps stale-tab revisions from marking a newer event revision read. Hidden events
+fail closed and read/dismiss remains independent of global alert acknowledgement,
+incident state, AI approval and response authorization. This does not complete the
+notification program: producers, retention, live cross-controller delivery, UI and
+end-to-end SQLite/MySQL/browser acceptance remain planned.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
@@ -5653,3 +5749,56 @@ This preserves the owner's corrected bebc0c9 handoff; legacy candidate versions
 are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
+
+## Password hashes and secret-key handling
+
+- Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
+- The Fernet instance is cached and reloaded only when `secret.key` changes (inode, size or mtime).
+- The OIDC flow-cookie secret is derived from `secret.key` with HKDF-SHA256 and a purpose label; the Fernet key material is not reused directly.
+- Threat model: `secret.key` lives on the same `/data` volume as the database. Encryption of stored secrets therefore only helps when the database is leaked without the volume (for example a database-only dump to MySQL). It does not protect against a compromise of the data volume.
+
+
+### Production image digests — partial #201 checkpoint
+
+This source checkpoint supersedes older statements in this historical log that
+production Python/Caddy references remain tag-only. The application Dockerfile
+keeps the existing `python:3.12-slim-bookworm` tag and binds it to the official
+Docker Hub OCI image-index digest
+`sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337`.
+The deployed Compose Caddy image keeps `caddy:2.10`, bound to index digest
+`sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb`.
+The CI Caddy adapter fixture uses that same complete image reference, so its
+adapter/TLS checks cannot silently test a newer floating tag than deployment.
+Focused regression tests reject missing/malformed digests and fixture drift.
+
+Both pins are multi-platform index digests, not an amd64-only child manifest.
+Direct official-registry reads on 2026-11-02 UTC verified the SHA-256 of the raw
+index bytes against Docker-Content-Digest, and both indexes include Linux amd64
+and arm64. Python also includes Linux arm/v7; Caddy includes arm/v6 and arm/v7.
+Index availability is not a claim that every architecture was built or tested.
+A digest fixes the selected bytes; it is not independent vendor signing or proof
+of a vulnerability-free image. No runtime version family or response authority
+is changed.
+
+Refresh procedure: inspect the intended official tag with
+`docker buildx imagetools inspect python:3.12-slim-bookworm` or
+`docker buildx imagetools inspect caddy:2.10`; verify the index digest and required
+platforms before updating the tag/digest pair. Update Caddy in both compose.yaml
+and the CI adapter fixture together. Keep the readable tag, run the focused pin
+and supply-chain tests, review upstream changes and run the full exact-head CI
+including Compose configuration, production/GCP builds and real Caddy HTTPS
+checks before coordinator integration. Existing Dependabot Docker coverage can
+propose application Dockerfile changes; this checkpoint does not claim automatic
+Compose digest refresh. Manual review remains required, including when a Python
+minor-version proposal such as #287 needs a different matching digest and real
+compatibility/build acceptance. Never pair a new tag with the old tag's digest.
+
+Limits: apt, pip and the GCP CLI installation still resolve packages during the
+build, so this is not a fully reproducible or hash-locked application build.
+Python install hashes, dependency-vulnerability scanning policy and Compose
+sandbox/resource hardening remain unfinished. The GCP Dockerfile's local
+`BASE_IMAGE=mrpatchy:base`, Compose's locally built `mrpatchy:gcp`, and explicitly
+parameterized SSH/RPM test-fixture bases remain build/test inputs, not falsely
+claimed registry digest pins. #292's Actions pins and #302's CodeQL coverage are
+separate deliveries whose history must be preserved during integration. #201
+stays partial/open; no broader deployment/security roadmap completion is claimed.
