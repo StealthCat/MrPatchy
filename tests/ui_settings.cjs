@@ -29,6 +29,7 @@ module.exports=async(page,capture)=>{
  await page.reload();await page.locator('#ai-settings-form').waitFor();
  assert.equal(await page.locator('[name=ai_daily_cap_usd]').inputValue(),'10');
  assert.match(await page.locator('#ai-settings-form').textContent(),/remaining \$10(?:\s|$)/);
+ assert.match(await page.locator('#ai-settings-form').textContent(),/Price catalog current.*2026-10-26.*expires/s);
  await page.locator('[name=ai_control_mode]').selectOption('rate_and_daily');
  await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
  await page.locator('[name=ai_budget_timezone]').fill('America/New_York');
