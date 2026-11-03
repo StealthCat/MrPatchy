@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.3 — 2026-11-03
+
+1. [PR #327](https://github.com/StealthCat/MrPatchy/pull/327): Reduce overview API memory and decoding work by projecting the three displayed host metadata fields in SQL, deferring inventory/telemetry/baseline blobs, and counting packages, updates and overdue updates in SQL instead of materializing every Package row. Preserve explicit JSON nulls separately from missing-key defaults, existing response shapes, role and deleted/disabled-host filtering, deadline comparisons and integrity counts. Compatibility: no schema, API contract, UI, configuration or runtime-response authorization change. Database work still scans eligible rows and the dashboard retains the Host fields needed for its counts; this is not a constant-time or fleet-latency guarantee. Continues and preserves #253's implementation history, corrects its nullable-metadata boundary, and completes #147.
+
 ## 1.37.2 — 2026-11-03
 
 1. [PR #270](https://github.com/StealthCat/MrPatchy/pull/270): Store passwords in a versioned scrypt format with stronger bounded-cost parameters, continue verifying legacy hashes and upgrade them after a successful sign-in, cap concurrent KDF work, reject unsupported or malformed stored parameters before hashing, cache the Fernet key until its file changes, and derive the short-lived OIDC flow-cookie secret with purpose-bound HKDF instead of reusing Fernet signing material. Compatibility: existing credentials continue to work, but older releases cannot verify hashes upgraded by this release and in-flight OIDC sign-ins must be restarted once after upgrade. The default four concurrent current-cost hashes can consume roughly 512 MiB in aggregate; `secret.key` still shares the data volume with the database, so encryption does not protect against compromise of that volume. Completes #200.

@@ -15,7 +15,8 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
-from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
+from sqlalchemy.orm import defer
+from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
@@ -47,7 +48,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.37.2'
+APP_VERSION='1.37.3'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -247,9 +248,18 @@ def logout(request:Request,response:Response,user=Depends(self_user)):
 @app.get('/api/dashboard')
 def dashboard(user=Depends(viewer_user)):
     with Session() as s:
-        cfg=config(s); hosts=list(s.scalars(select(Host).where(Host.enabled==True,Host.deleted_at==0))); packages=list(s.scalars(select(Package).where(Package.host_id.in_(host_lifecycle.active_ids())))); now=time.time()
-        updates=[p for p in packages if p.candidate]
-        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+        cfg=config(s); now=time.time()
+        # Large inventory/telemetry/baseline blobs are never needed for the overview counts.
+        hosts=list(s.scalars(select(Host).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.enabled==True,Host.deleted_at==0)))
+        active=Package.host_id.in_(host_lifecycle.active_ids())
+        total=s.scalar(select(func.count()).select_from(Package).where(active)) or 0
+        update_counts=dict(s.execute(select(Package.priority,func.count()).where(active,Package.candidate!='',Package.candidate.is_not(None)).group_by(Package.priority)).all())
+        overdue=0
+        for priority,count in update_counts.items():
+            # Same rule as before: now > available_since + deadline hours.
+            cutoff=now-cfg['deadlines'][priority]*3600
+            overdue+=s.scalar(select(func.count()).select_from(Package).where(active,Package.candidate!='',Package.candidate.is_not(None),Package.priority==priority,Package.available_since<cutoff)) or 0
+        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':total,'updates':sum(update_counts.values()),'overdue':overdue,'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
 
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
@@ -301,7 +311,19 @@ def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(s
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
-    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name))]
+    with Session() as s:
+        # Read the three small inventory keys in SQL instead of decoding every host's full inventory, telemetry and baseline.
+        # A JSON null stays distinct from a missing key (null is returned as-is, missing falls back to the default).
+        keys=('architecture','os','package_manager'); cols=[]
+        for k in keys:
+            path='$."%s"'%k
+            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*(( path,) if engine.dialect.name=='sqlite' else ()))
+            cols+=[Host.inventory[k].as_string(),kind]
+        rows=s.execute(select(Host,*cols).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
+        def meta(value,kind,default):
+            if kind is None:return default
+            return None if str(kind).lower()=='null' else value
+        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt')} for h,a,ak,o,ok,m,mk in rows]
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
