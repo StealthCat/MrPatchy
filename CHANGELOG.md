@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.10 — 2026-11-03
+
+1. [PR #265](https://github.com/StealthCat/MrPatchy/pull/265): Render baseline review history as a readable list of actor, date and reason with Previous/Next paging, escaped text, stale-response protection and an explicit empty state. Format execution-triggered scan counts as readable state totals or “No triggers recorded” instead of raw JSON. Compatibility: UI-only fix; existing APIs, roles, audit history and operational/response authorization remain unchanged. Completes #178.
+
 ## 1.37.9 — 2026-11-03
 
 1. [PR #291](https://github.com/StealthCat/MrPatchy/pull/291): Reuse worker patch validation in the patch route for repository freshness and held, broken or missing-candidate packages, resolving configuration once per request batch. Compatibility: API status codes, candidate-version review, recovery-policy review and execution-time validation remain unchanged; stale-repository errors now use the shared worker wording. No role, audit or response-authorization change. This delivers only the patch-validation portion of #188; the broader issue remains open.
