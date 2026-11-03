@@ -23,6 +23,7 @@ const assert=require('assert/strict');
     await page.locator('[name=password]').fill('ui-test-password-long');
     await page.getByRole('button',{name:'Open your workspace'}).click();
     await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
+    await require('./ui_notifications.cjs')(page,capture);
     await page.getByRole('button',{name:'+ Add server',exact:true}).click();
     await page.locator('[name=name]').fill('Test Ubuntu');
     await page.locator('[name=address]').fill('192.0.2.15');
