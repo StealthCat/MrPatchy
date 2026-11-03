@@ -33,6 +33,7 @@ def cert_for(hosts):
 
 def sni_request(host, material):
     context = ssl.create_default_context(cadata=material['certificate'])
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     with socket.create_connection(('127.0.0.1', 18443), timeout=10) as raw:
         with context.wrap_socket(raw, server_hostname=host) as connection:
             connection.sendall(('GET /healthz HTTP/1.1\r\nHost: '+host+':18443\r\nConnection: close\r\n\r\n').encode())
