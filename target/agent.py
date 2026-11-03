@@ -176,12 +176,53 @@ def collect(hash_cache):
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
     return processes, errors
 
+def root_filesystem_health(statvfs=os.statvfs,collected=None):
+    """Collect one cheap root-filesystem capacity observation without enumerating files."""
+    observed=time.time() if collected is None else collected
+    base={'version':1,'collected':observed,'source':'statvfs','scope':{'kind':'filesystem','path':'/'},'gaps':[]}
+    unknown={'state':'unknown','unit':'bytes'}
+    unknown_inodes={'state':'unknown','unit':'inodes'}
+    try:
+        value=statvfs('/')
+        fields={name:getattr(value,name) for name in ('f_frsize','f_bsize','f_blocks','f_bfree','f_bavail','f_files','f_ffree','f_favail')}
+        if any(type(item) is not int for item in fields.values()):raise ValueError('non-integer capacity value')
+        block_size=fields['f_frsize'] or fields['f_bsize']
+        if block_size<=0 or any(fields[name]<0 for name in ('f_blocks','f_bfree','f_bavail','f_files','f_ffree','f_favail')):raise ValueError('invalid capacity value')
+        total=fields['f_blocks']*block_size
+        free=min(fields['f_bfree']*block_size,total)
+        available=min(fields['f_bavail']*block_size,total)
+        if total>2**63-1:raise ValueError('capacity exceeds supported range')
+        result={**base,'applicability':'supported','bytes':{'state':'collected','unit':'bytes','total':total,'available':available,'used':total-free}}
+        if 0<fields['f_files']<=2**63-1:
+            inode_total=fields['f_files'];inode_free=min(fields['f_ffree'],inode_total);inode_available=min(fields['f_favail'],inode_total)
+            result['inodes']={'state':'collected','unit':'inodes','total':inode_total,'available':inode_available,'used':inode_total-inode_free}
+        else:
+            result['applicability']='partial'
+            result['inodes']=unknown_inodes
+            result['gaps'].append({'signal':'inodes','reason':'unsupported' if fields['f_files']==0 else 'unavailable-or-malformed'})
+        return result
+    except PermissionError:
+        reason='permission-denied'
+    except (OSError,AttributeError,TypeError,ValueError,OverflowError):
+        reason='unavailable-or-malformed'
+    return {**base,'applicability':'unknown','bytes':unknown,'inodes':unknown_inodes,'gaps':[{'signal':'filesystem-capacity','reason':reason}]}
+
+def telemetry_snapshot(hashed_at,hashes,metadata,processes,errors,clock=time.time,statvfs=os.statvfs):
+    collected=clock()
+    return {'collected':collected,'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,
+            'processes':processes,'errors':errors,'device_health':root_filesystem_health(statvfs,collected)}
+
 def atomic(path, value):
+    path=Path(path)
+    if path.is_symlink():raise ValueError('Refusing symlink destination')
     fd,name=tempfile.mkstemp(prefix='.'+path.name,dir=path.parent)
     try:
         with os.fdopen(fd,'w') as stream:
             json.dump(value,stream);stream.flush();os.fsync(stream.fileno());os.fchmod(stream.fileno(),0o600)
         os.replace(name,path)
+        directory_fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(directory_fd)
+        finally:os.close(directory_fd)
     finally:
         if os.path.exists(name):os.unlink(name)
 
@@ -480,14 +521,14 @@ def main():
                 optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
                 for p in MANAGED+([optional] if Path(optional).exists() else []):
                     try:
-                        hashes[p] = digest(p)
-                        info=Path(p).stat()
-                        metadata[p]={'uid':info.st_uid,'gid':info.st_gid,'mode':stat.S_IMODE(info.st_mode)}
+                        # One descriptor yields hash and ownership, so a swap cannot split them.
+                        found={};hashes[p] = hash_artifact(p,{},metadata=found)
+                        metadata[p]={key:found[key] for key in ('uid','gid','mode')}
                     except (OSError,ValueError) as e: hashes[p] = 'ERROR: '+str(e)
                 hashed_at = time.time(); next_hash = started+300
             procs, errors = collect(cache)
             spool(procs,time.time())
-            atomic(ROOT/'telemetry.json', {'collected':time.time(),'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,'processes':procs,'errors':errors})
+            atomic(ROOT/'telemetry.json', telemetry_snapshot(hashed_at,hashes,metadata,procs,errors))
             if started >= next_inventory:
                 atomic(ROOT/'inventory.json', inventory()); next_inventory = started+300
             (ROOT/'collector-error.json').unlink(missing_ok=True)

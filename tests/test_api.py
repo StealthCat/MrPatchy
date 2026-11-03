@@ -81,6 +81,22 @@ def test_patch_requires_fresh_inventory_and_honors_holds(admin):
     assert r.status_code==200
     with Session() as s: assert s.get(Job,r.json()['job_id']).payload['packages']==['bash:arm64=2']
 
+def test_patch_route_shares_worker_patch_validation(admin):
+    import time
+    id=host(admin)
+    with Session() as s:
+        h=s.get(Host,id);h.last_repo=0
+        s.add(Package(id=id+':bash',host_id=id,name='bash',installed='1',candidate='2',dpkg_state='install ok installed'));s.commit()
+    assert admin.post(f'/api/hosts/{id}/patch',json={'packages':['bash']}).status_code==409
+    with Session() as s: s.get(Host,id).last_repo=time.time();s.commit()
+    r=admin.post(f'/api/hosts/{id}/patch',json={'packages':['bash'],'expected_versions':{'bash':'1'}})
+    assert r.status_code==409 and 'bash' in r.text
+    with Session() as s: s.get(Package,id+':bash').dpkg_state='install ok half-configured';s.commit()
+    r=admin.post(f'/api/hosts/{id}/patch',json={'packages':['bash']})
+    assert r.status_code==400 and 'bash' in r.text
+    with Session() as s: s.get(Package,id+':bash').dpkg_state='install ok installed';s.commit()
+    assert admin.post(f'/api/hosts/{id}/patch',json={'packages':['bash'],'expected_versions':{'bash':'2'}}).status_code==200
+
 def test_ai_never_automatically_approves(admin,monkeypatch):
     import time
     id=host(admin)
@@ -113,3 +129,21 @@ def test_metrics_host_count_excludes_deleted_servers(admin):
         s.get(Host,gone).deleted_at=1;s.commit()
     assert 'mrpatchy_hosts 1\n' in admin.get('/api/metrics').text
     assert keep
+
+def test_patch_route_reads_config_once_per_batch(admin):
+    import time
+    from sqlalchemy import event
+    from app.db import engine
+    id=host(admin)
+    names=['p%d'%i for i in range(12)]
+    with Session() as s:
+        s.get(Host,id).last_repo=time.time()
+        for n in names: s.add(Package(id=id+':'+n,host_id=id,name=n,installed='1',candidate='2',dpkg_state='install ok installed'))
+        s.commit()
+    seen=[]
+    def spy(conn,cur,stmt,*a): seen.append(stmt)
+    event.listen(engine,'before_cursor_execute',spy)
+    try: r=admin.post(f'/api/hosts/{id}/patch',json={'packages':names})
+    finally: event.remove(engine,'before_cursor_execute',spy)
+    assert r.status_code==200
+    assert sum('FROM settings' in x for x in seen)<=4  # constant, not one per package

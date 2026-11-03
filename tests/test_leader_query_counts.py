@@ -73,3 +73,43 @@ def test_update_repos_loads_packages_once(admin, counted, monkeypatch):
         worker.update_repos(s, h)
         assert len(counted) < 20, len(counted)
         assert s.get(Package, 'h000:pkg7').candidate == '3'
+
+
+def test_scheduler_tick_with_open_window_issues_few_statements_per_host(admin, counted):
+    # 02:30 UTC is inside the seeded daily 02:00 window, so every host gets a regular and a critical run (#330).
+    import datetime as dt
+    now = dt.datetime(2026, 11, 3, 2, 30, tzinfo=dt.timezone.utc).timestamp(); seed(now)
+    sched.tick(now); counted.clear()
+    sched.tick(now)
+    assert len(counted) < 2 * HOSTS, len(counted)
+    with Session() as s:
+        runs = list(s.scalars(select(sched.PatchRun)))
+    assert len(runs) == 2 * HOSTS and {r.state for r in runs} <= {'refreshing', 'waiting'}
+
+
+def test_quarantined_hosts_matches_host_quarantined(admin):
+    from app.db import Job
+    now = time.time(); seed(now)
+    with Session() as s:
+        s.add(Job(id='held', host_id='h003', action='patch', payload={}, state='running'))
+        s.add(Job(id='queued', host_id='h004', action='patch', payload={}, state='queued'))
+        s.commit()
+        ids = [f'h{n:03d}' for n in range(HOSTS)]
+        assert operations.quarantined_hosts(s, ids) == {i for i in ids if operations.host_quarantined(s, i)} == {'h003'}
+
+
+def test_two_schedules_on_one_host_queue_one_refresh(admin):
+    # Per-schedule caches must see work queued by another schedule in the same tick (#331 review).
+    import datetime as dt
+    from app.db import Job
+    now = dt.datetime(2026, 11, 3, 2, 30, tzinfo=dt.timezone.utc).timestamp(); seed(now)
+    with Session() as s:
+        for h in s.scalars(select(Host).where(Host.id != 'h000')): s.delete(h)
+        s.commit()
+        policy = s.get(sched.PatchSchedule, 'schedule').policy
+        s.add(sched.PatchSchedule(id='schedule-b', policy={**policy, 'name': 'Second'}, revision=1, updated=now - 86400))
+        s.commit()
+    sched.tick(now)
+    with Session() as s:
+        refreshes = list(s.scalars(select(Job).where(Job.host_id == 'h000', Job.action == 'refresh')))
+    assert len(refreshes) == 1, len(refreshes)

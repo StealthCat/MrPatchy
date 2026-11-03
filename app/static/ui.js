@@ -13,7 +13,8 @@ window.PatchyUI=(()=>{
   settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="16" cy="17" r="3"/>',
   shield:'<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/>',
   arrow:'<path d="M5 12h14m-6-6 6 6-6 6"/>',
-  refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>'
+  refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
+  notifications:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/>'
  };
  const pages={security:['Security coverage','A clearer view of every check.'],users:['Users','Good company. Clear permissions.'],history:['Package history','Every patch leaves a footprint.'],'ai-logs':['AI run logs','A closer look at the work.'],overview:['Overview','Your fleet, in good paws.'],servers:['Server fleet','A home for every machine.'],packages:['Package inventory','Every package. Every patch.'],repositories:['Repository sources','Good updates start at the source.'],investigations:['AI investigations','A curious raccoon. A closer look.'],schedules:['Patch schedules','A little planning goes a long way.'],activity:['Activity & audit','Follow every footprint.'],settings:['Workspace settings','Make yourself at home.']};
  const icon=name=>`<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.shield}</svg>`;
