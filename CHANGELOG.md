@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.13 — 2026-11-03
+
+1. [PR #319](https://github.com/StealthCat/MrPatchy/pull/319): Require development triage to assign exactly one actual `P1`, `P2` or `P3` GitHub label to every bug and to correct missing or conflicting priority labels before concluding that no P1 bug exists or selecting feature work. Compatibility: contributor/coordinator policy only; application behavior, APIs, roles and operational/response authorization remain unchanged. This delivery does not bulk reclassify existing issues; missing labels or label permissions must be handled and reported separately. This source update does not publish a Docker image.
+
 ## 1.37.12 — 2026-11-03
 
 1. [PR #348](https://github.com/StealthCat/MrPatchy/pull/348): Add bounded, versioned root-filesystem byte and inode capacity observations to agent telemetry, with collection time, source, scope, units, independent collected/unknown states, clamped values, redacted typed gaps and controller-persistence coverage. Compatibility: the `device_health` telemetry object is additive; existing telemetry keys, APIs, roles, schemas, mutation paths and operational/response authorization remain unchanged. This is the first partial #342 increment only; CPU/memory pressure, time sync, certificate expiry, history/hysteresis, alerts, UI and patch/reboot preflight remain unfinished. This source update does not publish a Docker image.
