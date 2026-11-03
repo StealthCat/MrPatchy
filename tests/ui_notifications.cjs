@@ -35,6 +35,7 @@ module.exports=async(page,capture)=>{
   await panel.locator('.notification-item.is-read').waitFor();
   await panel.getByRole('button',{name:'Dismiss'}).last().click();
   await panel.locator('.notification-item').nth(1).waitFor({state:'detached'});
+  await page.waitForFunction(()=>document.querySelector('#notification-button').getAttribute('aria-label').includes('0 unread'));
   assert.equal(mutations.length,2);
   assert.ok(mutations[0].url.endsWith(`/${safeId}/read`));
   assert.deepEqual(mutations[0].body,{revision:3});
