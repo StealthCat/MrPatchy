@@ -51,8 +51,9 @@ module.exports=async(page,capture)=>{
   await page.locator('#notification-filters [name=include_dismissed]').check();
   await page.locator('#notification-filters [name=source]').fill('scanner');
   await page.getByRole('button',{name:'Apply filters'}).click();
-  await page.locator('#notification-center-list .notification-center-item').waitFor();
-  assert.equal(await page.getByText('Untrusted finding',{exact:false}).count(),1);
+  const filteredReason=page.locator('#notification-center-list .notification-reason',{hasText:'Untrusted finding'});
+  await filteredReason.waitFor();
+  assert.equal(await filteredReason.count(),1);
   assert.equal(await page.locator('#notification-center-list img[src="x"]').count(),0);
   assert.ok(listRequests.some(query=>query.includes('include_dismissed=true')&&query.includes('source=scanner')&&query.includes('limit=25')));
   assert.equal(await page.getByRole('link',{name:'Open subject'}).count(),0,'unsafe cross-origin center links remain inert');
