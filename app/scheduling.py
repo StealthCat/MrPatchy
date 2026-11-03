@@ -187,7 +187,11 @@ def window_settings(s, host_ids):
 
 def allow_window(s, host_id, policy, trigger, now, windows=None):
     # A change freeze outranks maintenance windows and urgent/bypass triggers.
-    if freezes.blocked(s, now): return False
+    if windows is None: frozen = freezes.blocked(s, now)
+    else:  # one lookup per tick: the shared windows dict doubles as the cache
+        if '*freeze' not in windows: windows['*freeze'] = freezes.blocked(s, now)
+        frozen = windows['*freeze']
+    if frozen: return False
     if trigger != 'regular' and policy[trigger]['bypass_window']: return True
     if windows is not None and host_id in windows: return operations.in_window(windows[host_id], now)
     from .db import Setting
