@@ -72,7 +72,7 @@ def build(s,host,actor,reason):
     references={e['details']['scan_id'] for e in b.sections['incident_events'] if isinstance(e['details'].get('scan_id'),str)}
     references.update(ref for p in b.sections['advisory_plans'] for step in p['content']['steps'] for ref in (step.get('evidence_ids') if isinstance(step.get('evidence_ids'),list) else []) if isinstance(ref,str))
     known|={'scans:'+i for i in scan_ids}
-    out_of_scope=sorted(r for r in references-known if r.split(':',1)[0] in ('executions','inspections') and ':' in r)
+    out_of_scope=sorted(r for r in references-known if r.startswith(('executions:', 'inspections:')) and bool(r.split(':', 1)[1]))
     unresolved=sorted(references-known-set(out_of_scope))
     record={'format':'mrpatchy-scanner-record','version':1,
         'export':{'id':str(uuid.uuid4()),'created':time.time(),'actor':actor,'reason':reason},
