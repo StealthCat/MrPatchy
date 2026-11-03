@@ -58,15 +58,19 @@ window.NotificationShell=(()=>{
   }finally{if(run===generation)schedule(run);}
  }
  async function mutate(item,action,control){
+  const run=generation;
   requestRevision++;
   control.disabled=true;
   try{
    await api(`/notifications/${encodeURIComponent(item.id)}/${action}`,'POST',{revision:item.revision});
+   if(run!==generation||!started)return;
    if(action==='dismiss')items=items.filter(candidate=>candidate!==item);else item.read=true;
    render();
    status(action==='dismiss'?'Notification dismissed for your account.':'Notification marked read for your account.');
-   const count=await api('/notifications/unread-count');setCount(count.unread,items);
-  }catch(error){status(error.message);if(control.isConnected)control.disabled=false;}
+   const count=await api('/notifications/unread-count');
+   if(run!==generation||!started)return;
+   setCount(count.unread,items);
+  }catch(error){if(run===generation&&started){status(error.message);if(control.isConnected)control.disabled=false;}}
  }
  function close({focus=false}={}){open=false;panel().hidden=true;button().setAttribute('aria-expanded','false');if(focus)button().focus();}
  function toggle(){

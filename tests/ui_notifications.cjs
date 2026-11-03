@@ -3,6 +3,7 @@ const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
   let unread=2;
   const mutations=[];
+  let holdMutation=false,releaseMutation,mutationStarted;
   const safeId='1'.repeat(64),unsafeId='2'.repeat(64);
   const items=[
     {id:safeId,revision:3,source:'operations',kind:'attention',subject_type:'job',subject_id:'job-7',host_id:'',severity:'critical',reason:'Patch verification needs review.',deep_link:'#activity',lifecycle:'active',created:1700000000,read:false,dismissed:false},
@@ -15,6 +16,7 @@ module.exports=async(page,capture)=>{
     mutations.push({url,body});
     if(item&&!item.read)unread=Math.max(0,unread-1);
     if(item){item.read=true;if(url.endsWith('/dismiss'))item.dismissed=true;}
+    if(holdMutation){mutationStarted();return new Promise(resolve=>{releaseMutation=()=>resolve(route.fulfill({json:{id,revision:body.revision,read_revision:body.revision,dismissed_revision:0}}));});}
     return route.fulfill({json:{id,revision:body.revision,read_revision:body.revision,dismissed_revision:url.endsWith('/dismiss')?body.revision:0}});
   });
 
@@ -67,4 +69,19 @@ module.exports=async(page,capture)=>{
    assert.equal(await bell.evaluate(node=>node===document.activeElement),true);
   }
   await page.setViewportSize({width:1440,height:1000});
+
+  items[0].read=false;
+  unread=1;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await bell.click();
+  holdMutation=true;
+  const started=new Promise(resolve=>{mutationStarted=resolve;});
+  await panel.getByRole('button',{name:'Mark read'}).click();
+  await started;
+  await page.evaluate(()=>window.NotificationShell.reset());
+  releaseMutation();
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator('#notification-list').textContent(),'','a late mutation response cannot restore account-scoped content after reset');
+  assert.equal(await page.locator('#notification-status').textContent(),'','a late mutation response cannot restore account-scoped status after reset');
+  assert.equal(await page.locator('#notification-badge').isHidden(),true);
 };
