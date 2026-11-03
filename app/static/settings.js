@@ -12,7 +12,6 @@ function settingsNav(section){
 async function settings(revision=renderRevision){
  const data=await api('/settings');
  if(!currentView(revision,'settings'))return;
- cfg=data;
  let section=location.hash.split('/')[1]||'';
  if(!SETTINGS_SECTIONS[section])section='';
  const title=section?SETTINGS_SECTIONS[section][0]:'Set your own rhythm.';

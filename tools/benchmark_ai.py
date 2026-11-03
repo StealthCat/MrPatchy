@@ -35,7 +35,6 @@ def main():
         from app import ai, worker, ai_runs
         from app.db import init, Session, Host, Setting, Behavior, engine
         from app.security import seal
-        from app import main as web_runtime
         init()
         requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
 

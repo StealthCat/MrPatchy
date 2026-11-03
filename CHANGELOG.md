@@ -1,5 +1,295 @@
 # Changelog
 
+## 1.37.7 — 2026-11-03
+
+1. [PR #236](https://github.com/StealthCat/MrPatchy/pull/236): Wrap long unbroken server names, including FQDNs, inside page headings so phone-width screens do not scroll horizontally. Cover long headings at 320, 768 and 1440 pixels in the browser regression suite. Compatibility: layout-only fix; no API, role, audit or response-authorization change. Completes #176.
+
+## 1.37.6 — 2026-11-03
+
+1. [PR #264](https://github.com/StealthCat/MrPatchy/pull/264): Catch unhandled route errors passing through the request guard, log them server-side and return a generic JSON 500 with the standard security headers and applicable no-store policy; authenticated mutations also retain their request-audit status. Compatibility: these route errors now use a generic JSON body without internal exception details. Errors in the guard's own post-response audit write remain outside this catch; enrollment-link reuse and throttling are not implemented by this change, so #202 remains partial/open.
+
+## 1.37.5 — 2026-11-03
+
+1. [PR #331](https://github.com/StealthCat/MrPatchy/pull/331): Batch maintenance-window, recovery-policy, security-hold, active-job and existing-run lookups during patch-schedule ticks, reducing the open-window 40-host regression fixture from 844 to 57 SQL statements. Share newly queued work across schedules within each tick so two schedules cannot queue duplicate refresh or patch work for one host. Compatibility: no schema or scheduling-policy change; existing approval, lifecycle, maintenance-window, recovery and executor safeguards remain in force. Statement counts describe the regression fixture, not a fleet-wide latency guarantee. Completes #330.
+
+## 1.37.4 — 2026-11-03
+
+1. [PR #329](https://github.com/StealthCat/MrPatchy/pull/329): Pin the scheduler query-count test to noon UTC outside its seeded maintenance window, preventing daily 02:00–04:00 UTC failures while preserving its query limits. Compatibility: test-fixture change only; production scheduling behavior is unchanged. The separate in-window scheduler query cost remains open under #330. Completes #328.
+
+## 1.37.3 — 2026-11-03
+
+1. [PR #327](https://github.com/StealthCat/MrPatchy/pull/327): Reduce overview API memory and decoding work by projecting the three displayed host metadata fields in SQL, deferring inventory/telemetry/baseline blobs, and counting packages, updates and overdue updates in SQL instead of materializing every Package row. Preserve explicit JSON nulls separately from missing-key defaults, existing response shapes, role and deleted/disabled-host filtering, deadline comparisons and integrity counts. Compatibility: no schema, API contract, UI, configuration or runtime-response authorization change. Database work still scans eligible rows and the dashboard retains the Host fields needed for its counts; this is not a constant-time or fleet-latency guarantee. Continues and preserves #253's implementation history, corrects its nullable-metadata boundary, and completes #147.
+
+## 1.37.2 — 2026-11-03
+
+1. [PR #270](https://github.com/StealthCat/MrPatchy/pull/270): Store passwords in a versioned scrypt format with stronger bounded-cost parameters, continue verifying legacy hashes and upgrade them after a successful sign-in, cap concurrent KDF work, reject unsupported or malformed stored parameters before hashing, cache the Fernet key until its file changes, and derive the short-lived OIDC flow-cookie secret with purpose-bound HKDF instead of reusing Fernet signing material. Compatibility: existing credentials continue to work, but older releases cannot verify hashes upgraded by this release and in-flight OIDC sign-ins must be restarted once after upgrade. The default four concurrent current-cost hashes can consume roughly 512 MiB in aggregate; `secret.key` still shares the data volume with the database, so encryption does not protect against compromise of that volume. Completes #200.
+
+## 1.37.1 — 2026-11-03
+
+1. [PR #326](https://github.com/StealthCat/MrPatchy/pull/326): Add a read-only per-server agent spool-health API that derives freshness, lifecycle, queue pressure and cumulative loss by reason from already stored telemetry, rejects malformed or fractional counters without exposing payloads or unknown keys, and preserves viewer/deleted-server access boundaries. Compatibility: additive authenticated API only; no schema, target-agent, remote-call or runtime-response authorization change. The endpoint cannot report metrics the agent does not collect, including oldest-observation age, rates, retries and delivery latency; UI, alerts, additional agent metrics and durable loss history remain unfinished under partial #108.
+
+## 1.37.0 — 2026-11-02
+
+1. [PR #325](https://github.com/StealthCat/MrPatchy/pull/325): Add authenticated, current-role-filtered notification list and unread-count APIs plus CSRF-protected, revision-bound per-user read and dismiss mutations. Responses expose only retained safe summaries, hide higher-role events, audit state changes and remain independent of global alert acknowledgement, incident state, AI approval and response authorization; a second exact 60-second enrollment-window fixture is also made deterministic across SQLite/MySQL timestamp round trips without changing runtime admission behavior. Compatibility: additive authenticated APIs and test/CI stabilization only; existing schema, alert delivery/lifecycle and runtime behavior remain compatible. Notification producers, retention/pruning, live cross-controller delivery/replay, shell/center UI and full end-to-end acceptance remain future work. Completes #324.
+
+## 1.36.1 — 2026-11-02
+
+1. [PR #323](https://github.com/StealthCat/MrPatchy/pull/323): Make the enrollment-download capacity/expiry boundary regression deterministic across SQLite and MySQL timestamp round trips by freezing its clock at an exactly representable whole second. Preserve the exact 60-second Retry-After assertion and all active-quota, finite-source-capacity, eviction, expiry and recovery checks. Compatibility: test and CI behavior only; production admission code, quotas, persisted state, APIs, roles and runtime-response authorization are unchanged. Completes #322 and unblocks dependent PR validation without weakening the boundary.
+
+## 1.36.0 — 2026-11-02
+
+1. [PR #321](https://github.com/StealthCat/MrPatchy/pull/321): Add the durable backend foundation for in-app notifications with stable source/kind/subject/host identities, retained safe revisions, exact-observation deduplication, resolution/reopening history, current-role filtering and independent revision-aware read/dismiss state per enabled user. Register three additive tables and audit user state changes without acknowledging operational alerts, changing incidents, approving AI output or authorizing response. Compatibility: existing APIs, UI, alert delivery/lifecycle and runtime behavior are unchanged; this increment exposes no notification endpoint or UI. Transactional producer integration, concurrent publication recovery, retention/pruning, broader alert lifecycle integration, live transport/replay, notification-center UI and multi-controller SQLite/MySQL acceptance remain future work. Completes the bounded foundation in #320, not the wider notification roadmap.
+
+## 1.35.105 — 2026-11-02
+
+1. [PR #317](https://github.com/StealthCat/MrPatchy/pull/317): Expose only explicitly controlled, bounded diagnostics from repository health and AI connection/model-discovery failures. Give APT and RPM repository validators dedicated controlled exception types, retain actionable intentional validation messages, and replace arbitrary plain, subclass or library exception text with fixed public fallbacks; persist only the explicit AIError diagnostic. Compatibility: API shapes and successful behavior are unchanged, while unexpected failure details are intentionally less specific. No schema, role, provider request, package action or runtime-response authorization change. Completes #309's reported exception-text exposure; successful changed-code scanning does not establish complete repository-wide live-alert closure.
+
+## 1.35.104 — 2026-11-02
+
+1. [PR #315](https://github.com/StealthCat/MrPatchy/pull/315): Build the central APT patch-preview configuration path from the persisted server identity rather than request-path text, so case-insensitive Host and Package lookups use the repository configuration that refresh actually saved. Add regressions for missing configuration, the exact simulation command, unknown servers and differently cased request/stored identities. Compatibility: matching-case requests are unchanged; differently cased requests now use the canonical stored directory. No schema, API, role, package-selection, target command or runtime-response authorization change. Completes #310's reported path construction defect; successful changed-code scanning does not establish complete repository-wide live-alert closure.
+
+## 1.35.103 — 2026-11-02
+
+1. [PR #312](https://github.com/StealthCat/MrPatchy/pull/312): Set an explicit TLS 1.2 minimum on the SNI integration client and native RPM HTTPS fixture, retaining certificate verification, hostname handling and fixture behavior while removing reliance on constructor defaults. Compatibility: test and CI policy only; production TLS configuration, schema, APIs, roles and runtime-response authorization are unchanged. Completes #307's reported test-context remediation; successful changed-code scanning does not establish a complete repository-wide live-alert inventory or closure.
+
+## 1.35.102 — 2026-11-02
+
+1. [PR #314](https://github.com/StealthCat/MrPatchy/pull/314): Validate signing-key filename stems and response service-unit names without ambiguous regular expressions, retaining the existing accepted character/suffix languages and service-unit bounds. Bound key filenames to 255 characters at request validation. Compatibility: longer key names now return HTTP 422 before host work; valid names and service-health approval behavior remain unchanged. No schema, role, command or runtime-response authorization change. Completes #308's reported validator remediation; PR CodeQL results do not establish a complete repository-wide live-alert inventory or closure.
+
+## 1.35.101 — 2026-11-02
+
+1. [PR #316](https://github.com/StealthCat/MrPatchy/pull/316): Create central APT auth.conf and recovery MySQL option files with owner-only 0600 permissions from the initial exclusive, no-follow open, replacing the existing final directory entry instead of following a symlink. Validate remote MySQL CA configuration before writing credential content, and retain creation-mode/symlink/failure regressions without altering os.open test semantics. Compatibility: required plaintext formats, locations and final modes remain unchanged; destination symlinks are now replaced rather than written through. No encryption, schema, API, role or runtime-response authorization change is introduced. Completes #311; fresh PR CodeQL evidence does not establish complete repository-wide live-alert closure.
+
+## 1.35.100 — 2026-11-02
+
+1. [PR #313](https://github.com/StealthCat/MrPatchy/pull/313): Bound public enrollment-installer preparation with a shared persistent ten-attempt sliding sixty-second quota per ASGI client address, finite retained source state and nonblocking admission contention; audit first/retry preparations without bearer tokens and recheck link expiry/revocation under the canonical stored-host lifecycle fence. Compatibility: links remain reusable for one hour, but excess requests now return 429/Retry-After and admission-lock contention returns 503/Retry-After:1; shared-NAT clients share an address quota and trusted ASGI proxy configuration still applies. Installer content, schema, roles and runtime-response approvals are unchanged. Preparation is not proof of delivery/execution; this is partial #202, whose independent route-exception-header item remains open in #264.
+
+## 1.35.99 — 2026-11-02
+
+1. [PR #306](https://github.com/StealthCat/MrPatchy/pull/306): Hash-lock the complete 31-package Python 3.12 production dependency graph with 607 published-artifact SHA-256 hashes and enforce pip --require-hashes in controller image builds, preserving the delivered Python/Caddy image pins and unchanged direct runtime versions. Add lock/install regression coverage and document reviewed regeneration. Compatibility: transitive runtime versions are now explicit and dependency changes require regenerating/reviewing the lock; no schema, API, UI, role or runtime-response authorization change. This does not establish native ARM execution, independent signing, vulnerability-free dependencies or fully reproducible apt/GCP/source-build inputs. Partial #201 remains open for the remaining supply-chain and sandbox work.
+
+## 1.35.98 — 2026-11-02
+
+1. [PR #303](https://github.com/StealthCat/MrPatchy/pull/303): Pin the production Python 3.12 and Caddy 2.10 multi-platform image indexes by immutable digest while retaining readable tags, keep deployed Caddy and its adapter fixture aligned, and validate both default and GCP-override Compose configurations before startup. Document coordinated tag/digest refresh and remaining build-input limits. Compatibility: no runtime version-family, schema, API, role or response-authorization change; pinning fixes selected base/proxy bytes but does not establish native acceptance on every platform, independent signing, vulnerability-free images or a fully reproducible apt/pip/GCP build. Partial #201 remains open.
+
+## 1.35.97 — 2026-11-02
+
+1. [PR #275](https://github.com/StealthCat/MrPatchy/pull/275): Batch scheduled candidate-package reads and selected fleet alert hold/run/recovery lookups, and preload existing packages during repository refresh, with query-count regressions that also prevent deferred Host attributes from adding per-host SELECTs. Preserve alert, scheduling, lifecycle, hold and executor authorization semantics. Compatibility: no schema, API, configuration, role or runtime-response authorization change; scheduler readiness still loads required inventory, while telemetry/baseline remain deferred, and separate per-host assessments continue to query. Completes #181.
+
+## 1.35.96 — 2026-11-02
+
+1. [PR #240](https://github.com/StealthCat/MrPatchy/pull/240): Keep unreleased AI spend counted while its original admission window remains open, as well as within the current reset-timezone day, so changing the reset timezone cannot silently regrant that spend. Preserve bounded exact-money status aggregation, conservative unknown/transmitted charges and atomic admission. Compatibility: no schema, API, provider-routing, role or runtime-response authorization change; timezone switches may retain counted spend until its applicable window expires. Completes #162.
+
+## 1.35.95 — 2026-11-02
+
+1. [PR #302](https://github.com/StealthCat/MrPatchy/pull/302): Add a least-privilege, SHA-pinned CodeQL workflow that analyzes Python with the security-extended query suite on pull requests targeting `main`, pushes to `main` and a bounded weekly schedule, with regression coverage for its triggers, action pins, timeout and upload permissions. Compatibility: CI, tests and documentation only; no application schema, persisted data, API, UI, deployment behavior, role, audit, target action or runtime-response authorization change. Findings remain advisory repository evidence rather than runtime remediation; future scheduled/default-branch execution and absence of findings are not established by this delivery, and base-image digests, hash-pinned Python installs, dependency-vulnerability scanning policy and additional Compose/container sandboxing remain open under partial #201.
+
+## 1.35.94 — 2026-11-02
+
+1. [PR #301](https://github.com/StealthCat/MrPatchy/pull/301): Share one tracked request, strict structured-validation, evidence-bound persistence and durable AI-error deferral pipeline across scanner-incident and startup-change advisory plans, while preserving each domain's exact prompts, models, evidence and reference gates, secret timing, rechecks, transactions, audit/events and manual-only approval boundary. Compatibility: no schema, persisted-data, API, UI, configuration, provider-routing, role, target-action or runtime-response authorization change. This is partial #189; pricing consolidation in unmerged #283 and other duplicated logic remain open, and #103's closed-incident plan policy decision is unchanged.
+
+## 1.35.93 — 2026-11-02
+
+1. [PR #292](https://github.com/StealthCat/MrPatchy/pull/292): Pin every third-party action reference in the validation workflow to a full commit SHA with a readable major-version comment, add regression coverage that rejects unpinned workflow actions, and update the security checkpoint to distinguish these pins from unfinished supply-chain work. Compatibility: CI, tests and documentation only; no application schema, persisted data, API, UI, deployment behavior, role, audit, target action or runtime-response authorization change. Dependabot continues to propose GitHub Actions updates; base-image digests, hash-pinned Python installs, code scanning and additional Compose sandboxing remain open under partial #201.
+
+## 1.35.92 — 2026-11-02
+
+1. [PR #300](https://github.com/StealthCat/MrPatchy/pull/300): Share the controller-local failed response-observation transition across file and process handlers and worker backstops while preserving every caller's host, row, started/status and duplicate-event guards, actor and job attribution, uncertainty hold, receipt clearing, clock and event writer, and caller-owned transaction boundaries. Compatibility: no schema, persisted-data, API, UI, configuration, audit, role, actor-attribution, target-action or runtime-response authorization change. This is partial #189; shared advisory-plan generation, unmerged pricing consolidation and other undelivered rows remain open.
+
+## 1.35.91 — 2026-11-02
+
+1. [PR #299](https://github.com/StealthCat/MrPatchy/pull/299): Share one pending-response-work query across the general file-response guard and trusted-repair preparation, staging and publication paths, while preserving each caller's host/hold scope, check precedence, exact conflict message and audit-action inclusion or exclusion. Compatibility: no schema, persisted-data, API, UI, configuration, role, audit, lifecycle, target-action or runtime-response authorization change. This is partial #188; patch-validation consolidation and other duplicated route logic remain open.
+
+## 1.35.90 — 2026-11-02
+
+1. [PR #298](https://github.com/StealthCat/MrPatchy/pull/298): Replace the duplicate staging and publication readiness `Original` carrier classes with the standard-library `SimpleNamespace`, preserving the original quarantine identity, exact plan and manifest references, receipt validation, state gates and runtime-response authorization boundaries. Compatibility: no schema, persisted-data, API, UI, configuration, audit, actor-attribution, target-action or deployment change. This is partial #189; advisory-plan generation, failed-status handling, unmerged pricing consolidation and other undelivered rows remain open.
+
+## 1.35.89 — 2026-11-02
+
+1. [PR #297](https://github.com/StealthCat/MrPatchy/pull/297): Share one newest-record query helper across process observations, service-health observations and repair publications, while preserving each caller's host and publication-state filters, newest-created/ascending-ID tie-break, empty-input behavior and result mapping. Compatibility: no schema, API, UI, configuration, deployment, role, audit, target-action or runtime-response authorization change. This is partial #189; shared advisory-plan generation, failed-status handling, the duplicated `Original` stub and other undelivered rows remain open.
+
+## 1.35.88 — 2026-11-02
+
+1. [PR #296](https://github.com/StealthCat/MrPatchy/pull/296): Share the controller-local transition that rejects an unstarted response job across file quarantine and process-response paths, while preserving each path's actor attribution, host/state guards, hold clearing and transactional rollback behavior. Compatibility: no schema, API, UI, configuration, target-action or runtime-response authorization change; this is partial #189, whose remaining advisory-plan, response/status/query and duplicate-stub consolidation stays open.
+
+## 1.35.87 — 2026-11-02
+
+1. [PR #295](https://github.com/StealthCat/MrPatchy/pull/295): Bound daily AI spend accounting to at most five exact-money status totals regardless of distinct receipt amounts, retaining conservative unknown, sent and uncertain charges, released-row exclusion, durable ledger evidence and atomic cap admission. Compatibility: no schema, API, provider-call, UI, role or runtime-response authorization change; SQLite retains its existing nine-place NUMERIC read precision and MySQL uses native DECIMAL summation. Eligible ledger rows are still scanned in SQL, so database work remains O(N); later #240 integration must preserve both its timezone-membership predicate and this aggregation. Completes #133.
+
+## 1.35.86 — 2026-11-01
+
+1. [PR #294](https://github.com/StealthCat/MrPatchy/pull/294): Share one bounded, strong-digest gpgv verification boundary across Debian vendor-package and YARA-bundle authentication, preserving signer fingerprints and the existing SHA-224/256/384/512 acceptance set while normalizing command, timeout, output-limit and status failures to a redacted `ValueError` subtype. Compatibility: failed YARA gpgv commands now use the shared failure type instead of exposing a `RuntimeError`; no schema, API, target helper, UI, role, audit or runtime-response authorization change. This is partial #189; advisory-plan, response/status/query and duplicate-stub consolidation remain open.
+
+## 1.35.85 — 2026-11-01
+
+1. [PR #293](https://github.com/StealthCat/MrPatchy/pull/293): Complete native-browser regression coverage for delayed patch success and conflict responses after navigation or sign-out, retaining one-shot submission, same-session global feedback, destination/login state and obsolete-session suppression. Compatibility: test-only completion of the already-delivered #241/#238 lifecycle guards; no production source, API, schema, role, audit, target action, data-sharing or runtime-response authorization change. Completes #126.
+
+## 1.35.84 — 2026-11-01
+
+1. [PR #259](https://github.com/StealthCat/MrPatchy/pull/259): Batch descriptor-safe ClamAV scans into local engine processes of at most 32 files / 128 MiB, while preserving exact per-file result mapping, descriptor/path/metadata identity checks, signature provenance, scan budgets and cleanup on every exit. Ambiguous output or engine failure conservatively retries through the existing single-file path. Compatibility: no schema, role, target-action, daemon or runtime-response authorization change; batches may run for up to 120 seconds within the existing four-minute overall budget, and fallback invocations retain their 30-second per-file timeout.
+
+## 1.35.83 — 2026-11-01
+
+1. [PR #262](https://github.com/StealthCat/MrPatchy/pull/262): Initially open the patch calendar in hourly day view at widths of 700px or narrower and keep weekday headers visible while scrolling the month grid. Retain the wider-screen month default and manual view selection.
+2. Compatibility: presentation-only defaults; no schedule execution, API, schema or authorization change. The initial choice is not reset on resize, and explicitly selected month/tablet grids can still scroll horizontally.
+
+## 1.35.82 — 2026-11-01
+
+1. [PR #238](https://github.com/StealthCat/MrPatchy/pull/238): Keep late manual-response-plan approval and patch-confirmation results from closing or annotating a newer dialog. Patch success/error feedback uses the shared same-session global notification contract and suppresses obsolete-session effects.
+2. Compatibility: no API, schema, role or runtime-response authorization change; manual-plan approval still executes no target action. Fixes #156; #126 remains open for broader acceptance, including patch-specific navigation/sign-out browser variants not added here.
+
+## 1.35.81 — 2026-11-01
+
+1. [PR #255](https://github.com/StealthCat/MrPatchy/pull/255): Place Security scan forms inside cards, space the targeted Security and File integrity pager/evidence actions consistently, and move Browse startup files below the baseline heading.
+2. Compatibility: markup-only presentation change; existing element identities and handlers are retained. No API, schema, role, audit or runtime-response authorization change.
+
+## 1.35.80 — 2026-11-01
+
+1. [PR #256](https://github.com/StealthCat/MrPatchy/pull/256): Reflow server Overview summary cards by available content width, keep the decorative mascot clear of guide text and actions, and render multi-line link buttons with complete borders on Overview and Patching pages.
+2. Compatibility: CSS-only presentation change; no API, schema, role or runtime-response authorization change. The separately tracked long server-heading overflow (#176) is not changed by this delivery.
+
+## 1.35.79 — 2026-11-01
+
+1. [PR #233](https://github.com/StealthCat/MrPatchy/pull/233): Show readable HTTP-status errors for non-JSON or empty API error bodies instead of JSON parser failures. Preserve valid JSON values, including null, accept empty successful responses, and retain sign-in reset and stale-session response guards.
+2. Compatibility: no backend API, schema, role or runtime-response authorization change. Unexpected non-JSON successful responses produce a readable error; existing structured API detail messages are retained.
+
+## 1.35.78 — 2026-11-01
+
+1. [PR #284](https://github.com/StealthCat/MrPatchy/pull/284): Configure weekly Dependabot update PRs for pip, npm, GitHub Actions and Docker, covering the root, deploy and test-fixture Dockerfile locations. Add tracked-manifest coverage regressions.
+2. Compatibility: no runtime or API change. Configuration does not establish a successful live update-generation run, dependency vulnerability scanning, code scanning, digest/hash/Actions-SHA pinning or additional Compose sandboxing. Partial #201 remains open for those requirements.
+
+## 1.35.77 — 2026-11-01
+
+1. [PR #285](https://github.com/StealthCat/MrPatchy/pull/285): Stage rollout jobs through the shared worker queue helper, recording one `queue patch` audit entry per server job alongside the existing batch audit. Share the per-server 50-operation queue-capacity check with ordinary queueing.
+2. Compatibility: retain single-transaction submission, canary dependencies, actor, reviewed recovery policy and host lifecycle revision. A full server queue still rejects the entire submission with HTTP 429; its error text now comes from the shared helper. No schema, role or runtime-response authorization change. Partial #188: patch-validation reuse and response-idle deduplication remain unfinished.
+
+## 1.35.76 — 2026-11-01
+
+1. [PR #263](https://github.com/StealthCat/MrPatchy/pull/263): Render the destination once after enrollment completion or server deletion, and reuse the loaded identity when displaying Activity controls. Show navigation success feedback only after its matching destination render succeeds, including unchanged-hash navigation.
+2. Drop pending feedback on failed renders, logout or superseding navigation; add native UI regressions for request counts, delayed destinations, failed-render retry, session changes and fresh same-hash success.
+3. Compatibility: no schema/API/role or runtime-response authorization change. Cached identity affects presentation only; backend authorization remains authoritative. Shared escaping, pager behavior and release-review polling are retained.
+
+## 1.35.75 — 2026-11-01
+
+1. [PR #282](https://github.com/StealthCat/MrPatchy/pull/282): Remove the unused frontend configuration cache and unreferenced confirmation-free deploy-action branch. Share the existing HTML escape routine through PatchyUI, and reuse common page slicing, labels, buttons and pager bindings for Overview and Servers.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Existing enrollment confirmation, refresh actions, filter/reset behavior, 12/24-item page sizes, scrolling and escaping for current consumers are retained. This is preventive maintenance of existing UI behavior; the release-review polling improvements remain intact.
+
+## 1.35.74 — 2026-11-01
+
+1. [PR #266](https://github.com/StealthCat/MrPatchy/pull/266): Update release-upgrade review status and progress in place during unchanged-state background polls, retaining open package/configuration details, scroll position and dialog messages. Reapply expanded-detail flags when a plan state transition rebuilds the review; add a browser regression covering polling and completion.
+2. Synchronize the eBPF diagnostic test fixture with recorded collector recovery before emitting its late warning, and cover delayed event processing while retaining every original diagnostic assertion. Runtime collector behavior is unchanged.
+3. Compatibility: no schema/API/role or runtime-response authorization change. Plan state transitions and explicit manual refresh can still rebuild the dialog; request/modal/session stale-response guards and the separately reviewed GO workflow remain intact.
+
+## 1.35.73 — 2026-11-01
+
+1. [PR #278](https://github.com/StealthCat/MrPatchy/pull/278): Share one pure, action-specific response-hold scope resolver between worker admission and execution, and derive the dispatch hold-cache key from that scope. Add table-driven coverage for response, process, read-only, staging, publication, local-observation and service exemptions.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Execution still checks current holds independently before claiming work; strict service-watch distinctions, separate hold IDs, per-host serialization, approvals and existing dispatch-cache boundaries are retained.
+
+## 1.35.72 — 2026-11-01
+
+1. [PR #280](https://github.com/StealthCat/MrPatchy/pull/280): Count sign-in attempts against the exact client address instead of a text prefix. Attempts from a different IPv6 address sharing that prefix no longer exhaust another address's sign-in window; same-address limits and audit-once behavior remain covered by regression tests. This coordinator integration preserves the implementation and history from PR #277.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change. Existing bucket format, per-account limits, expiry/eviction, IPv4 protection, password/MFA and session checks are retained. This does not complete the separate login-spray retention or aggregate password-hashing resource/concurrency work.
+
+## 1.35.71 — 2026-11-01
+
+1. [PR #273](https://github.com/StealthCat/MrPatchy/pull/273): Compute daily AI budget totals from SQL groups by status and exact amount instead of loading every ledger entry as an ORM object. Reuse those totals for status displays, exclude released reservations, and retain conservative cap accounting for unrecognized unreleased states.
+2. Compatibility: no schema/API/configuration/role or runtime-response authorization change; durable ledger evidence, Decimal money, release/uncertain semantics, timezone windows and atomic admission are retained. This is partial progress on #133: distinct receipt amounts can still produce one group per row under the shared lock. Bounded aggregation or a reconciled summary and SQLite/MySQL concurrency/lock-duration evidence remain open.
+
+## 1.35.70 — 2026-11-01
+
+1. [PR #272](https://github.com/StealthCat/MrPatchy/pull/272): Add pinned Ruff Pyflakes-rule checks to CI for undefined names, redefinitions and unused imports across controller/target/scripts/tools, plus undefined-name checks for tests. Remove redundant imports and one unused local while retaining model-registration side effects and intentionally test-facing module imports.
+2. Compatibility: no schema/API/role/runtime-response behavior change. The lint dependency is development-only; code rejected by the new static gate must be corrected before merge. This does not broaden runtime authorization or claim completion of unrelated SBOM work.
+
+## 1.35.69 — 2026-11-01
+
+1. [PR #271](https://github.com/StealthCat/MrPatchy/pull/271): Share the automatic package-priority rule between repository refresh and the manual reset-to-auto action. A security-origin package is high only when it has a newer candidate; no-candidate packages remain normal instead of temporarily becoming high.
+2. Compatibility: no schema/API/configuration/role or runtime-approval change; explicit manual priorities remain unchanged. This delivers only the auto-priority drift fix from #188. Patch-validation reuse, rollout queue/audit consolidation and response-idle dedup remain open and are not claimed complete.
+
+## 1.35.68 — 2026-11-01
+
+1. [PR #269](https://github.com/StealthCat/MrPatchy/pull/269): Check newly busy servers before dispatch evaluation and reuse exact response-hold scopes and ordinary patch-window results within each worker iteration. Skip later ordinary patch work after a closed window while retaining scheduled and non-patch paths, reducing repeated per-job database queries.
+2. Compatibility: no schema/API/configuration/role or runtime-response authority change. Cache state is local to one dispatch iteration; execution-time hold/window checks remain mandatory. This is not cross-worker shared authorization or an exactly-once guarantee. The separate shared-scope refactor in #134 remains open.
+
+## 1.35.67 — 2026-11-01
+
+1. [PR #267](https://github.com/StealthCat/MrPatchy/pull/267): Avoid ingesting the first event batch twice per poll by reusing its committed IDs for acknowledgement, reducing redundant policy and observation lookups. Remove the unused worker `ai_cycle` helper and update its tests; the strict newest-changelog-section check already present on main is retained.
+2. Compatibility: no schema/API or runtime-response authorization change. Commit-before-acknowledgement, replay deduplication, later batches and finite drain budgets remain intact; a lost acknowledgement can still cause a safe replay. No cross-worker exactly-once or lossless-capture guarantee is added.
+
+## 1.35.66 — 2026-11-01
+
+1. [PR #257](https://github.com/StealthCat/MrPatchy/pull/257): Return HTTP 409 consistently for disabled/deleted-server and busy-state conflicts, and HTTP 429 for the existing 50-operation server-queue limit, using dedicated centrally handled exceptions.
+2. Compatibility: API consumers that expected HTTP 400 for these conflicts or capacity refusals must handle 409/429. Ordinary invalid input remains 400; queue capacity, lifecycle checks, roles and runtime response approvals are unchanged. No schema change.
+
+## 1.35.65 — 2026-11-01
+
+1. [PR #260](https://github.com/StealthCat/MrPatchy/pull/260): A validated helper `not_started` process-response receipt restores the matching approval's prior state and process hold, resolving a stuck hold after a lost reply. Retain the receipt and `observed_not_started` audit event; a new suspension still requires fresh typed approval.
+2. Compatibility: no schema, helper protocol or role change. Uncertain/suspended responses, invalid verification and missing or mismatched approvals retain conservative holds; prior holds and the independent file-response hold remain intact. Receipt validation does not establish trust in a compromised target.
+
+## 1.35.64 — 2026-11-01
+
+1. [PR #254](https://github.com/StealthCat/MrPatchy/pull/254): Load schedule recovery policies with one batched Setting lookup instead of one lookup per server. Preserve missing/partial flag defaults, the existing per-server recovery-policy helper, host lifecycle filtering and the schedules response contract.
+2. Compatibility: no API/schema, role, audit or runtime-approval change. Fewer policy-query round trips do not make the complete schedules response constant-time; host/policy rows and payload still scale with fleet size.
+
+## 1.35.63 — 2026-11-01
+
+1. [PR #232](https://github.com/StealthCat/MrPatchy/pull/232): Close the staged-rollout review dialog before displaying its queued-server confirmation so the message is visible. Disable approval while the request is in flight and reenable the captured button on error to reduce duplicate submissions.
+2. Compatibility: UI-only; backend rollout authorization, roles, audit and recovery rules are unchanged. This focused confirmation fix does not complete the separately tracked stale-dialog/session isolation work in #126/#156, which remains open.
+
+## 1.35.62 — 2026-11-01
+
+1. [PR #250](https://github.com/StealthCat/MrPatchy/pull/250): Bulk-load advisory update-scoring candidates and exact/deferred score state in ordered 200-package chunks instead of two per-package score queries. Retain oldest-first/id ordering, stale deferred supersession, due-work eligibility, the five-item provider batch and final exact-evidence checks.
+2. Compatibility: no API/schema, model-quality, role or response-authorization change. Existing scoring ownership, lifecycle/AI pause, admission and spend gates remain required. Reduced local database round trips are not a guarantee of provider or end-to-end throughput.
+
+## 1.35.61 — 2026-11-01
+
+1. [PR #243](https://github.com/StealthCat/MrPatchy/pull/243): Page fleet Investigations in batches of 50 with Previous/Next controls so behaviors beyond the former first-500 limit remain reachable. Remember each fleet/server view's offset across refresh and navigation; clear it on session reset. Keep host scoping, role restrictions, advisory assessments and explicit approvals unchanged.
+2. Compatibility: frontend-only paging uses the existing API offset/limit contract; no schema or API change. Page state belongs to the current signed-in session, and existing response authorization remains required.
+
+## 1.35.60 — 2026-11-01
+
+1. [PR #247](https://github.com/StealthCat/MrPatchy/pull/247): Verify missing/disabled account attempts against a dummy password hash, move password verification outside the global login lock, and evict oldest throttle buckets at the 10,000-bucket cap instead of rejecting every sign-in. Recheck current identity/password and consume MFA under the lock before creating a session; retain failure/audit responses and existing per-bucket/address limits.
+2. Compatibility: no API schema change. This reduces account-existence timing differences and concurrent sign-in blocking; it does not add cross-process MFA guarantees or account-wide distributed throttling. Wider throttling and hash-format policy remain separate work.
+
+## 1.35.59 — 2026-11-01
+
+1. [PR #246](https://github.com/StealthCat/MrPatchy/pull/246): Fail lifecycle activity closed when its lock cannot be acquired; interactive SSH requests use nonblocking admission and report HTTP 409 when busy. Background operations retain blocking exclusion. Lifecycle admission/release errors preserve whether a remote command started, so pre-transport repair, repository and key failures release the host without losing uncertain-outcome safeguards after remote start.
+2. Compatibility: internal SSH calls gain an optional admission flag; external API schemas and operational approvals are unchanged. Busy interactive requests must be retried after active work finishes; no operation is replayed automatically.
+
+## 1.35.58 — 2026-11-01
+
+1. [PR #230](https://github.com/StealthCat/MrPatchy/pull/230): Restrict investigation-status AI budget, spend, admission, provider-backoff, error and capacity telemetry to administrators. Non-admins receive only pending count, oldest pending time and enabled state; the fleet Investigations page retains its safe queue summary and shows triage diagnostics and hourly limits only to admins.
+2. Compatibility: viewer/operator clients of `/api/investigation-status` must use the reduced response. Administrator telemetry and existing roles, approvals, response authorization and recent dialog guards remain unchanged.
+
+## 1.35.57 — 2026-10-31
+
+1. [PR #235](https://github.com/StealthCat/MrPatchy/pull/235): create a fresh urgent high/critical attempt when a previous run was skipped after its window expired without ever queuing a patch job. Reconsider it only after host telemetry, health and the approved maintenance-window/bypass rules allow.
+2. Retain deterministic attempt identities and previous run history. Existing active, failed or patch-queued attempts stop the reissue chain, preserving no-replay behavior and one patch batch per eligible attempt. Preserve the dispatcher-first expiry reporting delivered in PR #231.
+3. Compatibility: urgent work previously stranded after an unstarted expired window can become eligible again. Current repository revalidation, policy, host locks, recovery and response authorization remain required; no schema or target-helper change, major remains 1.
+
+## 1.35.56 — 2026-10-31
+
+1. [PR #231](https://github.com/StealthCat/MrPatchy/pull/231): record an otherwise-authorized scheduled patch whose start window expired as a skipped run even when the job dispatcher notices before the schedule tick. Retain the expiry reason so history and scheduled-patching alerts report the missed window.
+2. Keep authorization revocation separate: disabled or revised schedules, missing runs and mismatched host scope retain cancellation behavior. Expired queued jobs are cancelled before execution; running work is not replayed.
+3. Compatibility: expired runs previously shown as cancelled now show skipped and participate in existing missed-window alerting. No schema, roles, target-helper or response-authority change; major remains 1.
+
+## 1.35.55 — 2026-10-31
+
+1. [PR #241](https://github.com/StealthCat/MrPatchy/pull/241): bind repository source/key/access, investigation trust and schedule save/delete submissions to their originating dialog and session. Disable covered submissions while pending to prevent duplicate requests.
+2. Preserve newer dialogs when earlier requests finish; report stale same-session results globally and suppress obsolete feedback after sign-out. Keep the existing queued-response cancellation browser coverage alongside the new dialog-race coverage.
+3. Compatibility: UI lifecycle only; submitted operations are not cancelled by closing a dialog or signing out. No API, schema, role or response-authority change; major remains 1. Related #126 stays open pending the separately owned patch-confirm/manual-response work and complete combined acceptance.
+
+## 1.35.54 — 2026-10-31
+
+1. [PR #237](https://github.com/StealthCat/MrPatchy/pull/237): let administrators cancel genuinely unstarted file/process response and related queued security jobs despite retained response holds. Keep the host mutex and use an atomic queued-only transition with linked-record cleanup in one transaction.
+2. Reuse reject-unstarted approval, publication, staging, preparation and evidence semantics; mark only the cancelled execution-scan job's queued triggers skipped. Preserve prior/unrelated/uncertain holds, audit history, running/recovery job refusal and existing lifecycle/release-plan cancellation.
+3. Compatibility: cancellation remains controller-local bookkeeping, reflected in Activity, and does not undo target work or release an uncertain response. No schema, target-helper or runtime response-authority change; major remains 1.
+
+## 1.35.53 — 2026-10-31
+
+1. [PR #239](https://github.com/StealthCat/MrPatchy/pull/239): explain retained file-response, process-response, replacement-publication and service-monitoring review holds in package installation forecasts. Queued and scheduled work show a waiting state without a concrete start estimate while a hold remains.
+2. Reuse the authoritative local hold predicate in one request-local snapshot, reevaluate on the next request after separately authorized release, and preserve already-running installation status and host isolation.
+3. Compatibility: existing forecast fields and rendering are retained; held work now reports an unknown start instead of a misleading timestamp. Forecasts remain advisory and do not contact targets, release holds or change execution/response authorization. No schema change; major remains 1.
+
 ## 1.35.52 — 2026-10-31
 
 1. [PR #228](https://github.com/StealthCat/MrPatchy/pull/228): render IPv6 server endpoints as [address]:port through one shared presentation helper in the server directory, enrollment verification, management dialog, workspace heading and system facts.

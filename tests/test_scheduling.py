@@ -174,6 +174,24 @@ def test_expired_patch_is_cancelled_and_failures_not_retried(fleet,monkeypatch):
     with Session() as s: assert all(j.state=='cancelled' for j in s.scalars(select(Job).where(Job.action=='patch')))
 
 
+def test_dispatcher_first_expiry_is_skipped_not_cancelled(fleet,monkeypatch):
+    monkeypatch.setattr(worker.time,'time',lambda:fleet)
+    sched.tick(fleet);complete_refreshes(fleet);sched.tick(fleet)
+    late=fleet+7201
+    with Session() as s:
+        for job in s.scalars(select(Job).where(Job.action=='patch')):
+            assert sched.job_guard(s,job,late) is False
+            assert job.state=='cancelled' and 'expired' in job.output and 'authorization' not in job.output
+    assert all(r.state=='skipped' and 'expired' in r.detail for r in runs())
+    sched.tick(late)
+    assert all(r.state=='skipped' for r in runs())
+    operations.collect_alerts()
+    with Session() as s:
+        Alert=operations.Alert
+        kinds={a.kind for a in s.scalars(select(Alert))}
+        assert 'scheduled patching' in kinds
+
+
 def test_failed_refresh_never_patches(fleet):
     sched.tick(fleet)
     with Session() as s:
@@ -218,6 +236,28 @@ def test_executor_installs_only_reviewed_exact_versions(fleet,monkeypatch):
     with Session() as s: assert s.get(Job,job_id).state=='complete'
     assert next(r for r in calls if r['action']=='patch')=={'action':'patch','packages':['bash:amd64=2']}
     assert any(r['action']=='health' for r in calls)
+
+
+def test_urgent_run_skipped_outside_window_is_reissued_when_window_opens(fleet):
+    with Session() as s:
+        row=s.get(sched.PatchSchedule,'schedule');row.policy={**row.policy,'high':{'enabled':True,'after_minutes':0,'bypass_window':False}}
+        for host in ('alpha','beta'):
+            s.get(Package,host+':bash:amd64').priority='high'
+            s.add(Setting(key='window:'+host,value={'windows':[{'days':[0],'start':600,'end':660}]}))
+        s.commit()
+    sched.tick(fleet)
+    sched.tick(fleet+7201)
+    assert all(r.state=='skipped' for r in runs()) and not any(r.job_id for r in runs())
+    opened=fleet+8*3600
+    with Session() as s:
+        for h in s.scalars(select(Host)):h.last_seen=opened
+        s.commit()
+    before=len(runs())
+    sched.tick(opened)
+    fresh=[r for r in runs() if r.state!='skipped']
+    assert len(runs())>before and fresh and all(r.trigger=='high' for r in fresh)
+    sched.tick(opened+1)
+    assert len(runs())==before+len(fresh)
 
 
 def test_urgent_failed_batch_is_not_reissued(fleet,monkeypatch):
