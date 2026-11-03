@@ -73,6 +73,17 @@ def test_lost_reply_preserves_hold_and_read_only_verification_does_not_replay(ad
     assert record['state']=='uncertain' and not record['receipt'] and record['hold']
 
 
+def test_verified_not_started_restores_prior_state_and_hold(admin,prepared):
+    record=row(admin);result=approve(admin,record);prepared['state']['fail']=True
+    worker.execute(result.json()['job_id']);record=row(admin)
+    assert record['state']=='uncertain' and record['hold']
+    prepared['state']['fail']=False;prepared['state']['value']='not_started'
+    record=verify(admin,record)
+    assert record['state']=='prepared' and not record['hold'] and record['receipt']['state']=='not_started'
+    assert 'observed_not_started' in str(history(admin,record))
+    assert approve(admin,record).status_code==200
+
+
 @pytest.mark.parametrize('change',['expiry','pin','plan','agent'])
 def test_preflight_refusal_releases_only_new_process_hold(admin,prepared,monkeypatch,change):
     record=row(admin);result=approve(admin,record)
