@@ -33,11 +33,19 @@ def _scrypt(password,salt,n,r,p):
 def password_hash(password,salt=None):
     salt=salt or secrets.token_hex(16)
     return f'scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt}${_scrypt(password,salt,SCRYPT_N,SCRYPT_R,SCRYPT_P)}'
+_SUPPORTED_COSTS={(16384,8,1),(SCRYPT_N,SCRYPT_R,SCRYPT_P)}
+def _hex(value,max_len):
+    if not (2<=len(value)<=max_len) or len(value)%2 or not all(c in '0123456789abcdefABCDEF' for c in value): raise ValueError('bad hex')
+    return value
 def _parse(value):
-    """Return (n,r,p,salt,digest); legacy 'salt:digest' hashes used n=16384,r=8,p=1."""
+    """Return (n,r,p,salt,digest); legacy 'salt:digest' hashes used n=16384,r=8,p=1.
+    Unsupported cost tuples and malformed salt/digest raise ValueError before any scrypt work starts."""
     if value.startswith('scrypt$'):
-        _,n,r,p,salt,digest=value.split('$');return int(n),int(r),int(p),salt,digest
-    salt,digest=value.split(':');return 16384,8,1,salt,digest
+        _,n,r,p,salt,digest=value.split('$');cost=(int(n),int(r),int(p))
+    else:
+        salt,digest=value.split(':');cost=(16384,8,1)
+    if cost not in _SUPPORTED_COSTS: raise ValueError('unsupported scrypt cost')
+    return (*cost,_hex(salt,64),_hex(digest,128))
 def verify(password,value):
     try:n,r,p,salt,digest=_parse(value);computed=_scrypt(password,salt,n,r,p)
     except (ValueError,TypeError):return False

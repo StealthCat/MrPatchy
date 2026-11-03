@@ -123,3 +123,27 @@ def test_concurrent_legacy_logins_both_succeed(client):
     finally:
         main.verify = real_verify
     assert codes == [200, 200], codes
+
+
+def test_unsupported_cost_parameters_fail_closed_without_running_scrypt(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError('scrypt must not run for unsupported parameters')
+    monkeypatch.setattr(security.hashlib, 'scrypt', boom)
+    salt, digest = 'aa' * 16, '00' * 32
+    for bad in (
+        f'scrypt$1152921504606846976$8$1${salt}${digest}',  # overflows maxmem conversion
+        f'scrypt$4194304$8$1${salt}${digest}',  # convertible but oversized
+        f'scrypt$131072$1024$1${salt}${digest}',
+        f'scrypt$131072$8$64${salt}${digest}',
+        f'scrypt$0$8$1${salt}${digest}',
+        f'scrypt$131072$8$1${"aa" * 40}${digest}',
+        f'scrypt$131072$8$1${salt}${"00" * 80}',
+        f'scrypt$131072$8$1$abc${digest}',
+    ):
+        assert verify('pw', bad) is False
+        assert not needs_rehash(bad)
+
+
+def test_supported_cost_tuples_still_verify():
+    assert verify('pw', password_hash('pw'))
+    assert verify('legacy', legacy_hash('legacy'))
