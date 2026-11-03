@@ -1,4 +1,5 @@
 """Read-only per-server agent spool health (issue #108 increment)."""
+import re
 import time
 import pytest
 from app import agent_spool_health as health
@@ -145,5 +146,6 @@ def test_fleet_rollup_does_not_select_or_lazy_load_unused_host_blobs(admin):
     finally:event.remove(engine,'before_cursor_execute',capture)
     hosts=[q for q in statements if 'FROM hosts' in q and 'hosts.telemetry' in q]
     assert body['counts']['total']==5 and len(hosts)==1
-    assert not any(c in hosts[0] for c in ('hosts.inventory','hosts.baseline','hosts.integrity'))
+    selected=set(re.findall(r'hosts\.(\w+)',hosts[0].split(' FROM ')[0]))
+    assert selected=={'id','name','enabled','deleted_at','telemetry'}
     assert not any('FROM hosts' in q and q not in hosts and 'hosts.id =' in q for q in statements)

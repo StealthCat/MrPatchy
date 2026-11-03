@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
-from sqlalchemy.orm import defer
+from sqlalchemy.orm import defer, load_only
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
@@ -398,8 +398,8 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
     with Session() as s:
-        # Only telemetry is needed; defer the large unused blobs so the rollup does not materialize them per server.
-        query=select(Host).options(defer(Host.inventory),defer(Host.baseline),defer(Host.integrity)).where(Host.deleted_at==0,Host.enabled==True)  # noqa: E712
+        # The rollup reads only these columns; load nothing else per server.
+        query=select(Host).options(load_only(Host.id,Host.name,Host.enabled,Host.deleted_at,Host.telemetry)).where(Host.deleted_at==0,Host.enabled==True)  # noqa: E712
         rows=s.scalars(readable_host_records(query,Host.id,user)).all()
         return agent_spool_health.fleet(rows)
 
