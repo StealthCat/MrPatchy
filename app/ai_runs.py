@@ -163,7 +163,7 @@ def cost_summary(run, receipts):
 
 def safe_error(error):
     from .ai import AIError
-    if isinstance(error, AIError): return str(error)[:2000]
+    if isinstance(error, AIError): return error.diagnostic
     # Never persist str(unexpected_error): request bodies, SQL parameters and
     # cryptographic failures may contain evidence or credentials.
     kind = type(error).__name__
