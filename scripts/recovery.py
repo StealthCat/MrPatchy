@@ -226,7 +226,13 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
     check_ssh(bundle/'ssh',hosts)
     # Prove every destination is usable before any irreversible write, so a
     # mounted or read-only volume cannot leave a half-activated deployment (#151).
-    for location in (data,tls,Path(caddy_data),Path(caddy_config)):
+    destinations=(data,tls,Path(caddy_data),Path(caddy_config))
+    # Inspect all existing roots before creating or writing *any* destination.
+    # Path.exists() follows symlinks (and misses dangling ones); lstat does not.
+    for location in destinations:
+        if os.path.lexists(location) and not stat.S_ISDIR(location.lstat().st_mode):
+            raise ValueError('Unsafe activation destination: '+str(location))
+    for location in destinations:
         location.mkdir(mode=0o700,parents=True,exist_ok=True)
         try:
             with tempfile.TemporaryFile(dir=location):pass
