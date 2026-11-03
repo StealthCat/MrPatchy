@@ -460,3 +460,6 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 .assessment-policy code, .assessment-summary code, .assessment-artifact { overflow-wrap:anywhere; }
 .known-good-fingerprint { overflow-wrap:anywhere;word-break:break-all; }
+.badge.ok,.badge.warning{background:#274a40;color:#a8efd3}
+.badge.warning{background:#4c402a;color:var(--amber)}
+.badge.unavailable{color:var(--muted);background:#a7bdc714}
