@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.9 — 2026-11-03
+
+1. [PR #291](https://github.com/StealthCat/MrPatchy/pull/291): Reuse worker patch validation in the patch route for repository freshness and held, broken or missing-candidate packages, resolving configuration once per request batch. Compatibility: API status codes, candidate-version review, recovery-policy review and execution-time validation remain unchanged; stale-repository errors now use the shared worker wording. No role, audit or response-authorization change. This delivers only the patch-validation portion of #188; the broader issue remains open.
+
 ## 1.37.8 — 2026-11-03
 
 1. [PR #286](https://github.com/StealthCat/MrPatchy/pull/286): Refuse existing symlink destinations for target-agent status and telemetry writes, fsync the parent directory after atomic replacement, and obtain managed-file hashes and ownership/mode metadata from the same descriptor to prevent split hash/stat observations. Compatibility: managed metadata retains its uid/gid/mode shape; no role or response-authorization change. Deploy the updated target agent through the existing reviewed maintenance workflow to receive the target-side behavior. Shared-helper consolidation and other duplication under #190 remain unfinished, so #190 stays open.
