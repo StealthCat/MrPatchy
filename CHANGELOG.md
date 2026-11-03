@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.7 — 2026-11-03
+
+1. [PR #236](https://github.com/StealthCat/MrPatchy/pull/236): Wrap long unbroken server names, including FQDNs, inside page headings so phone-width screens do not scroll horizontally. Cover long headings at 320, 768 and 1440 pixels in the browser regression suite. Compatibility: layout-only fix; no API, role, audit or response-authorization change. Completes #176.
+
 ## 1.37.6 — 2026-11-03
 
 1. [PR #264](https://github.com/StealthCat/MrPatchy/pull/264): Catch unhandled route errors passing through the request guard, log them server-side and return a generic JSON 500 with the standard security headers and applicable no-store policy; authenticated mutations also retain their request-audit status. Compatibility: these route errors now use a generic JSON body without internal exception details. Errors in the guard's own post-response audit write remain outside this catch; enrollment-link reuse and throttling are not implemented by this change, so #202 remains partial/open.
