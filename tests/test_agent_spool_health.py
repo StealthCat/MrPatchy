@@ -132,3 +132,18 @@ def test_fleet_rollup_is_readable_by_viewers(admin):
     add_host('v',{'collected':time.time(),'spool':spool()})
     set_role('viewer')
     assert admin.get('/api/spool-health').status_code==200
+
+
+def test_fleet_rollup_does_not_select_or_lazy_load_unused_host_blobs(admin):
+    from sqlalchemy import event
+    from app.db import engine
+    for i in range(5):add_host(f'p{i}',{'collected':time.time(),'spool':spool()})
+    statements=[]
+    def capture(conn,cursor,statement,*a):statements.append(statement)
+    event.listen(engine,'before_cursor_execute',capture)
+    try:body=admin.get('/api/spool-health').json()
+    finally:event.remove(engine,'before_cursor_execute',capture)
+    hosts=[q for q in statements if 'FROM hosts' in q and 'hosts.telemetry' in q]
+    assert body['counts']['total']==5 and len(hosts)==1
+    assert not any(c in hosts[0] for c in ('hosts.inventory','hosts.baseline','hosts.integrity'))
+    assert not any('FROM hosts' in q and q not in hosts and 'hosts.id =' in q for q in statements)

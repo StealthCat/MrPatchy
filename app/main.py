@@ -398,7 +398,9 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
     with Session() as s:
-        rows=s.scalars(readable_host_records(select(Host).where(Host.deleted_at==0,Host.enabled==True),Host.id,user)).all()  # noqa: E712
+        # Only telemetry is needed; defer the large unused blobs so the rollup does not materialize them per server.
+        query=select(Host).options(defer(Host.inventory),defer(Host.baseline),defer(Host.integrity)).where(Host.deleted_at==0,Host.enabled==True)  # noqa: E712
+        rows=s.scalars(readable_host_records(query,Host.id,user)).all()
         return agent_spool_health.fleet(rows)
 
 @app.get('/api/hosts/{host_id}/spool-health')
