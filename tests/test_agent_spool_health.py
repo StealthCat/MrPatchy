@@ -1,4 +1,5 @@
 """Read-only per-server agent spool health (issue #108 increment)."""
+import re
 import time
 import pytest
 from app import agent_spool_health as health
@@ -102,3 +103,49 @@ def test_lifecycle_and_roles(admin):
     assert admin.get('/api/hosts/off/spool-health').status_code==200
     assert admin.get('/api/hosts/gone/spool-health').status_code==403
     assert admin.post('/api/hosts/off/spool-health').status_code in (404,405)
+
+
+def test_fleet_rollup_counts_every_state_and_lists_urgent_servers(admin):
+    now=time.time()
+    add_host('ok',{'collected':now,'spool':spool(queued=1,dropped=0,dropped_observations=0)})
+    add_host('warn',{'collected':now,'spool':spool(queued=int(CAPACITY*.75),dropped=0,dropped_observations=0)})
+    add_host('crit',{'collected':now,'spool':spool(queued=int(CAPACITY*.95))})
+    add_host('old',{'collected':now-3600,'spool':spool(dropped=0,dropped_observations=0)})
+    add_host('none',{'collected':now})
+    add_host('off',{'collected':now,'spool':spool(queued=CAPACITY)},enabled=False)
+    add_host('gone',{'collected':now,'spool':spool(queued=CAPACITY)},deleted_at=now)
+    body=admin.get('/api/spool-health').json()
+    assert body['counts']=={'total':5,'ok':1,'warning':1,'critical':1,'stale':1,'unavailable':1}
+    assert [r['host_id'] for r in body['servers']]==['crit','warn','old']
+    assert body['loss']=={'dropped_batches':5,'lost_observations':7,'servers_with_loss':1}
+    assert 'spool' not in str(body) and body['more']==0
+
+
+def test_fleet_rollup_caps_list_and_never_calls_missing_data_healthy(admin):
+    for i in range(14):add_host(f'c{i:02}',{'collected':time.time(),'spool':spool(queued=CAPACITY)})
+    add_host('nodata',{})
+    body=admin.get('/api/spool-health').json()
+    assert body['counts']['critical']==14 and body['counts']['unavailable']==1 and body['counts']['ok']==0
+    assert len(body['servers'])==10 and body['more']==4
+
+
+def test_fleet_rollup_is_readable_by_viewers(admin):
+    add_host('v',{'collected':time.time(),'spool':spool()})
+    set_role('viewer')
+    assert admin.get('/api/spool-health').status_code==200
+
+
+def test_fleet_rollup_does_not_select_or_lazy_load_unused_host_blobs(admin):
+    from sqlalchemy import event
+    from app.db import engine
+    for i in range(5):add_host(f'p{i}',{'collected':time.time(),'spool':spool()})
+    statements=[]
+    def capture(conn,cursor,statement,*a):statements.append(statement)
+    event.listen(engine,'before_cursor_execute',capture)
+    try:body=admin.get('/api/spool-health').json()
+    finally:event.remove(engine,'before_cursor_execute',capture)
+    hosts=[q for q in statements if 'FROM hosts' in q and 'hosts.telemetry' in q]
+    assert body['counts']['total']==5 and len(hosts)==1
+    selected=set(re.findall(r'hosts\.(\w+)',hosts[0].split(' FROM ')[0]))
+    assert selected=={'id','name','enabled','deleted_at','telemetry'}
+    assert not any('FROM hosts' in q and q not in hosts and 'hosts.id =' in q for q in statements)
