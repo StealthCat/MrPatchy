@@ -127,4 +127,3 @@ window.NotificationShell=(()=>{
  }
  return {start,reset,refresh,center};
 })();
-window.notificationCenter=(revision)=>window.NotificationShell.center(revision);

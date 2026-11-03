@@ -75,7 +75,7 @@ async function render(){
   document.title=PatchyUI.pages[page][0]+' · Mr Patchy';
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   $('#content').innerHTML=PatchyUI.loading();
-  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:notificationCenter}[page])(revision);
+  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
   flushNavToast(revision);
  }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
