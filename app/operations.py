@@ -65,6 +65,21 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     if publication_response_id:processes=processes.where(ProcessResponse.quarantine_id!=publication_response_id)
     return s.scalar(processes.limit(1)) is not None
 
+def quarantined_hosts(s,host_ids):
+    """Hosts among host_ids that host_quarantined(s,host_id) would report held, using one query per hold table."""
+    from .service_monitor import Watch as ServiceWatch
+    from .quarantine import Quarantine
+    from .repair_publication import Publication
+    from .process_response import ProcessResponse
+    host_ids=list(host_ids); held=set()
+    for start in range(0,len(host_ids),500):
+        chunk=host_ids[start:start+500]
+        for column,where in ((Job.host_id,Job.state.in_(QUARANTINE_STATES)),(ServiceWatch.host_id,ServiceWatch.hold==True),
+                             (Quarantine.host_id,Quarantine.hold==True),(Publication.host_id,Publication.hold==True),
+                             (ProcessResponse.host_id,ProcessResponse.hold==True)):
+            held.update(s.scalars(select(column).where(column.in_(chunk),where).distinct()))
+    return held
+
 def _recovery_flags(row):
     return {name:bool(row and row.value.get(name)) for name in ('reboot','rollback')}
 

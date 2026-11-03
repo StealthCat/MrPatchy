@@ -77,7 +77,9 @@ def test_anonymous_distinct_source_and_persisted_controller_state(admin, downloa
 def test_window_reopens_without_consuming_link_or_extending_expiry(admin, download, monkeypatch):
     from app import enrollment_downloads as downloads
     _, path, calls = download
-    now = time.time()
+    # Keep the exact +60-second reopen boundary deterministic after a
+    # timestamp is persisted and read back by SQLite or MySQL.
+    now = 1_700_000_000.0
     monkeypatch.setattr(downloads.time, 'time', lambda: now)
     for _ in range(10):
         assert admin.get(path).status_code == 200
@@ -145,7 +147,9 @@ def test_rotating_sources_cannot_evict_active_quota_and_storage_recovers(admin, 
     from fastapi import HTTPException
     from app import enrollment_downloads as downloads
     monkeypatch.setattr(downloads, 'SOURCE_LIMIT', 2)
-    now = time.time()
+    # Keep the exact 60-second ceiling assertion deterministic after a
+    # fractional timestamp is persisted and read back by SQLite or MySQL.
+    now = 1_700_000_000.0
     monkeypatch.setattr(downloads.time, 'time', lambda: now)
     for _ in range(10):
         downloads.admit('source-a')

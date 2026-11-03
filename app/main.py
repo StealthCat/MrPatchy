@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from contextlib import asynccontextmanager, contextmanager
 import hashlib
 import os
@@ -15,11 +16,12 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
-from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
-from .security import password_hash, verify, token_hash, seal
+from sqlalchemy.orm import defer
+from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
+from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections,host_lifecycle
+from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -47,13 +49,12 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.103'
+APP_VERSION='1.37.13'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from .security import cipher
 from . import sso
-app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
+app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 @app.exception_handler(host_lifecycle.Busy)
 @app.exception_handler(host_lifecycle.Inactive)
@@ -67,7 +68,11 @@ app.mount('/static',StaticFiles(directory=static),name='static')
 
 @app.middleware('http')
 async def guard(request,call_next):
-    response=await call_next(request)
+    try: response=await call_next(request)
+    except Exception:
+        # Unhandled errors would otherwise be answered outside this middleware, without the security headers.
+        logging.getLogger('mrpatchy').exception('Unhandled error for %s %s',request.method,request.url.path)
+        response=JSONResponse({'detail':'Internal server error'},status_code=500)
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
@@ -210,20 +215,29 @@ def login(body:Login,request:Request,response:Response):
         raise HTTPException(429,'Too many attempts. Try again in five minutes.')
     failure=None
     # Hash outside login_lock so password guesses cannot serialize other sign-ins. Always hash, even for missing accounts.
-    with Session() as s:
-        identity=s.get(User,body.username)
-        stored=identity.password if identity and identity.enabled else None
-    password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
-    with login_lock, Session() as s:
-        identity=s.get(User,body.username)
-        if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
-        elif not password_ok or identity.password!=stored: failure='bad password'
-        elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
-        else:
-            token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-            s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
-            audit(s,'login',identity.username+' '+ip); s.commit()
-            login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+    for attempt in range(2):
+        with Session() as s:
+            identity=s.get(User,body.username)
+            stored=identity.password if identity and identity.enabled else None
+        password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
+        upgraded=password_hash(body.password) if password_ok and needs_rehash(stored) else None
+        retry=False
+        with login_lock, Session() as s:
+            identity=s.get(User,body.username)
+            if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
+            elif not password_ok: failure='bad password'
+            elif identity.password!=stored:
+                # A concurrent correct sign-in may have just upgraded this hash: re-verify once against the current value.
+                failure='bad password'; retry=attempt==0
+            elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
+            else:
+                failure=None
+                if upgraded: identity.password=upgraded
+                token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
+                s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
+                audit(s,'login',identity.username+' '+ip); s.commit()
+                login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+        if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
         raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
@@ -239,13 +253,82 @@ def logout(request:Request,response:Response,user=Depends(self_user)):
 @app.get('/api/dashboard')
 def dashboard(user=Depends(viewer_user)):
     with Session() as s:
-        cfg=config(s); hosts=list(s.scalars(select(Host).where(Host.enabled==True,Host.deleted_at==0))); packages=list(s.scalars(select(Package).where(Package.host_id.in_(host_lifecycle.active_ids())))); now=time.time()
-        updates=[p for p in packages if p.candidate]
-        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+        cfg=config(s); now=time.time()
+        # Large inventory/telemetry/baseline blobs are never needed for the overview counts.
+        hosts=list(s.scalars(select(Host).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.enabled==True,Host.deleted_at==0)))
+        active=Package.host_id.in_(host_lifecycle.active_ids())
+        total=s.scalar(select(func.count()).select_from(Package).where(active)) or 0
+        update_counts=dict(s.execute(select(Package.priority,func.count()).where(active,Package.candidate!='',Package.candidate.is_not(None)).group_by(Package.priority)).all())
+        overdue=0
+        for priority,count in update_counts.items():
+            # Same rule as before: now > available_since + deadline hours.
+            cutoff=now-cfg['deadlines'][priority]*3600
+            overdue+=s.scalar(select(func.count()).select_from(Package).where(active,Package.candidate!='',Package.candidate.is_not(None),Package.priority==priority,Package.available_since<cutoff)) or 0
+        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':total,'updates':sum(update_counts.values()),'overdue':overdue,'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+
+@app.get('/api/notifications')
+def notification_list(unread_only:bool=False,include_dismissed:bool=False,
+                      limit:int=50,offset:int=0,user=Depends(self_user)):
+    """Return a bounded, current-role-filtered page for the signed-in user."""
+    with Session() as s:
+        items=notification_events.list_for_user(
+            s,user['username'],unread_only=unread_only,
+            include_dismissed=include_dismissed,limit=limit,offset=offset)
+        total=notification_events.count_for_user(
+            s,user['username'],unread_only=unread_only,
+            include_dismissed=include_dismissed)
+        return {'items':items,'offset':offset,'limit':limit,'total':total,
+                'more':offset+len(items)<total}
+
+@app.get('/api/notifications/unread-count')
+def notification_unread_count(user=Depends(self_user)):
+    with Session() as s:
+        return {'unread':notification_events.unread_count(s,user['username'])}
+
+class NotificationStateInput(BaseModel):
+    revision:int=Field(strict=True,ge=1)
+
+def _notification_event_id(event_id):
+    if not re.fullmatch(r'[0-9a-f]{64}',event_id):
+        raise HTTPException(404,'Notification not found')
+    return event_id
+
+def _notification_state(event_id,body,user,mutation):
+    event_id=_notification_event_id(event_id)
+    with Session() as s:
+        try:
+            state=mutation(s,user['username'],event_id,body.revision)
+        except PermissionError:
+            raise HTTPException(404,'Notification not found')
+        s.commit()
+        return {'id':event_id,'revision':body.revision,
+                'read_revision':state.read_revision,
+                'dismissed_revision':state.dismissed_revision}
+
+@app.post('/api/notifications/{event_id}/read')
+def notification_read(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    return _notification_state(event_id,body,user,notification_events.mark_read)
+
+@app.post('/api/notifications/{event_id}/dismiss')
+def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    return _notification_state(event_id,body,user,notification_events.dismiss)
+
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
-    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name))]
+    with Session() as s:
+        # Read the three small inventory keys in SQL instead of decoding every host's full inventory, telemetry and baseline.
+        # A JSON null stays distinct from a missing key (null is returned as-is, missing falls back to the default).
+        keys=('architecture','os','package_manager'); cols=[]
+        for k in keys:
+            path='$."%s"'%k
+            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*(( path,) if engine.dialect.name=='sqlite' else ()))
+            cols+=[Host.inventory[k].as_string(),kind]
+        rows=s.execute(select(Host,*cols).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
+        def meta(value,kind,default):
+            if kind is None:return default
+            return None if str(kind).lower()=='null' else value
+        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt')} for h,a,ak,o,ok,m,mk in rows]
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
@@ -316,6 +399,12 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+
+@app.get('/api/hosts/{host_id}/spool-health')
+def host_spool_health(host_id:str,user=Depends(viewer_user)):
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return agent_spool_health.health(h)
 
 @app.get('/api/hosts/{host_id}/snapshot')
 def host_snapshot(host_id:str,user=Depends(admin_user)):
@@ -502,15 +591,20 @@ def patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         policy=reviewed_policy(s,host_id,body.expected_recovery_policy)
-        if h.repo_error or not h.last_repo or time.time()-h.last_repo>config(s)['repo_minutes']*120: raise HTTPException(409,'Refresh repositories before patching; candidate data is stale')
+        cfg=config(s)
+        try: worker.validate_patch(s,h,[],cfg)
+        except ValueError as e: raise HTTPException(409,str(e))
         specs=[]
         if len(set(body.packages))!=len(body.packages): raise HTTPException(400,'Duplicate package selections')
         if body.expected_versions is not None and set(body.expected_versions)!=set(body.packages): raise HTTPException(400,'Expected versions must match selected packages')
         for name in body.packages:
             p=s.get(Package,host_id+':'+name)
-            if not p or not p.candidate or p.held or p.dpkg_state.split()[-1]!='installed': raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            if not p or not p.candidate: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            spec=p.name+'='+p.candidate
+            try: worker.validate_patch(s,h,[spec],cfg)
+            except ValueError: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
-            specs.append(p.name+'='+p.candidate)
+            specs.append(spec)
         return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs,'_recovery_policy':policy,'_actor':user['username']})}
 @app.get('/api/hosts/{host_id}/repositories')
 def repositories(host_id:str,user=Depends(admin_user)):
@@ -523,7 +617,7 @@ def repositories(host_id:str,user=Depends(admin_user)):
                 active=package_backend.sources(content,path,h.inventory,access)
                 state='disabled' if not active else ('check_failed' if h.repo_error else ('checked' if h.last_repo else 'unverified'))
                 detail='Central package metadata check includes this source' if active else 'No active repositories'
-            except ValueError as e: state='blocked';detail=str(e)
+            except ValueError as e: state='blocked';detail=package_backend.source_rejection(e)
             health.append({'path':path,'state':state,'detail':detail})
         return {'package_manager':h.inventory.get('package_manager','apt'),'editable_paths':[path for path in h.inventory.get('files',{}) if package_backend.source_path(path,h.inventory)],'files':h.inventory.get('files',{}),'keys':list(h.inventory.get('keys',{})),'last_checked':h.last_repo,'error':h.repo_error,'health':health}
 class RepoInput(BaseModel):
@@ -1147,7 +1241,8 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
         worker.validate_patch(s,h,specs)
         if package_backend.is_rpm(h.inventory):
             return {'plan':'Reviewed RPM candidates:\n'+'\n'.join(specs),'packages':specs,'warning':'Candidate review only. Native DNF resolves dependencies and verifies signatures on the target before installation; removals and downgrades are prohibited.'}
-        cfgfile=apt.DATA/'apt'/host_id/'apt.conf'
+        # Use the persisted identity: the URL text may differ (e.g. case-insensitive collation) and must never reach a filesystem path.
+        cfgfile=apt.DATA/'apt'/h.id/'apt.conf'
         if not cfgfile.exists():raise HTTPException(409,'Refresh repositories first')
         result=apt.run(cfgfile,['apt-get','--simulate','--no-remove','--only-upgrade','install','--',*specs])
         return {'plan':result[-48000:],'packages':specs,'warning':'Central simulation; target and repositories are revalidated at execution.'}
