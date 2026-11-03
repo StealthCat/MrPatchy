@@ -47,12 +47,18 @@ def test_stale_and_missing_and_malformed_are_explicit_not_zero(admin):
     add_host('old',{'collected':time.time()-3600,'spool':spool()})
     add_host('none',{'collected':time.time()})
     add_host('bad',{'collected':time.time(),'spool':spool(queued=-1)})
-    add_host('nan',{'collected':time.time(),'spool':spool(pending=float('inf'))})
+    add_host('nan',{'collected':time.time(),'spool':spool(pending='Infinity')})
     add_host('zero',{'collected':time.time(),'spool':spool(capacity_bytes=0)})
     assert admin.get('/api/hosts/old/spool-health').json()['status']=='stale'
     for name in ('none','bad','nan','zero'):
         body=admin.get(f'/api/hosts/{name}/spool-health').json()
         assert body['status']=='unavailable' and body['pressure']=='unavailable' and 'queue' not in body,name
+
+
+def test_non_finite_pending_is_unavailable_without_persisting_it():
+    host=Host(id='x',telemetry={'collected':time.time(),'spool':spool(pending=float('inf'))})
+    result=health.health(host)
+    assert result['status']=='unavailable' and 'queue' not in result
 
 
 def test_payloads_and_unknown_keys_never_returned(admin):
