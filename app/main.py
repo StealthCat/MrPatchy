@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
-from .security import password_hash, verify, token_hash, seal
+from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health
@@ -47,13 +47,12 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.37.1'
+APP_VERSION='1.37.2'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from .security import cipher
 from . import sso
-app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
+app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 @app.exception_handler(host_lifecycle.Busy)
 @app.exception_handler(host_lifecycle.Inactive)
@@ -210,20 +209,29 @@ def login(body:Login,request:Request,response:Response):
         raise HTTPException(429,'Too many attempts. Try again in five minutes.')
     failure=None
     # Hash outside login_lock so password guesses cannot serialize other sign-ins. Always hash, even for missing accounts.
-    with Session() as s:
-        identity=s.get(User,body.username)
-        stored=identity.password if identity and identity.enabled else None
-    password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
-    with login_lock, Session() as s:
-        identity=s.get(User,body.username)
-        if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
-        elif not password_ok or identity.password!=stored: failure='bad password'
-        elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
-        else:
-            token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-            s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
-            audit(s,'login',identity.username+' '+ip); s.commit()
-            login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+    for attempt in range(2):
+        with Session() as s:
+            identity=s.get(User,body.username)
+            stored=identity.password if identity and identity.enabled else None
+        password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
+        upgraded=password_hash(body.password) if password_ok and needs_rehash(stored) else None
+        retry=False
+        with login_lock, Session() as s:
+            identity=s.get(User,body.username)
+            if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
+            elif not password_ok: failure='bad password'
+            elif identity.password!=stored:
+                # A concurrent correct sign-in may have just upgraded this hash: re-verify once against the current value.
+                failure='bad password'; retry=attempt==0
+            elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
+            else:
+                failure=None
+                if upgraded: identity.password=upgraded
+                token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
+                s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
+                audit(s,'login',identity.username+' '+ip); s.commit()
+                login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+        if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
         raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
