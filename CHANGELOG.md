@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.37.12 — 2026-11-03
+
+1. [PR #348](https://github.com/StealthCat/MrPatchy/pull/348): Add bounded, versioned root-filesystem byte and inode capacity observations to agent telemetry, with collection time, source, scope, units, independent collected/unknown states, clamped values, redacted typed gaps and controller-persistence coverage. Compatibility: the `device_health` telemetry object is additive; existing telemetry keys, APIs, roles, schemas, mutation paths and operational/response authorization remain unchanged. This is the first partial #342 increment only; CPU/memory pressure, time sync, certificate expiry, history/hysteresis, alerts, UI and patch/reboot preflight remain unfinished. This source update does not publish a Docker image.
+
 ## 1.37.11 — 2026-11-03
 
 1. [PR #288](https://github.com/StealthCat/MrPatchy/pull/288): Update the pinned CI static-analysis tool Ruff from 0.16.9 to 0.17.3. Compatibility: development/CI tooling only; production dependencies, application behavior, APIs, roles and operational/response authorization remain unchanged. This source update does not publish a Docker image.
