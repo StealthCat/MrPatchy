@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
+from app import worker
+from app.db import Session
 from target import agent
+from test_review_regressions import create_host
 
 
 def filesystem(**changes):
@@ -65,3 +68,11 @@ def test_telemetry_snapshot_survives_capacity_collection_failure():
     result=agent.telemetry_snapshot(5,{}, {},[],[],lambda:20,denied)
     assert result['collected']==20 and result['device_health']['applicability']=='unknown'
     assert result['device_health']['gaps']==[{'signal':'filesystem-capacity','reason':'permission-denied'}]
+
+
+def test_controller_ingest_retains_device_health(admin):
+    with Session() as session:
+        host=create_host(session)
+        snapshot=agent.telemetry_snapshot(5,host.baseline,{},[],[],lambda:20,lambda path:filesystem())
+        worker.ingest(session,host,{'telemetry':snapshot})
+        assert host.telemetry['device_health']==snapshot['device_health']
