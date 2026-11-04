@@ -1,5 +1,105 @@
 # Changelog
 
+## 1.42.7 — 2026-11-04
+
+1. [PR #248](https://github.com/StealthCat/MrPatchy/pull/248): Check shared AI eligibility and exact candidate reservation ceilings before creating triage attempts, and reserve durable staggered rate-wake slots after the existing deferred tail. Preserve provider-only absolute floors from #390 without rate staggering; final atomic request admission remains authoritative. Compatibility: insufficient or unpriced budget candidates remain queued without consuming investigation attempts. This source update does not publish a Docker image.
+
+## 1.42.6 — 2026-11-04
+
+1. [PR #390](https://github.com/StealthCat/MrPatchy/pull/390): Cap provider-sent Retry-After at 24 hours and add an administrator-only audited clear of shared AI provider backoff. Keep local exponential retry gates separate, preserve longer local delays on clear, and release provider-only durable waits including admission races using their exact absolute provider floor. Compatibility: local-only backoff no longer blocks manual retry; provider calls still recheck shared rate, budget, pause and lifecycle admission. Includes the original [PR #229](https://github.com/StealthCat/MrPatchy/pull/229) history. This source update does not publish a Docker image.
+
+## 1.42.5 — 2026-11-04
+
+1. [PR #274](https://github.com/StealthCat/MrPatchy/pull/274): Keep transactional running byte/count totals for the target agent event spool, measuring legacy queues once and decrementing only successful acknowledgement deletes. Reuse a bounded executable hash cache with unchanged inode/metadata rechecks and throttle active eBPF status persistence to about once per second. Fix the eBPF test clock so collector sleeps cannot replace Python process-wide sleep or miscount background-thread sleeps. Fixes #186; batching/configuration work remains separately tracked in #106/#107. Compatibility: additive spool counter rows, unchanged observation/acknowledgement protocol and response authorization. This source update does not publish a Docker image.
+
+## 1.42.4 — 2026-11-04
+
+1. [PR #245](https://github.com/StealthCat/MrPatchy/pull/245): Restore into existing empty recovery destinations, including mounted TLS and Caddy volumes, without removing their roots. Validate all four destination roots and write-probe every destination before importing the database or writing secrets; reject symlinks, dangling links and non-directory roots before any recovery data is written. Fixes #151. Compatibility: preserves the existing empty-destination requirement and recovery authorization; no API, schema or response-authority change. This source update does not publish a Docker image.
+
+## 1.42.3 — 2026-11-04
+
+1. [PR #387](https://github.com/StealthCat/MrPatchy/pull/387): Add a CI drift guard requiring the target agent and bridge to retain the same managed-file list and requiring the observability systemd drop-in path to agree across the target and controller modules that verify, repair or install it. Compatibility: test/CI enforcement only, with no runtime, API, schema, role, audit or response-authorization change. Material limits: the duplicated constants remain in place, and the wider #190 hash-loop, ancestor-walker and import consolidation remains unfinished. This source update does not publish a Docker image.
+
+## 1.42.2 — 2026-11-04
+
+1. [PR #385](https://github.com/StealthCat/MrPatchy/pull/385): Run the production Compose `app`, `worker` and `caddy` services with read-only root filesystems, retaining only the existing named-volume state and an explicit private `/tmp` tmpfs as writable paths, with regression coverage requiring every production service to preserve both controls. Compatibility: no API, schema, UI, role, audit or response-authorization change; custom Compose overrides that write outside `app`/`worker` `/data`, app `/tls`, Caddy `/data` or `/config`, and each service's `/tmp` must mount an appropriate volume or tmpfs. This is a partial #201 hardening increment only: GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.
+
+## 1.42.1 — 2026-11-04
+
+1. [PR #249](https://github.com/StealthCat/MrPatchy/pull/249): Keep the 30-second Fleet Overview and Servers background refresh from replacing the view with a loading placeholder or dropping the reader's scroll position and keyboard focus; unchanged results restore the original DOM nodes, while an open details panel defers the refresh. Compatibility: no API, schema, role, audit or response-authorization change; manual refresh, navigation and Retry retain their existing loading behavior, and changed results restore focus by stable element attributes when possible. This source update does not publish a Docker image.
+
+## 1.42.0 — 2026-11-04
+
+1. [PR #380](https://github.com/StealthCat/MrPatchy/pull/380): Allow two independently leased process investigations for one server to perform provider work concurrently while retaining exclusive subject claims, the fleet-wide AI executor limit, bounded third/fourth admission, pause and lifecycle fencing, post-wait lifecycle revalidation, evidence/configuration ownership checks, and explicit worker-status/UI disclosure. Compatibility: no schema, provider contract, role, approval, audit or response-authorization change; non-triage AI purposes retain their exclusive per-server provider gate, and higher overlap can consume configured rate and spend capacity sooner. Administrator-configurable per-server occupancy, broader cross-purpose fairness, native complete-context collection and complete multi-controller failover acceptance remain unfinished. This source update does not publish a Docker image.
+
+## 1.41.1 — 2026-11-04
+
+1. [PR #381](https://github.com/StealthCat/MrPatchy/pull/381): Bound the production Compose `app`, `worker` and `caddy` services to 2 GiB, 4 GiB and 512 MiB of memory by default, with per-service `MRPATCHY_*_MEM_LIMIT` overrides and regression coverage requiring every production service to retain a finite overridable limit. Compatibility: no API, schema, UI, role, audit or response-authorization change; large fleets or concurrent scan and AI workloads may need to raise the worker limit, and reaching a limit can OOM-kill and restart the affected container. This is a partial #201 hardening increment only: read-only root filesystems, GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.
+
+## 1.41.0 — 2026-11-04
+
+1. [PR #375](https://github.com/StealthCat/MrPatchy/pull/375): Add authenticated same-origin notification Server-Sent Events with durable digest-cursor catch-up, session/account/role revalidation, bounded per-controller connections, heartbeats and polling fallback; refresh the bell, recent panel and open notification center from the existing permission-filtered APIs without replacing filters, losing unrelated form state or stealing focus. Compatibility: this is an additive stream endpoint and shell behavior with no schema migration, public API removal, global acknowledgement, SMTP/webhook producer, remediation or response-authorization change; frames contain no notification text, credentials or raw evidence. Production Caddy flushing/timeout measurement, slow-client and connection-exhaustion drills, pruned-cursor gap handling, live toasts, multi-controller failover and complete two-browser SQLite/MySQL acceptance remain unfinished. This source update does not publish a Docker image.
+
+## 1.40.6 — 2026-11-04
+
+1. [PR #378](https://github.com/StealthCat/MrPatchy/pull/378): Bound the production Compose `app`, `worker` and `caddy` services to 1024 processes each, with regression coverage requiring every service to retain a finite process limit. Compatibility: no API, schema, UI, role, audit or response-authorization change; custom deployments that legitimately require more than 1024 simultaneous processes in one container must raise `pids_limit` explicitly. This is a partial #201 hardening increment only: memory limits, read-only root filesystems, GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.
+
+## 1.40.5 — 2026-11-04
+
+1. [PR #376](https://github.com/StealthCat/MrPatchy/pull/376): Add a liveness-based Docker Compose healthcheck for the worker service, refreshed only after a successful registry heartbeat and failed by missing, stale or implausibly future liveness timestamps. Compatibility: no API, schema, UI, role, audit or response-authorization change; the worker container now reports unhealthy when registry heartbeats stop, but Docker Compose does not restart unhealthy containers automatically. This is a partial #201 hardening increment only: read-only root filesystems, PID/memory limits, GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.
+
+## 1.40.4 — 2026-11-04
+
+1. [PR #373](https://github.com/StealthCat/MrPatchy/pull/373): Add administrator-only retained AI spend history for trailing 1–90 day ranges, grouped by each ledger entry's persisted reset time and IANA timezone, with exact SQL aggregates for settled estimates and conservative unreleased ceilings plus bounded 7-, 30- and 90-day Settings views. Compatibility: this is an additive read-only API and UI change with no schema, admission, provider-call, pause, ledger-retention or response-authorization change; released unsent attempts remain excluded, estimates are not provider invoices, and output is capped at four reset/timezone groups per requested day with explicit truncation. Provider-invoice reconciliation, automated or signed catalog lifecycle and complete multi-controller failover/reset acceptance remain outside this increment. This source update does not publish a Docker image.
+
+## 1.40.3 — 2026-11-04
+
+1. [PR #371](https://github.com/StealthCat/MrPatchy/pull/371): Warn administrators through the durable operational outbox and retained in-app notification history during the final seven days of the reviewed AI public-price catalog window; deduplicate unchanged warnings, escalate and reopen delivery when the catalog expires, and resolve the lifecycle event after a verified refresh or applicable cap-mode disablement. Compatibility: no schema, target-agent, provider-call, deployment or response-authorization change; the alert applies only to enabled daily-cap modes and contains bounded catalog version/status/expiry metadata. Automated or signed catalog updates, provider-invoice reconciliation, live provider billing truth and complete multi-controller/reset acceptance remain outside this increment. This source update does not publish a Docker image.
+
+## 1.40.2 — 2026-11-04
+
+1. [PR #368](https://github.com/StealthCat/MrPatchy/pull/368): Drop every Linux capability from the production Compose `app`, `worker` and `caddy` services, then add back only `CHOWN`, `SETUID` and `SETGID` for the application entrypoints and `NET_BIND_SERVICE` and `DAC_READ_SEARCH` for Caddy; run the Compose acceptance proxy as the unprivileged `mrpatchy` user and pin the exact service sets with regression coverage. Compatibility: APIs, schemas, roles and runtime response authorization are unchanged, while custom Compose overrides that relied on Docker's default capability set must explicitly add their required capabilities. This is a partial #201 hardening increment only: read-only root filesystems, PID/memory limits, GCP override hardening, worker health checks and live alert inventory remain unfinished. This source update does not publish a Docker image.
+
+## 1.40.1 — 2026-11-04
+
+1. [PR #369](https://github.com/StealthCat/MrPatchy/pull/369): Add a CI dependency-vulnerability gate that runs `pip-audit` against the hash-locked Python runtime requirements and enforces reviewed exceptions with an advisory ID, owner, reason and expiry of at most 90 days; expired, malformed and unused exceptions fail closed. Compatibility: runtime APIs, schemas, roles, deployment and response authorization are unchanged, while pull-request validation now requires access to the PyPI advisory service. This is a partial #201 hardening increment only: npm tooling, base-image packages, live GitHub alert inventory, read-only filesystems, resource limits and worker health checks remain outside this gate. This source update does not publish a Docker image.
+
+## 1.40.0 — 2026-11-04
+
+1. [PR #367](https://github.com/StealthCat/MrPatchy/pull/367): Make multi-stage distribution-release configuration review resumable: each accepted AI review is durably sealed before the next provider call, controlled rate/spend/backoff/pause waits keep the plan queued and non-approvable, and an exact evidence/model/policy/vendor/news match reuses completed stages without paying to repeat them; changed evidence conservatively re-reviews the affected plan, and deferred release plans now appear in shared AI queue status. Compatibility: no schema, target-agent, role, approval, audit, deployment or response-authorization change; interrupted calls without an accepted structured result are not replayed automatically, and provider-invoice plus multi-controller failover/reset acceptance remain unfinished. This source update does not publish a Docker image.
+
+## 1.39.3 — 2026-11-04
+
+1. [PR #365](https://github.com/StealthCat/MrPatchy/pull/365): Align the release runner, RPM inventory and advisory ecosystem os-release parsers so they consistently ignore indented comments, trim keys and whitespace, and accept either single- or double-quoted values; this prevents valid single-quoted distribution metadata from losing its advisory ecosystem mapping. Compatibility: no API, schema, role, deployment, target action or response-authorization change; parser output changes only for previously inconsistent comments, whitespace and quote forms. This is a partial #190 consolidation only: shared hash loops, ancestor walkers and import cleanup remain unfinished. This source update does not publish a Docker image.
+
+## 1.39.2 — 2026-11-04
+
+1. [PR #358](https://github.com/StealthCat/MrPatchy/pull/358): Give the bundled AI public-price catalog exact reviewed-at and expiry metadata, expose its bounded freshness state in administrator settings, and make daily-cap and combined-cap admission fail closed at the expiry boundary before consuming smooth-rate capacity or contacting the provider. Compatibility: no schema, migration, target-agent, credential, provider-payload or response-authorization change; rate-only and unthrottled operation are unchanged, while capped installations require a reviewed catalog update before 2026-11-26 00:00 UTC or capped calls deliberately stop. Automated or signed catalog updates, lifecycle alerting, provider-invoice reconciliation, long-horizon reporting and broader failover acceptance remain unfinished. This source update does not publish a Docker image.
+
+## 1.39.1 — 2026-11-04
+
+1. [PR #356](https://github.com/StealthCat/MrPatchy/pull/356): Validate the target boot identity through one bounded lowercase-UUID parser and reuse it for recovery-status reads, rejecting missing, malformed, uppercase or oversized `/proc` values instead of propagating an untrusted identity. Compatibility: no API shape, schema, role, deployment, target action or response-authorization change; a malformed boot identity now fails closed. This is a partial #190 increment only: shared hash loops, ancestor walkers, OS-release parsing, RPM detection and import cleanup remain unfinished. This source update does not publish a Docker image.
+
+## 1.39.0 — 2026-11-03
+
+1. [PR #354](https://github.com/StealthCat/MrPatchy/pull/354): Add a first-class, deep-linkable notification center with bounded retained-history pagination; permission-filtered unread, dismissed, severity, source and server filters; current-revision lifecycle, time and escaped reason details; defensively revalidated same-origin subject links; and exact-revision per-user read/dismiss controls that remain separate from operational acknowledgement, resolution, approval and remediation. Compatibility: additive workspace UI and optional API query parameters only; no schema, provider, role, deployment, SMTP/webhook, target-agent or response-authorization change. Producers and retention, authenticated push/replay, cross-controller and multi-tab synchronization, live toasts, slow-client/backpressure/failover coverage and complete two-browser acceptance remain unfinished. This source update does not publish a Docker image.
+
+## 1.38.3 — 2026-11-03
+
+1. [PR #333](https://github.com/StealthCat/MrPatchy/pull/333): Add a read-only permission-filtered fleet spool-health API and Overview card with exhaustive enabled-server counts for pressure, stale and unavailable telemetry, cumulative loss totals, and a bounded ten-server urgent list; the route projects exactly the five required Host columns in one query without lazy-loading fleet blobs, and UI/API failures remain explicit rather than healthy. Compatibility: additive viewer API and UI only; no schema, target-agent, remote-call, deployment or operational/response-authorization change. This is a partial #108 increment: oldest-observation age, ingest/flush rates, retries, delivery latency, counter continuity, alert producers/deduplication/hysteresis and durable loss history remain unfinished. This source update does not publish a Docker image.
+
+## 1.38.2 — 2026-11-03
+
+1. [PR #332](https://github.com/StealthCat/MrPatchy/pull/332): Add a read-only Agent event spool card to each server's Overview summary, showing stored queue pressure and utilization, pending batches, queued/capacity bytes, telemetry freshness and cumulative loss with per-reason detail; stale, unavailable and request-failure states remain explicit and warning/critical pressure links to Agent health. Compatibility: no API, schema, role, target-contact, deployment or operational/response-authorization change; the card consumes the existing permission-scoped spool-health API and performs no remote work. This is a partial #108 UI increment only: fleet-wide projection, oldest-observation age, rates, retries, delivery latency, alert producers/deduplication, counter continuity and durable loss history remain unfinished. This source update does not publish a Docker image.
+
+## 1.38.1 — 2026-11-03
+
+1. [PR #289](https://github.com/StealthCat/MrPatchy/pull/289): Raise the development and CI pytest requirement from version 8 or newer to version 9.2.0 or newer while retaining the existing upper bound below 10. Compatibility: production dependencies and application behavior, APIs, roles, schemas and operational/response authorization are unchanged; local development and CI environments must use pytest 9.2.0–9.x and therefore inherit pytest 9 command, configuration and plugin compatibility requirements. This source update does not publish a Docker image.
+
+## 1.38.0 — 2026-11-03
+
+1. [PR #351](https://github.com/StealthCat/MrPatchy/pull/351): Add a persistent responsive notification bell and bounded eight-item recent panel to the authenticated shell, with permission-filtered unread severity, escaped payload text, defensively validated same-origin review links, exact-revision per-user read/dismiss controls, 30-second/visibility catch-up that preserves page and dialog state, session-reset race isolation and browser coverage across desktop, tablet and mobile layouts. Compatibility: no schema, API, role, deployment, provider, SMTP/webhook or operational/response-authorization change; read/dismiss does not acknowledge or remediate the underlying subject. Event producers and retention, authenticated push/replay and cross-controller/multi-tab delivery, live toasts, the dedicated filtered notification center, retained-history navigation and full two-browser/SQLite/MySQL/failover acceptance remain planned. This source update does not publish a Docker image.
+
 ## 1.37.13 — 2026-11-03
 
 1. [PR #319](https://github.com/StealthCat/MrPatchy/pull/319): Require development triage to assign exactly one actual `P1`, `P2` or `P3` GitHub label to every bug and to correct missing or conflicting priority labels before concluding that no P1 bug exists or selecting feature work. Compatibility: contributor/coordinator policy only; application behavior, APIs, roles and operational/response authorization remain unchanged. This delivery does not bulk reclassify existing issues; missing labels or label permissions must be handled and reported separately. This source update does not publish a Docker image.

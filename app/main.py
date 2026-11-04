@@ -1,4 +1,5 @@
 import base64
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager, contextmanager
@@ -12,11 +13,11 @@ import threading
 import time
 import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
-from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
-from sqlalchemy.orm import defer
+from sqlalchemy.orm import defer, load_only
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
@@ -49,13 +50,24 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.37.13'
+APP_VERSION='1.42.7'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
 from . import sso
 app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
+
+
+def _stream_limit():
+    try:
+        value = int(os.getenv('NOTIFICATION_STREAM_LIMIT', '32'))
+    except ValueError:
+        value = 32
+    return min(256, max(1, value))
+
+
+notification_streams = notification_events.StreamConnections(_stream_limit())
 @app.exception_handler(host_lifecycle.Busy)
 @app.exception_handler(host_lifecycle.Inactive)
 async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=409)
@@ -268,15 +280,21 @@ def dashboard(user=Depends(viewer_user)):
 
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
+                      severity:str='',source:str='',host_id:str='',
                       limit:int=50,offset:int=0,user=Depends(self_user)):
     """Return a bounded, current-role-filtered page for the signed-in user."""
     with Session() as s:
-        items=notification_events.list_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed,limit=limit,offset=offset)
-        total=notification_events.count_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed)
+        try:
+            filters={'severity':severity,'source':source,'host_id':host_id}
+            items=notification_events.list_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,limit=limit,offset=offset,
+                **filters)
+            total=notification_events.count_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,**filters)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
         return {'items':items,'offset':offset,'limit':limit,'total':total,
                 'more':offset+len(items)<total}
 
@@ -284,6 +302,62 @@ def notification_list(unread_only:bool=False,include_dismissed:bool=False,
 def notification_unread_count(user=Depends(self_user)):
     with Session() as s:
         return {'unread':notification_events.unread_count(s,user['username'])}
+
+
+def _notification_stream_session(session,session_key,username,generation,role):
+    row=session.get(Setting,session_key)
+    identity=session.get(User,username)
+    return bool(row and row.value.get('expires',0)>=time.time()
+                and row.value.get('username')==username
+                and row.value.get('generation')==generation
+                and identity and identity.enabled
+                and identity.generation==generation
+                and identity.role==role
+                and identity.role in notification_events.ROLES)
+
+
+def _notification_sse(cursor):
+    return f'id: {cursor}\nretry: 3000\nevent: notifications\ndata: {{"cursor":"{cursor}"}}\n\n'
+
+
+@app.get('/api/notifications/stream')
+async def notification_stream(request:Request,user=Depends(self_user)):
+    """Stream bounded invalidations; list/count APIs remain authoritative."""
+    if not notification_streams.acquire():
+        raise HTTPException(429,'Notification stream capacity reached',headers={'Retry-After':'3'})
+    token=request.cookies.get('mrpatchy','')
+    session_key='session:'+token_hash(token)
+    username=user['username'];generation=user['generation'];role=user['role']
+    supplied=request.headers.get('last-event-id','')
+    last=supplied if re.fullmatch(r'[0-9a-f]{64}',supplied) else ''
+
+    async def events():
+        nonlocal last
+        heartbeat=time.monotonic()
+        try:
+            while not await request.is_disconnected():
+                with Session() as s:
+                    if not _notification_stream_session(
+                            s,session_key,username,generation,role):
+                        yield 'event: close\ndata: {}\n\n'
+                        return
+                    cursor=notification_events.stream_cursor(s,username)
+                if cursor is None:
+                    yield 'event: close\ndata: {}\n\n'
+                    return
+                if cursor!=last:
+                    last=cursor
+                    yield _notification_sse(cursor)
+                    heartbeat=time.monotonic()
+                elif time.monotonic()-heartbeat>=15:
+                    yield ': heartbeat\n\n'
+                    heartbeat=time.monotonic()
+                await asyncio.sleep(1)
+        finally:
+            notification_streams.release()
+
+    return StreamingResponse(events(),media_type='text/event-stream',headers={
+        'Cache-Control':'no-store','X-Accel-Buffering':'no','Connection':'keep-alive'})
 
 class NotificationStateInput(BaseModel):
     revision:int=Field(strict=True,ge=1)
@@ -373,8 +447,11 @@ def server_ai_policy(host_id:str,user=Depends(admin_user)):
 
 @app.put('/api/hosts/{host_id}/security/ai-policy')
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
-    from . import ai_policy
+    from . import ai_policy,ai_claims
     with worker.Lock('ai-policy-change:'+host_id):
+        with Session() as s:
+            if s.scalar(select(ai_claims.Claim.subject).where(ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
+                raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
         lock=worker.Lock('ai-provider:'+host_id)
         if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
         try:
@@ -399,6 +476,14 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+
+@app.get('/api/spool-health')
+def fleet_spool_health(user=Depends(viewer_user)):
+    with Session() as s:
+        # The rollup reads only these columns; load nothing else per server.
+        query=select(Host).options(load_only(Host.id,Host.name,Host.enabled,Host.deleted_at,Host.telemetry)).where(Host.deleted_at==0,Host.enabled==True)  # noqa: E712
+        rows=s.scalars(readable_host_records(query,Host.id,user)).all()
+        return agent_spool_health.fleet(rows)
 
 @app.get('/api/hosts/{host_id}/spool-health')
 def host_spool_health(host_id:str,user=Depends(viewer_user)):
@@ -817,6 +902,13 @@ def settings(user=Depends(admin_user)):
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+
+@app.get('/api/settings/ai-spend-history')
+def ai_spend_history(days:int=30,user=Depends(admin_user)):
+    from . import ai_budget
+    if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
+    with Session() as s:return ai_budget.history(s,days)
+
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
@@ -930,6 +1022,14 @@ def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
 @app.put('/api/settings/history')
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
     return save_settings_section(body.model_dump(),'history')
+
+@app.post('/api/ai/provider-backoff/clear')
+def clear_provider_backoff(user=Depends(admin_user)):
+    from . import ai_provider_backoff
+    active=ai_provider_backoff.clear()
+    with Session() as s:
+        audit(s,'clear AI provider backoff',user['username']+(' cleared an active floor' if active else ' (no active floor)'));s.commit()
+    return {'cleared':active}
 
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}

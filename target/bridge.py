@@ -186,7 +186,10 @@ def transaction_path(job):
     return directory/(job+'.json')
 
 
-def boot_id():return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+def boot_id():
+    value=Path('/proc/sys/kernel/random/boot_id').read_text()[:100].strip()
+    if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value):raise ValueError('Boot identity unavailable')
+    return value
 
 
 def schedule_reboot(journal,state,rollback=False):
@@ -480,7 +483,7 @@ def handle(req):
     if action == 'complete-recovery':return complete_recovery(req)
     if action == 'rollback-patch':return rollback_after_reboot(req)
     if action == 'recovery-status':
-        return {'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'rollback_adapter':Path('/etc/mrpatchy/rollback').is_file(),'systemd':Path('/run/systemd/system').exists()}
+        return {'boot_id':boot_id(),'rollback_adapter':Path('/etc/mrpatchy/rollback').is_file(),'systemd':Path('/run/systemd/system').exists()}
     if action == 'authorized-keys':
         keys=req.get('keys')
         if not isinstance(keys,list) or not 1<=len(keys)<=2:raise ValueError('One or two Ed25519 keys required')
