@@ -35,10 +35,21 @@ def require(host_ids):
 @contextmanager
 def provider():
     identifiers=sorted(set(scope.get()))
+    # A process-triage lease is the durable cross-worker in-flight fence. Use
+    # the short policy-change gate only for admission so independent subjects
+    # on one server can overlap. The administrator route rejects a policy
+    # change while any such lease is live.
+    from .ai_claims import current,check_current
+    lease=current.get()
+    if lease and identifiers==[lease.host_id]:
+        with ExitStack() as stack:
+            for identifier in identifiers:stack.enter_context(Lock('ai-policy-change:'+identifier))
+            require(identifiers);check_current()
+        yield
+        return
     with ExitStack() as stack:
         for identifier in identifiers:stack.enter_context(Lock('ai-provider:'+identifier))
         require(identifiers)
-        from .ai_claims import check_current
         check_current()
         yield
 

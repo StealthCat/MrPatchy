@@ -1,9 +1,11 @@
 const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
- const id='lifecycle-ui-host',now=Date.now()/1000;let revision='',enabled=true,deleted=false;const writes=[];let blockDeletion=true;
+ const id='lifecycle-ui-host',now=Date.now()/1000;let revision='',enabled=true,deleted=false;const writes=[];let blockDeletion=true;let gate=null,failHosts=false;
  const host=()=>({id,name:'Lifecycle UI server',address:'192.0.2.201',port:22,state:deleted?'deleted':enabled?'online':'disabled',enabled,deleted_at:deleted?now:0,lifecycle_revision:revision,integrity:[],last_seen:now,error:'',repo_error:'',package_manager:'apt'});
  const handler=async route=>{
   const request=route.request(),url=new URL(request.url()),p=url.pathname;
+  if(p==='/api/hosts'&&gate)await gate;
+  if(p==='/api/hosts'&&failHosts)return route.fulfill({status:500,json:{detail:'render failed'}});
   if(p==='/api/hosts')return route.fulfill({json:url.searchParams.get('deleted')==='true'?(deleted?[host()]:[]):deleted?[]:[host()]});
   if(!p.startsWith('/api/hosts/'+id))return route.fallback();
   if(p.endsWith('/lifecycle')){const body=request.postDataJSON();assert.equal(body.expected_revision,revision);assert.ok(body.reason.length>=10);enabled=body.enabled;revision='revision-'+writes.length;writes.push(p);return route.fulfill({json:{host:host(),cancelled_jobs:enabled?0:2}});}
@@ -49,7 +51,17 @@ module.exports=async(page,capture)=>{
   await page.locator('#host-lifecycle-form [name=confirmation]').fill('Lifecycle UI server');
   await page.getByRole('button',{name:'Delete this server',exact:true}).click();
   await page.locator('#modal-message').filter({hasText:'Reconcile the active response hold'}).waitFor();assert.equal(deleted,false);
+  const afterDelete=[];const track=r=>{const u=new URL(r.url());if(u.pathname==='/api/hosts'||u.pathname==='/api/identity')afterDelete.push(r.method()+' '+u.pathname);};page.on('request',track);
+  let release;gate=new Promise(r=>release=r);
   await page.getByRole('button',{name:'Delete this server',exact:true}).click();await page.locator('#modal').waitFor({state:'hidden'});
+  await page.waitForFunction(()=>location.hash==='#servers');await page.waitForTimeout(300);
+  assert.equal(await page.locator('#toast').filter({hasText:'Server deleted from management'}).isVisible(),false,'success feedback must wait for the destination render');
+  gate=null;release();
+  await page.locator('#toast').filter({hasText:'Server deleted from management'}).waitFor();
+  assert.ok(await page.locator('#content h1,#content h2').count()>0,'destination rendered before feedback');
+  await page.getByRole('heading',{name:'Servers'}).first().waitFor().catch(()=>{});await page.waitForLoadState('networkidle');page.off('request',track);
+  assert.equal(afterDelete.filter(x=>x==='GET /api/hosts').length,1,'deletion renders the destination once: '+afterDelete);
+  assert.equal(afterDelete.filter(x=>x==='GET /api/identity').length,1,'deletion fetches identity once: '+afterDelete);
   await page.setViewportSize({width:1440,height:1000});
   await page.getByRole('link',{name:'Deleted servers',exact:true}).click();
   await page.getByRole('heading',{name:'Deleted servers',exact:true}).waitFor();
@@ -63,6 +75,21 @@ module.exports=async(page,capture)=>{
   await page.getByRole('link',{name:'Security',exact:true}).click();
   await page.getByRole('heading',{name:'Retained security records',exact:true}).waitFor();
   await page.locator('#retained-security-data').filter({hasText:'retained-scan'}).waitFor();
+  // A pending navigation message belongs to its own render: a failed render drops it, and a
+  // session change during an unchanged-hash render suppresses it.
+  await page.evaluate(()=>{location.hash='#overview';});await page.waitForFunction(()=>location.hash==='#overview');await page.waitForLoadState('networkidle');
+  failHosts=true;
+  await page.evaluate(()=>{navigateWithToast('#servers','STALE-AFTER-FAILURE');});
+  await page.locator('#retry-view').waitFor();
+  failHosts=false;await page.locator('#retry-view').click();
+  await page.getByRole('heading',{name:'Servers'}).first().waitFor().catch(()=>{});await page.waitForLoadState('networkidle');
+  assert.equal(await page.locator('#toast').filter({hasText:'STALE-AFTER-FAILURE'}).isVisible(),false,'a failed render drops its pending message');
+  let releaseSame;gate=new Promise(r=>releaseSame=r);
+  await page.evaluate(()=>{window.__sameHash=navigateWithToast(location.hash,'STALE-AFTER-SESSION');sessionRevision++;});
+  gate=null;releaseSame();await page.evaluate(()=>window.__sameHash);await page.waitForLoadState('networkidle');
+  assert.equal(await page.locator('#toast').filter({hasText:'STALE-AFTER-SESSION'}).isVisible(),false,'unchanged-hash completion must not toast after a session change');
+  await page.evaluate(()=>{window.__sameHash=navigateWithToast(location.hash,'FRESH-SAME-HASH');});
+  await page.locator('#toast').filter({hasText:'FRESH-SAME-HASH'}).waitFor();
   assert.equal(writes.length,3);
  }finally{await page.unroute('**/api/**',handler);}
 };
