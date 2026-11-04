@@ -16,6 +16,11 @@ SQLite destinations are filenames inside `DATA_DIR` (`/data` in Compose). Choose
 
 ```bash
 docker compose stop app worker
+```
+
+The worker drains on SIGTERM and Compose waits up to `stop_grace_period` (8100 s by default, `MRPATCHY_WORKER_STOP_GRACE_PERIOD`) before SIGKILL. Prefer draining first (**Activity → Workers → Drain worker**) or waiting for running jobs; `docker compose stop -t <seconds> worker` overrides the wait.
+
+```bash
 
 docker compose run --rm --no-deps app python -m app.database_migrate \
   --confirm-offline --dry-run
