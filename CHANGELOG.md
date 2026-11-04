@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.12 — 2026-11-04
+
+1. [PR #455](https://github.com/StealthCat/MrPatchy/pull/455): Keep fleet-wide scheduling, queued-job dispatch and alert collection running when one server's 50-operation queue prevents a periodic refresh from being enqueued; the skipped refresh is logged and retried on a later scheduler tick. Compatibility: no API, configuration or runtime response-authorization change; the affected server remains subject to its existing queue limit and does not receive that refresh until capacity becomes available. Completes #428. This source update does not publish a Docker image.
+
 ## 1.42.11 — 2026-11-04
 
 1. [PR #420](https://github.com/StealthCat/MrPatchy/pull/420): Give the Compose worker an 8100-second stop grace period so in-flight patch, rollback and release work can drain instead of being SIGKILLed after Docker's 10-second default; the GCP override inherits the same setting. Compatibility: worker stop, restart and upgrade can now wait up to 2h15m, and `docker compose stop -t <seconds> worker` can shorten an explicit stop; work that exceeds the finite grace may still be interrupted. No runtime response authorization changes. Completes #406. This source update does not publish a Docker image.
