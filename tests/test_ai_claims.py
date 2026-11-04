@@ -329,3 +329,84 @@ def test_database_json_normalization_is_bound_before_followup(admin,monkeypatch)
         assert len(normalized)==1 and sent[1]['investigation']['collected']==normalized[0]
         saved=s.scalar(select(ai_assessments.Assessment));assert saved and saved.inputs[1]['evidence']==sent[1]
         assert s.get(Behavior,'subject-0').verdict=='low'
+
+
+def test_rate_throttled_triage_is_not_claimed_and_deferrals_are_spread(admin,monkeypatch):
+    seed(count=4)
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1};s.commit()
+    sent=[]
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:sent.append(1) or result())
+    for _ in range(4):worker.investigate_one()
+    assert len(sent)==1
+    with Session() as s:
+        states=sorted(r.state for r in s.scalars(select(ai_runs.AIRun)))
+        # The gate closed after the first admission: no runs/attempts for the rest.
+        assert states==['complete']
+        assert not list(s.scalars(select(ai_retry.TriageRetry)))
+    # Force a refused item through the failure path: it must be deferred, not errored,
+    # and later waiters must not share an identical wake time.
+    from app.ai import AIError
+    now=time.time();wakes=[]
+    with Session() as s:
+        rows=list(s.scalars(select(Behavior).order_by(Behavior.id)))[1:]
+        for row in rows:
+            ai_retry.begin(s,row,'sig',now)
+            wakes.append(ai_retry.failed(s,row,AIError('wait',policy_wait=True,retry_after=600),now).next_at)
+        s.commit()
+    assert len(set(wakes))==3 and wakes==sorted(wakes)
+
+
+@pytest.mark.parametrize('cap,spent',[(0.01,0),(0.1,0.095)])
+def test_insufficient_safe_budget_does_not_create_triage_attempts(admin,monkeypatch,cap,spent):
+    from app import ai_budget
+    seed(count=2)
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_model':'gpt-6-astra',
+            'ai_control_mode':'daily_cap','ai_daily_cap_usd':cap}
+        if spent:
+            s.add(ai_budget.BudgetEntry(id='prior-spend',reset_at=time.time()+3600,timezone='UTC',
+                model='gpt-6-astra',status='settled',reservation_usd=spent,actual_usd=spent,
+                pricing_version='fixture',pricing_source='fixture'))
+        s.commit()
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:pytest.fail('Insufficient reservation must not send'))
+    for _ in range(2):worker.investigate_one()
+    with Session() as s:
+        assert not list(s.scalars(select(ai_runs.AIRun)))
+        assert not list(s.scalars(select(ai_retry.TriageRetry)))
+        assert all(row.attempted==0 for row in s.scalars(select(Behavior)))
+
+
+def test_staggered_waiters_reserve_after_existing_tail_with_different_clocks(admin):
+    seed(count=4);now=time.time()
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
+        s.add(ai_retry.TriageRetry(subject='occupied-tail',configuration='sig',state='deferred',
+            attempts=0,next_at=now+7200,provider_until=0))
+        s.commit()
+        wakes=[]
+        for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
+            at=now+index*.01
+            ai_retry.begin(s,row,'sig',at)
+            wakes.append(ai_retry.failed(s,row,ai.AIError('wait',policy_wait=True,retry_after=600),at).next_at)
+            s.flush()
+        assert wakes[0]>=now+10800
+        assert all(b-a>=3600 for a,b in zip(wakes,wakes[1:]))
+
+
+@pytest.mark.parametrize('start_delay',[0,121])
+def test_provider_policy_waits_keep_exact_floor_without_rate_staggering(admin,start_delay):
+    seed(count=3);now=time.time();floor=now+120
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
+        s.add(ai_retry.TriageRetry(subject='rate-tail',configuration='sig',state='deferred',
+            attempts=0,next_at=now+7200,provider_until=0))
+        s.commit()
+        for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
+            at=now+start_delay+index*.01
+            ai_retry.begin(s,row,'sig',at)
+            error=ai.AIError('provider wait',policy_wait=True,retry_after=floor-at+.25)
+            error.provider_wait_until=floor
+            retry=ai_retry.failed(s,row,error,at)
+            assert retry.next_at==max(at,floor) and retry.provider_until==floor
+            s.flush()
