@@ -431,6 +431,15 @@ Server push/replay, cross-tab synchronization, live toasts, the dedicated filter
 center, retained-history navigation and full multi-browser/SQLite/MySQL acceptance
 remain planned, so this checkpoint does not complete the live notification center.
 
+Issue #353 adds the dedicated retained-history surface: the bell panel links to a
+deep-linkable workspace page with bounded previous/next navigation and server-side
+unread, severity, source and server filters. Cards retain the shared glass/status
+palette, escaped text, readable timestamps and safe subject links across desktop,
+tablet and phone layouts. Exact-revision read/dismiss remains an account-local UI
+choice and is explained separately from operational response. Server push/replay,
+cross-tab synchronization, live toasts and full multi-browser/SQLite/MySQL/failover
+acceptance remain planned, so the asynchronous notification program is not complete.
+
 
 ### v1.24.0 — Exact-match readiness on assessment detail
 

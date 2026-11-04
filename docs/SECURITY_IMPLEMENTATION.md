@@ -2634,6 +2634,19 @@ center and live toasts remain planned. Event producers/retention, authenticated
 SSE with cursor replay/cross-controller delivery, multi-tab synchronization and
 end-to-end SQLite/MySQL/failover acceptance also remain milestones 1, 2 and 4.
 
+Implementation checkpoint (issue #353): the next bounded milestone-3 increment
+adds a dedicated deep-linkable notification center. Its server-side page/count query
+applies the same current-role and per-user dismissal boundaries while supporting
+exact severity, source, server and unread filters. The responsive page renders the
+current revision's source, severity, server, time, lifecycle and escaped reason,
+defensively revalidates same-origin subject links, and keeps exact-revision read and
+dismiss actions separate from acknowledgement, resolution, approval and remediation.
+The bell panel links to the center; filters and pagination use bounded pages without
+exposing raw evidence or credentials. This still does not complete milestone 3:
+live toasts, multi-tab synchronization and server-pushed updates remain planned.
+Producers/retention, authenticated replay across controllers/workers and the complete
+two-browser SQLite/MySQL/failover acceptance remain milestones 1, 2 and 4.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
