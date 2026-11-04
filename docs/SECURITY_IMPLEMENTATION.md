@@ -2683,6 +2683,26 @@ live toasts, multi-tab synchronization and server-pushed updates remain planned.
 Producers/retention, authenticated replay across controllers/workers and the complete
 two-browser SQLite/MySQL/failover acceptance remain milestones 1, 2 and 4.
 
+Implementation checkpoint (issue #374): a bounded milestone-2 increment adds an
+authenticated Server-Sent Events invalidation stream. Each connection polls the
+shared durable notification tables, emits only a safe digest cursor, and leaves the
+existing permission-filtered list/count APIs authoritative. New event revisions and
+that user's read/dismiss progress change the cursor; role, account enablement,
+session generation and expiry are rechecked while connected. EventSource supplies
+automatic reconnect and Last-Event-ID, so a stale cursor receives an immediate
+authoritative catch-up signal after reload, sleep or controller reconnect.
+
+The stream has a configurable bounded per-controller connection count (default 32,
+hard maximum 256), one small current invalidation with no per-client queue, a
+15-second heartbeat and a three-second reconnect hint. It disables proxy buffering
+and retains the 30-second polling/visibility fallback. The bell, recent panel and an
+open notification center refresh from the durable APIs; center filters, pagination,
+unrelated dialogs/forms and focus remain in place. Logout or revoked account state
+closes the stream and clears account-scoped client data. This is not completion of
+milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client and
+connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
+two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -5980,3 +6000,17 @@ resolution and non-cap/disabled modes. This does not automate or sign catalog
 updates, reconcile provider invoices, add provider-derived billing truth or complete
 the remaining multi-controller/reset acceptance. Final delivery still requires the
 coordinator's exact-head full test matrix and fresh code scan.
+
+### Compose memory bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services set `mem_limit` with
+defaults of 2 GiB, 4 GiB and 512 MiB, overridable through
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and `MRPATCHY_CADDY_MEM_LIMIT`.
+A runaway container is OOM-killed and restarted (`restart: unless-stopped`) instead
+of exhausting the host. Regression coverage requires every declared production
+service to keep an overridable default between 256 MiB and 16 GiB. Large fleets with
+heavy concurrent scanning or AI fan-out should raise the worker limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. Read-only
+root filesystems, GCP override hardening and the live alert inventory remain open
+under #201. No Docker runtime was available locally.
