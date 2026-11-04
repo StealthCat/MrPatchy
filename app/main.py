@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
-from sqlalchemy.orm import defer
+from sqlalchemy.orm import defer, load_only
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
@@ -49,7 +49,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.38.0'
+APP_VERSION='1.39.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -268,15 +268,21 @@ def dashboard(user=Depends(viewer_user)):
 
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
+                      severity:str='',source:str='',host_id:str='',
                       limit:int=50,offset:int=0,user=Depends(self_user)):
     """Return a bounded, current-role-filtered page for the signed-in user."""
     with Session() as s:
-        items=notification_events.list_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed,limit=limit,offset=offset)
-        total=notification_events.count_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed)
+        try:
+            filters={'severity':severity,'source':source,'host_id':host_id}
+            items=notification_events.list_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,limit=limit,offset=offset,
+                **filters)
+            total=notification_events.count_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,**filters)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
         return {'items':items,'offset':offset,'limit':limit,'total':total,
                 'more':offset+len(items)<total}
 
@@ -399,6 +405,14 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+
+@app.get('/api/spool-health')
+def fleet_spool_health(user=Depends(viewer_user)):
+    with Session() as s:
+        # The rollup reads only these columns; load nothing else per server.
+        query=select(Host).options(load_only(Host.id,Host.name,Host.enabled,Host.deleted_at,Host.telemetry)).where(Host.deleted_at==0,Host.enabled==True)  # noqa: E712
+        rows=s.scalars(readable_host_records(query,Host.id,user)).all()
+        return agent_spool_health.fleet(rows)
 
 @app.get('/api/hosts/{host_id}/spool-health')
 def host_spool_health(host_id:str,user=Depends(viewer_user)):

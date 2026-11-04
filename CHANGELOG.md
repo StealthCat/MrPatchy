@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.39.0 — 2026-11-03
+
+1. [PR #354](https://github.com/StealthCat/MrPatchy/pull/354): Add a first-class, deep-linkable notification center with bounded retained-history pagination; permission-filtered unread, dismissed, severity, source and server filters; current-revision lifecycle, time and escaped reason details; defensively revalidated same-origin subject links; and exact-revision per-user read/dismiss controls that remain separate from operational acknowledgement, resolution, approval and remediation. Compatibility: additive workspace UI and optional API query parameters only; no schema, provider, role, deployment, SMTP/webhook, target-agent or response-authorization change. Producers and retention, authenticated push/replay, cross-controller and multi-tab synchronization, live toasts, slow-client/backpressure/failover coverage and complete two-browser acceptance remain unfinished. This source update does not publish a Docker image.
+
+## 1.38.3 — 2026-11-03
+
+1. [PR #333](https://github.com/StealthCat/MrPatchy/pull/333): Add a read-only permission-filtered fleet spool-health API and Overview card with exhaustive enabled-server counts for pressure, stale and unavailable telemetry, cumulative loss totals, and a bounded ten-server urgent list; the route projects exactly the five required Host columns in one query without lazy-loading fleet blobs, and UI/API failures remain explicit rather than healthy. Compatibility: additive viewer API and UI only; no schema, target-agent, remote-call, deployment or operational/response-authorization change. This is a partial #108 increment: oldest-observation age, ingest/flush rates, retries, delivery latency, counter continuity, alert producers/deduplication/hysteresis and durable loss history remain unfinished. This source update does not publish a Docker image.
+
+## 1.38.2 — 2026-11-03
+
+1. [PR #332](https://github.com/StealthCat/MrPatchy/pull/332): Add a read-only Agent event spool card to each server's Overview summary, showing stored queue pressure and utilization, pending batches, queued/capacity bytes, telemetry freshness and cumulative loss with per-reason detail; stale, unavailable and request-failure states remain explicit and warning/critical pressure links to Agent health. Compatibility: no API, schema, role, target-contact, deployment or operational/response-authorization change; the card consumes the existing permission-scoped spool-health API and performs no remote work. This is a partial #108 UI increment only: fleet-wide projection, oldest-observation age, rates, retries, delivery latency, alert producers/deduplication, counter continuity and durable loss history remain unfinished. This source update does not publish a Docker image.
+
+## 1.38.1 — 2026-11-03
+
+1. [PR #289](https://github.com/StealthCat/MrPatchy/pull/289): Raise the development and CI pytest requirement from version 8 or newer to version 9.2.0 or newer while retaining the existing upper bound below 10. Compatibility: production dependencies and application behavior, APIs, roles, schemas and operational/response authorization are unchanged; local development and CI environments must use pytest 9.2.0–9.x and therefore inherit pytest 9 command, configuration and plugin compatibility requirements. This source update does not publish a Docker image.
+
 ## 1.38.0 — 2026-11-03
 
 1. [PR #351](https://github.com/StealthCat/MrPatchy/pull/351): Add a persistent responsive notification bell and bounded eight-item recent panel to the authenticated shell, with permission-filtered unread severity, escaped payload text, defensively validated same-origin review links, exact-revision per-user read/dismiss controls, 30-second/visibility catch-up that preserves page and dialog state, session-reset race isolation and browser coverage across desktop, tablet and mobile layouts. Compatibility: no schema, API, role, deployment, provider, SMTP/webhook or operational/response-authorization change; read/dismiss does not acknowledge or remediate the underlying subject. Event producers and retention, authenticated push/replay and cross-controller/multi-tab delivery, live toasts, the dedicated filtered notification center, retained-history navigation and full two-browser/SQLite/MySQL/failover acceptance remain planned. This source update does not publish a Docker image.

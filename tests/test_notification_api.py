@@ -21,13 +21,17 @@ def login(client, username):
     client.headers['X-CSRF-Token'] = result.json()['csrf']
 
 
-def publish(session, subject_id, minimum_role='viewer', now=100):
+def publish(session, subject_id, minimum_role='viewer', now=100, **changes):
+    values = {
+        'source': 'operations', 'kind': 'attention', 'subject_type': 'job',
+        'subject_id': subject_id, 'subject_revision': 'revision-1',
+        'severity': 'high', 'reason': 'A bounded fixture needs human attention.',
+        'deep_link': '#/operations?job=' + subject_id,
+        'minimum_role': minimum_role, 'now': now,
+    }
+    values.update(changes)
     event, _ = notifications.publish(
-        session, source='operations', kind='attention', subject_type='job',
-        subject_id=subject_id, subject_revision='revision-1', severity='high',
-        reason='A bounded fixture needs human attention.',
-        deep_link='#/operations?job=' + subject_id, minimum_role=minimum_role,
-        now=now)
+        session, **values)
     return event
 
 
@@ -62,6 +66,30 @@ def test_list_count_role_filter_and_pagination_use_authenticated_identity(admin)
     assert admin.get('/api/notifications?limit=0').status_code == 400
     assert admin.get('/api/notifications?limit=101').status_code == 400
     assert admin.get('/api/notifications?offset=-1').status_code == 400
+
+
+def test_list_filters_are_authoritative_and_keep_role_boundaries(admin):
+    add_user('reader', 'viewer')
+    with Session() as session:
+        match = publish(session, 'matching', source='scanner', severity='critical',
+                        host_id='host-1', now=400)
+        publish(session, 'wrong-source', source='operations', severity='critical',
+                host_id='host-1', now=300)
+        publish(session, 'wrong-severity', source='scanner', severity='info',
+                host_id='host-1', now=200)
+        publish(session, 'higher-role', 'operator', source='scanner',
+                severity='critical', host_id='host-1', now=100)
+        session.commit()
+    login(admin, 'reader')
+
+    page = admin.get('/api/notifications?severity=critical&source=scanner&host_id=host-1').json()
+    assert page['total'] == 1 and [item['id'] for item in page['items']] == [match.id]
+    assert admin.post(f'/api/notifications/{match.id}/read', json={'revision': 1}).status_code == 200
+    assert admin.get('/api/notifications?severity=critical&source=scanner&host_id=host-1&unread_only=true').json()['total'] == 0
+
+    for query in ('severity=urgent', 'source=Scanner', 'source=' + 'x' * 41,
+                  'host_id=' + 'x' * 37):
+        assert admin.get('/api/notifications?' + query).status_code == 400
 
 
 def test_read_and_dismiss_are_csrf_protected_isolated_and_revision_bound(admin):
