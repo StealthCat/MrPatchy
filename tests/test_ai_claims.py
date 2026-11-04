@@ -123,13 +123,21 @@ def pause_policy(admin):
     })
 
 
-def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin):
+def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeypatch):
     seed(count=1)
     queue=worker.Lock('server-queue:host-0');assert queue.acquire(False)
+    attempted=threading.Event();native_lock=host_lifecycle.Lock
+    class ObservedLock:
+        def __init__(self,name):self.name=name;self.inner=native_lock(name)
+        def acquire(self,blocking=True):
+            if self.name=='server-queue:host-0':attempted.set()
+            return self.inner.acquire(blocking)
+        def release(self):self.inner.release()
+    monkeypatch.setattr(host_lifecycle,'Lock',ObservedLock)
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             waiting=pool.submit(ai_claims.acquire)
-            time.sleep(.05);assert not waiting.done()
+            assert attempted.wait(15) and not waiting.done()
             with Session() as s:
                 s.get(Host,'host-0').enabled=False;s.commit()
             queue.release();queue=None
