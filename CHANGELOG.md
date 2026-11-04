@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.13 — 2026-11-04
+
+1. [PR #471](https://github.com/StealthCat/MrPatchy/pull/471): Refuse Add-user requests for an existing or case-only variant username with HTTP 409 instead of silently replacing that account, and apply bootstrap-administrator and self-lockout guards to the stored username so case-insensitive MySQL lookups cannot bypass them. Compatibility: `PUT /api/users` accepts an optional `create` boolean; omitting it preserves the existing upsert behavior for API clients, while the web Add-user dialog now sends `create: true`. No runtime response-authorization expansion. Completes #417. This source update does not publish a Docker image.
+
 ## 1.42.12 — 2026-11-04
 
 1. [PR #455](https://github.com/StealthCat/MrPatchy/pull/455): Keep fleet-wide scheduling, queued-job dispatch and alert collection running when one server's 50-operation queue prevents a periodic refresh from being enqueued; the skipped refresh is logged and retried on a later scheduler tick. Compatibility: no API, configuration or runtime response-authorization change; the affected server remains subject to its existing queue limit and does not receive that refresh until capacity becomes available. Completes #428. This source update does not publish a Docker image.
