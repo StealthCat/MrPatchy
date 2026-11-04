@@ -6014,3 +6014,22 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+### Verified operating-system lifecycle status — worker checkpoint #341
+
+The server Overview now reports a read-only lifecycle assessment for reviewed
+Ubuntu and Debian releases. Matching is strict on the exact `ID` and
+`VERSION_ID`; derivatives, unknown releases, stale or future-dated inventory and
+unverified extended-support architectures fail closed as unknown. The versioned
+catalog records the vendor source and review date. Ubuntu extended coverage
+explicitly reports that Pro entitlement is not observed, while Debian 12 LTS
+checks the published architecture set. Inclusive support boundaries have focused
+regression coverage.
+
+This increment does not schedule, recommend or authorize an upgrade and does not
+change patching, response or AI behavior. The migration-planning queue, supported
+target correlation, fleet filters/reports, lifecycle alerts, RPM/vendor coverage,
+entitlement discovery, signed or automated catalog refresh/expiry, and real-target
+upgrade acceptance remain planned under #341. Coordinator integration, exact-head
+full SQLite/MySQL/browser checks and fresh code scanning remain required before
+this checkpoint is delivered.
