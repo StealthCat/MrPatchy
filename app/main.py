@@ -415,7 +415,7 @@ def recovery_readiness_status(user=Depends(admin_user)):
 
 @app.post('/api/recovery/receipts')
 def record_recovery_receipt(body:dict,user=Depends(admin_user)):
-    with Session() as s:
+    with worker.Lock('recovery-receipts'),Session() as s:
         row=s.get(Setting,RECOVERY_RECEIPTS)
         try:items,item=recovery_readiness.add((row.value or {}).get('items',[]) if row else [],body)
         except ValueError as e:raise HTTPException(400,str(e))
