@@ -116,7 +116,7 @@ module.exports=async(page,capture)=>{
   await bell.click();
   holdMutation=true;
   const started=new Promise(resolve=>{mutationStarted=resolve;});
-  await panel.getByRole('button',{name:'Mark read'}).click();
+  await panel.locator('.notification-item').filter({hasText:'Patch verification needs review.'}).getByRole('button',{name:'Mark read'}).click();
   await started;
   await page.evaluate(()=>window.NotificationShell.reset());
   assert.equal(await page.evaluate(()=>window.notificationStreams[0].closed),true,'logout/reset closes the account stream');
