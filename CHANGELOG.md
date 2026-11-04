@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.6 — 2026-11-04
+
+1. [PR #390](https://github.com/StealthCat/MrPatchy/pull/390): Cap provider-sent Retry-After at 24 hours and add an administrator-only audited clear of shared AI provider backoff. Keep local exponential retry gates separate, preserve longer local delays on clear, and release provider-only durable waits including admission races using their exact absolute provider floor. Compatibility: local-only backoff no longer blocks manual retry; provider calls still recheck shared rate, budget, pause and lifecycle admission. Includes the original [PR #229](https://github.com/StealthCat/MrPatchy/pull/229) history. This source update does not publish a Docker image.
+
 ## 1.42.5 — 2026-11-04
 
 1. [PR #274](https://github.com/StealthCat/MrPatchy/pull/274): Keep transactional running byte/count totals for the target agent event spool, measuring legacy queues once and decrementing only successful acknowledgement deletes. Reuse a bounded executable hash cache with unchanged inode/metadata rechecks and throttle active eBPF status persistence to about once per second. Fix the eBPF test clock so collector sleeps cannot replace Python process-wide sleep or miscount background-thread sleeps. Fixes #186; batching/configuration work remains separately tracked in #106/#107. Compatibility: additive spool counter rows, unchanged observation/acknowledgement protocol and response authorization. This source update does not publish a Docker image.

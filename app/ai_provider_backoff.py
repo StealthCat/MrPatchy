@@ -9,6 +9,9 @@ from .coordination import Lock
 from .db import Base, Session
 
 
+MAX_PROVIDER_DELAY=86400  # a longer provider Retry-After is capped and flagged for administrator review
+
+
 class ProviderBackoff(Base):
     __tablename__='ai_provider_backoff'
     id: Mapped[str]=mapped_column(String(20),primary_key=True)
@@ -25,8 +28,10 @@ def admit(now=None):
     with Session() as session:
         row=session.get(ProviderBackoff,'global')
         if row and row.blocked_until>now:
-            raise AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
+            error=AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
                 policy_wait=True,retry_after=row.blocked_until-now)
+            error.provider_wait_until=row.blocked_until
+            raise error
 
 
 def failed(error,now=None):
@@ -40,11 +45,15 @@ def failed(error,now=None):
                 row=ProviderBackoff(id='global');session.add(row)
             if not row.updated or now-row.updated>3600:row.failures=0
             row.failures=(row.failures or 0)+1
-            provider=float(getattr(error,'retry_after',0) or 0)
+            provider=float(getattr(error,'provider_retry_after',getattr(error,'retry_after',0)) or 0)
+            capped=provider>MAX_PROVIDER_DELAY
+            provider=min(provider,MAX_PROVIDER_DELAY)
+            error.provider_retry_after=provider
             delay=provider if provider>0 else random.uniform(30,min(1800,60*2**(row.failures-1)))
             row.blocked_until=max(row.blocked_until or 0,now+delay)
             row.updated=now
-            row.reason=('Provider Retry-After floor is active.' if provider>0 else
+            row.reason=('Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.' if capped else
+                'Provider Retry-After floor is active.' if provider>0 else
                 'Transient provider or transport failure; bounded exponential backoff is active.')
             session.commit()
             return max(0,row.blocked_until-now)
@@ -59,6 +68,36 @@ def succeeded(request_started=None,now=None):
             if row and (request_started is None or row.updated<=request_started):
                 row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
                 session.commit()
+
+
+def clear(now=None):
+    """Administrator reset of the shared floor; returns whether a floor was active."""
+    now=time.time() if now is None else now
+    with Lock('ai-provider-backoff'):
+        with Session() as session:
+            row=session.get(ProviderBackoff,'global')
+            active=bool(row and row.blocked_until>now)
+            if row:
+                row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
+                session.commit()
+    # Already-deferred investigations keep their own provider-only wait. Revoke
+    # only that wait; attempt limits, claims and other admission gates remain.
+    return revoke_item_waits(now) or active
+
+
+def revoke_item_waits(now):
+    from .ai_retry import TriageRetry
+    from sqlalchemy import select
+    with Lock('ai-triage'),Session() as session:
+        rows=session.scalars(select(TriageRetry).where(TriageRetry.provider_until>now)).all()
+        for retry in rows:
+            # A later next_at belongs to the local retry gate, not the provider
+            # floor. Compare before clearing the saved provider deadline.
+            if retry.state=='deferred' and now<retry.next_at<=retry.provider_until:
+                retry.next_at=now
+            retry.provider_until=0
+        session.commit()
+        return bool(rows)
 
 
 def status(session,now=None):
