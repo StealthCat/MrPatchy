@@ -88,8 +88,15 @@ Those production `app`, `worker` and `caddy` services also cap the number of
 processes at 1024 to bound fork exhaustion while leaving room for the configured
 thread pools and subprocess work. Custom deployments that legitimately need more
 than 1024 simultaneous processes per container must raise `pids_limit` explicitly;
-this limit does not impose a memory cap or make the container root filesystem
-read-only.
+this process limit does not make the container root filesystem read-only.
+
+The same services cap memory by default at 2 GiB for `app`, 4 GiB for `worker`
+and 512 MiB for `caddy`. Override those limits with
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and
+`MRPATCHY_CADDY_MEM_LIMIT` when larger fleets or concurrent scan and AI workloads
+need more headroom. Reaching a limit can OOM-kill the container process; the
+production restart policy then starts it again, so size and monitor these limits
+for the deployment rather than treating them as a readiness guarantee.
 
 The Compose `worker` service publishes a Docker health status from a liveness file
 on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
