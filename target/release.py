@@ -31,7 +31,7 @@ def bridge():
 def digest(value):return hashlib.sha256(value).hexdigest()
 def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
 def os_info(text):
-    return {k:v.strip().strip('"').strip("'") for k,v in (line.split('=',1) for line in text.splitlines() if '=' in line and not line.startswith('#'))}
+    return {k.strip():v.strip().strip('"').strip("'") for k,v in (line.split('=',1) for line in text.splitlines() if '=' in line and not line.lstrip().startswith('#'))}
 def transition(inv):
     info=os_info(inv['os']);kind=info.get('ID');version=info.get('VERSION_ID','')
     # 64-bit Pi OS also reports ID=debian. Detect its vendor packages/sources.

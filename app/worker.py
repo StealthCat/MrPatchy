@@ -9,14 +9,12 @@ import time
 import uuid
 import math
 import re
-import subprocess
-from sqlalchemy import select, delete, update, func
-from . import host_lifecycle
+from sqlalchemy import select, delete, update
+from . import host_lifecycle,response_status,worker_health
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
-from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend
+from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
 from .security import unseal
-import httpx
 from .coordination import Lock
 log=logging.getLogger(__name__)
 stop=threading.Event()
@@ -65,12 +63,19 @@ def enqueue(s,host_id,action,payload=None):
         if host_id in revisions:body['_host_revision']=revisions[host_id]
         return _enqueue_active(s,host_id,action,body)
 
-def _enqueue_active(s,host_id,action,payload=None):
+def ensure_queue_capacity(s,host_id):
+    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
+
+def stage_job(s,host_id,action,payload=None):
+    """Add a queued job with its per-job audit entry; the caller commits."""
     host=s.get(Host,host_id)
     if host and not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
-    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise ValueError('Server queue is full (50 operations)')
+    ensure_queue_capacity(s,host_id)
     job=Job(id=str(uuid.uuid4()),host_id=host_id,action=action,payload=payload or {})
-    s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
+    s.add(job); audit(s,'queue '+action,host_id); return job.id
+
+def _enqueue_active(s,host_id,action,payload=None):
+    job_id=stage_job(s,host_id,action,payload); s.commit(); return job_id
 
 def save_inventory(s,h,inv):
     items=package_backend.installed(inv)
@@ -114,8 +119,9 @@ def update_repos(s,h):
         else:
             save_inventory(s,h,inv);s.commit()
     packages,output=package_backend.refresh(h.id,inv,repository_access(s,h.id))
+    known={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     for item in packages:
-        p=s.get(Package,h.id+':'+item['name'])
+        p=known.get(item['name'])
         if not p: continue
         # Superseding a still-outstanding update must not postpone its deadline.
         if not item['candidate']: p.available_since=0
@@ -244,7 +250,7 @@ def ingest(s,h,snapshot,include_inventory=True):
             if t.get('managed_metadata',{}).get(name)!={'uid':0,'gid':0,'mode':expected_mode}:
                 issues.append({'path':name,'issue':'Managed file ownership/permissions changed or metadata is missing; upgrade the collector if needed'})
     if not h.baseline: issues.append({'path':'baseline','issue':'Managed baseline missing; finish installation'})
-    ingest_events(s,h,snapshot)
+    ids=ingest_events(s,h,snapshot)
     for p in t.get('processes',[]): record_behavior(s,h,p,t['collected'])
     spool_issue=spool_loss_issue(snapshot.get('spool',{}),h.telemetry.get('spool',{}) if isinstance(h.telemetry,dict) else {})
     if spool_issue:issues.append({'path':'event spool','issue':spool_issue})
@@ -256,14 +262,19 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
     s.commit()
+    return ids
 
-def drain_events(s,h,snapshot,max_batches=32,budget=10):
-    """Commit before acknowledgement; bounded catch-up without full inventories."""
+def drain_events(s,h,snapshot,max_batches=32,budget=10,ingested_ids=None):
+    """Commit before acknowledgement; bounded catch-up without full inventories.
+
+    ingested_ids are the ids of the first batch that ingest() already committed;
+    that batch is acknowledged without being ingested a second time."""
     deadline=time.monotonic()+budget
     for index in range(max_batches):
         events=snapshot.get('events',[])
         if not events:return
-        ids=ingest_events(s,h,snapshot);s.commit()
+        if index==0 and ingested_ids is not None:ids=ingested_ids
+        else:ids=ingest_events(s,h,snapshot);s.commit()
         ssh.call(h,{'action':'ack','ids':ids},timeout=max(1,deadline-time.monotonic()))
         if snapshot.get('spool',{}).get('pending',len(events))<=len(events):return
         if index+1==max_batches or time.monotonic()>=deadline:return
@@ -295,8 +306,8 @@ def _poll_active_host(host_id):
                     return
             try:
                 snapshot=ssh.call(h,{'action':'snapshot'})
-                ingest(s,h,snapshot,include_inventory=locked)
-                drain_events(s,h,snapshot)
+                ids=ingest(s,h,snapshot,include_inventory=locked)
+                drain_events(s,h,snapshot,ingested_ids=ids)
             except Exception as e:
                 s.rollback()
                 h=s.get(Host,host_id)
@@ -389,6 +400,24 @@ def execute(job_id,reserved_lock=None):
         ai_admission.end_scope(admission_token);lock.release()
 
 
+def response_hold_scope(job):
+    """Exemptions from the host response hold for one job (pure; shared by admission and execution)."""
+    from . import quarantine,process_response
+    action,payload=job.action,job.payload
+    service_watch=action=='response-service-health' and payload.get('_service_watch') is True
+    response_id=payload.get('quarantine_id') if action in quarantine.RECOVERY_ACTIONS and not service_watch else None
+    publication_id=payload.get('publication_id') if action in ('trusted-repair-publish','trusted-repair-publish-status') else None
+    return dict(
+        response_id=response_id,
+        process_id=payload.get('process_id') if action in process_response.RECOVERY_ACTIONS else None,
+        read_only_response_id=payload.get('quarantine_id') if action in ('trusted-repair-prepare','response-service-health') and not service_watch else None,
+        staging_response_id=payload.get('quarantine_id') if action in ('trusted-repair-stage','trusted-repair-stage-status') else None,
+        publication_id=publication_id,
+        publication_response_id=response_id if publication_id else None,
+        local_observation=action=='evidence-archive-status',
+        service_response_id=response_id if action=='response-service-health' else None)
+
+
 def execute_locked(job_id):
     with Session() as s:
         job=s.get(Job,job_id)
@@ -406,12 +435,7 @@ def execute_locked(job_id):
         resuming=job.action=='release-upgrade' and job.state=='running'
         if job.state!='queued' and not resuming:return
         from . import quarantine,process_response
-        response_id=job.payload.get('quarantine_id') if job.action in quarantine.RECOVERY_ACTIONS and not (job.action=='response-service-health' and job.payload.get('_service_watch') is True) else None
-        process_id=job.payload.get('process_id') if job.action in process_response.RECOVERY_ACTIONS else None
-        read_only_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-prepare','response-service-health') and not (job.action=='response-service-health' and job.payload.get('_service_watch') is True) else None
-        staging_response_id=job.payload.get('quarantine_id') if job.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
-        publication_id=job.payload.get('publication_id') if job.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-        if operations.host_quarantined(s,job.host_id,exclude=job.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=job.action=='evidence-archive-status',service_response_id=response_id if job.action=='response-service-health' else None):return
+        if operations.host_quarantined(s,job.host_id,exclude=job.id,**response_hold_scope(job)):return
         if not resuming and not operations.eligible(s,job): return
         claimed=1 if resuming else s.execute(update(Job).where(Job.id==job_id,Job.state=='queued',Job.next_at<=time.time()).values(state='running')).rowcount
         s.commit()
@@ -599,14 +623,14 @@ def execute_locked(job_id):
             else: raise ValueError('Unsupported job')
             job.output=job.output.encode()[:48000].decode(errors='ignore')
             job.state='failed' if result.get('outcome') in ('rolled_back','response_incomplete') else 'complete'
-            if job.action in ('security-plan','startup-plan'):
+            if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             audit(s,('rolled back ' if result.get('outcome')=='rolled_back' else 'incomplete ' if result.get('outcome')=='response_incomplete' else 'complete ')+job.action,h.id)
         except Exception as e:
             s.rollback()
             job=s.get(Job,job_id)
             h=s.get(Host,job.host_id)
-            eligible=ai.defer_until(e) if job.action in ('security-plan','startup-plan') else None
+            eligible=ai.defer_until(e) if job.action in ('release-plan','security-plan','startup-plan') else None
             if eligible is not None:
                 job.state='queued';job.next_at=eligible
                 job.payload={**job.payload,'_ai_deferred':True}
@@ -615,7 +639,7 @@ def execute_locked(job_id):
                 s.commit();return
             uncertain=mutation_outcome_uncertain(mutation_stage,e)
             job.state='recovery_required' if protected or uncertain else 'failed'
-            if job.action in ('security-plan','startup-plan'):
+            if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
             if job.action in ('process-suspend','process-resume'):process_response.reject_unstarted(s,job)
@@ -625,13 +649,11 @@ def execute_locked(job_id):
             if job.action=='process-status':
                 response=s.get(process_response.ProcessResponse,job.payload.get('process_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    process_response.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=process_response.event,clock=time.time)
             if job.action=='quarantine-status':
                 response=s.get(quarantine.Quarantine,job.payload.get('quarantine_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    quarantine.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=quarantine.event,clock=time.time)
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
@@ -672,8 +694,8 @@ def mutation_outcome_uncertain(stage,error):
     if stage!='sent':return False
     return not (ssh.request_unstarted(error) or isinstance(error,ssh.RemoteFailure))
 
-def validate_patch(s,h,specs):
-    cfg=config(s)
+def validate_patch(s,h,specs,cfg=None):
+    cfg=cfg or config(s)
     if h.repo_error or not h.last_repo or time.time()-h.last_repo>cfg['repo_minutes']*120:
         raise ValueError('Refresh repositories before patching; metadata is stale, changed, or the latest check failed')
     for spec in specs:
@@ -776,13 +798,6 @@ def _assess_active_behavior(s,row,cfg,secret):
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
 
-def ai_cycle():
-    # Separate quotas keep score batches from starving process investigations.
-    for fn in (investigate_one,update_scores.run_one):
-        try:fn()
-        except Exception as error:ai_runs.task_failure(error)
-
-
 def loop(role="embedded"):
     from .worker_registry import Registration
     try:
@@ -835,6 +850,7 @@ def _loop(reporter):
                         except Exception:pass
                         is_leader=False
                 draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
+                worker_health.touch()
                 if draining and is_leader:leader.release();is_leader=False
                 if not draining and not is_leader:is_leader=leader.acquire(False)
                 if is_leader:
@@ -875,17 +891,21 @@ def _loop(reporter):
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
                         if len(active_jobs)>=capacity['jobs']:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
+                    hold_cache={};window_cache={};closed_patch_windows=set()
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.next_at<=now,Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=capacity['jobs']: break
+                        if j.host_id in busy_hosts:continue
+                        if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
                         if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
-                        from . import quarantine,process_response
-                        response_id=j.payload.get('quarantine_id') if j.action in quarantine.RECOVERY_ACTIONS and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
-                        process_id=j.payload.get('process_id') if j.action in process_response.RECOVERY_ACTIONS else None
-                        read_only_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-prepare','response-service-health') and not (j.action=='response-service-health' and j.payload.get('_service_watch') is True) else None
-                        staging_response_id=j.payload.get('quarantine_id') if j.action in ('trusted-repair-stage','trusted-repair-stage-status') else None
-                        publication_id=j.payload.get('publication_id') if j.action in ('trusted-repair-publish','trusted-repair-publish-status') else None
-                        if operations.host_quarantined(s,j.host_id,exclude=j.id,response_id=response_id,process_id=process_id,read_only_response_id=read_only_response_id,staging_response_id=staging_response_id,publication_id=publication_id,publication_response_id=response_id if publication_id else None,local_observation=j.action=='evidence-archive-status',service_response_id=response_id if j.action=='response-service-health' else None):continue
-                        if j.id not in active_jobs and j.host_id not in busy_hosts and operations.eligible(s,j):
+                        scope=response_hold_scope(j)
+                        hold_scope=(j.host_id,*scope.values())
+                        if hold_scope not in hold_cache:
+                            hold_cache[hold_scope]=operations.host_quarantined(s,j.host_id,exclude=j.id,**scope)
+                        if hold_cache[hold_scope]:continue
+                        eligible=operations.eligible(s,j,window_cache)
+                        if not eligible and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule') and window_cache.get(j.host_id) is False:
+                            closed_patch_windows.add(j.host_id)
+                        if j.id not in active_jobs and eligible:
                             submit_job(jobs,j,active_jobs,busy_hosts)
                 if is_leader and now-last_cleanup>3600:
                     with Session() as s:
@@ -927,7 +947,7 @@ def start():
     t=threading.Thread(target=loop,daemon=True); t.start(); return t
 
 if __name__=='__main__':
-    from . import identity,operations
+    from . import operations
     from .db import init
     import signal
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')

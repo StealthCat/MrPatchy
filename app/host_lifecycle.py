@@ -12,6 +12,7 @@ from .coordination import Lock
 
 class Inactive(ValueError):pass
 class Busy(ValueError):pass
+class QueueFull(ValueError):pass
 
 
 def active(host):
@@ -27,13 +28,15 @@ def inactive_ids():
 
 
 @contextmanager
-def activity(host_ids,kind):
+def activity(host_ids,kind,blocking=True):
     """Keep lifecycle transitions out of in-flight SSH and provider requests."""
     locks=[]
     try:
         for identifier in sorted(set(host_ids)):
             lock=Lock('server-'+kind+':'+identifier)
-            lock.acquire();locks.append(lock)
+            if not lock.acquire(blocking):
+                raise Busy('Server communication or AI work is active; retry after it finishes')
+            locks.append(lock)
         revisions={}
         with Session() as s:
             for identifier in host_ids:

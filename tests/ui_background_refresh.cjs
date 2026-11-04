@@ -14,6 +14,7 @@ module.exports=async(page)=>{
   await link.scrollIntoViewIfNeeded();await link.focus();
   const before=await page.evaluate(()=>({y:scrollY,href:document.activeElement.getAttribute('href')}));
   assert.ok(before.y>0&&before.href);
+  await page.evaluate(()=>{window.__bgFocused=document.activeElement;});
   await page.route('**/api/dashboard',dashboard);
   let open;release=new Promise(resolve=>open=resolve);
   await page.evaluate(()=>{window.__bgDone=refreshInBackground();new MutationObserver(()=>{if(document.querySelector('#content .loading-state'))window.__bgPlaceholder=true;}).observe(document.querySelector('#content'),{childList:true,subtree:true});});
@@ -22,5 +23,8 @@ module.exports=async(page)=>{
   open();release=null;await page.evaluate(()=>window.__bgDone);
   const after=await page.evaluate(()=>({y:scrollY,href:document.activeElement.getAttribute('href'),tag:document.activeElement.tagName,placeholder:!!window.__bgPlaceholder}));
   assert.equal(after.y,before.y);assert.equal(after.href,before.href);assert.equal(after.tag,'A');assert.equal(after.placeholder,false);
+  // Unchanged data must keep the original focused element connected and focused, not a rebuilt copy.
+  const kept=await page.evaluate(()=>({connected:window.__bgFocused.isConnected,same:document.activeElement===window.__bgFocused}));
+  assert.deepEqual(kept,{connected:true,same:true});
  }finally{await page.unroute('**/api/hosts',hosts);await page.unroute('**/api/dashboard',dashboard).catch(()=>{});await page.setViewportSize({width:1440,height:1000});}
 };

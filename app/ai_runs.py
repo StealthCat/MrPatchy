@@ -163,7 +163,7 @@ def cost_summary(run, receipts):
 
 def safe_error(error):
     from .ai import AIError
-    if isinstance(error, AIError): return str(error)[:2000]
+    if isinstance(error, AIError): return error.diagnostic
     # Never persist str(unexpected_error): request bodies, SQL parameters and
     # cryptographic failures may contain evidence or credentials.
     kind = type(error).__name__
@@ -289,7 +289,7 @@ def status(s):
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
     scoring_deferred=s.scalar(select(func.count()).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
     scoring_next=s.scalar(select(func.min(UpdateScore.next_at)).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
-    plan_rows=list(s.scalars(select(Job).where(Job.action.in_(('security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()))))
+    plan_rows=list(s.scalars(select(Job).where(Job.action.in_(('release-plan','security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()))))
     plan_rows=[row for row in plan_rows if row.payload.get('_ai_deferred') is True]
     plan_deferred=len(plan_rows)
     plan_next=min((row.next_at for row in plan_rows if row.next_at>now),default=None)
