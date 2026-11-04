@@ -36,3 +36,10 @@ def test_every_service_drops_all_capabilities_and_adds_back_only_what_it_needs()
         assert set(_flow_list(block, "cap_add")) == ALLOWED[name], name
         assert "no-new-privileges:true" in _flow_list(block, "security_opt"), name
         assert not re.search(r"^    privileged:\s*true", block, re.M), name
+
+
+def test_every_service_bounds_process_count():
+    for name, block in _services().items():
+        match = re.search(r"^    pids_limit:\s*(\d+)\s*$", block, re.M)
+        assert match, f"{name} must set pids_limit"
+        assert 256 <= int(match.group(1)) <= 4096, name
