@@ -2,10 +2,11 @@ import copy
 import json
 import time
 import uuid
+from types import SimpleNamespace
 import pytest
 from sqlalchemy import select,create_engine,text
 from sqlalchemy.orm import Session as DatabaseSession
-from app import host_lifecycle as lifecycle,worker,ssh,incidents,persistence,response_monitor,service_monitor,scheduling,operations,ai,update_scores
+from app import host_lifecycle as lifecycle,worker,ssh,incidents,persistence,response_monitor,service_monitor,scheduling,operations,ai,update_scores,coordination
 from app.db import Session,Host,Job,Setting,Package,Behavior,Audit,engine
 from app.identity import User
 from app.security import token_hash,seal
@@ -88,6 +89,68 @@ def test_lifecycle_change_refuses_inflight_activity_without_changing_state(admin
         assert remove(admin,identifier).status_code==409
     assert host(admin,identifier)['enabled'] and host(admin,identifier)['lifecycle_revision']==before['lifecycle_revision']
     assert change(admin,identifier,False).status_code==200
+
+
+def test_activity_refuses_failed_lock_without_entering_or_releasing(admin,monkeypatch):
+    identifier=create(admin)
+    events=[]
+    class RefusedLock:
+        def __init__(self,name):events.append(('created',name))
+        def acquire(self,blocking=True):events.append(('acquire',blocking));return False
+        def release(self):events.append(('release',))
+    monkeypatch.setattr(lifecycle,'Lock',RefusedLock)
+    with pytest.raises(lifecycle.Busy,match='active'):
+        with lifecycle.activity([identifier],'control'):
+            events.append(('entered',))
+    assert events==[('created','server-control:'+identifier),('acquire',True)]
+
+
+def test_interactive_ssh_refuses_busy_lifecycle_lock_as_conflict(admin,monkeypatch):
+    identifier=create(admin)
+    class RefusedLock:
+        def __init__(self,name):pass
+        def acquire(self,blocking=True):return False
+        def release(self):pytest.fail('An unowned lifecycle lock must not be released')
+    monkeypatch.setattr(lifecycle,'Lock',RefusedLock)
+    monkeypatch.setattr(ssh,'_call',lambda *a,**k:pytest.fail('Busy request must not start SSH'))
+    response=admin.get('/api/hosts/'+identifier+'/backups')
+    assert response.status_code==409
+    assert 'active' in response.json()['detail'].lower()
+
+
+def test_activity_fails_closed_when_mysql_named_lock_times_out(admin,monkeypatch):
+    identifier=create(admin);closed=[];created=[]
+    connection=SimpleNamespace(
+        execute=lambda *a,**k:SimpleNamespace(scalar=lambda:0),
+        close=lambda:closed.append(True),
+    )
+    engine=SimpleNamespace(url=SimpleNamespace(database='fixture'),dialect=SimpleNamespace(name='mysql'),connect=lambda:connection)
+    monkeypatch.setattr(coordination,'lock_engine',engine)
+    class CapturedLock(coordination.Lock):
+        def __init__(self,name):super().__init__(name);created.append(self)
+    monkeypatch.setattr(lifecycle,'Lock',CapturedLock)
+    with pytest.raises(lifecycle.Busy,match='active'):
+        with lifecycle.activity([identifier],'control'):
+            pytest.fail('A timed-out MySQL lock must not protect work')
+    assert closed==[True] and created[0].resource is None
+    assert created[0].local.acquire(False);created[0].local.release()
+
+
+def test_interactive_activity_uses_nonblocking_sqlite_lock(admin,monkeypatch):
+    identifier=create(admin);created=[];original=coordination.fcntl.flock
+    monkeypatch.setattr(coordination,'lock_engine',SimpleNamespace(url=SimpleNamespace(database='fixture'),dialect=SimpleNamespace(name='sqlite')))
+    def busy(stream,operation):
+        if operation & coordination.fcntl.LOCK_NB:raise BlockingIOError
+        return original(stream,operation)
+    monkeypatch.setattr(coordination.fcntl,'flock',busy)
+    class CapturedLock(coordination.Lock):
+        def __init__(self,name):super().__init__(name);created.append(self)
+    monkeypatch.setattr(lifecycle,'Lock',CapturedLock)
+    with pytest.raises(lifecycle.Busy,match='active'):
+        with lifecycle.activity([identifier],'control',blocking=False):
+            pytest.fail('A busy SQLite lock must not protect work')
+    assert created[0].resource is None
+    assert created[0].local.acquire(False);created[0].local.release()
 
 
 def test_running_jobs_and_response_holds_are_not_discarded(admin):
@@ -240,10 +303,25 @@ def test_inactive_investigation_actions_and_update_provider_are_blocked(admin,mo
         s.merge(Setting(key='config',value={'ai_enabled':True,'ai_updates_enabled':True,'ai_model':'fixture'}))
         s.merge(Setting(key='openai_key',value={'encrypted':seal('test-secret')}));s.commit()
     assert change(admin,identifier,False).status_code==200
-    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True}).status_code==400
-    assert admin.post('/api/investigations/inactive-behavior/retry',json={}).status_code==400
+    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True}).status_code==409
+    assert admin.post('/api/investigations/inactive-behavior/retry',json={}).status_code==409
     monkeypatch.setattr(ai,'request',lambda *a,**k:pytest.fail('Disabled/deleted packages must not be sent for AI scoring'))
     update_scores.run_one()
     assert remove(admin,identifier).status_code==200
     update_scores.run_one()
     with Session() as s:assert not s.get(Behavior,'inactive-behavior').approved
+
+
+def test_queue_full_is_429_and_inactive_server_is_409_across_routes(admin):
+    identifier=create(admin,'Status code fixture')
+    with Session() as s:
+        s.get(Host,identifier).fingerprint='SHA256:'+'A'*43
+        for _ in range(50):s.add(Job(id=str(uuid.uuid4()),host_id=identifier,action='agent-check',payload={}))
+        s.commit()
+    full=admin.post('/api/hosts/'+identifier+'/actions/refresh',json={})
+    assert full.status_code==429 and 'queue is full' in full.json()['detail'],full.text
+    other=create(admin,'Status code disabled')
+    with Session() as s:s.get(Host,other).fingerprint='SHA256:'+'B'*43;s.commit()
+    assert change(admin,other,False).status_code==200
+    inactive=admin.post('/api/hosts/'+other+'/actions/refresh',json={})
+    assert inactive.status_code==409,inactive.text

@@ -120,3 +120,14 @@ def test_rpm_inventory_redacts_repository_credentials():
     assert 'secret' not in cleaned and 'gpgcheck=1' in cleaned and cleaned.count('[redacted]')==3
     with pytest.raises(ValueError):rpm.repositories({'/etc/yum.repos.d/vendor.repo':cleaned},{})
     with pytest.raises(ValueError):rpm.validate_main({'files':{'/etc/dnf/dnf.conf':'[main]\nproxy_password=[redacted]'}})
+
+
+@pytest.mark.parametrize('line,name',[('bash-0:5.1.8-6.el9.*','bash'),('!bash-0:5.1.8-6.el9.*','bash'),
+                                      ('0:bash-4.2.46-34.el7.*','bash'),('!0:bash-4.2.46-34.el7.*','bash')])
+def test_versionlock_name_accepts_dnf4_and_yum_lines(line,name):
+    assert rpm.versionlock_name(line)==name
+
+
+@pytest.mark.parametrize('line',['!ba$h-0:1-2.*','!!bash-0:1-2.*'])
+def test_versionlock_name_still_rejects_unsupported_expressions(line):
+    with pytest.raises(ValueError):rpm.versionlock_name(line)

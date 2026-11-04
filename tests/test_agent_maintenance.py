@@ -185,3 +185,9 @@ def test_manual_deploy_independently_verifies_and_clears_stale_health(admin,enro
         assert s.get(Job,job_id).state==('failed' if invalid else 'complete')
         assert s.get(Setting,'agent-status:'+enrolled.id).value['state']==('blocked' if invalid else 'current')
     assert calls==(['agent-status'] if invalid else ['agent-status','inventory'])
+
+
+def test_bridge_verify_is_agent_status_alias_and_tolerates_missing_files(monkeypatch):
+    # Regression for #191: legacy verify raised FileNotFoundError when a managed file was absent.
+    monkeypatch.setattr(bridge, 'agent_status', lambda: {'version': 1, 'files': {'/x': {'missing': True}}})
+    assert bridge.handle({'action': 'verify'}) == {'version': 1, 'files': {'/x': {'missing': True}}}

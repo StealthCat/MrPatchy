@@ -7,8 +7,8 @@ from .apt import paragraphs
 def ecosystem(os_release,inventory=None):
     values={}
     for line in os_release.splitlines():
-        if '=' in line:
-            key,value=line.split('=',1);values[key]=value.strip('"')
+        if '=' in line and not line.lstrip().startswith('#'):
+            key,value=line.split('=',1);values[key.strip()]=value.strip().strip('"').strip("'")
     inv=inventory or {}
     packages={p.get('Package') for p in paragraphs(inv.get('status',''))}
     if packages & {'raspberrypi-sys-mods','raspi-config'} or any(
