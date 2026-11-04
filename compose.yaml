@@ -44,6 +44,9 @@ services:
     build: .
     command: [python, -m, app.worker]
     restart: unless-stopped
+    # SIGTERM drains active jobs; patch SSH calls may run up to 7500 s, so allow that plus margin
+    # instead of Docker's 10 s default, which SIGKILLs the worker mid-operation.
+    stop_grace_period: ${MRPATCHY_WORKER_STOP_GRACE_PERIOD:-8100s}
     depends_on:
       app:
         condition: service_healthy
