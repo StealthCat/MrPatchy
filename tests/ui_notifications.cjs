@@ -74,7 +74,7 @@ module.exports=async(page,capture)=>{
   items.push({id:'3'.repeat(64),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'scan-live',host_id:'',severity:'critical',reason:'A live durable event needs review.',deep_link:'#activity',lifecycle:'active',created:1700000100,read:false,dismissed:false});
   unread=1;
   await page.evaluate(()=>window.notificationStreams[0].emit('notifications'));
-  await page.getByText('A live durable event needs review.',{exact:true}).waitFor();
+  await page.locator('#notification-center-list').getByText('A live durable event needs review.',{exact:true}).waitFor();
   assert.equal(await sourceFilter.inputValue(),'scanner','live catch-up preserves filter form state');
   assert.equal(await sourceFilter.evaluate(node=>node===document.activeElement),true,'live catch-up does not steal filter focus');
   assert.match(await bell.getAttribute('aria-label'),/1 unread/);
