@@ -68,11 +68,16 @@ def _state(session,cfg,now):
     return enabled,name,start,reset,rows,groups,counted,cap
 
 
-def waiting(session,now):
-    """Read-only: the budget reset instant when the daily cap is already spent, or 0."""
+def waiting(session,now,payload=None):
+    """Read-only preflight; final atomic reserve still owns spending authority."""
     cfg=config(session)
     enabled,name,start,reset,rows,groups,counted,cap=_state(session,cfg,now)
-    return reset if enabled and counted>=cap else 0
+    if not enabled:return 0
+    if counted>=cap:return reset
+    if payload is not None:
+        quote=ai_pricing.reservation(payload)
+        if not quote['ok'] or counted+quote['amount_usd']>cap:return reset
+    return 0
 
 
 def reserve(payload):

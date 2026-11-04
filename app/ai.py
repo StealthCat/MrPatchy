@@ -234,10 +234,15 @@ def investigation_policy():
         'max_output_tokens':INVESTIGATION_TOKENS,'max_connections':INVESTIGATION_CONNECTIONS,'max_evidence_bytes':INVESTIGATION_BYTES}))
 
 
-def investigate(evidence,model,key):
+def investigation_payload(evidence,model):
+    """Build the same bounded request for read-only pricing and actual admission."""
     evidence=investigation_input(evidence)
-    result=request({'model':model,'store':False,'max_output_tokens':INVESTIGATION_TOKENS,'instructions':INSTRUCTIONS,
-                    'input':json.dumps(evidence),'text':{'format':{'type':'json_schema','name':'process_investigation','strict':True,'schema':SCHEMA}}},key)
+    return {'model':model,'store':False,'max_output_tokens':INVESTIGATION_TOKENS,'instructions':INSTRUCTIONS,
+            'input':json.dumps(evidence),'text':{'format':{'type':'json_schema','name':'process_investigation','strict':True,'schema':SCHEMA}}}
+
+
+def investigate(evidence,model,key):
+    result=request(investigation_payload(evidence,model),key)
     checks=result.get('requested_checks',[])
     if result.get('risk') not in ('low','medium','high','unknown') or not isinstance(result.get('explanation'),str) or not isinstance(result.get('recommended_checks'),str):
         raise AIError('OpenAI returned an invalid investigation assessment; no result was accepted.')

@@ -92,7 +92,7 @@ def acquire(owner=None):
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
             # Read-only gate: do not create runs/attempts for work that the shared
             # rate gate, provider backoff or daily budget cannot admit right now.
-            from . import ai_admission,ai_budget,ai_provider_backoff
+            from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing
             if any(gate.waiting(s,now) for gate in (ai_admission,ai_provider_backoff,ai_budget)):return None
             signature=ai_retry.configuration(s)
             # One process investigation per host preserves lifecycle/provider
@@ -108,6 +108,10 @@ def acquire(owner=None):
             with host_lifecycle.activity([host_id],'queue'):
                 s.rollback();row=s.get(Behavior,subject)
                 if not row or row.approved or row.verdict not in ('pending','error'):return None
+                if cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
+                    try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
+                    except ai.AIError:return None
+                    if ai_budget.waiting(s,now,payload):return None
                 row.attempted=now;ai_retry.begin(s,row,signature,now)
                 run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
                 s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))

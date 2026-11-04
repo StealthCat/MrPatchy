@@ -313,3 +313,40 @@ def test_rate_throttled_triage_is_not_claimed_and_deferrals_are_spread(admin,mon
             wakes.append(ai_retry.failed(s,row,AIError('wait',policy_wait=True,retry_after=600),now).next_at)
         s.commit()
     assert len(set(wakes))==3 and wakes==sorted(wakes)
+
+
+@pytest.mark.parametrize('cap,spent',[(0.01,0),(0.1,0.095)])
+def test_insufficient_safe_budget_does_not_create_triage_attempts(admin,monkeypatch,cap,spent):
+    from app import ai_budget
+    seed(count=2)
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_model':'gpt-6-astra',
+            'ai_control_mode':'daily_cap','ai_daily_cap_usd':cap}
+        if spent:
+            s.add(ai_budget.BudgetEntry(id='prior-spend',reset_at=time.time()+3600,timezone='UTC',
+                model='gpt-6-astra',status='settled',reservation_usd=spent,actual_usd=spent,
+                pricing_version='fixture',pricing_source='fixture'))
+        s.commit()
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:pytest.fail('Insufficient reservation must not send'))
+    for _ in range(2):worker.investigate_one()
+    with Session() as s:
+        assert not list(s.scalars(select(ai_runs.AIRun)))
+        assert not list(s.scalars(select(ai_retry.TriageRetry)))
+        assert all(row.attempted==0 for row in s.scalars(select(Behavior)))
+
+
+def test_staggered_waiters_reserve_after_existing_tail_with_different_clocks(admin):
+    seed(count=4);now=time.time()
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
+        s.add(ai_retry.TriageRetry(subject='occupied-tail',configuration='sig',state='deferred',
+            attempts=0,next_at=now+7200,provider_until=0))
+        s.commit()
+        wakes=[]
+        for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
+            at=now+index*.01
+            ai_retry.begin(s,row,'sig',at)
+            wakes.append(ai_retry.failed(s,row,ai.AIError('wait',policy_wait=True,retry_after=600),at).next_at)
+            s.flush()
+        assert wakes[0]>=now+10800
+        assert all(b-a>=3600 for a,b in zip(wakes,wakes[1:]))
