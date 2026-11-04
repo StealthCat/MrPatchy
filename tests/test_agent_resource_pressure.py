@@ -1,7 +1,4 @@
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'target'))
-import agent
+from target import agent
 
 PSI = 'some avg10=1.50 avg60=2.00 avg300=3.25 total=123\nfull avg10=0.10 avg60=0.20 avg300=0.30 total=9\n'
 MEM = 'MemTotal:        2048 kB\nMemFree: 10 kB\nMemAvailable:    1024 kB\n'
