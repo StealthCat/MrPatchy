@@ -53,3 +53,9 @@ def test_every_service_bounds_memory_with_overridable_default():
         assert match, f"{name} must set an overridable mem_limit default"
         megabytes = int(match.group(1)) * (1024 if match.group(2) == "g" else 1)
         assert 256 <= megabytes <= 16384, name
+
+
+def test_every_service_has_read_only_root_with_tmp_tmpfs():
+    for name, block in _services().items():
+        assert re.search(r"^    read_only:\s*true\s*$", block, re.M), name
+        assert "/tmp" in _flow_list(block, "tmpfs"), name
