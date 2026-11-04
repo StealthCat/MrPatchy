@@ -398,7 +398,7 @@ The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.
 ## Upgrade
 
 1. Back up the database and all persistent volumes with app/workers stopped.
-2. Pull `main`, review `.env`, then run `docker compose up -d --build`.
+2. Pull `main` and review `.env`. Drain workers first (**Activity → Workers → Drain worker**) or wait for running jobs to finish, then run `docker compose up -d --build`. Compose lets active worker jobs drain for up to `MRPATCHY_WORKER_STOP_GRACE_PERIOD` (default `8100s`, or 2h15m); `docker compose stop -t <seconds> worker` overrides that wait for an explicit stop.
 3. Use **Servers → Manage → Finish / verify installation** to upgrade each managed bridge/collector. Legacy bootstrap targets may require a fresh installer run through a trusted console first.
 4. Regenerate unexecuted release plans after updating helpers; old plans cannot authorize changed runner, bridge or recovery/validation code. Do not update helpers while a release upgrade is running.
 5. Review queued jobs: jobs created before recovery-policy capture cannot inherit an enabled reboot/rollback policy; resubmit them after reviewing the policy.
@@ -669,7 +669,8 @@ remain required before the shared controls program is complete.
 
 Every current billable provider path checks one durable fleet-wide transient-failure
 floor before budget and rate admission. A valid provider `Retry-After` is retained
-exactly; transient 408/429/5xx responses, connection failures and timeouts without a
+up to 24 hours; longer delays are capped and reported for administrator review.
+Transient 408/429/5xx responses, connection failures and timeouts without a
 valid floor use bounded exponential backoff with full jitter from 30 seconds up to 30
 minutes. The sanitized state is shared across controllers and workers, survives
 restart and is cleared by the next completed/non-transient provider response that
@@ -682,6 +683,13 @@ receipt nor a rate/budget reservation. Process investigations remain durably que
 at the shared eligibility time without consuming another attempt, and manual retry
 cannot bypass it. Settings and AI worker status show consecutive transient failures
 and the next eligible time.
+
+An administrator can review and clear the shared floor with the audited
+`POST /api/ai/provider-backoff/clear` API. Clearing it also releases investigations
+waiting only on that provider deadline, including waits created after a claim.
+Longer local retry delays, attempt limits and other admission controls remain in
+force. An expired provider deadline is immediately eligible; local exponential
+backoff is kept separate and does not itself block a manual retry as a provider wait.
 
 Already concurrent in-flight calls cannot be recalled after another call discovers a
 provider floor. Exact durable queue/resume for every manual plan and connection-test
@@ -961,9 +969,18 @@ limits. Provider delay floors also apply to manual Retry. Pending work, retained
 usage receipts and uncertain charges survive; no assessment or approval is inferred
 from a failure. AI pause/resume and lifecycle checks still apply to every call.
 
+The worker checks shared rate, provider backoff and daily budget eligibility before
+claiming a process investigation. In capped modes it also checks that candidate's
+bounded request reservation; unavailable prices or insufficient budget leave the
+item queued without creating a run or consuming an attempt. Deferred rate waits
+reserve staggered wake slots after the durable queue tail. Provider-only waits keep
+their exact deadline, including immediate eligibility after it expires. Every actual
+provider call still passes the final atomic admission checks.
+
 Investigations and AI logs show eligible, review-blocked and paused counts; each
 pending/error item explains its retry state and eligibility. Eligibility is not a
-promised start time: existing hourly limits and the serial worker still apply.
+promised start time: existing hourly limits, shared admission and available worker
+slots still apply.
 Legacy attempts and lost-worker attempts retain their one-hour recovery interval.
 This is process-triage scheduling only, not shared provider-wide rate admission,
 daily spend controls or faster-triage program completion. Other AI purposes retain
