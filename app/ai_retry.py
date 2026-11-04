@@ -8,7 +8,7 @@ import json
 import math
 import random
 import time
-from sqlalchemy import String, Double, Integer, Text, and_, or_
+from sqlalchemy import String, Double, Integer, Text, and_, or_, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 from . import ai_provider_backoff
 from .db import Base, Behavior, Setting, config
@@ -61,12 +61,21 @@ def failed(s,row,error,now):
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
         provider_wait=getattr(error,'provider_wait_until',0)
-        if type(provider_wait) in (int,float) and math.isfinite(provider_wait) and provider_wait>0:
+        provider_wait=(provider_wait if type(provider_wait) in (int,float)
+            and math.isfinite(provider_wait) and provider_wait>0 else 0)
+        if provider_wait:
             retry.provider_until=provider_wait
             retry.next_at=max(now,provider_wait)
+        elif error.retry_after:
+            # Reserve after the durable eligible tail, including waiters whose
+            # base time is slightly earlier than this failure's wall clock.
+            tail=s.scalar(select(func.max(TriageRetry.next_at)).where(TriageRetry.subject!=row.id,
+                TriageRetry.state=='deferred',TriageRetry.next_at>now,TriageRetry.provider_until<=now))
+            cfg=config(s);rate=cfg['ai_rate_per_hour'] if cfg['ai_control_mode'] in ('rate','rate_and_daily') else 120
+            if tail is not None:retry.next_at=max(retry.next_at,tail+3600.0/max(1,rate))
         retry.reason=('Waiting for shared AI rate eligibility; no provider request was sent.' if error.retry_after else
             'Waiting for AI policy resume; eligibility is rechecked before every provider call.')
-        if retry.provider_until:retry.reason='Waiting for shared provider backoff; no provider request was sent.'
+        if provider_wait:retry.reason='Waiting for shared provider backoff; no provider request was sent.'
     elif isinstance(error,AIError) and error.transient:
         provider=min(error.provider_retry_after or 0,ai_provider_backoff.MAX_PROVIDER_DELAY)
         retry.provider_until=now+provider if provider else 0

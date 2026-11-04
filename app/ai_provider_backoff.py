@@ -34,6 +34,12 @@ def admit(now=None):
             raise error
 
 
+def waiting(session,now):
+    """Read-only: the instant the shared provider floor lifts, or 0."""
+    row=session.get(ProviderBackoff,'global')
+    return row.blocked_until if row and row.blocked_until>now else 0
+
+
 def failed(error,now=None):
     """Record a sanitized transient failure and return its shared delay in seconds."""
     if not getattr(error,'transient',False):return 0
