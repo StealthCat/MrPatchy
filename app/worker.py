@@ -95,7 +95,7 @@ def save_inventory(s,h,inv):
     for item in items:
         names.add(item['name']); p=old.get(item['name'])
         if not p:
-            p=Package(id=h.id+':'+item['name'],host_id=h.id,**item); s.add(p)
+            p=Package(id=h.id+':'+item['name'],host_id=h.id,repository_priority=item.get('priority',''),**item); s.add(p)
             if old: audit(s,'package installed',h.name+' '+item['name']+' '+item['installed'])
         else:
             if p.installed!=item['installed']: audit(s,'package version changed',h.name+' '+p.name+' '+p.installed+' → '+item['installed'])
@@ -127,6 +127,9 @@ def update_repos(s,h):
         if not item['candidate']: p.available_since=0
         elif not p.candidate or not p.available_since: p.available_since=time.time()
         for key in ['candidate','origin']: setattr(p,key,item[key])
+        # Remember the repository classification even under a manual override so
+        # resetting to auto can restore it (RPM severity is not derivable from origin).
+        p.repository_priority=item['priority']
         if not p.priority_manual: p.priority=item['priority']
     h.last_repo=time.time(); h.repo_error=''; s.commit(); return output
 

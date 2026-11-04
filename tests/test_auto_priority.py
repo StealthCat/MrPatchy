@@ -20,3 +20,32 @@ def test_set_priority_auto_ignores_security_origin_without_candidate(admin):
         with Session() as s:
             p = s.get(Package, id + ':' + name)
             assert (p.priority, p.priority_manual) == (want, False)
+
+
+def _rpm_host(id, manager='rpm'):
+    from app.db import Host
+    with Session() as s:
+        h = s.get(Host, id)
+        h.inventory = {**(h.inventory or {}), 'package_manager': manager}
+        h.last_repo = 123.0
+        s.commit()
+
+
+def test_set_priority_auto_restores_stored_repository_priority_on_rpm(admin):
+    id = host(admin)
+    _rpm_host(id)
+    with Session() as s:
+        s.add(Package(id=id + ':openssl', host_id=id, name='openssl', installed='1', candidate='2', origin='baseos', priority='low', priority_manual=True, repository_priority='critical'))
+        s.add(Package(id=id + ':legacy', host_id=id, name='legacy', installed='1', candidate='2', origin='baseos', priority='low', priority_manual=True))
+        s.commit()
+    assert admin.put(f'/api/hosts/{id}/priority', json={'name': 'openssl', 'priority': 'auto'}).status_code == 200
+    with Session() as s:
+        p = s.get(Package, id + ':openssl')
+        assert (p.priority, p.priority_manual) == ('critical', False)
+    # No stored classification: never apply the APT origin rule to RPM; force a refresh.
+    assert admin.put(f'/api/hosts/{id}/priority', json={'name': 'legacy', 'priority': 'auto'}).status_code == 200
+    from app.db import Host
+    with Session() as s:
+        p = s.get(Package, id + ':legacy')
+        assert (p.priority, p.priority_manual) == ('low', False)
+        assert s.get(Host, id).last_repo == 0
