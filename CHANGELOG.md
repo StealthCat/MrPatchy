@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.42.2 — 2026-11-04
+
+1. [PR #385](https://github.com/StealthCat/MrPatchy/pull/385): Run the production Compose `app`, `worker` and `caddy` services with read-only root filesystems, retaining only the existing named-volume state and an explicit private `/tmp` tmpfs as writable paths, with regression coverage requiring every production service to preserve both controls. Compatibility: no API, schema, UI, role, audit or response-authorization change; custom Compose overrides that write outside `app`/`worker` `/data`, app `/tls`, Caddy `/data` or `/config`, and each service's `/tmp` must mount an appropriate volume or tmpfs. This is a partial #201 hardening increment only: GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.
+
+## 1.42.1 — 2026-11-04
+
+1. [PR #249](https://github.com/StealthCat/MrPatchy/pull/249): Keep the 30-second Fleet Overview and Servers background refresh from replacing the view with a loading placeholder or dropping the reader's scroll position and keyboard focus; unchanged results restore the original DOM nodes, while an open details panel defers the refresh. Compatibility: no API, schema, role, audit or response-authorization change; manual refresh, navigation and Retry retain their existing loading behavior, and changed results restore focus by stable element attributes when possible. This source update does not publish a Docker image.
+
 ## 1.42.0 — 2026-11-04
 
 1. [PR #380](https://github.com/StealthCat/MrPatchy/pull/380): Allow two independently leased process investigations for one server to perform provider work concurrently while retaining exclusive subject claims, the fleet-wide AI executor limit, bounded third/fourth admission, pause and lifecycle fencing, post-wait lifecycle revalidation, evidence/configuration ownership checks, and explicit worker-status/UI disclosure. Compatibility: no schema, provider contract, role, approval, audit or response-authorization change; non-triage AI purposes retain their exclusive per-server provider gate, and higher overlap can consume configured rate and spend capacity sooner. Administrator-configurable per-server occupancy, broader cross-purpose fairness, native complete-context collection and complete multi-controller failover acceptance remain unfinished. This source update does not publish a Docker image.

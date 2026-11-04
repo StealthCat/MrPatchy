@@ -37,6 +37,8 @@ services:
     pids_limit: 1024
     # Bound memory exhaustion; raise via the environment variable on large fleets.
     mem_limit: ${MRPATCHY_APP_MEM_LIMIT:-2g}
+    # Immutable root filesystem; writable state is only the named volumes and the /tmp tmpfs.
+    read_only: true
     tmpfs: [/tmp]
   worker:
     build: .
@@ -72,6 +74,8 @@ services:
     pids_limit: 1024
     # Bound memory exhaustion; raise via the environment variable on large fleets.
     mem_limit: ${MRPATCHY_WORKER_MEM_LIMIT:-4g}
+    # Immutable root filesystem; writable state is only the named volumes and the /tmp tmpfs.
+    read_only: true
     tmpfs: [/tmp]
   caddy:
     image: caddy:2.10@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
@@ -111,6 +115,9 @@ services:
     pids_limit: 1024
     # Bound memory exhaustion; raise via the environment variable on large fleets.
     mem_limit: ${MRPATCHY_CADDY_MEM_LIMIT:-512m}
+    # Immutable root filesystem; Caddy writes only to the /data and /config volumes and /tmp.
+    read_only: true
+    tmpfs: [/tmp]
 volumes:
   app-data:
   tls-config:

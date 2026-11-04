@@ -50,6 +50,8 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Overview summary cards reflow to the available content width. Decorative imagery stays clear of text and actions, and multi-line link buttons retain a complete border on narrow screens.
 
+The 30-second Fleet Overview and Servers background refresh keeps the current view visible while it fetches, preserves scroll position and keyboard focus, and reuses the existing DOM when the rendered result is unchanged. An open details panel defers that background refresh; manual refresh, navigation and Retry still show their normal loading state.
+
 Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
 
 Open **Servers → a server name** (or **Open server**) to see everything recorded for that server in one place. Separate tabs cover its overview, packages, patching timeline, investigations, AI activity with estimated costs, history, repositories and maintenance. Switch servers while keeping the same tab, or bookmark a server tab directly. Sensitive tabs and actions retain the existing role permissions.
@@ -97,6 +99,13 @@ and 512 MiB for `caddy`. Override those limits with
 need more headroom. Reaching a limit can OOM-kill the container process; the
 production restart policy then starts it again, so size and monitor these limits
 for the deployment rather than treating them as a readiness guarantee.
+
+Production Compose also runs `app`, `worker` and `caddy` with read-only root
+filesystems. The app can write only to its `/data` and `/tls` named volumes and
+private `/tmp` tmpfs, the worker to `/data` and `/tmp`, and Caddy to `/data`,
+`/config` and `/tmp`. Custom overrides or extensions that need another writable
+path must mount an explicit volume or tmpfs there; do not disable the read-only
+root merely to provide transient or application state.
 
 The Compose `worker` service publishes a Docker health status from a liveness file
 on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
