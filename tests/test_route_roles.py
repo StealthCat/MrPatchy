@@ -15,6 +15,7 @@ PASSWORD = os.environ['ADMIN_PASSWORD']
 EXPECTED_ROLES = {
     ('GET','/'):'public',
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
+    ('POST','/api/ai/provider-backoff/clear'):'admin',
     ('GET','/api/ai/runs'):'admin',
     ('GET','/api/ai/runs/{run_id}'):'admin',
     ('GET','/api/audit'):'admin',
@@ -159,6 +160,7 @@ EXPECTED_ROLES = {
     ('POST','/api/logout'):'self-service',
     ('GET','/api/metrics'):'viewer',
     ('GET','/api/notifications'):'self-service',
+    ('GET','/api/notifications/stream'):'self-service',
     ('GET','/api/notifications/unread-count'):'self-service',
     ('POST','/api/notifications/{event_id}/dismiss'):'self-service',
     ('POST','/api/notifications/{event_id}/read'):'self-service',
@@ -307,8 +309,15 @@ def test_each_role_reaches_the_routes_it_may_use(admin):
     for method, path in authenticated('viewer'):
         assert call(viewer, method, path).status_code not in (401, 403), (method, path)
     for method, path in authenticated('self-service'):
-        if path in ('/api/logout', '/api/identity/password', '/api/identity/mfa', '/api/identity/mfa/confirm', '/api/identity/sessions'):
-            continue  # mutating self-service calls would end or alter the session used for the remaining checks
+        if path in (
+            '/api/logout',
+            '/api/identity/password',
+            '/api/identity/mfa',
+            '/api/identity/mfa/confirm',
+            '/api/identity/sessions',
+            '/api/notifications/stream',
+        ):
+            continue  # mutating or long-lived calls have dedicated authorization coverage
         assert call(viewer, method, path).status_code not in (401, 403), (method, path)
     for method, path in authenticated('admin'):
         if method == 'GET' or '{' in path:

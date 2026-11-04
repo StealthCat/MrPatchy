@@ -36,3 +36,26 @@ def test_every_service_drops_all_capabilities_and_adds_back_only_what_it_needs()
         assert set(_flow_list(block, "cap_add")) == ALLOWED[name], name
         assert "no-new-privileges:true" in _flow_list(block, "security_opt"), name
         assert not re.search(r"^    privileged:\s*true", block, re.M), name
+
+
+def test_every_service_bounds_process_count():
+    for name, block in _services().items():
+        match = re.search(r"^    pids_limit:\s*(\d+)\s*$", block, re.M)
+        assert match, f"{name} must set pids_limit"
+        assert 256 <= int(match.group(1)) <= 4096, name
+
+
+def test_every_service_bounds_memory_with_overridable_default():
+    for name, block in _services().items():
+        match = re.search(
+            r"^    mem_limit:\s*\$\{MRPATCHY_[A-Z]+_MEM_LIMIT:-(\d+)([mg])\}\s*$", block, re.M
+        )
+        assert match, f"{name} must set an overridable mem_limit default"
+        megabytes = int(match.group(1)) * (1024 if match.group(2) == "g" else 1)
+        assert 256 <= megabytes <= 16384, name
+
+
+def test_every_service_has_read_only_root_with_tmp_tmpfs():
+    for name, block in _services().items():
+        assert re.search(r"^    read_only:\s*true\s*$", block, re.M), name
+        assert "/tmp" in _flow_list(block, "tmpfs"), name

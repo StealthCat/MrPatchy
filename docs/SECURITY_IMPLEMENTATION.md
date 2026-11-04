@@ -2193,6 +2193,29 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Bounded same-server process triage — worker checkpoint #379
+
+This bounded threaded-execution increment permits two independent renewable process-
+triage leases for one server, while the configured fleet-wide AI executor capacity
+remains the outer bound. The subject claim stays exclusive and selection excludes a
+server once its two live leases are occupied, so one noisy server cannot consume an
+arbitrarily large pool. The investigations use independent sessions and run contexts;
+their provider calls can actually overlap instead of only occupying executor slots.
+
+The durable lease also becomes the in-flight fence for per-server AI policy and server
+lifecycle changes. Provider admission briefly serializes with policy updates, rechecks
+pause and lease ownership, then releases that gate before network I/O. Pause/resume is
+rejected while either lease remains live. Disable/delete obtains the triage admission
+gate before server activity locks, rejects a live lease, and a claim delayed behind a
+lifecycle transition re-reads active state before committing. Non-triage AI purposes
+retain their existing exclusive per-server provider gate.
+
+Focused acceptance covers real two-call same-server overlap, refusal of a third and
+fourth slot, status/UI disclosure of the bound, policy-change rejection and lifecycle
+rejection. This does not complete priority/aging across every AI purpose, make the
+per-server bound administrator-configurable, or establish full multi-controller/MySQL
+failover acceptance. Exact-head full CI and coordinator integration remain required.
+
 
 ## Portable per-server scanner records
 
@@ -2659,6 +2682,26 @@ exposing raw evidence or credentials. This still does not complete milestone 3:
 live toasts, multi-tab synchronization and server-pushed updates remain planned.
 Producers/retention, authenticated replay across controllers/workers and the complete
 two-browser SQLite/MySQL/failover acceptance remain milestones 1, 2 and 4.
+
+Implementation checkpoint (issue #374): a bounded milestone-2 increment adds an
+authenticated Server-Sent Events invalidation stream. Each connection polls the
+shared durable notification tables, emits only a safe digest cursor, and leaves the
+existing permission-filtered list/count APIs authoritative. New event revisions and
+that user's read/dismiss progress change the cursor; role, account enablement,
+session generation and expiry are rechecked while connected. EventSource supplies
+automatic reconnect and Last-Event-ID, so a stale cursor receives an immediate
+authoritative catch-up signal after reload, sleep or controller reconnect.
+
+The stream has a configurable bounded per-controller connection count (default 32,
+hard maximum 256), one small current invalidation with no per-client queue, a
+15-second heartbeat and a three-second reconnect hint. It disables proxy buffering
+and retains the 30-second polling/visibility fallback. The bell, recent panel and an
+open notification center refresh from the durable APIs; center filters, pagination,
+unrelated dialogs/forms and focus remain in place. Logout or revoked account state
+closes the stream and clears account-scoped client data. This is not completion of
+milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client and
+connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
+two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
@@ -5868,6 +5911,21 @@ separate #369 checkpoint. Acceptance of the new capability set on a real Docker
 host comes from the exact-head CI Compose and HTTPS checks; no local Docker was
 available. No runtime response authority changes.
 
+### Compose process-count bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services each set
+`pids_limit: 1024`. This bounds fork exhaustion while retaining headroom for the
+configured thread pools and subprocess work. Regression coverage requires every
+declared production service to retain a numeric limit between 256 and 4096.
+Custom overrides that legitimately need more than 1024 simultaneous processes in
+one container must raise the limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. It does not
+add memory limits, read-only root filesystems or GCP override-specific limits, and
+it does not establish a live GitHub alert inventory; those #201 items remain open.
+No Docker runtime was available locally, so exact-head CI supplies the image-build,
+Compose/HTTPS startup and custom-binding acceptance.
+
 ### Resumable multi-stage release configuration reviews — worker checkpoint #366
 
 Issue #366 implements the next bounded faster-AI increment. Distribution release
@@ -5942,3 +6000,17 @@ resolution and non-cap/disabled modes. This does not automate or sign catalog
 updates, reconcile provider invoices, add provider-derived billing truth or complete
 the remaining multi-controller/reset acceptance. Final delivery still requires the
 coordinator's exact-head full test matrix and fresh code scan.
+
+### Compose memory bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services set `mem_limit` with
+defaults of 2 GiB, 4 GiB and 512 MiB, overridable through
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and `MRPATCHY_CADDY_MEM_LIMIT`.
+A runaway container is OOM-killed and restarted (`restart: unless-stopped`) instead
+of exhausting the host. Regression coverage requires every declared production
+service to keep an overridable default between 256 MiB and 16 GiB. Large fleets with
+heavy concurrent scanning or AI fan-out should raise the worker limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. Read-only
+root filesystems, GCP override hardening and the live alert inventory remain open
+under #201. No Docker runtime was available locally.
