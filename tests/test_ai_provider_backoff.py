@@ -184,7 +184,8 @@ def test_clear_preserves_later_local_retry_gate(admin, local_delay, provider_del
         assert retry.state=='deferred' and retry.attempts==2
 
 
-def test_clear_releases_provider_policy_wait_after_admission_race(admin):
+@pytest.mark.parametrize('failure_delay',[1.25,121])
+def test_clear_releases_provider_policy_wait_after_admission_race(admin,failure_delay):
     from app import ai_retry
     from app.db import Behavior
     now=time.time()
@@ -195,9 +196,13 @@ def test_clear_releases_provider_policy_wait_after_admission_race(admin):
     with pytest.raises(ai.AIError) as refused:ai_provider_backoff.admit(now=now+1)
     with Session() as session:
         row=session.get(Behavior,'raced')
-        ai_retry.failed(session,row,refused.value,now+1.25);session.commit()
-    assert ai_provider_backoff.clear(now=now+2)
+        ai_retry.failed(session,row,refused.value,now+failure_delay);session.commit()
     with Session() as session:
         retry=session.get(ai_retry.TriageRetry,'raced')
-        assert retry.provider_until==0 and retry.next_at<=now+2
+        assert retry.next_at<=max(now+120,now+failure_delay)
+    ai_provider_backoff.clear(now=now+failure_delay+1)
+    with Session() as session:
+        retry=session.get(ai_retry.TriageRetry,'raced')
+        assert retry.provider_until<=now+failure_delay+1 and retry.next_at<=now+failure_delay+1
+        if failure_delay<120:assert retry.provider_until==0
         assert retry.state=='deferred' and retry.attempts==0

@@ -669,7 +669,8 @@ remain required before the shared controls program is complete.
 
 Every current billable provider path checks one durable fleet-wide transient-failure
 floor before budget and rate admission. A valid provider `Retry-After` is retained
-exactly; transient 408/429/5xx responses, connection failures and timeouts without a
+up to 24 hours; longer delays are capped and reported for administrator review.
+Transient 408/429/5xx responses, connection failures and timeouts without a
 valid floor use bounded exponential backoff with full jitter from 30 seconds up to 30
 minutes. The sanitized state is shared across controllers and workers, survives
 restart and is cleared by the next completed/non-transient provider response that
@@ -682,6 +683,13 @@ receipt nor a rate/budget reservation. Process investigations remain durably que
 at the shared eligibility time without consuming another attempt, and manual retry
 cannot bypass it. Settings and AI worker status show consecutive transient failures
 and the next eligible time.
+
+An administrator can review and clear the shared floor with the audited
+`POST /api/ai/provider-backoff/clear` API. Clearing it also releases investigations
+waiting only on that provider deadline, including waits created after a claim.
+Longer local retry delays, attempt limits and other admission controls remain in
+force. An expired provider deadline is immediately eligible; local exponential
+backoff is kept separate and does not itself block a manual retry as a provider wait.
 
 Already concurrent in-flight calls cannot be recalled after another call discovers a
 provider floor. Exact durable queue/resume for every manual plan and connection-test
