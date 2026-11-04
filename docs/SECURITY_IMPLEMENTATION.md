@@ -5957,3 +5957,17 @@ resolution and non-cap/disabled modes. This does not automate or sign catalog
 updates, reconcile provider invoices, add provider-derived billing truth or complete
 the remaining multi-controller/reset acceptance. Final delivery still requires the
 coordinator's exact-head full test matrix and fresh code scan.
+
+### Compose memory bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services set `mem_limit` with
+defaults of 2 GiB, 4 GiB and 512 MiB, overridable through
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and `MRPATCHY_CADDY_MEM_LIMIT`.
+A runaway container is OOM-killed and restarted (`restart: unless-stopped`) instead
+of exhausting the host. Regression coverage requires every declared production
+service to keep an overridable default between 256 MiB and 16 GiB. Large fleets with
+heavy concurrent scanning or AI fan-out should raise the worker limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. Read-only
+root filesystems, GCP override hardening and the live alert inventory remain open
+under #201. No Docker runtime was available locally.
