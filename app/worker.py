@@ -638,7 +638,7 @@ def execute_locked(job_id):
                 audit(s,'deferred '+job.action,job.host_id+' controlled AI wait')
                 s.commit();return
             uncertain=mutation_outcome_uncertain(mutation_stage,e)
-            job.state='recovery_required' if protected or uncertain else 'failed'
+            job.state='failed' if isinstance(e,releases.Refused) else 'recovery_required' if protected or uncertain else 'failed'
             if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
