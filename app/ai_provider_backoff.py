@@ -89,8 +89,11 @@ def revoke_item_waits(now):
     with Lock('ai-triage'),Session() as session:
         rows=session.scalars(select(TriageRetry).where(TriageRetry.provider_until>now)).all()
         for retry in rows:
+            # A later next_at belongs to the local retry gate, not the provider
+            # floor. Compare before clearing the saved provider deadline.
+            if retry.state=='deferred' and now<retry.next_at<=retry.provider_until:
+                retry.next_at=now
             retry.provider_until=0
-            if retry.state=='deferred' and retry.next_at>now:retry.next_at=now
         session.commit()
         return bool(rows)
 

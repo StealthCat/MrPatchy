@@ -161,3 +161,24 @@ def test_clear_revokes_provider_only_item_waits_but_keeps_attempts(admin):
         assert blocked.provider_until==0 and blocked.attempts==5 and blocked.state=='blocked'
         assert policy.next_at==far  # unrelated policy/rate waits are untouched
         ai_retry.manual(session,type('R',(),{'id':'blocked'})(),now=now)
+
+
+@pytest.mark.parametrize('local_delay,provider_delay,expected_delay', [
+    (120, 10, 120),
+    (10, 120, 0),
+    (120, 120, 0),
+])
+def test_clear_preserves_later_local_retry_gate(admin, local_delay, provider_delay, expected_delay):
+    from app import ai_retry
+    now=time.time()
+    with Session() as session:
+        session.add(ai_retry.TriageRetry(subject='mixed',configuration='c',attempts=2,
+            state='deferred',next_at=now+max(local_delay,provider_delay),
+            provider_until=now+provider_delay))
+        session.commit()
+    assert ai_provider_backoff.clear(now=now) is True
+    with Session() as session:
+        retry=session.get(ai_retry.TriageRetry,'mixed')
+        assert retry.provider_until==0
+        assert retry.next_at==now+expected_delay
+        assert retry.state=='deferred' and retry.attempts==2
