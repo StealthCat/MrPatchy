@@ -113,14 +113,13 @@ def test_bounded_retries_and_manual_reset_is_audited(admin,monkeypatch):
                 s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
     worker.investigate_one();assert len(calls)==5 and bounds==[(30,60),(30,60),(30,120),(30,120),(30,240),(30,240),(30,480),(30,480),(30,960)]
     with Session() as s:assert s.get(ai_retry.TriageRetry,'subject').state=='blocked'
-    assert admin.post('/api/investigations/subject/retry').status_code==409
-    with Session() as s:
-        s.get(ai_retry.TriageRetry,'subject').provider_until=0
-        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
+    # Only a provider-sent Retry-After blocks a manual retry; local exponential backoff does not.
+    with Session() as s:assert s.get(ai_retry.TriageRetry,'subject').provider_until==0
     assert admin.post('/api/investigations/subject/retry').status_code==200
     with Session() as s:
         assert s.get(ai_retry.TriageRetry,'subject') is None
         assert s.scalar(select(Audit).where(Audit.action=='retry AI investigation'))
+        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
     worker.investigate_one();assert len(calls)==6
 
 

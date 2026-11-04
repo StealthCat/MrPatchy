@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from sqlalchemy import select,event
-from app import ai, ai_claims, ai_runs, ai_assessments, ai_retry, worker, worker_registry
+from app import ai, ai_claims, ai_runs, ai_assessments, ai_retry, host_lifecycle, worker, worker_registry
 from app.db import Session, Host, Behavior, Setting,engine
 from app.security import seal
 
@@ -92,19 +92,61 @@ def test_refused_admission_lock_does_not_mutate_work(admin,monkeypatch):
         assert not list(s.scalars(select(ai_runs.AIRun)))
 
 
-def test_one_subject_and_one_host_cannot_occupy_multiple_slots(admin,monkeypatch):
-    seed(count=4,same_host=True);started=threading.Event();release=threading.Event();sent=[]
+def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
+    seed(count=4,same_host=True);started=threading.Event();release=threading.Event();sent=[];guard=threading.Lock()
     def post(*a,**k):
-        sent.append(1);started.set();assert release.wait(15);return result()
+        with guard:
+            sent.append(time.perf_counter())
+            if len(sent)==2:started.set()
+        assert release.wait(15);return result()
     monkeypatch.setattr(ai.transport,'post',post)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        first=pool.submit(worker.investigate_one);assert started.wait(15)
-        others=[pool.submit(worker.investigate_one) for _ in range(3)]
-        for future in others:future.result(15)
-        assert sent==[1]
+        running=[pool.submit(worker.investigate_one) for _ in range(2)];assert started.wait(15)
+        refused=[pool.submit(worker.investigate_one) for _ in range(2)]
+        for future in refused:future.result(15)
+        assert len(sent)==2
         assert admin.post('/api/investigations/subject-0/retry').status_code==409
-        status=admin.get('/api/investigation-status').json();assert status['active']==1 and status['queued']==3
-        release.set();first.result(15)
+        status=admin.get('/api/investigation-status').json()
+        assert status['active']==2 and status['queued']==2 and status['per_server_limit']==2
+        assert pause_policy(admin).status_code==409
+        with pytest.raises(host_lifecycle.Busy,match='AI investigation'):
+            with host_lifecycle.changing('host-0'):pass
+        release.set()
+        for future in running:future.result(15)
+
+
+def pause_policy(admin):
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    return admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':True,'expected_revision':current['revision'],
+        'reason':'Pause this server for an operator review',
+    })
+
+
+def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeypatch):
+    seed(count=1)
+    queue=worker.Lock('server-queue:host-0');assert queue.acquire(False)
+    attempted=threading.Event();native_lock=host_lifecycle.Lock
+    class ObservedLock:
+        def __init__(self,name):self.name=name;self.inner=native_lock(name)
+        def acquire(self,blocking=True):
+            if self.name=='server-queue:host-0':attempted.set()
+            return self.inner.acquire(blocking)
+        def release(self):self.inner.release()
+    monkeypatch.setattr(host_lifecycle,'Lock',ObservedLock)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting=pool.submit(ai_claims.acquire)
+            assert attempted.wait(15) and not waiting.done()
+            with Session() as s:
+                s.get(Host,'host-0').enabled=False;s.commit()
+            queue.release();queue=None
+            assert waiting.result(15) is None
+    finally:
+        if queue is not None:queue.release()
+    with Session() as s:
+        assert s.get(Behavior,'subject-0').attempted==0
+        assert not list(s.scalars(select(ai_claims.Claim)))
 
 
 @pytest.mark.parametrize('change',['evidence','approval','configuration','expiry','token','worker_boot','worker_heartbeat','worker_identity'])
@@ -352,7 +394,8 @@ def test_staggered_waiters_reserve_after_existing_tail_with_different_clocks(adm
         assert all(b-a>=3600 for a,b in zip(wakes,wakes[1:]))
 
 
-def test_provider_policy_waits_keep_exact_floor_without_rate_staggering(admin):
+@pytest.mark.parametrize('start_delay',[0,121])
+def test_provider_policy_waits_keep_exact_floor_without_rate_staggering(admin,start_delay):
     seed(count=3);now=time.time();floor=now+120
     with Session() as s:
         cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
@@ -360,10 +403,10 @@ def test_provider_policy_waits_keep_exact_floor_without_rate_staggering(admin):
             attempts=0,next_at=now+7200,provider_until=0))
         s.commit()
         for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
-            at=now+index*.01
+            at=now+start_delay+index*.01
             ai_retry.begin(s,row,'sig',at)
             error=ai.AIError('provider wait',policy_wait=True,retry_after=floor-at+.25)
             error.provider_wait_until=floor
             retry=ai_retry.failed(s,row,error,at)
-            assert retry.next_at==floor and retry.provider_until==floor
+            assert retry.next_at==max(at,floor) and retry.provider_until==floor
             s.flush()

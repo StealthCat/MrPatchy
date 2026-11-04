@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 import uuid
 import pytest
-from app import releases,worker,ssh
+from app import ai_runs,releases,worker,ssh
 from app.db import Session,Host,Job,Setting
 from app.security import unseal
 from target import release
@@ -254,6 +254,62 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
         assert plan['services']==['nginx.service']
         assert plan['custom_validation'] is True
         assert row.digest==release.digest(release.canonical(plan))
+
+
+@pytest.mark.parametrize('change_completed_evidence',[False,True])
+def test_release_plan_deferral_resumes_only_exact_completed_reviews(admin,monkeypatch,tmp_path,change_completed_evidence):
+    first='/etc/nginx/one.conf';second='/etc/nginx/two.conf'
+    inv=inventory();inv['status']='Package: nginx\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\nConffiles:\n'
+    for path,content in ((first,'old one\n'),(second,'old two\n')):
+        inv['status']+=f' {path} {hashlib.md5(content.encode()).hexdigest()}\n'
+    inv['status']+='\n'
+    target=release.transition(inv)
+    inspection={'inventory':inv,'fingerprint':release.fingerprint(inv),'target':target,'blockers':[],
+        'custom_validator':True,'execution_files':{},'services':['nginx.service'],
+        'runner_sha256':release.digest(Path(release.__file__).read_bytes())}
+    configs={path:{'package':'nginx','content':content,'sha256':release.digest(content.encode()),
+        'uid':0,'gid':0,'mode':0o644} for path,content in ((first,'old one\n'),(second,'old two\n'))}
+    monkeypatch.setattr(releases.apt,'DATA',tmp_path)
+    monkeypatch.setattr(releases,'simulate',lambda *a:(tmp_path,tmp_path/'apt.conf',
+        {'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main\n'},[],
+        [{'action':'install','package':'nginx','version':'2'}]))
+    monkeypatch.setattr(releases,'vendor_files',lambda *a:{first:'vendor one\n',second:'vendor two\n'})
+    monkeypatch.setattr(ssh,'call',lambda host,request,**kw: inspection if request['action']=='release-inspect'
+        else {'configs':configs} if request['action']=='release-configs' else pytest.fail(request['action']))
+    calls=[]
+    def pause_second(session,target,path,current,vendor,news,**kwargs):
+        calls.append(path)
+        if path==second:raise releases.ai.AIError('Daily cap reached.',policy_wait=True,retry_after=90)
+        return {'content':current+'planned\n','reason':'Preserve the first local setting','blockers':[]}
+    monkeypatch.setattr(releases,'ai_review',pause_second)
+    with Session() as session:
+        host=Host(id='release-resume-host',name='Release resume host',address='192.0.2.40',fingerprint='fixture')
+        row=releases.ReleasePlan(id=str(uuid.uuid4()),host_id=host.id)
+        job=Job(id=str(uuid.uuid4()),host_id=host.id,action='release-plan',payload={'plan_id':row.id})
+        row.job_id=job.id;session.add_all([host,row,job]);session.commit();job_id=job.id;plan_id=row.id
+    worker.execute(job_id)
+    with Session() as session:
+        job=session.get(Job,job_id);row=session.get(releases.ReleasePlan,plan_id);partial=releases.body(row)
+        assert job.state=='queued' and 89<=job.next_at-time.time()<=90 and job.payload['_ai_deferred'] is True
+        assert row.state=='planning' and list(partial['review_progress']['results'])==[first]
+        assert [review['path'] for review in partial['reviews']]==[first]
+        assert ai_runs.status(session)['plan_deferred']==1
+        job.next_at=0;session.commit()
+    if change_completed_evidence:
+        configs[first]={**configs[first],'content':'changed one\n','sha256':release.digest(b'changed one\n')}
+    resumed=[]
+    def finish(session,target,path,current,vendor,news,**kwargs):
+        resumed.append(path)
+        return {'content':current+'planned\n','reason':'Preserve the current local setting','blockers':[]}
+    monkeypatch.setattr(releases,'ai_review',finish)
+    worker.execute(job_id)
+    with Session() as session:
+        job=session.get(Job,job_id);row=session.get(releases.ReleasePlan,plan_id);plan=releases.body(row)
+        assert job.state=='complete' and '_ai_deferred' not in job.payload
+        assert row.state=='ready' and 'review_progress' not in plan
+        assert [review['path'] for review in plan['reviews']]==[first,second]
+    assert calls==[first,second]
+    assert resumed==([first,second] if change_completed_evidence else [second])
 
 
 def test_service_recovery_ignores_transient_login_sessions():

@@ -238,6 +238,28 @@ def test_executor_installs_only_reviewed_exact_versions(fleet,monkeypatch):
     assert any(r['action']=='health' for r in calls)
 
 
+def test_urgent_run_skipped_outside_window_is_reissued_when_window_opens(fleet):
+    with Session() as s:
+        row=s.get(sched.PatchSchedule,'schedule');row.policy={**row.policy,'high':{'enabled':True,'after_minutes':0,'bypass_window':False}}
+        for host in ('alpha','beta'):
+            s.get(Package,host+':bash:amd64').priority='high'
+            s.add(Setting(key='window:'+host,value={'windows':[{'days':[0],'start':600,'end':660}]}))
+        s.commit()
+    sched.tick(fleet)
+    sched.tick(fleet+7201)
+    assert all(r.state=='skipped' for r in runs()) and not any(r.job_id for r in runs())
+    opened=fleet+8*3600
+    with Session() as s:
+        for h in s.scalars(select(Host)):h.last_seen=opened
+        s.commit()
+    before=len(runs())
+    sched.tick(opened)
+    fresh=[r for r in runs() if r.state!='skipped']
+    assert len(runs())>before and fresh and all(r.trigger=='high' for r in fresh)
+    sched.tick(opened+1)
+    assert len(runs())==before+len(fresh)
+
+
 def test_urgent_failed_batch_is_not_reissued(fleet,monkeypatch):
     monkeypatch.setattr(worker.time,'time',lambda:fleet)
     with Session() as s:

@@ -5,6 +5,13 @@
 - Apply the read-only completion gate after triage. Stop without speculative edits, commits or version bumps only when neither actionable issue fixes nor unfinished requested roadmap work remains.
 - Work in a focused feature branch targeting main. Preserve the mascot/theme, roles, audit history and explicit response authorization boundaries. Development coordination never authorizes runtime response actions.
 
+## Bug priority labels
+
+- **Every bug must have exactly one GitHub priority label: `P1`, `P2`, or `P3`.** This applies to all bug reports and defect issues, including existing bugs, newly discovered bugs, regressions, security bugs and bugs tracked from code-scanning findings. A `[P1]`, `[P2]` or `[P3]` title/body prefix is not a substitute for the actual GitHub label.
+- Apply the priority label when creating a bug issue. During triage, inspect all open bug issues and correct missing or conflicting priority labels before deciding there are no P1 bugs to fix or selecting feature work. Do not treat an unlabeled bug as low priority or as evidence that no P1 work exists.
+- Choose the priority from the evidence and user impact: `P1` for urgent/high-impact defects, `P2` for normal-priority defects, and `P3` for lower-impact defects. Record the reason for the classification and reassess it when new evidence changes the impact; replace the old priority label rather than retaining multiple priorities. Do not downgrade a bug merely to make feature work eligible.
+- Preserve unrelated labels and issue ownership. If permissions or unavailable labels prevent applying the required label, report the exact issue, intended priority and access/configuration blocker; do not claim labeling is complete or that the issue has no priority.
+
 ## Parallel implementation workers
 
 User instruction (2026-10-31): independent development may run concurrently; one integration coordinator owns versioning, merging and issue closure. This replaces the former requirement that every worker version and merge its own update.

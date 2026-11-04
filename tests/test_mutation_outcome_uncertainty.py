@@ -1,6 +1,7 @@
 """Non-patch mutations retain a review hold when their remote outcome is unknown."""
 import json
 import time
+from contextlib import contextmanager
 
 import pytest
 from sqlalchemy import select
@@ -101,6 +102,31 @@ def test_known_failure_releases_host_and_allows_later_work(admin, monkeypatch, a
         job = s.get(Job, 'mutation')
         assert job.state == 'failed' and str(failure) in job.output
         assert 'not be replayed' not in job.output
+        assert not operations.host_quarantined(s, HOST)
+        assert s.get(Job, 'later').state == 'complete'
+        assert s.scalar(select(Audit).where(Audit.action == 'failed ' + action))
+
+
+@pytest.mark.parametrize('action', ACTIONS)
+def test_lifecycle_lock_refusal_is_known_unstarted_and_releases_host(admin, monkeypatch, action):
+    setup(action);calls=[];refuse=[True];original=host_lifecycle.activity
+    @contextmanager
+    def activity(host_ids, kind, **kwargs):
+        if refuse[0]:
+            refuse[0]=False
+            raise host_lifecycle.Busy('Fixture lifecycle lock is active')
+        with original(host_ids, kind, **kwargs) as revisions:
+            yield revisions
+    monkeypatch.setattr(host_lifecycle, 'activity', activity)
+    monkeypatch.setattr(ssh, '_call', lambda host, request, *args, **kwargs: calls.append(request['action']) or {})
+    monkeypatch.setattr(worker, 'save_inventory', lambda *args: None)
+    worker.execute('mutation')
+    worker.execute('later')
+    worker.execute('mutation')
+    assert calls == ['repair', 'inventory']
+    with Session() as s:
+        job=s.get(Job, 'mutation')
+        assert job.state == 'failed' and 'lifecycle lock is active' in job.output
         assert not operations.host_quarantined(s, HOST)
         assert s.get(Job, 'later').state == 'complete'
         assert s.scalar(select(Audit).where(Audit.action == 'failed ' + action))

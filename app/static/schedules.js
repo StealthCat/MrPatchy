@@ -1,5 +1,5 @@
 'use strict';
-let scheduleDate=new Date(),scheduleView='month',scheduleHostPolicies={};
+let scheduleDate=new Date(),scheduleView=(typeof matchMedia==='function'&&matchMedia('(max-width:700px)').matches)?'day':'month',scheduleHostPolicies={};
 const localDay=value=>{const d=new Date(value);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const clock=value=>new Date(value*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 const scheduleDescription=p=>`${p.frequency==='weekly'?p.days.map(day=>['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(', '):p.frequency==='monthly'?'Day '+p.month_day+' each month':'Every day'} · ${String(Math.floor(p.minute/60)).padStart(2,'0')}:${String(p.minute%60).padStart(2,'0')} ${p.timezone}`;

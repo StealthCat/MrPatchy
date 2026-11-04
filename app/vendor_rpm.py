@@ -1,5 +1,4 @@
 """Offline RPM authentication through native librpm tools in an isolated database."""
-import os
 from pathlib import Path
 import re
 import stat
