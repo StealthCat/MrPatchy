@@ -87,6 +87,21 @@ def test_current_role_filters_and_per_user_read_dismiss_are_isolated(admin):
         assert actions[-2:] == ['read notification', 'dismiss notification']
 
 
+def test_filtered_counts_and_pages_share_the_same_permission_boundary(admin):
+    users()
+    with Session() as session:
+        matched, _ = publish(session, source='scanner', severity='critical', host_id='host-1')
+        publish(session, source='scanner', severity='info', host_id='host-1', subject_id='other')
+        publish(session, source='operations', severity='critical', host_id='host-1', subject_id='source')
+        publish(session, source='scanner', severity='critical', host_id='host-2', subject_id='host')
+        publish(session, source='scanner', severity='critical', host_id='host-1', subject_id='admin', minimum_role='admin')
+        session.commit()
+        filters = {'severity': 'critical', 'source': 'scanner', 'host_id': 'host-1'}
+        rows = notifications.list_for_user(session, 'operator', **filters)
+        assert [row['id'] for row in rows] == [matched.id]
+        assert notifications.count_for_user(session, 'operator', **filters) == 1
+
+
 def test_change_resolve_and_reopen_resurface_after_read_or_dismiss(admin):
     users()
     with Session() as session:

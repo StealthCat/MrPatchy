@@ -49,7 +49,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.38.3'
+APP_VERSION='1.39.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -268,15 +268,21 @@ def dashboard(user=Depends(viewer_user)):
 
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
+                      severity:str='',source:str='',host_id:str='',
                       limit:int=50,offset:int=0,user=Depends(self_user)):
     """Return a bounded, current-role-filtered page for the signed-in user."""
     with Session() as s:
-        items=notification_events.list_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed,limit=limit,offset=offset)
-        total=notification_events.count_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed)
+        try:
+            filters={'severity':severity,'source':source,'host_id':host_id}
+            items=notification_events.list_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,limit=limit,offset=offset,
+                **filters)
+            total=notification_events.count_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,**filters)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
         return {'items':items,'offset':offset,'limit':limit,'total':total,
                 'more':offset+len(items)<total}
 
