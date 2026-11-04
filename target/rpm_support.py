@@ -24,6 +24,11 @@ MAIN_FILES = ('/etc/dnf/dnf.conf','/etc/yum.conf')
 LOCK_FILES = ('/etc/dnf/plugins/versionlock.list','/etc/yum/pluginconf.d/versionlock.list','/etc/dnf/versionlock.toml')
 
 
+
+def os_info(text):
+    """Parse os-release like target/release.py: skip comments, strip either quote style."""
+    return {k.strip():v.strip().strip('"').strip("'") for k,v in (line.split('=',1) for line in text.splitlines() if '=' in line and not line.lstrip().startswith('#'))}
+
 def source_path(name): return bool(re.fullmatch(r'/etc/yum\.repos\.d/[A-Za-z0-9_.-]+\.repo',name))
 class RepositoryRejected(ValueError):
     """Fixed, administrator-facing diagnostic raised by the repository validators; safe to display."""
@@ -143,7 +148,7 @@ def local_inventory():
     for name in glob.glob(KEY_ROOT+'*'):
         p=Path(name)
         if key_path(name) and p.is_file() and p.stat().st_size<2_000_000:keys[name]=base64.b64encode(p.read_bytes()).decode()
-    info={k:v.strip().strip('"') for k,v in (line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)}
+    info=os_info(Path('/etc/os-release').read_text())
     arch=rpm.expandMacro('%{_arch}')
     import dnf.rpm
     releasever=variables.get('releasever') or dnf.rpm.detect_releasever('/') or info.get('VERSION_ID','').split('.')[0]
