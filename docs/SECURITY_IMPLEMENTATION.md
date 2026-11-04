@@ -5868,3 +5868,25 @@ does not expand release support or response authority, and does not complete the
 remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
 integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
 required before this increment is delivered.
+
+
+### AI pricing catalog lifecycle alerts — worker checkpoint #370
+
+This bounded faster-AI increment warns administrators through the existing durable
+operational outbox and in-app notification history during the final seven days of a
+catalog's reviewed window. The stable subject is deduplicated while unchanged,
+escalates from medium to high and reopens delivery at expiry, and resolves when a
+reviewed catalog refresh moves outside the warning window or enabled daily-cap
+enforcement is removed. Only safe catalog version/status/expiry text is published;
+the event contains no keys, prompts, evidence or provider receipts and links to the
+administrator-only AI settings page. Per-user read/dismiss remains separate from
+operational acknowledgement and neither changes admission nor performs remediation.
+Rate-only, unthrottled, legacy and globally disabled AI modes do not receive this
+spend-guard alert.
+
+Focused acceptance covers the exact warning and expiry boundaries, repeated
+collection, acknowledged-warning escalation, per-user revision visibility,
+resolution and non-cap/disabled modes. This does not automate or sign catalog
+updates, reconcile provider invoices, add provider-derived billing truth or complete
+the remaining multi-controller/reset acceptance. Coordinator integration, full
+exact-head tests and fresh code scanning remain required before delivery.
