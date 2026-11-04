@@ -143,3 +143,21 @@ def test_internal_backoff_is_not_stored_as_provider_retry_after(admin, monkeypat
 
 def test_clear_provider_backoff_requires_admin(client):
     assert client.post('/api/ai/provider-backoff/clear').status_code in (401, 403)
+
+
+def test_clear_revokes_provider_only_item_waits_but_keeps_attempts(admin):
+    from app import ai_retry
+    now=time.time();far=now+300000000
+    with Session() as session:
+        session.add_all([
+            ai_retry.TriageRetry(subject='legacy',configuration='c',attempts=2,state='deferred',next_at=far,provider_until=far),
+            ai_retry.TriageRetry(subject='blocked',configuration='c',attempts=5,state='blocked',next_at=0,provider_until=far),
+            ai_retry.TriageRetry(subject='policy',configuration='c',attempts=1,state='deferred',next_at=far,provider_until=0)])
+        session.commit()
+    assert ai_provider_backoff.clear(now=now) is True
+    with Session() as session:
+        legacy,blocked,policy=(session.get(ai_retry.TriageRetry,k) for k in ('legacy','blocked','policy'))
+        assert legacy.provider_until==0 and legacy.next_at<=now and legacy.attempts==2
+        assert blocked.provider_until==0 and blocked.attempts==5 and blocked.state=='blocked'
+        assert policy.next_at==far  # unrelated policy/rate waits are untouched
+        ai_retry.manual(session,type('R',(),{'id':'blocked'})(),now=now)

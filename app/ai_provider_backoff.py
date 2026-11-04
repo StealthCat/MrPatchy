@@ -78,7 +78,21 @@ def clear(now=None):
             if row:
                 row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
                 session.commit()
-            return active
+    # Already-deferred investigations keep their own provider-only wait. Revoke
+    # only that wait; attempt limits, claims and other admission gates remain.
+    return revoke_item_waits(now) or active
+
+
+def revoke_item_waits(now):
+    from .ai_retry import TriageRetry
+    from sqlalchemy import select
+    with Lock('ai-triage'),Session() as session:
+        rows=session.scalars(select(TriageRetry).where(TriageRetry.provider_until>now)).all()
+        for retry in rows:
+            retry.provider_until=0
+            if retry.state=='deferred' and retry.next_at>now:retry.next_at=now
+        session.commit()
+        return bool(rows)
 
 
 def status(session,now=None):
