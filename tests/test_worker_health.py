@@ -38,3 +38,11 @@ def test_compose_worker_has_healthcheck_and_app_has_none_of_it():
     assert "python, -m, app.worker_health" in worker
     assert "healthcheck:" in worker
     assert "/tmp" in worker
+
+
+def test_compose_worker_stop_grace_outlasts_longest_job_ssh_timeout():
+    text = (ROOT / "compose.yaml").read_text()
+    worker = re.search(r"^  worker:\n(.*?)(?=^  \w)", text, re.S | re.M).group(1)
+    m = re.search(r"^    stop_grace_period: \$\{[A-Z_]+:-(\d+)s\}$", worker, re.M)
+    assert m, "worker needs a stop_grace_period; Docker's 10 s default SIGKILLs running jobs"
+    assert int(m.group(1)) > 7500
