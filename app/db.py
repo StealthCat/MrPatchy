@@ -75,7 +75,13 @@ class Job(Base):
     next_at: Mapped[float] = mapped_column(Double, default=0, server_default='0')
     # Hot scheduler, queue-count, latest-refresh and history paths filter by
     # host/state/action and order by created; history is retained forever.
-    __table_args__=(Index('ix_jobs_host_state','host_id','state'),Index('ix_jobs_host_action_created','host_id','action','created'),Index('ix_jobs_host_created','host_id','created'),Index('ix_jobs_state_created','state','created'))
+    __table_args__=(
+        Index('ix_jobs_host_state','host_id','state'),
+        Index('ix_jobs_host_action_created','host_id','action','created'),
+        Index('ix_jobs_host_history',host_id,created.desc(),id.asc()),
+        Index('ix_jobs_history',created.desc(),id.asc()),
+        Index('ix_jobs_state_created','state','created'),
+    )
 class Audit(Base):
     __tablename__ = 'audit'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

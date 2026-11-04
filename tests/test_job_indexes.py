@@ -1,8 +1,8 @@
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, text, event
 
 from app import db
 
-EXPECTED = {'ix_jobs_host_state', 'ix_jobs_host_action_created', 'ix_jobs_host_created', 'ix_jobs_state_created'}
+EXPECTED = {'ix_jobs_host_state', 'ix_jobs_host_action_created', 'ix_jobs_host_history', 'ix_jobs_history', 'ix_jobs_state_created'}
 
 
 def plan(connection, sql):
@@ -33,3 +33,37 @@ def test_init_adds_job_indexes_to_an_existing_jobs_table(tmp_path, monkeypatch):
 def test_job_indexes_are_in_shared_metadata_for_new_and_migrated_databases():
     db.register_models()
     assert EXPECTED <= {i.name for i in db.Job.__table__.indexes}
+
+
+def test_real_fleet_and_host_history_ordering_uses_bounded_indexes(admin):
+    with db.Session() as session:
+        session.add_all([db.Host(id='history-'+str(i),name='history',address='192.0.2.1',fingerprint='test') for i in range(20)])
+        session.bulk_insert_mappings(db.Job,[{
+            'id':f'history-{i:06d}','host_id':'history-'+str(i%20),
+            'action':'refresh','state':'complete','created':float(i//100),
+            'payload':{},'output':'retained history',
+        } for i in range(10000)])
+        session.commit()
+    for host in ('','history-0'):
+        queries=[]
+        def capture(connection,cursor,statement,parameters,context,executemany):
+            if 'FROM jobs' in statement and 'ORDER BY jobs.created DESC, jobs.id' in statement:
+                queries.append((statement,parameters))
+        event.listen(db.engine,'before_cursor_execute',capture)
+        try:
+            response=admin.get('/api/jobs',params={'host_id':host,'limit':50})
+        finally:event.remove(db.engine,'before_cursor_execute',capture)
+        assert response.status_code==200 and len(response.json())==50
+        assert queries
+        sql,parameters=queries[-1]
+        with db.engine.connect() as connection:
+            if connection.dialect.name=='sqlite':
+                rows=connection.exec_driver_sql('EXPLAIN QUERY PLAN '+sql,parameters).all()
+                details=' '.join(str(row[3]) for row in rows)
+                assert 'TEMP B-TREE' not in details
+                assert ('ix_jobs_host_history' if host else 'ix_jobs_history') in details
+            else:
+                rows=connection.exec_driver_sql('EXPLAIN '+sql,parameters).mappings().all()
+                assert all('filesort' not in str(row.get('Extra','')).lower() for row in rows)
+        items=response.json()
+        assert items==sorted(items,key=lambda item:(-item['created'],item['id']))
