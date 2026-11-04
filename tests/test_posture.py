@@ -42,6 +42,13 @@ def test_not_applicable_when_daemon_absent():
     assert report['state']=='not_applicable' and report['counts']['not_applicable']==len(posture.SSH_RULES)
 
 
+def test_collection_error_overrides_not_applicable_flag():
+    report=posture.evaluate_ssh({'applicable':False,'error':'permission denied'},NOW)
+    assert report['state']=='unknown'
+    assert report['counts']['unknown']==len(posture.SSH_RULES)
+    assert report['counts']['not_applicable']==0
+
+
 def test_values_are_bounded_and_non_numeric_limit_fails():
     report=posture.evaluate_ssh(ev(settings={**GOOD,'maxauthtries':'x'*5000}),NOW)
     r={x['setting']:x for x in report['results']}

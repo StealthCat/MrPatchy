@@ -35,8 +35,8 @@ def _result(rule,state,measured,reason):
 def _evidence_problem(evidence,now,max_age):
     """Return (state,reason) when the evidence cannot support a verdict, else None."""
     if not isinstance(evidence,dict):return 'unknown','No evidence collected'
-    if evidence.get('applicable') is False:return 'not_applicable','SSH daemon is not present on this target'
     if evidence.get('error'):return 'unknown','Collection failed: '+str(evidence['error'])[:200]
+    if evidence.get('applicable') is False:return 'not_applicable','SSH daemon is not present on this target'
     at=evidence.get('collected_at')
     if type(at) not in (int,float) or not math.isfinite(at):return 'unknown','Evidence has no valid collection time'
     if at>now+FUTURE_SKEW:return 'unknown','Evidence collection time is in the future'
