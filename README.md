@@ -559,16 +559,20 @@ Direct worker/embedded processes use the same variables. Invalid values refuse
 startup. These limits size the real executors. Poll/notification work shares the
 poll pool; process investigations and update scoring share AI slots.
 
-Independent servers can now undergo process triage concurrently. A durable,
-renewable claim permits one process investigation per server across supported
-workers, with atomic existing hourly admission and ownership/evidence checks
-before calls and acceptance. The coordinator schedules update scoring, alternating
-purposes even with one AI slot. Claims expire after 120 seconds without renewal;
-interrupted attempts retain the existing recovery delay and finite retry limits.
-A lease cannot cancel an already sent request or guarantee exactly-once billing.
-The full model, evidence and conditional SSH/follow-up flow remain unchanged.
-Same-server parallel investigations, broader fairness and native complete-context
-collection remain unfinished.
+Independent servers can undergo process triage concurrently, and one server may
+use at most two AI slots for different process subjects. Each subject remains
+exclusive under its durable renewable claim; a third same-server investigation
+waits rather than allowing one server to consume the whole pool. Policy pause/resume
+and server lifecycle changes reject live claims, and delayed admission rechecks the
+current lifecycle before starting. Existing hourly/rate/spend admission and
+ownership/evidence checks still apply before calls and acceptance. The coordinator
+schedules update scoring, alternating purposes even with one AI slot. Claims expire
+after 120 seconds without renewal; interrupted attempts retain the existing recovery
+delay and finite retry limits. A lease cannot cancel an already sent request or
+guarantee exactly-once billing. The full model, evidence and conditional
+SSH/follow-up flow remain unchanged. Administrator-configurable per-server occupancy,
+broader cross-purpose fairness, native complete-context collection and complete
+multi-controller failover acceptance remain unfinished.
 v1.30.0 adds exact-context contradiction invalidation and linked review for the
 complete exact candidates described below.
 
