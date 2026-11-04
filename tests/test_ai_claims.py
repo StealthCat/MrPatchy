@@ -350,3 +350,20 @@ def test_staggered_waiters_reserve_after_existing_tail_with_different_clocks(adm
             s.flush()
         assert wakes[0]>=now+10800
         assert all(b-a>=3600 for a,b in zip(wakes,wakes[1:]))
+
+
+def test_provider_policy_waits_keep_exact_floor_without_rate_staggering(admin):
+    seed(count=3);now=time.time();floor=now+120
+    with Session() as s:
+        cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
+        s.add(ai_retry.TriageRetry(subject='rate-tail',configuration='sig',state='deferred',
+            attempts=0,next_at=now+7200,provider_until=0))
+        s.commit()
+        for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
+            at=now+index*.01
+            ai_retry.begin(s,row,'sig',at)
+            error=ai.AIError('provider wait',policy_wait=True,retry_after=floor-at+.25)
+            error.provider_wait_until=floor
+            retry=ai_retry.failed(s,row,error,at)
+            assert retry.next_at==floor and retry.provider_until==floor
+            s.flush()

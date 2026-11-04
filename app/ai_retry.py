@@ -5,6 +5,7 @@ sleeps occur here. Legacy/interrupted attempts retain a one-hour recovery delay.
 """
 import hashlib
 import json
+import math
 import random
 import time
 from sqlalchemy import String, Double, Integer, Text, and_, or_, func, select
@@ -58,7 +59,13 @@ def failed(s,row,error,now):
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
-        if error.retry_after:
+        provider_wait=getattr(error,'provider_wait_until',0)
+        provider_wait=(provider_wait if type(provider_wait) in (int,float)
+            and math.isfinite(provider_wait) and provider_wait>now else 0)
+        if provider_wait:
+            retry.provider_until=provider_wait
+            retry.next_at=provider_wait
+        elif error.retry_after:
             # Reserve after the durable eligible tail, including waiters whose
             # base time is slightly earlier than this failure's wall clock.
             tail=s.scalar(select(func.max(TriageRetry.next_at)).where(TriageRetry.subject!=row.id,
@@ -67,6 +74,7 @@ def failed(s,row,error,now):
             if tail is not None:retry.next_at=max(retry.next_at,tail+3600.0/max(1,rate))
         retry.reason=('Waiting for shared AI rate eligibility; no provider request was sent.' if error.retry_after else
             'Waiting for AI policy resume; eligibility is rechecked before every provider call.')
+        if provider_wait:retry.reason='Waiting for shared provider backoff; no provider request was sent.'
     elif isinstance(error,AIError) and error.transient:
         retry.provider_until=now+error.retry_after if error.retry_after else 0
         if retry.attempts<MAX_ATTEMPTS:
