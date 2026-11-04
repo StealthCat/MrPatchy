@@ -91,6 +91,10 @@ def acquire(owner=None):
                 recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
+            # Read-only gate: do not create runs/attempts for work that the shared
+            # rate gate, provider backoff or daily budget cannot admit right now.
+            from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing
+            if any(gate.waiting(s,now) for gate in (ai_admission,ai_provider_backoff,ai_budget)):return None
             signature=ai_retry.configuration(s)
             # Bound per-host occupancy so one noisy server cannot consume the
             # whole pool while still allowing independent work to overlap.
@@ -112,6 +116,10 @@ def acquire(owner=None):
                     # only a present host can carry a lifecycle transition.
                     host=s.get(Host,host_id)
                     if host is not None and not host_lifecycle.active(host):return None
+                    if cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
+                        try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
+                        except ai.AIError:return None
+                        if ai_budget.waiting(s,now,payload):return None
                     row.attempted=now;ai_retry.begin(s,row,signature,now)
                     run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
                     s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
