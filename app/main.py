@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -75,6 +76,16 @@ async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1
 async def queue_full(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=429)
 @app.exception_handler(ValueError)
 async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request,exc):
+    # Never echo `input` or `ctx` (they can contain passwords); return short field-labelled messages.
+    if request.url.path=='/api/login': return JSONResponse({'detail':'Invalid credentials'},status_code=422)
+    parts=[]
+    for err in exc.errors()[:5]:
+        loc=[str(x) for x in err.get('loc',()) if x not in ('body','query','path')]
+        msg=str(err.get('msg',''))[:200]
+        parts.append((loc[-1]+': ' if loc else '')+msg)
+    return JSONResponse({'detail':'; '.join(parts) or 'Invalid request'},status_code=422)
 static=Path(__file__).parent/'static'
 app.mount('/static',StaticFiles(directory=static),name='static')
 
