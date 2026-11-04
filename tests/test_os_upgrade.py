@@ -2,7 +2,7 @@ import time
 from types import SimpleNamespace
 import pytest
 from app import os_upgrade
-from app.db import Session,Host
+from app.db import Session,Host,Setting,engine
 
 NOW=1_800_000_000.0
 
@@ -39,8 +39,9 @@ def test_status_clears_after_upgrade_inventory_refresh():
 
 def test_api_exposes_one_status_to_every_role(admin,client):
     with Session() as s:
-        s.add(Host(id='up1',name='Upgradable',address='192.0.2.50',fingerprint='fixture',state='online',last_seen=time.time(),
-                   inventory={'os':'ID=debian\nVERSION_ID="12"\n','status':'','files':{},'collected':time.time()}));s.commit()
+        h=Host(id='up1',name='Upgradable',address='192.0.2.50',fingerprint='fixture',state='online',last_seen=time.time(),
+                   inventory={'os':'ID=debian\nVERSION_ID="12"\n','status':'','files':{},'collected':time.time()})
+        s.add(h);os_upgrade.store(s,h,h.inventory);s.commit()
     row=[h for h in client.get('/api/hosts').json() if h['id']=='up1'][0]
     assert row['os_upgrade']['status']=='available' and row['os_upgrade']['to_version']=='13'
     summary=client.get('/api/hosts/up1/summary').json()['host']
@@ -74,3 +75,52 @@ def test_malformed_inventory_keeps_fleet_api_working(admin,client):
     assert rows['ok1']['os_upgrade']['status']=='available'
     assert all(rows[i]['os_upgrade']['status']=='unknown' for i in ('bad1','bad2','bad3'))
     assert client.get('/api/hosts/bad1/summary').status_code==200
+
+
+def test_fleet_status_uses_one_projection_without_loading_private_inventory(admin):
+    from sqlalchemy import event,inspect
+    with Session() as s:
+        for index in range(20):
+            h=Host(id='bounded-'+str(index),name='Bounded',address='192.0.2.1',fingerprint='test',state='online',
+                inventory={'os':'ID=debian\nVERSION_ID="12"\n','status':'','files':{},'collected':time.time(),
+                           'unused':'x'*100000},telemetry={'unused':'y'*100000},baseline={'unused':'z'*100000})
+            s.add(h);os_upgrade.store(s,h,h.inventory)
+        s.commit()
+    queries=[];loaded=[]
+    def sql(conn,cursor,statement,parameters,context,many):
+        if 'FROM hosts' in statement:queries.append(statement)
+    def load(host,context):
+        loaded.append(host.id)
+        assert {'inventory','telemetry','baseline'}<=inspect(host).unloaded
+    event.listen(engine,'before_cursor_execute',sql);event.listen(Host,'load',load)
+    try:response=admin.get('/api/hosts')
+    finally:
+        event.remove(engine,'before_cursor_execute',sql);event.remove(Host,'load',load)
+    assert response.status_code==200 and len(loaded)==20 and len(queries)==1
+    assert all(item['os_upgrade']['status']=='available' for item in response.json())
+    assert all('unused' not in item for item in response.json())
+
+
+def test_startup_backfill_is_idempotent_and_does_not_need_inventory_on_list(admin):
+    with Session() as s:
+        s.add(Host(id='legacy',name='Legacy',address='192.0.2.1',fingerprint='test',state='online',
+            inventory={'os':'ID=debian\nVERSION_ID="12"\n','status':'','files':{},'collected':time.time()}))
+        s.commit()
+    assert admin.get('/api/hosts').json()[0]['os_upgrade']['status']=='unknown'
+    with engine.begin() as connection:
+        os_upgrade.backfill(connection);os_upgrade.backfill(connection)
+    assert admin.get('/api/hosts').json()[0]['os_upgrade']['status']=='available'
+    with Session() as s:assert s.get(Setting,os_upgrade.PREFIX+'legacy')
+
+
+def test_saved_status_rechecks_freshness_and_lifecycle_without_inventory():
+    saved=os_upgrade.snapshot(host().inventory)
+    class NoInventory:
+        state='online';enabled=True;deleted_at=0
+        @property
+        def inventory(self):raise AssertionError('Private inventory must not load')
+    h=NoInventory()
+    assert os_upgrade.status(h,NOW,saved=saved)['status']=='available'
+    assert os_upgrade.status(h,NOW+8*86400,saved=saved)['status']=='stale'
+    h.enabled=False
+    assert os_upgrade.status(h,NOW,saved=saved)['status']=='unknown'

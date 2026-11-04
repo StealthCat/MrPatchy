@@ -88,6 +88,8 @@ def save_inventory(s,h,inv):
     if previous!=current or not s.scalar(select(InventoryRevision.id).where(InventoryRevision.host_id==h.id).limit(1)):
         s.add(InventoryRevision(id=uuid.uuid4().hex,host_id=h.id,inventory=inv))
     h.inventory=inv
+    from . import os_upgrade
+    os_upgrade.store(s,h,inv)
     changed=[(item,old[item['name']]) for item in items if item['name'] in old and old[item['name']].candidate]
     newer=package_backend.newer_flags(inv,[(p.candidate,item['installed']) for item,p in changed])
     still_newer={item['name']:flag for (item,_),flag in zip(changed,newer)}

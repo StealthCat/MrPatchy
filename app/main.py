@@ -15,7 +15,8 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
-from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
+from sqlalchemy.orm import defer
+from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
@@ -293,7 +294,21 @@ def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(s
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
-    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt'),'os_upgrade':os_upgrade.status(h)} for h in s.scalars(select(Host).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name))]
+    with Session() as s:
+        keys=('architecture','os','package_manager');cols=[]
+        for key in keys:
+            path='$."%s"'%key
+            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
+            cols+=[Host.inventory[key].as_string(),kind]
+        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+            .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
+            .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
+        def meta(value,kind,default):
+            if kind is None:return default
+            return None if str(kind).lower()=='null' else value
+        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
+            'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
+            for h,a,ak,o,ok,m,mk,saved in rows]
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
