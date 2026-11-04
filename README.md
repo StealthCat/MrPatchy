@@ -100,6 +100,13 @@ need more headroom. Reaching a limit can OOM-kill the container process; the
 production restart policy then starts it again, so size and monitor these limits
 for the deployment rather than treating them as a readiness guarantee.
 
+Production Compose also runs `app`, `worker` and `caddy` with read-only root
+filesystems. The app can write only to its `/data` and `/tls` named volumes and
+private `/tmp` tmpfs, the worker to `/data` and `/tmp`, and Caddy to `/data`,
+`/config` and `/tmp`. Custom overrides or extensions that need another writable
+path must mount an explicit volume or tmpfs there; do not disable the read-only
+root merely to provide transient or application state.
+
 The Compose `worker` service publishes a Docker health status from a liveness file
 on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
 registry heartbeat; a missing timestamp, one more than 60 seconds old, or one
