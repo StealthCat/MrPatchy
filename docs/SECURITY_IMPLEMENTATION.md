@@ -5831,3 +5831,33 @@ parameterized SSH/RPM test-fixture bases remain build/test inputs, not falsely
 claimed registry digest pins. #292's Actions pins and #302's CodeQL coverage are
 separate deliveries whose history must be preserved during integration. #201
 stays partial/open; no broader deployment/security roadmap completion is claimed.
+
+
+### Resumable multi-stage release configuration reviews — worker checkpoint #366
+
+Issue #366 implements the next bounded faster-AI increment. Distribution release
+planning now seals each accepted configuration review before another provider call.
+A controlled smooth-rate, daily-spend, provider-backoff or administrator-pause wait
+leaves the job queued at the authoritative eligibility time (or indefinite resume
+state) and leaves the plan non-approvable in `planning` state. Once policy permits
+execution, an exact completed stage is reconstructed without another provider call.
+
+Reuse is deliberately strict. The encrypted checkpoint and its digest must be valid,
+and its versioned identity binds the host, target release, inspected inventory,
+release runner, rewritten sources, simulated package transaction, every relevant
+configuration's verified bytes/metadata/package state, selected model, review-policy
+version, vendor-default bytes and package-news bytes. Any mismatch discards all saved
+stage results and performs current-evidence reviews; a name, package or file hash by
+itself is never sufficient. Completed plans remove the private progress envelope and
+retain the existing digest-bound administrator GO/NO-GO decision, expiry, validation,
+audit, lifecycle and response safeguards.
+
+Focused regression coverage reproduces a wait after one accepted review, verifies the
+job remains queued and the partial plan remains non-approvable, then proves exact
+resume calls only the unfinished stage. A changed completed configuration proves the
+conservative miss path re-runs both stages. This checkpoint does not make a provider
+call interrupted without an accepted structured result safe to replay automatically,
+does not expand release support or response authority, and does not complete the
+remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before this increment is delivered.
