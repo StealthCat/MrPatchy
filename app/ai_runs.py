@@ -297,8 +297,12 @@ def status(s):
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
     scoring_deferred=s.scalar(select(func.count()).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
     scoring_next=s.scalar(select(func.min(UpdateScore.next_at)).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
+    # JSON numeric 1 compares equal to true after scalar extraction on SQLite.
+    # Retained malformed markers must match the public API's `is True` contract.
+    marker_type=(func.json_type(Job.payload,'$._ai_deferred')=='true' if s.get_bind().dialect.name=='sqlite' else
+        func.json_type(func.json_extract(Job.payload,'$._ai_deferred'))=='BOOLEAN')
     plan_where=(Job.action.in_(('security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
-        Job.payload['_ai_deferred'].as_boolean()==True)
+        marker_type,Job.payload['_ai_deferred'].as_boolean()==True)
     plan_deferred,plan_next=s.execute(select(func.count(),func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where)).one()
     plan_ready=s.scalar(select(func.count()).where(*plan_where,Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids())))
     if scoring_next and scoring_next>now:retry=min([value for value in (retry,scoring_next) if value is not None])

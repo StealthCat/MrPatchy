@@ -1,4 +1,5 @@
 import time
+import pytest
 from sqlalchemy import event
 from app import ai_runs, ai_retry
 from app.db import Session, Setting, Behavior, Host, Job, engine
@@ -31,3 +32,19 @@ def test_status_counts_without_loading_pending_rows(admin):
     assert abs(status['retry_at']-(now+600))<5
     assert len(statements)<40
     assert not any('FROM behaviors' in q and 'count(' not in q.lower() and 'min(' not in q.lower() for q in statements)
+
+
+@pytest.mark.parametrize('marker', [True,False,1,1.0,'true',None,[],{}])
+def test_deferred_plan_counts_only_native_json_true(admin,marker):
+    now=time.time()
+    with Session() as session:
+        session.add(Host(id='marker-host',name='Marker',address='192.0.2.1',fingerprint=''))
+        session.add(Job(id='marker-job',host_id='marker-host',action='security-plan',
+            payload={'_ai_deferred':marker},next_at=now+600))
+        session.commit()
+        status=ai_runs.status(session)
+    expected=1 if marker is True else 0
+    assert status['plan_deferred']==expected
+    assert (status['plan_next_at'] is not None)==bool(expected)
+    response=admin.get('/api/jobs/marker-job',params={'host_id':'marker-host'})
+    assert response.status_code==200 and response.json()['ai_deferred']==bool(expected)
