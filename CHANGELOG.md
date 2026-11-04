@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.40.4 — 2026-11-04
+
+1. [PR #373](https://github.com/StealthCat/MrPatchy/pull/373): Add administrator-only retained AI spend history for trailing 1–90 day ranges, grouped by each ledger entry's persisted reset time and IANA timezone, with exact SQL aggregates for settled estimates and conservative unreleased ceilings plus bounded 7-, 30- and 90-day Settings views. Compatibility: this is an additive read-only API and UI change with no schema, admission, provider-call, pause, ledger-retention or response-authorization change; released unsent attempts remain excluded, estimates are not provider invoices, and output is capped at four reset/timezone groups per requested day with explicit truncation. Provider-invoice reconciliation, automated or signed catalog lifecycle and complete multi-controller failover/reset acceptance remain outside this increment. This source update does not publish a Docker image.
+
 ## 1.40.3 — 2026-11-04
 
 1. [PR #371](https://github.com/StealthCat/MrPatchy/pull/371): Warn administrators through the durable operational outbox and retained in-app notification history during the final seven days of the reviewed AI public-price catalog window; deduplicate unchanged warnings, escalate and reopen delivery when the catalog expires, and resolve the lifecycle event after a verified refresh or applicable cap-mode disablement. Compatibility: no schema, target-agent, provider-call, deployment or response-authorization change; the alert applies only to enabled daily-cap modes and contains bounded catalog version/status/expiry metadata. Automated or signed catalog updates, provider-invoice reconciliation, live provider billing truth and complete multi-controller/reset acceptance remain outside this increment. This source update does not publish a Docker image.
