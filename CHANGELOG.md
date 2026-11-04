@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.15 — 2026-11-04
+
+1. [PR #468](https://github.com/StealthCat/MrPatchy/pull/468): Persist the Google Cloud compose-file chain, project and zone in `.env` during `install-gcp.sh`, so later plain `docker compose` upgrade, migration and TLS commands keep the gcloud runtime, Workload Identity Federation mount and IAP connectivity. Compatibility: new installs receive the settings automatically; existing Google Cloud deployments must re-run `install-gcp.sh` once or continue using `./gcp-compose.sh` until `.env` is updated. The installer upsert is idempotent, preserves other keys and keeps `.env` mode 0600. No runtime response-authorization change. Completes #407. This source update does not publish a Docker image.
+
 ## 1.42.14 — 2026-11-04
 
 1. [PR #469](https://github.com/StealthCat/MrPatchy/pull/469): Aggregate schedule-calendar runs in SQL, count target hosts without loading full host rows and remove the 10,000-run cap that silently omitted in-range results; active runs still reflect their linked job state and non-regular runs remain individually addressable. Compatibility: the calendar API response shape and scheduling behavior are unchanged; query count is bounded by schedules rather than runs, while result size remains bounded by distinct schedule/due/state groups plus individual non-regular triggers. No runtime response-authorization change. Completes #434. This source update does not publish a Docker image.
