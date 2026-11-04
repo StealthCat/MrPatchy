@@ -43,3 +43,13 @@ def test_every_service_bounds_process_count():
         match = re.search(r"^    pids_limit:\s*(\d+)\s*$", block, re.M)
         assert match, f"{name} must set pids_limit"
         assert 256 <= int(match.group(1)) <= 4096, name
+
+
+def test_every_service_bounds_memory_with_overridable_default():
+    for name, block in _services().items():
+        match = re.search(
+            r"^    mem_limit:\s*\$\{MRPATCHY_[A-Z]+_MEM_LIMIT:-(\d+)([mg])\}\s*$", block, re.M
+        )
+        assert match, f"{name} must set an overridable mem_limit default"
+        megabytes = int(match.group(1)) * (1024 if match.group(2) == "g" else 1)
+        assert 256 <= megabytes <= 16384, name

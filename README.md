@@ -88,8 +88,15 @@ Those production `app`, `worker` and `caddy` services also cap the number of
 processes at 1024 to bound fork exhaustion while leaving room for the configured
 thread pools and subprocess work. Custom deployments that legitimately need more
 than 1024 simultaneous processes per container must raise `pids_limit` explicitly;
-this limit does not impose a memory cap or make the container root filesystem
-read-only.
+this process limit does not make the container root filesystem read-only.
+
+The same services cap memory by default at 2 GiB for `app`, 4 GiB for `worker`
+and 512 MiB for `caddy`. Override those limits with
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and
+`MRPATCHY_CADDY_MEM_LIMIT` when larger fleets or concurrent scan and AI workloads
+need more headroom. Reaching a limit can OOM-kill the container process; the
+production restart policy then starts it again, so size and monitor these limits
+for the deployment rather than treating them as a readiness guarantee.
 
 The Compose `worker` service publishes a Docker health status from a liveness file
 on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
@@ -552,16 +559,20 @@ Direct worker/embedded processes use the same variables. Invalid values refuse
 startup. These limits size the real executors. Poll/notification work shares the
 poll pool; process investigations and update scoring share AI slots.
 
-Independent servers can now undergo process triage concurrently. A durable,
-renewable claim permits one process investigation per server across supported
-workers, with atomic existing hourly admission and ownership/evidence checks
-before calls and acceptance. The coordinator schedules update scoring, alternating
-purposes even with one AI slot. Claims expire after 120 seconds without renewal;
-interrupted attempts retain the existing recovery delay and finite retry limits.
-A lease cannot cancel an already sent request or guarantee exactly-once billing.
-The full model, evidence and conditional SSH/follow-up flow remain unchanged.
-Same-server parallel investigations, broader fairness and native complete-context
-collection remain unfinished.
+Independent servers can undergo process triage concurrently, and one server may
+use at most two AI slots for different process subjects. Each subject remains
+exclusive under its durable renewable claim; a third same-server investigation
+waits rather than allowing one server to consume the whole pool. Policy pause/resume
+and server lifecycle changes reject live claims, and delayed admission rechecks the
+current lifecycle before starting. Existing hourly/rate/spend admission and
+ownership/evidence checks still apply before calls and acceptance. The coordinator
+schedules update scoring, alternating purposes even with one AI slot. Claims expire
+after 120 seconds without renewal; interrupted attempts retain the existing recovery
+delay and finite retry limits. A lease cannot cancel an already sent request or
+guarantee exactly-once billing. The full model, evidence and conditional
+SSH/follow-up flow remain unchanged. Administrator-configurable per-server occupancy,
+broader cross-purpose fairness, native complete-context collection and complete
+multi-controller failover acceptance remain unfinished.
 v1.30.0 adds exact-context contradiction invalidation and linked review for the
 complete exact candidates described below.
 
