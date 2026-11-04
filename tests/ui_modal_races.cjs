@@ -194,6 +194,8 @@ module.exports=async function modalRaces(page){
       await patchStart;
       await page.evaluate(()=>document.querySelector('#logout').click());
       await page.getByRole('button',{name:'Open your workspace'}).waitFor();
+      // A toast left by the previous iteration must be gone so that only feedback from the obsolete session can fail the assertion below.
+      await page.locator('#toast').waitFor({state:'hidden'});
       const patchResponse=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname.endsWith('/patch'));
       releasePatch();
       await patchResponse;
