@@ -623,14 +623,14 @@ def execute_locked(job_id):
             else: raise ValueError('Unsupported job')
             job.output=job.output.encode()[:48000].decode(errors='ignore')
             job.state='failed' if result.get('outcome') in ('rolled_back','response_incomplete') else 'complete'
-            if job.action in ('security-plan','startup-plan'):
+            if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             audit(s,('rolled back ' if result.get('outcome')=='rolled_back' else 'incomplete ' if result.get('outcome')=='response_incomplete' else 'complete ')+job.action,h.id)
         except Exception as e:
             s.rollback()
             job=s.get(Job,job_id)
             h=s.get(Host,job.host_id)
-            eligible=ai.defer_until(e) if job.action in ('security-plan','startup-plan') else None
+            eligible=ai.defer_until(e) if job.action in ('release-plan','security-plan','startup-plan') else None
             if eligible is not None:
                 job.state='queued';job.next_at=eligible
                 job.payload={**job.payload,'_ai_deferred':True}
@@ -639,7 +639,7 @@ def execute_locked(job_id):
                 s.commit();return
             uncertain=mutation_outcome_uncertain(mutation_stage,e)
             job.state='recovery_required' if protected or uncertain else 'failed'
-            if job.action in ('security-plan','startup-plan'):
+            if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
             if job.action in ('process-suspend','process-resume'):process_response.reject_unstarted(s,job)
