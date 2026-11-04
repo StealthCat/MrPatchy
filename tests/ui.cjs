@@ -32,6 +32,7 @@ const assert=require('assert/strict');
     assert.equal(await page.locator('#install-mode').inputValue(),'offline');
     await capture('enrollment');
     const download=page.locator('#install-delivery a');
+    assert.equal(await page.locator('#install-delivery a button').count(),0);
     const installerPath=await download.getAttribute('href');
     const installer=await page.request.get(new URL(installerPath,page.url()).href);
     assert.equal(installer.status(),200);assert.match(await installer.text(),/useradd --system/);
