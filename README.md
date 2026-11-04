@@ -595,15 +595,21 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+The bundled public price catalog has an exact reviewed-at and expiry window shown in
+AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
+before consuming smooth-rate capacity or contacting the provider. A reviewed catalog
+update is therefore required before **2026-11-26 00:00 UTC** for capped calls to
+continue; rate-only and unthrottled modes retain their existing controls and behavior.
+
 Daily accounting returns at most five exact-money status totals without loading
 ledger entries as application objects. SQLite preserves the existing nine-place
 Numeric read precision; MySQL sums native DECIMAL values. Eligible ledger scanning
 remains O(N) under the shared admission lock; broader concurrency work remains open.
 
-Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
-alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
-failover/reset acceptance remain required before the shared controls program is
-complete.
+Exact durable defer/resume for every manual/plan path, automated or signed catalog
+updates and lifecycle alerts, invoice reconciliation, long-horizon spend reports and
+full SQLite/MySQL failover/reset acceptance remain required before the shared controls
+program is complete.
 
 ### Shared provider backoff (v1.33.0)
 
@@ -664,10 +670,14 @@ creates no call receipt or charge. A transmitted transient failure is not replay
 inside the HTTP request: its existing receipt and spend outcome remain, and the job
 becomes eligible for a later scheduler attempt at the shared provider floor.
 
-Release planning remains excluded because one release plan can make multiple paid
-calls without per-stage persistence; replaying the whole job could duplicate a
-successful earlier stage. Connection tests are interactive rather than durable jobs.
-Those paths, plus complete multi-controller failover acceptance, remain unfinished.
+Release configuration review planning also retains controlled rate, spend, provider-
+backoff and administrator-pause waits. Each accepted stage is sealed before the next
+provider call; an exact match resumes only unfinished stages, while changed host,
+inventory, configuration, model, policy, vendor or package-news evidence discards
+reuse and reviews the current plan again. A call interrupted before an accepted
+structured result is not replayed automatically. Connection tests remain interactive
+rather than durable jobs, and complete provider-invoice and multi-controller failover
+acceptance remain unfinished.
 
 ### Interrupted advisory-plan recovery (v1.35.4)
 

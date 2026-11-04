@@ -61,6 +61,43 @@ def test_capped_unknown_pricing_fails_before_rate_or_provider(admin, monkeypatch
     assert sent == []
 
 
+def test_pricing_catalog_status_has_exact_freshness_boundaries():
+    before=ai_pricing.catalog_status(ai_pricing.VERIFIED_AT-1)
+    fresh=ai_pricing.catalog_status(ai_pricing.VERIFIED_AT)
+    final=ai_pricing.catalog_status(ai_pricing.EXPIRES_AT-1)
+    expired=ai_pricing.catalog_status(ai_pricing.EXPIRES_AT)
+    assert before['state']=='not_yet_valid' and not before['fresh']
+    assert fresh['state']=='fresh' and fresh['fresh']
+    assert final['state']=='fresh' and final['fresh']
+    assert expired['state']=='expired' and not expired['fresh']
+    assert expired['version']==ai_pricing.VERSION
+    assert expired['source']==ai_pricing.SOURCE
+    assert expired['verified_at']<expired['expires_at']
+
+
+def test_expired_catalog_blocks_capped_call_before_rate_or_provider(admin, monkeypatch):
+    configure(mode='rate_and_daily')
+    sent=[]
+    monkeypatch.setattr(ai_pricing.time, 'time', lambda: ai_pricing.EXPIRES_AT)
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: sent.append(True))
+    with pytest.raises(ai.AIError, match='catalog has expired'):
+        ai.request(payload(), 'fixture-key')
+    with Session() as session:
+        assert session.get(ai_admission.Admission, 'global') is None
+        assert not session.query(ai_budget.BudgetEntry).count()
+        catalog=ai_budget.status(session)['pricing_catalog']
+    assert catalog['state']=='expired' and not catalog['fresh']
+    assert sent == []
+
+
+@pytest.mark.parametrize('mode', ['rate', 'unthrottled'])
+def test_expired_catalog_does_not_add_a_spend_guard_without_a_cap(admin, monkeypatch, mode):
+    configure(mode=mode)
+    monkeypatch.setattr(ai_pricing.time, 'time', lambda: ai_pricing.EXPIRES_AT)
+    # Budget admission remains disabled in modes that do not promise a daily cap.
+    assert ai_budget.reserve(payload()) is None
+
+
 def test_daily_cap_reservation_is_atomic_and_reports_reset(admin, monkeypatch):
     quote=ai_pricing.reservation(payload())['amount_usd']
     configure(cap=quote+Decimal('0.000001'))
@@ -122,6 +159,8 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
     assert state['ai_control_mode']=='rate_and_daily'
     assert state['ai_budget']['cap_usd']=='12.5'
     assert state['ai_budget']['timezone']=='America/New_York'
+    assert state['ai_budget']['pricing_catalog']['state']=='fresh'
+    assert state['ai_budget']['pricing_catalog']['expires_at']==ai_pricing.EXPIRES_AT
     body['ai_budget_timezone']='Not/A_Zone'
     assert admin.put('/api/settings/ai',json=body).status_code==400
 

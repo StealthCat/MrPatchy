@@ -4760,8 +4760,15 @@ eight-thread atomic admission, reset/remaining status, actual reconciliation,
 uncertain transmitted failures, unsent release, combined-mode settings and timezone
 validation. Exact-head SQLite, MySQL, browser and full-suite checks remain mandatory.
 
+The bundled public-price catalog now carries an exact reviewed-at and expires-at
+window. Settings expose its safe version/source/freshness metadata. At the expiry
+boundary, daily-cap and combined-cap admission fails before consuming rate capacity
+or contacting the provider; rate-only and unthrottled operation remain independent
+of Mr Patchy's spend guard. Updating the catalog still requires a reviewed source
+change, and post-call estimates remain advisory rather than provider invoices.
+
 This does not complete the program. Exact durable defer/resume for every manual and
-plan path, pricing-catalog update/expiry controls, provider-invoice reconciliation,
+plan path, automated/signed pricing-catalog updates, provider-invoice reconciliation,
 long-horizon reports and full SQLite/MySQL reset/failover acceptance remain planned.
 APP_VERSION/README/changelog/UI/API synchronize at v1.32.0 with major fixed at 1.
 Rebuild the controller first to create the ledger table, then matching workers. No
@@ -5846,3 +5853,32 @@ Limits: read-only root filesystems, PID/memory limits, GCP override services and
 dependency-vulnerability scanning remain unfinished under #201. Acceptance of the
 new capability set on a real Docker host comes from the exact-head CI Compose and
 HTTPS checks; no local Docker was available. No runtime response authority changes.
+
+### Resumable multi-stage release configuration reviews — worker checkpoint #366
+
+Issue #366 implements the next bounded faster-AI increment. Distribution release
+planning now seals each accepted configuration review before another provider call.
+A controlled smooth-rate, daily-spend, provider-backoff or administrator-pause wait
+leaves the job queued at the authoritative eligibility time (or indefinite resume
+state) and leaves the plan non-approvable in `planning` state. Once policy permits
+execution, an exact completed stage is reconstructed without another provider call.
+
+Reuse is deliberately strict. The encrypted checkpoint and its digest must be valid,
+and its versioned identity binds the host, target release, inspected inventory,
+release runner, rewritten sources, simulated package transaction, every relevant
+configuration's verified bytes/metadata/package state, selected model, review-policy
+version, vendor-default bytes and package-news bytes. Any mismatch discards all saved
+stage results and performs current-evidence reviews; a name, package or file hash by
+itself is never sufficient. Completed plans remove the private progress envelope and
+retain the existing digest-bound administrator GO/NO-GO decision, expiry, validation,
+audit, lifecycle and response safeguards.
+
+Focused regression coverage reproduces a wait after one accepted review, verifies the
+job remains queued and the partial plan remains non-approvable, then proves exact
+resume calls only the unfinished stage. A changed completed configuration proves the
+conservative miss path re-runs both stages. This checkpoint does not make a provider
+call interrupted without an accepted structured result safe to replay automatically,
+does not expand release support or response authority, and does not complete the
+remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before this increment is delivered.
