@@ -145,4 +145,70 @@ module.exports=async function modalRaces(page){
       await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
     }finally{releasePatch();await page.unroute('**/api/hosts/*/patch',patchWrite);await page.unroute('**/api/hosts/*/patch-policy',patchPolicy);await page.unroute('**/api/hosts/*/packages?*',patchList);}
   }
+
+  // Navigation invalidates the submitting dialog but not the authenticated
+  // session. Delayed patch outcomes remain truthful in the global toast and
+  // must not replace or redirect the newly rendered view.
+  for(const outcome of ['success','error']){
+    let patchPosts=0,releasePatch,patchStarted;
+    const patchWait=new Promise(resolve=>releasePatch=resolve);
+    const patchStart=new Promise(resolve=>patchStarted=resolve);
+    const patchWrite=async route=>{patchPosts++;patchStarted();await patchWait;await route.fulfill(outcome==='success'?{json:{job_id:'patch-navigation-race'}}:{status:409,json:{detail:'Patch request became stale'}});};
+    await page.route('**/api/hosts/*/packages?*',patchList);
+    await page.route('**/api/hosts/*/patch-policy',patchPolicy);
+    await page.route('**/api/hosts/*/patch',patchWrite);
+    try{
+      await page.locator('[data-nav=packages]').click();
+      await page.locator('.pkg-check').first().waitFor();
+      await page.locator('#select-all-updates').click();
+      await page.locator('#patch-selected').click();
+      await page.locator('#confirm-patch').click();
+      await patchStart;
+      await page.evaluate(()=>document.querySelector('[data-nav=overview]').click());
+      await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
+      releasePatch();
+      await page.locator('#toast').filter({hasText:outcome==='success'?'Installation queued':'Patch request became stale'}).waitFor({state:'visible'});
+      assert.equal(await page.locator('#modal').evaluate(dialog=>dialog.open),false);
+      assert.equal(await page.getByRole('heading',{name:'A healthier fleet starts here.'}).isVisible(),true);
+      assert.equal(patchPosts,1);
+    }finally{releasePatch();await page.unroute('**/api/hosts/*/patch',patchWrite);await page.unroute('**/api/hosts/*/patch-policy',patchPolicy);await page.unroute('**/api/hosts/*/packages?*',patchList);}
+  }
+
+  // Sign-out changes the session. Neither successful nor failed work from the
+  // obsolete session may display feedback, mutate the login view, or re-open
+  // the submitting dialog after the response arrives.
+  for(const outcome of ['success','error']){
+    let patchPosts=0,releasePatch,patchStarted;
+    const patchWait=new Promise(resolve=>releasePatch=resolve);
+    const patchStart=new Promise(resolve=>patchStarted=resolve);
+    const patchWrite=async route=>{patchPosts++;patchStarted();await patchWait;await route.fulfill(outcome==='success'?{json:{job_id:'patch-signout-race'}}:{status:409,json:{detail:'Patch request became stale'}});};
+    await page.route('**/api/hosts/*/packages?*',patchList);
+    await page.route('**/api/hosts/*/patch-policy',patchPolicy);
+    await page.route('**/api/hosts/*/patch',patchWrite);
+    try{
+      await page.locator('[data-nav=packages]').click();
+      await page.locator('.pkg-check').first().waitFor();
+      await page.locator('#select-all-updates').click();
+      await page.locator('#patch-selected').click();
+      await page.locator('#confirm-patch').click();
+      await patchStart;
+      await page.evaluate(()=>document.querySelector('#logout').click());
+      await page.getByRole('button',{name:'Open your workspace'}).waitFor();
+      const patchResponse=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname.endsWith('/patch'));
+      releasePatch();
+      await patchResponse;
+      assert.equal(await page.locator('#toast').isVisible(),false);
+      assert.equal(await page.locator('#modal').evaluate(dialog=>dialog.open),false);
+      assert.equal(await page.getByRole('button',{name:'Open your workspace'}).isVisible(),true);
+      assert.equal(patchPosts,1);
+      await page.locator('[name=username]').fill('admin');
+      await page.locator('[name=password]').fill('ui-test-password-long');
+      const loginResponse=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/login');
+      await page.getByRole('button',{name:'Open your workspace'}).click();
+      assert.equal((await loginResponse).status(),200);
+      await page.locator('#shell').waitFor({state:'visible'});
+      await page.locator('[data-nav=overview]').click();
+      await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
+    }finally{releasePatch();await page.unroute('**/api/hosts/*/patch',patchWrite);await page.unroute('**/api/hosts/*/patch-policy',patchPolicy);await page.unroute('**/api/hosts/*/packages?*',patchList);}
+  }
 };
