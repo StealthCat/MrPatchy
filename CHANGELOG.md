@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.40.6 — 2026-11-04
+
+1. [PR #378](https://github.com/StealthCat/MrPatchy/pull/378): Bound the production Compose `app`, `worker` and `caddy` services to 1024 processes each, with regression coverage requiring every service to retain a finite process limit. Compatibility: no API, schema, UI, role, audit or response-authorization change; custom deployments that legitimately require more than 1024 simultaneous processes in one container must raise `pids_limit` explicitly. This is a partial #201 hardening increment only: memory limits, read-only root filesystems, GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.
+
 ## 1.40.5 — 2026-11-04
 
 1. [PR #376](https://github.com/StealthCat/MrPatchy/pull/376): Add a liveness-based Docker Compose healthcheck for the worker service, refreshed only after a successful registry heartbeat and failed by missing, stale or implausibly future liveness timestamps. Compatibility: no API, schema, UI, role, audit or response-authorization change; the worker container now reports unhealthy when registry heartbeats stop, but Docker Compose does not restart unhealthy containers automatically. This is a partial #201 hardening increment only: read-only root filesystems, PID/memory limits, GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.

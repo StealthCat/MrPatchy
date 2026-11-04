@@ -5888,6 +5888,21 @@ separate #369 checkpoint. Acceptance of the new capability set on a real Docker
 host comes from the exact-head CI Compose and HTTPS checks; no local Docker was
 available. No runtime response authority changes.
 
+### Compose process-count bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services each set
+`pids_limit: 1024`. This bounds fork exhaustion while retaining headroom for the
+configured thread pools and subprocess work. Regression coverage requires every
+declared production service to retain a numeric limit between 256 and 4096.
+Custom overrides that legitimately need more than 1024 simultaneous processes in
+one container must raise the limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. It does not
+add memory limits, read-only root filesystems or GCP override-specific limits, and
+it does not establish a live GitHub alert inventory; those #201 items remain open.
+No Docker runtime was available locally, so exact-head CI supplies the image-build,
+Compose/HTTPS startup and custom-binding acceptance.
+
 ### Resumable multi-stage release configuration reviews — worker checkpoint #366
 
 Issue #366 implements the next bounded faster-AI increment. Distribution release
