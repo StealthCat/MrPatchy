@@ -19,7 +19,6 @@ from . import ai, ai_runs, ai_retry, ai_assessments, ai_policy, host_lifecycle
 
 LEASE_SECONDS=120
 RENEW_SECONDS=15
-PER_HOST_LIMIT=2
 PROCESS_BOOT=uuid.uuid4().hex
 current=ContextVar('ai_triage_lease',default=None)
 
@@ -92,10 +91,13 @@ def acquire(owner=None):
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
             signature=ai_retry.configuration(s)
-            # Bound per-host occupancy so one noisy server cannot consume the
-            # whole pool while still allowing independent work to overlap.
-            saturated_hosts=(select(Claim.host_id).where(Claim.expires>now)
-                .group_by(Claim.host_id).having(func.count()>=PER_HOST_LIMIT))
+            # Active claims are globally bounded by worker capacity. Resolve
+            # each occupied host's revisioned policy under this admission lock
+            # so a settings change and the next claim cannot cross.
+            active_by_host=dict(s.execute(select(Claim.host_id,func.count()).where(
+                Claim.expires>now).group_by(Claim.host_id)).all())
+            saturated_hosts=[host_id for host_id,count in active_by_host.items()
+                if count>=ai_policy.investigation_limit(s,host_id)]
             row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
                 Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
