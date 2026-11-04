@@ -84,6 +84,13 @@ The production Compose services drop all Linux capabilities and add back only
 rely on Docker's default capability set must explicitly add the capabilities they
 need.
 
+Those production `app`, `worker` and `caddy` services also cap the number of
+processes at 1024 to bound fork exhaustion while leaving room for the configured
+thread pools and subprocess work. Custom deployments that legitimately need more
+than 1024 simultaneous processes per container must raise `pids_limit` explicitly;
+this limit does not impose a memory cap or make the container root filesystem
+read-only.
+
 The Compose `worker` service publishes a Docker health status from a liveness file
 on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
 registry heartbeat; a missing timestamp, one more than 60 seconds old, or one
