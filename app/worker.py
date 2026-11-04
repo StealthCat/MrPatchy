@@ -822,7 +822,18 @@ def _loop(reporter):
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
-            if shutting_down and not active_jobs and not ai_tasks and all(future.done() for future in active_polls.values()) and (notification_task is None or notification_task.done()):break
+            # Finished observation/delivery futures must be consumed even when
+            # this tick satisfies the terminal shutdown condition.
+            for host_id,future in list(active_polls.items()):
+                if future.done() and not getattr(future,'_mp_reaped',False):
+                    future._mp_reaped=True
+                    try: future.result()
+                    except Exception: log.exception('Host poll failed outside its handler')
+            if notification_task is not None and notification_task.done() and not getattr(notification_task,'_mp_reaped',False):
+                notification_task._mp_reaped=True
+                try: notification_task.result()
+                except Exception: log.exception('Notification delivery failed outside its handler')
+            if shutting_down and not active_jobs and not ai_tasks and all(getattr(future,'_mp_reaped',False) for future in active_polls.values()) and (notification_task is None or getattr(notification_task,'_mp_reaped',False)):break
             if shutting_down:time.sleep(.25)
             reporter.stopping=shutting_down
             try:
@@ -853,15 +864,6 @@ def _loop(reporter):
                         try: future.result()
                         except Exception: log.exception('Job worker failed outside its operation handler')
                         del active_jobs[key]
-                for host_id,future in list(active_polls.items()):
-                    if future.done() and not getattr(future,'_mp_reaped',False):
-                        future._mp_reaped=True
-                        try: future.result()
-                        except Exception: log.exception('Host poll failed outside its handler')
-                if notification_task is not None and notification_task.done() and not getattr(notification_task,'_mp_reaped',False):
-                    notification_task._mp_reaped=True
-                    try: notification_task.result()
-                    except Exception: log.exception('Notification delivery failed outside its handler')
                 if draining:
                     ai_transport.close(wait=False)
                     continue
