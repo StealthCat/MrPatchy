@@ -110,18 +110,20 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
     if result.get('error'): raise RemoteFailure(result['error'])
     return result
 
-def call(host, payload, timeout=60, key_file=None):
+def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
     from . import host_lifecycle
     if not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
     kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
-    with host_lifecycle.activity([host.id],kind):
-        stage={'started':False}
-        try:return _call(host,payload,timeout,key_file,stage)
-        except Exception as error:
-            # Callers deciding whether a mutation may have run need to know if
-            # the remote command was ever requested, whatever the error type.
-            error.remote_started=stage['started']
-            raise
+    stage={'started':False}
+    try:
+        with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking):
+            return _call(host,payload,timeout,key_file,stage)
+    except Exception as error:
+        # Callers deciding whether a mutation may have run need to know if the
+        # remote command was ever requested, including lifecycle admission and
+        # lock-release failures around the transport itself.
+        error.remote_started=stage['started']
+        raise
 
 def _call(host, payload, timeout=60, key_file=None, stage=None):
     stage=stage if stage is not None else {}
