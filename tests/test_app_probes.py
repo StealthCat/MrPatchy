@@ -32,7 +32,8 @@ def test_comparison_separates_new_from_pre_existing_and_distrusts_gaps():
     ok=result(('web',True),('api',True),('opt',True))
     for after in (None,{},result(('web',True)),result(('web',True),('web',True),('api',True)),{'results':[{'name':'web','ok':1},{'name':'api','ok':True}]}):
         assert not app_probes.comparison(probes,ok,after)['passed']
-    assert app_probes.comparison(probes,None,result(('web',True),('api',True)))['recovered_probes']==['web','api']
+    missing=app_probes.comparison(probes,None,result(('web',True),('api',True)))
+    assert not missing['passed'] and not missing['baseline_valid'] and not missing['recovered_probes']
 
 def serve(status):
     class H(BaseHTTPRequestHandler):
@@ -97,6 +98,26 @@ def test_unavailable_baseline_blocks_before_any_package_change(admin,monkeypatch
     calls=run(monkeypatch,'probe-base',[RuntimeError('agent disconnected')])
     assert 'patch' not in calls
     with Session() as s:assert s.get(Job,'probe-base-job').state=='failed'
+
+@pytest.mark.parametrize('baseline', [
+    {}, None, {'results':[]}, result(('other',True)),
+    result(('web',True),('web',False)),
+    {'results':[{'name':'web','ok':1}]},
+    {'results':[{'name':'web'}]},
+])
+def test_malformed_baseline_blocks_before_any_package_change(admin,monkeypatch,baseline):
+    seed('probe-malformed',[probe()])
+    calls=run(monkeypatch,'probe-malformed',[baseline,result(('web',False))])
+    assert 'patch' not in calls
+    with Session() as s:assert s.get(Job,'probe-malformed-job').state=='failed'
+
+def test_valid_failing_baseline_remains_a_known_pre_existing_failure(admin,monkeypatch):
+    seed('probe-existing',[probe()])
+    calls=run(monkeypatch,'probe-existing',[result(('web',False)),result(('web',False))])
+    assert 'patch' in calls
+    with Session() as s:
+        job=s.get(Job,'probe-existing-job')
+        assert job.state=='complete' and 'pre_existing_probe_failures' in job.output
 
 def test_post_probe_outage_is_unhealthy_not_ignored(admin,monkeypatch):
     seed('probe-gone',[probe()])

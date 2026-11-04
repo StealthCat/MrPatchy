@@ -597,6 +597,8 @@ def execute_locked(job_id):
                 if probes:
                     # Reviewed application probes: a baseline that cannot be collected stops the rollout before any package change.
                     probes_before=ssh.call(h,app_probes.request(probes),timeout=200)
+                    if not app_probes.baseline_trusted(probes,probes_before):
+                        raise ValueError('Pre-patch application probe baseline is incomplete or malformed; no package changes attempted')
                     job.payload={**job.payload,'_probes_before':probes_before};s.commit()
                 protected=job.action=='patch' and any(policy.values())
                 request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}

@@ -55,6 +55,23 @@ def request(probes):
     """Target request carrying only the reviewed fields the fixed adapter understands."""
     return {'action':'app-probe','probes':[{k:v for k,v in p.items() if k!='reason'} for p in probes]}
 
+def baseline_trusted(probes,results):
+    """Require exactly one explicit boolean observation per reviewed probe.
+
+    A known failure is useful baseline evidence; missing or ambiguous evidence is
+    not a known pre-existing failure and cannot authorize a package change.
+    """
+    if not isinstance(results,dict) or not isinstance(results.get('results'),list):return False
+    rows=results['results']
+    if len(rows)!=len(probes) or len(rows)>MAX_PROBES:return False
+    expected={p['name'] for p in probes};seen=set()
+    for row in rows:
+        if not isinstance(row,dict) or not isinstance(row.get('name'),str):return False
+        name=row['name']
+        if name not in expected or name in seen or type(row.get('ok')) is not bool:return False
+        seen.add(name)
+    return seen==expected
+
 def _outcomes(probes,results):
     """name -> (healthy, detail); anything missing, repeated or malformed is unhealthy."""
     rows={}
@@ -73,10 +90,11 @@ def _outcomes(probes,results):
 
 def comparison(probes,before,after):
     """Pre/post contract: only a required probe that was healthy and is not now stops a rollout."""
+    valid=baseline_trusted(probes,before)
     previous=_outcomes(probes,before);current=_outcomes(probes,after)
     required=[p['name'] for p in probes if p['required']]
     new=[n for n in required if previous[n][0] and not current[n][0]]
-    pre=[n for n in required if not previous[n][0] and not current[n][0]]
+    pre=[n for n in required if valid and not previous[n][0] and not current[n][0]]
     return {'probes':len(probes),'new_probe_failures':new,'pre_existing_probe_failures':pre,
-            'recovered_probes':[n for n in required if not previous[n][0] and current[n][0]],
-            'details':{n:current[n][1] for n in new+pre},'passed':not new}
+            'recovered_probes':[n for n in required if valid and not previous[n][0] and current[n][0]],
+            'details':{n:current[n][1] for n in new+pre},'baseline_valid':valid,'passed':valid and not new}
