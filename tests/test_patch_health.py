@@ -69,11 +69,17 @@ def test_target_recovery_preflight_creates_no_transaction(tmp_path,monkeypatch):
 def test_target_health_list_is_not_truncated(monkeypatch):
     units=''.join(f'unit-{n}.service loaded failed failed Example\n' for n in range(1000))
     assert len(units)>20000
-    monkeypatch.setattr(bridge,'bounded',lambda *args,**kwargs:(units,''))
-    monkeypatch.setattr(bridge,'run',lambda *args,**kwargs:'active')
+    monkeypatch.setattr(bridge,'bounded',lambda args,**kwargs:('active\n','',0) if 'is-active' in args else (units,''))
     monkeypatch.setattr(bridge,'rpm_backend',lambda:False)
     result=bridge.handle({'action':'health'})
     assert len(operations.failed_unit_names(result))==1000
     assert result['failed_units'].startswith('unit-0.service')
     monkeypatch.setattr(bridge,'bounded',lambda *args,**kwargs:('', 'Failed to connect to bus'))
     with pytest.raises(RuntimeError,match='unambiguous'):bridge.handle({'action':'health'})
+
+@pytest.mark.parametrize('state,code',[('inactive',3),('failed',3),('activating',3),('unknown',4)])
+def test_target_health_reports_inactive_collector_instead_of_raising(monkeypatch,state,code):
+    monkeypatch.setattr(bridge,'bounded',lambda args,**kwargs:(state+'\n','',code) if 'is-active' in args else ('',''))
+    monkeypatch.setattr(bridge,'rpm_backend',lambda:False)
+    result=bridge.handle({'action':'health'})
+    assert result['collector_active'] is False and result['failed_units']==''
