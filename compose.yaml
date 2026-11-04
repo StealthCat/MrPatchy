@@ -54,6 +54,13 @@ services:
     volumes:
       - app-data:/data
     networks: [management]
+    healthcheck:
+      # Passes only while the loop keeps completing registry heartbeats (file in the /tmp tmpfs).
+      test: [CMD, python, -m, app.worker_health]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     cap_add: [CHOWN, SETUID, SETGID]

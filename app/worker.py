@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle,response_status
+from . import host_lifecycle,response_status,worker_health
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -850,6 +850,7 @@ def _loop(reporter):
                         except Exception:pass
                         is_leader=False
                 draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
+                worker_health.touch()
                 if draining and is_leader:leader.release();is_leader=False
                 if not draining and not is_leader:is_leader=leader.acquire(False)
                 if is_leader:

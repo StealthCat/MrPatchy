@@ -84,6 +84,13 @@ The production Compose services drop all Linux capabilities and add back only
 rely on Docker's default capability set must explicitly add the capabilities they
 need.
 
+The Compose `worker` service publishes a Docker health status from a liveness file
+on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
+registry heartbeat; a missing timestamp, one more than 60 seconds old, or one
+implausibly in the future fails the health command. The check reports a stalled or
+disconnected worker but does not grant new response authority, prove application
+readiness, or make Docker Compose restart an unhealthy container automatically.
+
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
 cd MrPatchy
