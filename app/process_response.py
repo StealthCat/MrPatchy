@@ -1,10 +1,10 @@
 """Separately approved process suspension/recovery with durable host holds."""
 import time
 import uuid
-from sqlalchemy import String,Double,Boolean,JSON,Text,select
+from sqlalchemy import String,Double,Boolean,JSON,Text
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
-from . import quarantine,response_processes,incidents,ssh
+from . import quarantine,response_processes,incidents,ssh,response_rejection,response_status
 
 ACTIONS=('process-prepare','process-suspend','process-status','process-resume')
 RECOVERY_ACTIONS=('process-suspend','process-status','process-resume')
@@ -85,12 +85,8 @@ def validate_receipt(receipt,row):
 
 
 def reject_unstarted(s,job):
-    row=s.get(ProcessResponse,job.payload.get('process_id'))
-    if row and row.host_id==job.host_id and row.state in ('queued','resume_queued'):
-        approval=s.get(Approval,row.approval_id)
-        row.state='rejected' if row.state=='queued' else (approval.before_state if approval else 'uncertain')
-        row.hold=approval.before_hold if approval else True
-        event(s,row,'rejected',job.payload.get('_actor','system'),{'job_id':job.id})
+    response_rejection.reject_unstarted(s,job,model=ProcessResponse,approval_model=Approval,
+        payload_key='process_id',recovery_state='resume_queued',event=event,actor_from_approval=False)
 
 
 def execute(s,host,job):
@@ -123,13 +119,15 @@ def execute(s,host,job):
         s.rollback();s.expire_all();row=s.get(ProcessResponse,payload['process_id'])
         if not row or not bound(s,host,row) or incidents.digest(row.plan)!=digest:raise ValueError('Process scope changed during remote response; review console')
         row.receipt=receipt;row.observed=time.time();row.state=receipt['state'];row.hold=row.state!='resumed'
-        event(s,row,'observed_'+row.state,actor,{'job_id':job.id,'receipt':receipt})
+        if receipt['state']=='not_started':
+            approval=s.get(Approval,row.approval_id)
+            if approval and approval.process_id==row.id and approval.plan_digest==digest:row.state=approval.before_state;row.hold=approval.before_hold
+        event(s,row,'observed_'+receipt['state'],actor,{'job_id':job.id,'receipt':receipt})
         incomplete=not status and row.state!=('resumed' if action=='resume' else 'suspended')
         return {'id':row.id,'state':row.state,'process_hold':row.hold,'outcome':'response_incomplete' if incomplete else 'observed'}
     except Exception:
         if started or status:
             s.rollback();row=s.get(ProcessResponse,payload['process_id'])
             if row and row.host_id==host.id:
-                row.state='uncertain';row.hold=True;row.receipt={};row.observed=time.time()
-                event(s,row,'observation_failed',actor,{'job_id':job.id});s.commit()
+                response_status.mark_status_failed(s,row,actor,job.id,event=event,clock=time.time);s.commit()
         raise

@@ -163,7 +163,7 @@ def cost_summary(run, receipts):
 
 def safe_error(error):
     from .ai import AIError
-    if isinstance(error, AIError): return str(error)[:2000]
+    if isinstance(error, AIError): return error.diagnostic
     # Never persist str(unexpected_error): request bodies, SQL parameters and
     # cryptographic failures may contain evidence or credentials.
     kind = type(error).__name__
@@ -301,7 +301,7 @@ def status(s):
     # Retained malformed markers must match the public API's `is True` contract.
     marker_type=(func.json_type(Job.payload,'$._ai_deferred')=='true' if s.get_bind().dialect.name=='sqlite' else
         func.json_type(func.json_extract(Job.payload,'$._ai_deferred'))=='BOOLEAN')
-    plan_where=(Job.action.in_(('security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
+    plan_where=(Job.action.in_(('release-plan','security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
         marker_type,Job.payload['_ai_deferred'].as_boolean()==True)
     plan_deferred,plan_next=s.execute(select(func.count(),func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where)).one()
     plan_ready=s.scalar(select(func.count()).where(*plan_where,Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids())))
@@ -331,7 +331,7 @@ def status(s):
     return {'pending':pending_count,'oldest':oldest,'hourly_limit':cfg['ai_hourly_limit'],
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
-            'active':active_count,'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
+            'active':active_count,'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,'per_server_limit':ai_claims.PER_HOST_LIMIT,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
