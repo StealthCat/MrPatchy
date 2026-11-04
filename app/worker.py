@@ -894,7 +894,10 @@ def _loop(reporter):
                                 existing=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh',Job.state.in_(['queued','running'])))
                                 # Failure backoff is independent of last successful refresh.
                                 latest=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh').order_by(Job.created.desc()))
-                                if not existing and (not latest or now-latest.created>300): enqueue(s,h.id,'refresh')
+                                if not existing and (not latest or now-latest.created>300):
+                                    # A full per-server queue must not abort the fleet-wide tick.
+                                    try:enqueue(s,h.id,'refresh')
+                                    except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
                         operations.collect_alerts()
                     # Resume observation, never the package transaction, after worker loss.
