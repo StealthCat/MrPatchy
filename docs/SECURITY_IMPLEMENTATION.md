@@ -5852,6 +5852,21 @@ claimed registry digest pins. #292's Actions pins and #302's CodeQL coverage are
 separate deliveries whose history must be preserved during integration. #201
 stays partial/open; no broader deployment/security roadmap completion is claimed.
 
+### Compose capability bounding — partial #201 checkpoint
+
+The complete Compose file now drops all Linux capabilities from `app`, `worker`
+and `caddy` and adds back only what each needs. `app` and `worker` start as root
+only for the entrypoint's `chown` of the data/TLS volumes and the `gosu` drop to
+the unprivileged `mrpatchy` user, so they keep `CHOWN`, `SETUID` and `SETGID`.
+`caddy` keeps `NET_BIND_SERVICE` for ports 80/443 and `DAC_READ_SEARCH` to read
+the owner-only files on the read-only `/tls` mount. `no-new-privileges` is
+unchanged. `tests/test_compose_capabilities.py` pins this exact set.
+
+Limits: read-only root filesystems, PID/memory limits and GCP override services
+remain unfinished under #201; the dependency-vulnerability gate is tracked by the
+separate #369 checkpoint. Acceptance of the new capability set on a real Docker
+host comes from the exact-head CI Compose and HTTPS checks; no local Docker was
+available. No runtime response authority changes.
 
 ### Resumable multi-stage release configuration reviews — worker checkpoint #366
 
