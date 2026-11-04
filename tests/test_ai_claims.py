@@ -149,6 +149,24 @@ def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeyp
         assert not list(s.scalars(select(ai_claims.Claim)))
 
 
+def test_new_pid_refresh_does_not_fence_in_flight_triage(admin,monkeypatch):
+    seed(count=1)
+    identity=lambda pid:{'pid':pid,'start_ticks':5,'pid_namespace':1,'boot_id':'a'*8+'-aaaa-aaaa-aaaa-'+'a'*12,'proc_device':1,'proc_inode':2}
+    with Session() as s:
+        row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(10)};s.commit()
+    def post(*a,**k):
+        with Session() as s:  # the same behavior re-spawns under a new PID
+            row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(11)};s.commit()
+        return result()
+    monkeypatch.setattr(ai.transport,'post',post)
+    worker.investigate_one()
+    with Session() as s:
+        row=s.get(Behavior,'subject-0')
+        assert row.verdict=='low' and row.evidence['process_identity']['pid']==11
+        assert len(list(s.scalars(select(ai_assessments.Assessment))))==1
+        assert not list(s.scalars(select(ai_claims.Claim)))
+
+
 @pytest.mark.parametrize('change',['evidence','approval','configuration','expiry','token','worker_boot','worker_heartbeat','worker_identity'])
 def test_changed_state_fences_late_provider_result(admin,monkeypatch,change):
     seed(count=1)
