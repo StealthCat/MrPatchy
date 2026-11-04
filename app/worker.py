@@ -657,6 +657,10 @@ def execute_locked(job_id):
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
+            if job.action=='evidence-preserve':
+                from .evidence_vault import EvidenceCopy
+                copy=s.get(EvidenceCopy,job.payload.get('copy_id'))
+                if copy and copy.host_id==job.host_id and copy.state=='queued':copy.state='rejected';copy.expires=0
             if job.action=='evidence-acquire':
                 from . import evidence_archive
                 from .evidence_vault import EvidenceArchive
