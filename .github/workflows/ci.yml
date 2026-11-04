@@ -47,6 +47,12 @@ jobs:
           python -m pip install --quiet -r requirements-lint.txt
           ruff check --no-cache --select F app target scripts tools
           ruff check --no-cache --select F821 tests
+      - name: Dependency vulnerability gate
+        # Policy and exception rules: docs/SECURITY_IMPLEMENTATION.md (issue #201).
+        run: |
+          python -m pip install --quiet -r requirements-audit.txt
+          pip-audit --require-hashes --disable-pip --no-deps -r requirements.lock --format json --output pip-audit.json || test -s pip-audit.json
+          python tools/dependency_policy.py pip-audit.json
       - name: Python byte-compilation
         run: python -m compileall -q app target scripts tools tests
       - name: Shell syntax
