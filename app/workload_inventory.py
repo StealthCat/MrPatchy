@@ -24,7 +24,7 @@ GAPS=[
 
 
 def _text(value,pattern):
-    return value if isinstance(value,str) and len(value)<=MAX_TEXT and pattern.match(value) else None
+    return value if isinstance(value,str) and len(value)<=MAX_TEXT and pattern.fullmatch(value) else None
 
 
 def _pid_list(value):
@@ -45,10 +45,11 @@ def normalize(report):
     tags as non-identifying labels. Duplicate container reports collapse, and
     reports beyond the bound set ``truncated`` instead of being silently dropped.
     """
-    runtimes={};workloads={};images={};rejected=0;truncated=False
+    runtimes={};workloads={};images={};rejected=0;truncated=False;conflicts=set();tags_truncated=False
     raw_runtimes=report.get('runtimes') if isinstance(report,dict) else None
     if not isinstance(raw_runtimes,dict):raw_runtimes={}
-    for name,item in raw_runtimes.items():
+    for name in RUNTIMES:
+        item=raw_runtimes.get(name)
         if name in RUNTIMES and isinstance(item,dict):
             runtimes[name]='accessible' if item.get('accessible') is True else 'inaccessible'
     containers=report.get('containers') if isinstance(report,dict) else None
@@ -62,10 +63,21 @@ def normalize(report):
         if runtimes.get(runtime)!='accessible':rejected+=1;continue
         tag=_text(item.get('image_tag'),TAG) if item.get('image_tag') is not None else None
         key=workload_key(runtime,cid)
-        workloads[key]={'key':key,'runtime':runtime,'container_id':cid,'name':name,'state':state,'image_digest':digest,
-                        'image_tag':tag,'pids':_pid_list(item.get('pids')) if state=='running' else []}
+        value={'key':key,'runtime':runtime,'container_id':cid,'name':name,'state':state,'image_digest':digest,
+               'image_tag':tag,'pids':_pid_list(item.get('pids')) if state=='running' else []}
+        if key in conflicts:rejected+=1;continue
+        if key in workloads:
+            if workloads[key]==value:continue
+            del workloads[key];conflicts.add(key);rejected+=2;continue
+        workloads[key]=value
+    # Build reverse links only after duplicate/conflict handling, so every image
+    # reference resolves to exactly one retained workload observation.
+    for key,item in workloads.items():
+        digest=item['image_digest'];tag=item['image_tag']
         image=images.setdefault(digest,{'digest':digest,'tags':[],'workloads':[]})
-        if tag and tag not in image['tags'] and len(image['tags'])<MAX_TAGS:image['tags'].append(tag)
+        if tag and tag not in image['tags']:
+            if len(image['tags'])<MAX_TAGS:image['tags'].append(tag)
+            else:tags_truncated=True
         image['workloads'].append(key)
     for image in images.values():image['tags'].sort();image['workloads'].sort()
     gaps=list(GAPS)
@@ -74,21 +86,27 @@ def normalize(report):
         elif name not in runtimes:gaps.append(f'{name} runtime did not report; its workloads are unknown.')
     if rejected:gaps.append(f'{rejected} malformed or unattributable container record(s) were skipped.')
     if truncated:gaps.append(f'More than {MAX_CONTAINERS} containers were reported; the inventory is incomplete.')
+    if tags_truncated:gaps.append(f'More than {MAX_TAGS} tags were reported for an image; tag coverage is incomplete.')
     return {'runtimes':runtimes,'workloads':sorted(workloads.values(),key=lambda w:w['key']),
-            'images':sorted(images.values(),key=lambda i:i['digest']),'rejected':rejected,'truncated':truncated,'gaps':gaps}
+            'images':sorted(images.values(),key=lambda i:i['digest']),'rejected':rejected,'truncated':truncated or tags_truncated,'gaps':gaps}
 
 
 def compare(previous,current):
     """Classify changes between two normalised inventories by workload identity.
 
     ``replaced`` is a container whose name persists under a new id; ``retagged``
-    is an image tag now resolving to a different digest. Neither is conflated
+    lists every newly observed digest for an image tag. It does not assert the
+    current registry resolution of that movable label. Neither is conflated
     with an unchanged workload.
     """
     old={w['key']:w for w in previous['workloads']};new={w['key']:w for w in current['workloads']}
     added=sorted(set(new)-set(old));removed=sorted(set(old)-set(new))
-    by_name={old[k]['name']:k for k in removed}
-    replaced=sorted((by_name[new[k]['name']],k) for k in added if new[k]['name'] in by_name)
+    by_name={}
+    for k in removed:by_name.setdefault((old[k]['runtime'],old[k]['name']),[]).append(k)
+    replacements={}
+    for k in added:replacements.setdefault((new[k]['runtime'],new[k]['name']),[]).append(k)
+    replaced=sorted((values[0],replacements[name][0]) for name,values in by_name.items()
+        if len(values)==1 and len(replacements.get(name,[]))==1)
     changed=sorted(k for k in set(old)&set(new) if (old[k]['state'],old[k]['image_digest'])!=(new[k]['state'],new[k]['image_digest']))
     tags={}
     for image in previous['images']:
@@ -96,5 +114,6 @@ def compare(previous,current):
     moved={}
     for image in current['images']:
         for tag in image['tags']:
-            if tag in tags and image['digest'] not in tags[tag]:moved[tag]=image['digest']
-    return {'added':added,'removed':removed,'replaced':[list(p) for p in replaced],'changed':changed,'retagged':dict(sorted(moved.items()))}
+            if tag in tags and image['digest'] not in tags[tag]:moved.setdefault(tag,set()).add(image['digest'])
+    return {'added':added,'removed':removed,'replaced':[list(p) for p in replaced],'changed':changed,
+            'retagged':{tag:sorted(digests) for tag,digests in sorted(moved.items())}}

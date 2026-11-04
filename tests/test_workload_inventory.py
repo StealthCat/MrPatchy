@@ -23,7 +23,9 @@ def test_same_image_in_two_containers_stays_distinct_instances():
 
 
 def test_duplicate_container_reports_collapse():
-    assert len(wi.normalize(report(c(),c()))['workloads'])==1
+    inventory=wi.normalize(report(c(),c()))
+    assert len(inventory['workloads'])==1
+    assert inventory['images'][0]['workloads']==[inventory['workloads'][0]['key']]
 
 
 def test_tag_is_label_not_identity():
@@ -72,5 +74,33 @@ def test_compare_replacement_tag_movement_and_state_change():
     assert diff['replaced']==[['docker:'+'1'*12,'docker:'+'3'*12]]
     assert diff['added']==['docker:'+'3'*12] and diff['removed']==['docker:'+'1'*12]
     assert diff['changed']==['docker:'+'2'*12]
-    assert diff['retagged']=={'app:1':D2}
+    assert diff['retagged']=={'app:1':[D2]}
     assert wi.compare(old,old)=={'added':[],'removed':[],'replaced':[],'changed':[],'retagged':{}}
+
+
+def test_conflicting_duplicate_identity_is_unknown_and_leaves_no_stale_image_link():
+    inv=wi.normalize(report(c(),c(digest=D2)))
+    assert not inv['workloads'] and not inv['images'] and inv['rejected']==2
+
+
+def test_replacement_does_not_cross_runtime_namespace():
+    old=wi.normalize(report(c(),docker=True,podman=True))
+    new=wi.normalize(report(c(cid='2'*12,runtime='podman'),docker=True,podman=True))
+    assert wi.compare(old,new)['replaced']==[]
+
+
+def test_newline_is_not_an_immutable_identity():
+    assert not wi.normalize(report(c(digest=D1+'\n')))['workloads']
+
+
+def test_tag_overflow_has_an_explicit_coverage_gap():
+    inv=wi.normalize(report(*(c(cid=f'{i:012x}',name='w'+str(i),tag='app:'+str(i)) for i in range(17))))
+    assert len(inv['images'][0]['tags'])==wi.MAX_TAGS
+    assert inv['truncated'] and any('tag' in gap and 'incomplete' in gap for gap in inv['gaps'])
+
+
+def test_tag_comparison_retains_every_new_observed_digest():
+    d3='sha256:'+'c'*64
+    old=wi.normalize(report(c(tag='app:latest')))
+    new=wi.normalize(report(c(cid='2'*12,digest=D2,tag='app:latest'),c(cid='3'*12,digest=d3,tag='app:latest')))
+    assert wi.compare(old,new)['retagged']=={'app:latest':[D2,d3]}
