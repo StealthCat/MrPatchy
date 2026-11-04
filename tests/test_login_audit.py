@@ -227,3 +227,30 @@ def test_detector_account_cap_does_not_lock_out_valid_authentication(client, mon
     assert client.post('/api/login', json={'username': 'admin', 'password': 'bad'}).status_code == 401
     assert len(main.login_account_failures) == 8
     assert client.post('/api/login', json={'username': 'admin', 'password': PASSWORD}).status_code == 200
+
+
+def test_login_failures_do_not_reveal_which_factor_was_wrong(client):
+    with Session() as s:
+        s.get(User, 'admin').otp_secret = seal(new_secret())
+        s.commit()
+    login_attempts.clear()
+    bad_password = client.post('/api/login', json={'username': 'admin', 'password': 'wrong-guess', 'otp': '000000'})
+    bad_otp = client.post('/api/login', json={'username': 'admin', 'password': PASSWORD, 'otp': '000000'})
+    unknown = client.post('/api/login', json={'username': 'nobody', 'password': 'wrong-guess'})
+    assert {(r.status_code, r.json()['detail']) for r in (bad_password, bad_otp, unknown)} == {(401, 'Invalid credentials or MFA code')}
+    details = entries('login failed')  # the specific reason is kept for the audit log only
+    assert 'bad password' in details[0] and 'bad MFA code' in details[1]
+
+
+def test_step_up_password_check_does_not_reveal_which_factor_was_wrong(client):
+    login = client.post('/api/login', json={'password': PASSWORD})
+    assert login.status_code == 200
+    with Session() as s:
+        s.get(User, 'admin').otp_secret = seal(new_secret())
+        s.commit()
+    login_attempts.clear()
+    headers = {'X-CSRF-Token': login.json()['csrf']}
+    bad_password = client.post('/api/identity/mfa', json={'password': 'wrong-guess', 'otp': '000000'}, headers=headers)
+    bad_otp = client.post('/api/identity/mfa', json={'password': PASSWORD, 'otp': '000000'}, headers=headers)
+    assert bad_password.status_code == bad_otp.status_code == 403
+    assert bad_password.json() == bad_otp.json() == {'detail': 'Invalid credentials or MFA code'}
