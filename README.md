@@ -50,6 +50,8 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Overview summary cards reflow to the available content width. Decorative imagery stays clear of text and actions, and multi-line link buttons retain a complete border on narrow screens.
 
+The 30-second Fleet Overview and Servers background refresh keeps the current view visible while it fetches, preserves scroll position and keyboard focus, and reuses the existing DOM when the rendered result is unchanged. An open details panel defers that background refresh; manual refresh, navigation and Retry still show their normal loading state.
+
 Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
 
 Open **Servers → a server name** (or **Open server**) to see everything recorded for that server in one place. Separate tabs cover its overview, packages, patching timeline, investigations, AI activity with estimated costs, history, repositories and maintenance. Switch servers while keeping the same tab, or bookmark a server tab directly. Sensitive tabs and actions retain the existing role permissions.
@@ -88,8 +90,22 @@ Those production `app`, `worker` and `caddy` services also cap the number of
 processes at 1024 to bound fork exhaustion while leaving room for the configured
 thread pools and subprocess work. Custom deployments that legitimately need more
 than 1024 simultaneous processes per container must raise `pids_limit` explicitly;
-this limit does not impose a memory cap or make the container root filesystem
-read-only.
+this process limit does not make the container root filesystem read-only.
+
+The same services cap memory by default at 2 GiB for `app`, 4 GiB for `worker`
+and 512 MiB for `caddy`. Override those limits with
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and
+`MRPATCHY_CADDY_MEM_LIMIT` when larger fleets or concurrent scan and AI workloads
+need more headroom. Reaching a limit can OOM-kill the container process; the
+production restart policy then starts it again, so size and monitor these limits
+for the deployment rather than treating them as a readiness guarantee.
+
+Production Compose also runs `app`, `worker` and `caddy` with read-only root
+filesystems. The app can write only to its `/data` and `/tls` named volumes and
+private `/tmp` tmpfs, the worker to `/data` and `/tmp`, and Caddy to `/data`,
+`/config` and `/tmp`. Custom overrides or extensions that need another writable
+path must mount an explicit volume or tmpfs there; do not disable the read-only
+root merely to provide transient or application state.
 
 The Compose `worker` service publishes a Docker health status from a liveness file
 on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
@@ -552,16 +568,20 @@ Direct worker/embedded processes use the same variables. Invalid values refuse
 startup. These limits size the real executors. Poll/notification work shares the
 poll pool; process investigations and update scoring share AI slots.
 
-Independent servers can now undergo process triage concurrently. A durable,
-renewable claim permits one process investigation per server across supported
-workers, with atomic existing hourly admission and ownership/evidence checks
-before calls and acceptance. The coordinator schedules update scoring, alternating
-purposes even with one AI slot. Claims expire after 120 seconds without renewal;
-interrupted attempts retain the existing recovery delay and finite retry limits.
-A lease cannot cancel an already sent request or guarantee exactly-once billing.
-The full model, evidence and conditional SSH/follow-up flow remain unchanged.
-Same-server parallel investigations, broader fairness and native complete-context
-collection remain unfinished.
+Independent servers can undergo process triage concurrently, and one server may
+use at most two AI slots for different process subjects. Each subject remains
+exclusive under its durable renewable claim; a third same-server investigation
+waits rather than allowing one server to consume the whole pool. Policy pause/resume
+and server lifecycle changes reject live claims, and delayed admission rechecks the
+current lifecycle before starting. Existing hourly/rate/spend admission and
+ownership/evidence checks still apply before calls and acceptance. The coordinator
+schedules update scoring, alternating purposes even with one AI slot. Claims expire
+after 120 seconds without renewal; interrupted attempts retain the existing recovery
+delay and finite retry limits. A lease cannot cancel an already sent request or
+guarantee exactly-once billing. The full model, evidence and conditional
+SSH/follow-up flow remain unchanged. Administrator-configurable per-server occupancy,
+broader cross-purpose fairness, native complete-context collection and complete
+multi-controller failover acceptance remain unfinished.
 v1.30.0 adds exact-context contradiction invalidation and linked review for the
 complete exact candidates described below.
 
@@ -649,7 +669,8 @@ remain required before the shared controls program is complete.
 
 Every current billable provider path checks one durable fleet-wide transient-failure
 floor before budget and rate admission. A valid provider `Retry-After` is retained
-exactly; transient 408/429/5xx responses, connection failures and timeouts without a
+up to 24 hours; longer delays are capped and reported for administrator review.
+Transient 408/429/5xx responses, connection failures and timeouts without a
 valid floor use bounded exponential backoff with full jitter from 30 seconds up to 30
 minutes. The sanitized state is shared across controllers and workers, survives
 restart and is cleared by the next completed/non-transient provider response that
@@ -662,6 +683,13 @@ receipt nor a rate/budget reservation. Process investigations remain durably que
 at the shared eligibility time without consuming another attempt, and manual retry
 cannot bypass it. Settings and AI worker status show consecutive transient failures
 and the next eligible time.
+
+An administrator can review and clear the shared floor with the audited
+`POST /api/ai/provider-backoff/clear` API. Clearing it also releases investigations
+waiting only on that provider deadline, including waits created after a claim.
+Longer local retry delays, attempt limits and other admission controls remain in
+force. An expired provider deadline is immediately eligible; local exponential
+backoff is kept separate and does not itself block a manual retry as a provider wait.
 
 Already concurrent in-flight calls cannot be recalled after another call discovers a
 provider floor. Exact durable queue/resume for every manual plan and connection-test
@@ -941,9 +969,18 @@ limits. Provider delay floors also apply to manual Retry. Pending work, retained
 usage receipts and uncertain charges survive; no assessment or approval is inferred
 from a failure. AI pause/resume and lifecycle checks still apply to every call.
 
+The worker checks shared rate, provider backoff and daily budget eligibility before
+claiming a process investigation. In capped modes it also checks that candidate's
+bounded request reservation; unavailable prices or insufficient budget leave the
+item queued without creating a run or consuming an attempt. Deferred rate waits
+reserve staggered wake slots after the durable queue tail. Provider-only waits keep
+their exact deadline, including immediate eligibility after it expires. Every actual
+provider call still passes the final atomic admission checks.
+
 Investigations and AI logs show eligible, review-blocked and paused counts; each
 pending/error item explains its retry state and eligibility. Eligibility is not a
-promised start time: existing hourly limits and the serial worker still apply.
+promised start time: existing hourly limits, shared admission and available worker
+slots still apply.
 Legacy attempts and lost-worker attempts retain their one-hour recovery interval.
 This is process-triage scheduling only, not shared provider-wide rate admission,
 daily spend controls or faster-triage program completion. Other AI purposes retain

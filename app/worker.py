@@ -738,10 +738,17 @@ def investigate_one(owner=None):
                     retry=ai_retry.failed(s,saved,e,time.time())
                     saved.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(e)
             except ai_claims.Lost:lease.lost.set()
+            else:
+                # Controlled waits are queued work, not failed runs.
+                eligible=ai.defer_until(e)
+                if getattr(e,'policy_wait',False) and eligible is not None:ai_runs.defer(lease.run_id,eligible)
 
 def _assess_behavior(s,row,cfg,secret):
-    from . import ai_policy
+    from . import ai_policy,ai_claims
     ai_policy.require([row.host_id])
+    lease=ai_claims.current.get()
+    if lease and lease.host_id==row.host_id:
+        return _assess_active_behavior(s,row,cfg,secret)
     with host_lifecycle.activity([row.host_id],'ai'):
         return _assess_active_behavior(s,row,cfg,secret)
 

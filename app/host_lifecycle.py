@@ -52,13 +52,24 @@ def activity(host_ids,kind,blocking=True):
 @contextmanager
 def changing(host_id):
     locks=[]
+    admission=Lock('ai-triage')
     try:
+        # Match claim admission's lock order. Once the server activity locks
+        # are held, a later claim waits on queue and must re-read lifecycle
+        # state before it can commit.
+        if not admission.acquire(False):raise Busy('Server communication or AI work is active; retry after it finishes')
         for kind in ('queue','polling','telemetry','control','ai'):
             lock=Lock('server-'+kind+':'+host_id)
             if not lock.acquire(False):raise Busy('Server communication or AI work is active; retry after it finishes')
             locks.append(lock)
+        from .ai_claims import Claim
+        with Session() as s:
+            if s.scalar(select(Claim.subject).where(Claim.host_id==host_id,Claim.expires>time.time()).limit(1)):
+                raise Busy('Server AI investigation is active; retry after it finishes')
+        admission.release();admission=None
         yield
     finally:
+        if admission is not None:admission.release()
         for lock in reversed(locks):lock.release()
 
 
