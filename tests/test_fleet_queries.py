@@ -1,11 +1,14 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
+from sqlalchemy import event
 from app.db import Session,Host,Package
-from app.fleet_queries import PAGE_MAX
+from app.fleet_queries import PAGE_MAX,PACKAGES_PER_HOST
 
 
 def add_host(name,os_name='Ubuntu 24.04',seen=None,deleted=0):
     with Session() as s:
-        h=Host(id='h-'+name,name=name,address='192.0.2.9',fingerprint='',state='online',last_seen=time.time() if seen is None else seen,deleted_at=deleted,inventory={'os':os_name})
+        observed=time.time() if seen is None else seen
+        h=Host(id='h-'+name,name=name,address='192.0.2.9',fingerprint='',state='online',last_seen=observed,deleted_at=deleted,inventory={'os':os_name,'collected':observed})
         s.add(h);s.commit();return h.id
 
 
@@ -47,3 +50,46 @@ def test_update_requires_current_version_and_names_are_unique(admin):
     ok=admin.put('/api/fleet/queries/'+q['id'],json={'name':'Renamed','filter':{'os':'x'},'expected_version':1});assert ok.json()['version']==2
     assert admin.delete('/api/fleet/queries/'+q['id']).status_code==200
     assert admin.get('/api/fleet/queries/'+q['id']+'/results').status_code==404
+
+
+def test_package_evidence_materialization_is_bounded_in_sql(admin):
+    host=add_host('many')
+    with Session() as s:
+        s.bulk_insert_mappings(Package,[{'id':host+':pkg-'+str(i),'host_id':host,'name':f'pkg-{i:05d}',
+            'installed':'1','candidate':'2','priority':'normal','available_since':time.time()} for i in range(2000)])
+        s.commit()
+    q=save(admin,'Bounded',package='pkg-');loaded=[]
+    def load(package,context):loaded.append(package.id)
+    event.listen(Package,'load',load)
+    try:response=admin.get('/api/fleet/queries/'+q['id']+'/results')
+    finally:event.remove(Package,'load',load)
+    assert response.status_code==200
+    row=response.json()['hosts'][0]
+    assert row['matching_package_count']==2000 and len(row['matching_packages'])==PACKAGES_PER_HOST
+    assert len(loaded)<=PACKAGES_PER_HOST
+
+
+def test_future_or_missing_observation_never_counts_as_fresh(admin):
+    now=time.time();ids=[add_host(name) for name in ('future-contact','future-observation','missing','fresh')]
+    with Session() as s:
+        s.get(Host,ids[0]).last_seen=now+86400
+        s.get(Host,ids[1]).inventory={'os':'Ubuntu','collected':now+86400}
+        s.get(Host,ids[2]).inventory={'os':'Ubuntu'}
+        s.commit()
+    q=save(admin,'Freshness')
+    body=admin.get('/api/fleet/queries/'+q['id']+'/results').json()
+    assert body['stale_hosts']==3
+    assert {row['name'] for row in body['hosts'] if row['fresh']}=={'fresh'}
+
+
+def test_concurrent_updates_cannot_both_accept_one_saved_version(admin,monkeypatch):
+    from app import main
+    original=main.saved_query_or_404
+    def slow_read(*args,**kwargs):
+        row=original(*args,**kwargs);time.sleep(.03);return row
+    monkeypatch.setattr(main,'saved_query_or_404',slow_read)
+    q=save(admin,'Concurrent')
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        responses=list(pool.map(lambda i:admin.put('/api/fleet/queries/'+q['id'],
+            json={'name':'Change '+str(i),'filter':{},'expected_version':1}),range(4)))
+    assert sorted(response.status_code for response in responses)==[200,409,409,409]

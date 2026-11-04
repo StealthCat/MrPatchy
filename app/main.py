@@ -347,7 +347,7 @@ def fleet_query_list(user=Depends(viewer_user)):
 
 @app.post('/api/fleet/queries')
 def fleet_query_create(body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
-    with Session() as s:
+    with worker.Lock('fleet-query-config'),Session() as s:
         if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name)):raise HTTPException(409,'A saved fleet query with this name already exists')
         row=fleet_queries.SavedFleetQuery(id=fleet_queries.new_id(),name=body.name,definition=body.filter.model_dump(),created_by=user['username'])
         s.add(row);audit(s,'fleet-query-create',row.id+' '+row.name);s.commit()
@@ -355,7 +355,7 @@ def fleet_query_create(body:fleet_queries.SavedQueryInput,user=Depends(admin_use
 
 @app.put('/api/fleet/queries/{query_id}')
 def fleet_query_update(query_id:str,body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
-    with Session() as s:
+    with worker.Lock('fleet-query-config'),Session() as s:
         row=saved_query_or_404(s,query_id)
         if body.expected_version!=row.version:raise HTTPException(409,'Saved fleet query changed; reload it before editing')
         if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name,fleet_queries.SavedFleetQuery.id!=query_id)):raise HTTPException(409,'A saved fleet query with this name already exists')
@@ -365,7 +365,7 @@ def fleet_query_update(query_id:str,body:fleet_queries.SavedQueryInput,user=Depe
 
 @app.delete('/api/fleet/queries/{query_id}')
 def fleet_query_delete(query_id:str,user=Depends(admin_user)):
-    with Session() as s:
+    with worker.Lock('fleet-query-config'),Session() as s:
         row=saved_query_or_404(s,query_id)
         s.delete(row);audit(s,'fleet-query-delete',row.id+' '+row.name);s.commit()
         return {'deleted':query_id}
@@ -375,7 +375,7 @@ def fleet_query_results(query_id:str,offset:int=0,limit:int=50,user=Depends(view
     if offset<0 or not 1<=limit<=fleet_queries.PAGE_MAX:raise HTTPException(400,'Invalid fleet query pagination')
     with Session() as s:
         row=saved_query_or_404(s,query_id)
-        return fleet_queries.evaluate(s,fleet_queries.FleetFilter(**row.definition),offset,limit)|{'query':{'id':row.id,'name':row.name,'version':row.version}}
+        return fleet_queries.evaluate(s,fleet_queries.FleetFilter(**row.definition),offset,limit)|{'query':{'id':row.id,'name':row.name,'version':row.version,'filter':row.definition}}
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
