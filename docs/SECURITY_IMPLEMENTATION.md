@@ -4760,8 +4760,15 @@ eight-thread atomic admission, reset/remaining status, actual reconciliation,
 uncertain transmitted failures, unsent release, combined-mode settings and timezone
 validation. Exact-head SQLite, MySQL, browser and full-suite checks remain mandatory.
 
+The bundled public-price catalog now carries an exact reviewed-at and expires-at
+window. Settings expose its safe version/source/freshness metadata. At the expiry
+boundary, daily-cap and combined-cap admission fails before consuming rate capacity
+or contacting the provider; rate-only and unthrottled operation remain independent
+of Mr Patchy's spend guard. Updating the catalog still requires a reviewed source
+change, and post-call estimates remain advisory rather than provider invoices.
+
 This does not complete the program. Exact durable defer/resume for every manual and
-plan path, pricing-catalog update/expiry controls, provider-invoice reconciliation,
+plan path, automated/signed pricing-catalog updates, provider-invoice reconciliation,
 long-horizon reports and full SQLite/MySQL reset/failover acceptance remain planned.
 APP_VERSION/README/changelog/UI/API synchronize at v1.32.0 with major fixed at 1.
 Rebuild the controller first to create the ledger table, then matching workers. No

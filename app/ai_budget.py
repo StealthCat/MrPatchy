@@ -153,4 +153,5 @@ def status(session,now=None):
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
         'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
-        'next_reset':reset if enabled else None,'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE}
+        'next_reset':reset if enabled else None,'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
+        'pricing_catalog':ai_pricing.catalog_status(now)}
