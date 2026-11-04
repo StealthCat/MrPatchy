@@ -31,6 +31,8 @@ services:
       timeout: 5s
       retries: 5
     security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
     tmpfs: [/tmp]
   worker:
     build: .
@@ -53,6 +55,8 @@ services:
       - app-data:/data
     networks: [management]
     security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
     tmpfs: [/tmp]
   caddy:
     image: caddy:2.10@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
@@ -87,6 +91,8 @@ services:
         ipv4_address: ${CADDY_CONTROL_IP:-172.30.254.2}
       edge: {}
     security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, DAC_READ_SEARCH]
 volumes:
   app-data:
   tls-config:
