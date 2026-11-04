@@ -194,7 +194,9 @@ def build(s,host,identifier):
         base_hash=digest(canonical({'format':1,'review_policy':REVIEW_POLICY_VERSION,
             'host_id':host.id,'target':plan['target'],'inventory_hash':plan['inventory_hash'],
             'runner_sha256':plan['runner_sha256'],'ai_model':plan['ai_model'],'sources':plan['sources'],
-            'transaction':plan['transaction'],'configs':configuration_identity}))
+            'transaction':plan['transaction'],'services':plan['services'],
+            'execution_files':plan['execution_files'],'custom_validation':plan['custom_validation'],
+            'inspection_blockers':plan['blockers'],'configs':configuration_identity}))
         cached=previous_progress.get('results',{}) if previous_progress.get('base_hash')==base_hash else {}
         progress={'format':1,'base_hash':base_hash,'results':{}}
         plan['review_progress']=progress
