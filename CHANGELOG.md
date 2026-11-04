@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.41.0 — 2026-11-04
+
+1. [PR #375](https://github.com/StealthCat/MrPatchy/pull/375): Add authenticated same-origin notification Server-Sent Events with durable digest-cursor catch-up, session/account/role revalidation, bounded per-controller connections, heartbeats and polling fallback; refresh the bell, recent panel and open notification center from the existing permission-filtered APIs without replacing filters, losing unrelated form state or stealing focus. Compatibility: this is an additive stream endpoint and shell behavior with no schema migration, public API removal, global acknowledgement, SMTP/webhook producer, remediation or response-authorization change; frames contain no notification text, credentials or raw evidence. Production Caddy flushing/timeout measurement, slow-client and connection-exhaustion drills, pruned-cursor gap handling, live toasts, multi-controller failover and complete two-browser SQLite/MySQL acceptance remain unfinished. This source update does not publish a Docker image.
+
 ## 1.40.6 — 2026-11-04
 
 1. [PR #378](https://github.com/StealthCat/MrPatchy/pull/378): Bound the production Compose `app`, `worker` and `caddy` services to 1024 processes each, with regression coverage requiring every service to retain a finite process limit. Compatibility: no API, schema, UI, role, audit or response-authorization change; custom deployments that legitimately require more than 1024 simultaneous processes in one container must raise `pids_limit` explicitly. This is a partial #201 hardening increment only: memory limits, read-only root filesystems, GCP override hardening and live alert inventory remain unfinished. This source update does not publish a Docker image.
