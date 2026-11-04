@@ -450,7 +450,11 @@ def execute_locked(job_id):
             health=s.get(Setting,'agent-status:'+h.id)
             # File responses perform a mandatory fresh independent check before
             # importing a helper. Let that check recover a stale cached outage.
-            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status',*quarantine.ACTIONS):
+            # A journaled rotation interrupted after writing [old,new] leaves only authorized_keys
+            # drifting from the baseline; let the retry finish it instead of requiring a reinstall.
+            rotation_retry=bool(health and job.action=='rotate-key' and health.value.get('state') in ('blocked','drifted') and ssh.rotation_resumable(h)
+                and health.value.get('issues') and all(i.get('path')=='/opt/drpatch/.ssh/authorized_keys' for i in health.value['issues']))
+            if not resuming and not rotation_retry and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status',*quarantine.ACTIONS):
                 raise ValueError('Agent verification failed; review Agent health before executing remote operations')
             if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
             elif job.action=='release-upgrade':

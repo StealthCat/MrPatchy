@@ -263,6 +263,13 @@ sshd -t
 printf '\nAllow SSH from your Mr Patchy server, then click Finish installation.\n'
 '''
 
+def rotation_resumable(host):
+    """True when an unfinished rotation journal exists, so a retry may finish it."""
+    journal=DATA/'ssh'/(host.id+'.rotation.json')
+    try:state=json.loads(journal.read_text())
+    except (OSError,ValueError):return False
+    return isinstance(state,dict) and not state.get('complete') and bool(state.get('old')) and bool(state.get('new'))
+
 def rotate(host):
     """Add new key, prove it works, atomically promote, then revoke old key."""
     journal=DATA/'ssh'/(host.id+'.rotation.json')
