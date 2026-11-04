@@ -325,3 +325,19 @@ def test_queue_full_is_429_and_inactive_server_is_409_across_routes(admin):
     assert change(admin,other,False).status_code==200
     inactive=admin.post('/api/hosts/'+other+'/actions/refresh',json={})
     assert inactive.status_code==409,inactive.text
+
+
+def test_ssh_call_deadline_includes_wait_for_control_lock(admin,monkeypatch):
+    identifier=create(admin)
+    with Session() as s:record=s.get(Host,identifier);s.expunge(record)
+    reached=[]
+    monkeypatch.setattr(ssh,'_call',lambda *args,**kwargs:reached.append(1))
+    held=coordination.Lock('server-control:'+identifier)
+    assert held.acquire(False)
+    try:
+        started=time.monotonic()
+        with pytest.raises(lifecycle.Busy) as caught:ssh.call(record,{'action':'evidence'},timeout=1)
+        assert time.monotonic()-started<2.5
+        assert caught.value.remote_started is False and not reached
+    finally:held.release()
+    assert ssh.call(record,{'action':'evidence'},timeout=1) is None and reached

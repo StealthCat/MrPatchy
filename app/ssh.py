@@ -116,7 +116,7 @@ def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
     kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
     stage={'started':False}
     try:
-        with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking):
+        with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking,wait=timeout):
             return _call(host,payload,timeout,key_file,stage)
     except Exception as error:
         # Callers deciding whether a mutation may have run need to know if the
