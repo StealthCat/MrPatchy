@@ -87,6 +87,21 @@ def test_current_role_filters_and_per_user_read_dismiss_are_isolated(admin):
         assert actions[-2:] == ['read notification', 'dismiss notification']
 
 
+def test_filtered_counts_and_pages_share_the_same_permission_boundary(admin):
+    users()
+    with Session() as session:
+        matched, _ = publish(session, source='scanner', severity='critical', host_id='host-1')
+        publish(session, source='scanner', severity='info', host_id='host-1', subject_id='other')
+        publish(session, source='operations', severity='critical', host_id='host-1', subject_id='source')
+        publish(session, source='scanner', severity='critical', host_id='host-2', subject_id='host')
+        publish(session, source='scanner', severity='critical', host_id='host-1', subject_id='admin', minimum_role='admin')
+        session.commit()
+        filters = {'severity': 'critical', 'source': 'scanner', 'host_id': 'host-1'}
+        rows = notifications.list_for_user(session, 'operator', **filters)
+        assert [row['id'] for row in rows] == [matched.id]
+        assert notifications.count_for_user(session, 'operator', **filters) == 1
+
+
 def test_change_resolve_and_reopen_resurface_after_read_or_dismiss(admin):
     users()
     with Session() as session:
@@ -108,6 +123,47 @@ def test_change_resolve_and_reopen_resurface_after_read_or_dismiss(admin):
         row = notifications.list_for_user(session, 'operator')[0]
         assert row['revision'] == 3 and row['lifecycle'] == 'active' and not row['read']
         assert notifications.unread_count(session, 'operator') == 1
+
+
+def test_stream_cursor_tracks_only_visible_events_and_own_state(admin):
+    users()
+    with Session() as session:
+        viewer_before = notifications.stream_cursor(session, 'viewer')
+        operator_before = notifications.stream_cursor(session, 'operator')
+        other_before = notifications.stream_cursor(session, 'other')
+        event, _ = publish(session)
+        session.commit()
+
+        assert notifications.stream_cursor(session, 'viewer') == viewer_before
+        assert notifications.stream_cursor(session, 'operator') != operator_before
+        assert notifications.stream_cursor(session, 'other') != other_before
+        operator_event = notifications.stream_cursor(session, 'operator')
+        other_event = notifications.stream_cursor(session, 'other')
+
+        notifications.mark_read(session, 'operator', event.id, 1, now=110)
+        session.commit()
+        assert notifications.stream_cursor(session, 'operator') != operator_event
+        assert notifications.stream_cursor(session, 'other') == other_event
+
+        operator = session.get(User, 'operator')
+        operator.role = 'viewer'
+        session.commit()
+        assert notifications.stream_cursor(session, 'operator') != operator_event
+        operator.enabled = False
+        session.commit()
+        assert notifications.stream_cursor(session, 'operator') is None
+
+
+def test_stream_connection_limit_is_bounded_and_release_is_idempotent():
+    gate = notifications.StreamConnections(2)
+    assert gate.acquire() and gate.acquire()
+    assert not gate.acquire() and gate.active == 2
+    gate.release()
+    assert gate.acquire() and gate.active == 2
+    gate.release(); gate.release(); gate.release()
+    assert gate.active == 0
+    with pytest.raises(ValueError):
+        notifications.StreamConnections(0)
 
 
 def test_stale_tab_cannot_mark_a_new_revision_read(admin):
