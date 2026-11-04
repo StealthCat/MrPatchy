@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.39.2 — 2026-11-04
+
+1. [PR #358](https://github.com/StealthCat/MrPatchy/pull/358): Give the bundled AI public-price catalog exact reviewed-at and expiry metadata, expose its bounded freshness state in administrator settings, and make daily-cap and combined-cap admission fail closed at the expiry boundary before consuming smooth-rate capacity or contacting the provider. Compatibility: no schema, migration, target-agent, credential, provider-payload or response-authorization change; rate-only and unthrottled operation are unchanged, while capped installations require a reviewed catalog update before 2026-11-26 00:00 UTC or capped calls deliberately stop. Automated or signed catalog updates, lifecycle alerting, provider-invoice reconciliation, long-horizon reporting and broader failover acceptance remain unfinished. This source update does not publish a Docker image.
+
 ## 1.39.1 — 2026-11-04
 
 1. [PR #356](https://github.com/StealthCat/MrPatchy/pull/356): Validate the target boot identity through one bounded lowercase-UUID parser and reuse it for recovery-status reads, rejecting missing, malformed, uppercase or oversized `/proc` values instead of propagating an untrusted identity. Compatibility: no API shape, schema, role, deployment, target action or response-authorization change; a malformed boot identity now fails closed. This is a partial #190 increment only: shared hash loops, ancestor walkers, OS-release parsing, RPM detection and import cleanup remain unfinished. This source update does not publish a Docker image.

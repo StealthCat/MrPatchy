@@ -595,15 +595,21 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+The bundled public price catalog has an exact reviewed-at and expiry window shown in
+AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
+before consuming smooth-rate capacity or contacting the provider. A reviewed catalog
+update is therefore required before **2026-11-26 00:00 UTC** for capped calls to
+continue; rate-only and unthrottled modes retain their existing controls and behavior.
+
 Daily accounting returns at most five exact-money status totals without loading
 ledger entries as application objects. SQLite preserves the existing nine-place
 Numeric read precision; MySQL sums native DECIMAL values. Eligible ledger scanning
 remains O(N) under the shared admission lock; broader concurrency work remains open.
 
-Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
-alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
-failover/reset acceptance remain required before the shared controls program is
-complete.
+Exact durable defer/resume for every manual/plan path, automated or signed catalog
+updates and lifecycle alerts, invoice reconciliation, long-horizon spend reports and
+full SQLite/MySQL failover/reset acceptance remain required before the shared controls
+program is complete.
 
 ### Shared provider backoff (v1.33.0)
 
