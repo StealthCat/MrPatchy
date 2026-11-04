@@ -8,6 +8,7 @@ later milestone.
 import hashlib
 import json
 import re
+import threading
 import time
 
 from sqlalchemy import Double, Integer, String, Text, and_, func, select
@@ -20,6 +21,34 @@ ROLES = {'viewer': 0, 'operator': 1, 'admin': 2}
 SEVERITIES = {'info', 'low', 'medium', 'high', 'critical'}
 LIFECYCLES = {'active', 'resolved'}
 IDENTIFIER = re.compile(r'^[a-z0-9][a-z0-9_.-]*$')
+
+
+class StreamConnections:
+    """Small process-local guard for long-lived notification streams.
+
+    Streams carry only invalidation cursors and keep no event queue.  The shared
+    database remains authoritative, so a client refused here can use the polling
+    fallback and reconnect without losing notification history.
+    """
+
+    def __init__(self, limit):
+        if type(limit) is not int or not 1 <= limit <= 256:
+            raise ValueError('Notification stream limit must be between 1 and 256')
+        self.limit = limit
+        self.active = 0
+        self.lock = threading.Lock()
+
+    def acquire(self):
+        with self.lock:
+            if self.active >= self.limit:
+                return False
+            self.active += 1
+            return True
+
+    def release(self):
+        with self.lock:
+            if self.active:
+                self.active -= 1
 
 
 class NotificationEvent(Base):
@@ -221,6 +250,35 @@ def list_for_user(session, username, *, unread_only=False,
 
 def unread_count(session, username):
     return count_for_user(session, username, unread_only=True, include_dismissed=False)
+
+
+def stream_cursor(session, username):
+    """Return a safe digest of all durable notification state visible to a user.
+
+    The digest changes for a new/revised visible event, a current-role change, or
+    this user's read/dismiss progress.  It contains no event text or identifiers.
+    Aggregate inputs make equal timestamps safe and avoid loading event rows.
+    """
+    user = _user(session, username)
+    if not user:
+        return None
+    roles = _allowed_roles(user.role)
+    event_values = session.execute(select(
+        func.count(NotificationEvent.id),
+        func.coalesce(func.max(NotificationEvent.updated), 0),
+        func.coalesce(func.sum(NotificationEvent.revision), 0),
+    ).where(NotificationEvent.minimum_role.in_(roles))).one()
+    state_values = session.execute(select(
+        func.count(NotificationUserState.event_id),
+        func.coalesce(func.max(NotificationUserState.updated), 0),
+        func.coalesce(func.sum(NotificationUserState.read_revision), 0),
+        func.coalesce(func.sum(NotificationUserState.dismissed_revision), 0),
+    ).join(NotificationEvent, NotificationEvent.id == NotificationUserState.event_id)
+      .where(NotificationUserState.username == username,
+             NotificationEvent.minimum_role.in_(roles))).one()
+    values = [user.role, *(str(value) for value in event_values),
+              *(str(value) for value in state_values)]
+    return hashlib.sha256(json.dumps(values, separators=(',', ':')).encode()).hexdigest()
 
 
 def validate_filters(severity='', source='', host_id=''):

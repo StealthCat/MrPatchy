@@ -3,7 +3,7 @@
 // permission filtering, unread counts and per-user revision state.
 window.NotificationShell=(()=>{
  const POLL_MS=30000, severityRank={info:0,low:1,medium:2,high:3,critical:4};
- let generation=0,requestRevision=0,timer=0,items=[],open=false,started=false;
+ let generation=0,requestRevision=0,centerRequestRevision=0,timer=0,items=[],open=false,started=false,stream=null;
  const centerContext={offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''};
  const node=id=>document.getElementById(id);
  const button=()=>node('notification-button'),panel=()=>node('notification-panel');
@@ -45,6 +45,14 @@ window.NotificationShell=(()=>{
   }
  }
  function schedule(run=generation){clearTimeout(timer);if(!started||document.hidden)return;timer=setTimeout(()=>{if(run===generation)refresh();},POLL_MS);}
+ function connect(run){
+  if(typeof EventSource!=='function')return;
+  if(stream)stream.close();
+  const current=new EventSource('/api/notifications/stream');stream=current;
+  current.addEventListener('notifications',()=>{if(stream===current&&run===generation&&started)refresh();});
+  current.addEventListener('close',()=>{if(stream!==current||run!==generation)return;current.close();stream=null;if(typeof showLogin==='function')showLogin();else reset();});
+  current.onerror=()=>{if(stream===current&&run===generation&&started&&open)status('Live updates are reconnecting. The 30-second catch-up remains active.');};
+ }
  async function refresh(){
   if(!started||document.hidden)return;
   const run=generation,request=++requestRevision;
@@ -53,6 +61,7 @@ window.NotificationShell=(()=>{
    if(run!==generation||request!==requestRevision)return;
    items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();
    status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
+   if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){
    if(run!==generation||request!==requestRevision)return;
    setCount(null);status('Notification updates are temporarily delayed. '+error.message);
@@ -71,7 +80,7 @@ window.NotificationShell=(()=>{
    const count=await api('/notifications/unread-count');
    if(run!==generation||!started)return;
    setCount(count.unread,items);
-   if(location.hash==='#notifications')await center(renderRevision);
+   if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){if(run===generation&&started){status(error.message);if(control.isConnected)control.disabled=false;}}
  }
  function close({focus=false}={}){open=false;panel().hidden=true;button().setAttribute('aria-expanded','false');if(focus)button().focus();}
@@ -80,11 +89,12 @@ window.NotificationShell=(()=>{
   open=true;panel().hidden=false;button().setAttribute('aria-expanded','true');refresh();
  }
  function reset(){
-  generation++;requestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;
+  generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;
+  if(stream){stream.close();stream=null;}
   panel().hidden=true;button().setAttribute('aria-expanded','false');setCount(null,[]);
   status('');node('notification-list').replaceChildren();Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});
  }
- function start(){generation++;requestRevision++;started=true;clearTimeout(timer);refresh();}
+ function start(){generation++;requestRevision++;started=true;clearTimeout(timer);connect(generation);refresh();}
  button().addEventListener('click',toggle);node('notification-close').addEventListener('click',()=>close({focus:true}));node('notification-panel').querySelector('.notification-center-link').addEventListener('click',()=>close());
  document.addEventListener('click',event=>{if(open&&!event.target.closest('.notification-shell'))close();});
  document.addEventListener('keydown',event=>{if(open&&event.key==='Escape'){close({focus:true});event.preventDefault();}});
@@ -98,28 +108,44 @@ window.NotificationShell=(()=>{
  }
  function centerItem(item){
   const article=element('article','card notification-center-item'+(item.read?' is-read':''));article.dataset.severity=item.severity||'info';
+  article.dataset.eventId=item.id;
   const meta=element('div','notification-meta');meta.append(element('span','notification-severity',item.severity||'info'),element('span','',readableSource(item.source)));
   if(item.host_id)meta.append(element('span','',hostName(item.host_id)));
   if(item.lifecycle==='resolved')meta.append(element('span','notification-resolved','resolved'));
   const stamp=element('time','',Number.isFinite(item.created)?new Date(item.created*1000).toLocaleString():'Time unavailable');if(Number.isFinite(item.created))stamp.dateTime=new Date(item.created*1000).toISOString();meta.append(stamp);
   const reason=element('p','notification-reason',item.reason||'Reason unavailable'),actions=element('div','notification-actions'),link=safeLink(item.deep_link);
-  if(link){const anchor=element('a','button','Open subject');anchor.href=link;actions.append(anchor);}
-  if(!item.read&&!item.dismissed){const read=element('button','quiet','Mark read');read.type='button';read.addEventListener('click',()=>centerMutate(item,'read',read));actions.append(read);}
-  if(!item.dismissed){const dismiss=element('button','quiet','Dismiss');dismiss.type='button';dismiss.addEventListener('click',()=>centerMutate(item,'dismiss',dismiss));actions.append(dismiss);}
+  if(link){const anchor=element('a','button','Open subject');anchor.href=link;anchor.dataset.notificationAction='open';actions.append(anchor);}
+  if(!item.read&&!item.dismissed){const read=element('button','quiet','Mark read');read.type='button';read.dataset.notificationAction='read';read.addEventListener('click',()=>centerMutate(item,'read',read));actions.append(read);}
+  if(!item.dismissed){const dismiss=element('button','quiet','Dismiss');dismiss.type='button';dismiss.dataset.notificationAction='dismiss';dismiss.addEventListener('click',()=>centerMutate(item,'dismiss',dismiss));actions.append(dismiss);}
   article.append(meta,reason,actions);return article;
  }
  async function centerMutate(item,action,control){
   control.disabled=true;
-  try{await api(`/notifications/${encodeURIComponent(item.id)}/${action}`,'POST',{revision:item.revision});await refresh();if(location.hash==='#notifications')await center(renderRevision);}
+  try{await api(`/notifications/${encodeURIComponent(item.id)}/${action}`,'POST',{revision:item.revision});await refresh();}
   catch(error){if(control.isConnected)control.disabled=false;toast(error.message);}
  }
- async function center(revision=renderRevision){
-  const root=node('content'),page=await api('/notifications?'+query());
-  if(!currentView(revision,'notifications')||!root.isConnected)return;
-  const hostOptions=hosts.map(host=>`<option value="${esc(host.id)}" ${centerContext.hostId===host.id?'selected':''}>${esc(host.name)}</option>`).join('');
-  root.innerHTML=PatchyUI.heading('notifications','Your notification history.','Permission-filtered attention and recovery notes, kept separate from operational acknowledgement.')+`<section class="card notification-center-controls"><form id="notification-filters"><div class="form-grid"><label>Severity<select name="severity"><option value="">All severities</option>${['critical','high','medium','low','info'].map(value=>`<option value="${value}" ${centerContext.severity===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Source<input name="source" value="${esc(centerContext.source)}" maxlength="40" pattern="[a-z0-9][a-z0-9_.-]*" placeholder="All sources"></label><label>Server<select name="host_id"><option value="">All servers</option>${hostOptions}</select></label></div><div class="actions"><label class="check"><input name="unread_only" type="checkbox" ${centerContext.unreadOnly?'checked':''}>Unread only</label><label class="check"><input name="include_dismissed" type="checkbox" ${centerContext.includeDismissed?'checked':''}>Include dismissed</label><button type="submit">Apply filters</button><button type="button" class="quiet" id="notification-filters-clear">Clear</button></div></form><p class="help">Read and dismiss affect only your account. They never acknowledge an alert, resolve an incident, approve AI work or run remediation.</p></section><section id="notification-center-list" aria-label="Notification history"></section><div class="actions notification-center-pages"><button id="notification-center-prev" ${page.offset?'':'disabled'}>Previous</button><span class="help">${page.total?`${page.offset+1}–${Math.min(page.offset+page.items.length,page.total)} of ${page.total}`:'0 notifications'}</span><button id="notification-center-next" ${page.more?'':'disabled'}>Next</button></div><p class="help notification-center-coverage">This view catches up through the current polling fallback. Authenticated server push/replay, live toasts and cross-tab/cross-controller delivery remain planned.</p>`;
-  const list=node('notification-center-list');
+ function applyCenterPage(page,preserveFocus=true){
+  const list=node('notification-center-list');if(!list)return;
+  const active=document.activeElement,activeCard=active?.closest?.('[data-event-id]');
+  const focus=preserveFocus&&activeCard&&list.contains(active)?{id:activeCard.dataset.eventId,action:active.dataset.notificationAction||''}:null;
+  list.replaceChildren();
   if(page.items.length)for(const item of page.items)list.append(centerItem(item));else{const empty=element('div','card notification-empty');empty.append(element('strong','','No matching notifications.'),element('p','help','Adjust the filters or wait for a new event visible to your account.'));list.append(empty);}
+  const range=node('notification-center-range'),previous=node('notification-center-prev'),next=node('notification-center-next');
+  if(range)range.textContent=page.total?`${page.offset+1}–${Math.min(page.offset+page.items.length,page.total)} of ${page.total}`:'0 notifications';
+  if(previous)previous.disabled=!page.offset;if(next)next.disabled=!page.more;
+  if(focus){const card=[...list.querySelectorAll('[data-event-id]')].find(candidate=>candidate.dataset.eventId===focus.id);const target=card&&[...card.querySelectorAll('[data-notification-action]')].find(candidate=>candidate.dataset.notificationAction===focus.action);if(target)target.focus();}
+ }
+ async function refreshCenterList(revision=renderRevision){
+  const request=++centerRequestRevision,page=await api('/notifications?'+query());
+  if(request!==centerRequestRevision||!currentView(revision,'notifications'))return;
+  applyCenterPage(page);
+ }
+ async function center(revision=renderRevision){
+  const request=++centerRequestRevision,root=node('content'),page=await api('/notifications?'+query());
+  if(request!==centerRequestRevision||!currentView(revision,'notifications')||!root.isConnected)return;
+  const hostOptions=hosts.map(host=>`<option value="${esc(host.id)}" ${centerContext.hostId===host.id?'selected':''}>${esc(host.name)}</option>`).join('');
+  root.innerHTML=PatchyUI.heading('notifications','Your notification history.','Permission-filtered attention and recovery notes, kept separate from operational acknowledgement.')+`<section class="card notification-center-controls"><form id="notification-filters"><div class="form-grid"><label>Severity<select name="severity"><option value="">All severities</option>${['critical','high','medium','low','info'].map(value=>`<option value="${value}" ${centerContext.severity===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Source<input name="source" value="${esc(centerContext.source)}" maxlength="40" pattern="[a-z0-9][a-z0-9_.-]*" placeholder="All sources"></label><label>Server<select name="host_id"><option value="">All servers</option>${hostOptions}</select></label></div><div class="actions"><label class="check"><input name="unread_only" type="checkbox" ${centerContext.unreadOnly?'checked':''}>Unread only</label><label class="check"><input name="include_dismissed" type="checkbox" ${centerContext.includeDismissed?'checked':''}>Include dismissed</label><button type="submit">Apply filters</button><button type="button" class="quiet" id="notification-filters-clear">Clear</button></div></form><p class="help">Read and dismiss affect only your account. They never acknowledge an alert, resolve an incident, approve AI work or run remediation.</p></section><section id="notification-center-list" aria-label="Notification history"></section><div class="actions notification-center-pages"><button id="notification-center-prev">Previous</button><span class="help" id="notification-center-range"></span><button id="notification-center-next">Next</button></div><p class="help notification-center-coverage">Authenticated server push refreshes this page from durable, permission-filtered history. A 30-second polling fallback remains active; live toasts and complete failover acceptance remain planned.</p>`;
+  applyCenterPage(page,false);
   node('notification-filters').onsubmit=event=>{event.preventDefault();const form=new FormData(event.currentTarget);Object.assign(centerContext,{offset:0,severity:String(form.get('severity')||''),source:String(form.get('source')||'').trim(),hostId:String(form.get('host_id')||''),unreadOnly:form.has('unread_only'),includeDismissed:form.has('include_dismissed')});center(revision).catch(error=>toast(error.message));};
   node('notification-filters-clear').onclick=()=>{Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});center(revision).catch(error=>toast(error.message));};
   node('notification-center-prev').onclick=()=>{centerContext.offset=Math.max(0,centerContext.offset-25);center(revision).catch(error=>toast(error.message));};
