@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.8'
+APP_VERSION='1.42.13'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -252,7 +252,7 @@ def login(body:Login,request:Request,response:Response):
         if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
-        raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
+        raise HTTPException(401,'Invalid credentials or MFA code')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
 @app.get('/api/session')
@@ -1236,8 +1236,8 @@ def reserve_account_attempt(username):
 
 def check_password(row,body):
     reserve_account_attempt(row.username)
-    if not verify(body.password,row.password): raise HTTPException(403,'Invalid credentials')
-    if row.otp_secret and not consume_otp(row,body.otp): raise HTTPException(403,'Invalid MFA code')
+    # One message for either factor: the reason stays out of the response so a password cannot be tested apart from the OTP.
+    if not verify(body.password,row.password) or (row.otp_secret and not consume_otp(row,body.otp)): raise HTTPException(403,'Invalid credentials or MFA code')
 
 @app.post('/api/identity/mfa')
 def begin_mfa(body:Reauthenticate,user=Depends(self_user)):
