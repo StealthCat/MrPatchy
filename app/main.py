@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.41.1'
+APP_VERSION='1.42.1'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -447,8 +447,11 @@ def server_ai_policy(host_id:str,user=Depends(admin_user)):
 
 @app.put('/api/hosts/{host_id}/security/ai-policy')
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
-    from . import ai_policy
+    from . import ai_policy,ai_claims
     with worker.Lock('ai-policy-change:'+host_id):
+        with Session() as s:
+            if s.scalar(select(ai_claims.Claim.subject).where(ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
+                raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
         lock=worker.Lock('ai-provider:'+host_id)
         if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
         try:
