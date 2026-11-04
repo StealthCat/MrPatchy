@@ -40,16 +40,40 @@ def fake_bpftrace(tmp_path,script):
 def run_loop(tmp_path,monkeypatch,on_sleep):
     """Drive the real collector loop; each sleep hands control back to the test."""
     monkeypatch.setattr(agent,'ROOT',tmp_path)
-    real_sleep=time.sleep;calls=[]
-    def sleep(seconds):
-        calls.append(seconds)
-        if seconds>=5:on_sleep(len(calls))
-        else:real_sleep(seconds)
-    monkeypatch.setattr(agent.time,'sleep',sleep)
+    import threading
+    collector_thread=threading.get_ident()
+    real_sleep=time.sleep
+    long_sleeps=[]
+
+    class CollectorClock:
+        # Patch only the agent module, never Python's shared time module.
+        def __getattr__(self,name):
+            return getattr(time,name)
+
+        def sleep(self,seconds):
+            if threading.get_ident()==collector_thread and seconds>=5:
+                long_sleeps.append(seconds)
+                on_sleep(len(long_sleeps))
+            else:
+                real_sleep(seconds)
+
+    monkeypatch.setattr(agent,'time',CollectorClock())
     with pytest.raises(StopLoop):agent.ebpf_loop()
 
 def configure(tmp_path,enabled):
     (tmp_path/'observability.json').write_text(json.dumps({'ebpf':enabled}))
+
+def test_collector_clock_patch_never_changes_shared_process_sleep(tmp_path,monkeypatch):
+    configure(tmp_path,False)
+    original=time.sleep
+    seen=[]
+    def on_sleep(count):
+        seen.append(count)
+        assert time.sleep is original
+        raise StopLoop
+    run_loop(tmp_path,monkeypatch,on_sleep)
+    assert seen==[1]
+
 
 def test_day_old_warning_with_disabled_collector_is_not_current_attention(admin):
     state,issues,stored=ingest({'ebpf-status':{'state':'disabled'},
@@ -87,7 +111,16 @@ def test_failure_then_recovery_then_disable_through_snapshot(admin,tmp_path,monk
     path=fake_bpftrace(tmp_path,
         "sys.stderr.write('attach warning\\n');sys.stderr.flush();time.sleep(0.5)\n"
         "print('{\"type\":\"printf\",\"data\":\"%d\\\\t0\\\\t/nonexistent/exe\\\\n\"}' % "+str(os.getpid())+",flush=True)\n"
-        "time.sleep(0.5);sys.stderr.write('late warning\\n');sys.stderr.flush();time.sleep(0.5);sys.exit(1)\n")
+        # Emit the late warning only after the collector has recorded recovery (processing time varies).
+        "import json,pathlib\n"
+        "status=pathlib.Path(__file__).parent.parent/'ebpf-status.json'\n"
+        "for _ in range(500):\n"
+        "    try:\n"
+        "        if json.loads(status.read_text()).get('state')=='active':break\n"
+        "    except (OSError,ValueError):pass\n"
+        "    time.sleep(0.02)\n"
+        "else:sys.exit(2)\n"
+        "sys.stderr.write('late warning\\n');sys.stderr.flush();time.sleep(0.5);sys.exit(1)\n")
     monkeypatch.setenv('PATH',path+os.pathsep+os.environ['PATH'])
     configure(tmp_path,True)
     seen={}
@@ -153,3 +186,11 @@ def test_restart_retires_previous_process_warning_without_hiding_new_ones(admin,
     agent.retire_ebpf_diagnostic('disabled');retired=read(tmp_path,'ebpf-diagnostic')
     agent.retire_ebpf_diagnostic('collector-restart')
     assert read(tmp_path,'ebpf-diagnostic')==retired
+
+def test_late_warning_after_slow_event_processing_stays_current(admin,tmp_path,monkeypatch):
+    """Slow first-event processing must not let the late warning precede recovery."""
+    real_sleep=time.sleep;original=agent.ebpf_process
+    def slow(*args,**kwargs):
+        result=original(*args,**kwargs);real_sleep(1.1);return result
+    monkeypatch.setattr(agent,'ebpf_process',slow)
+    test_failure_then_recovery_then_disable_through_snapshot(admin,tmp_path,monkeypatch)

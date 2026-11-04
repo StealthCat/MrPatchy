@@ -53,7 +53,7 @@ def test_native_rpm_metadata_and_policy(tmp_path):
             if 'If-Modified-Since' in self.headers:del self.headers['If-Modified-Since']
             super().do_GET()
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Quiet,directory=str(repo)))
-    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(tmp_path/'ca.pem',tmp_path/'key.pem')
+    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2;context.load_cert_chain(tmp_path/'ca.pem',tmp_path/'key.pem')
     server.socket=context.wrap_socket(server.socket,server_side=True)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     source=f'[fixture]\nname=Fixture\nbaseurl=https://127.0.0.1:{server.server_port}\ngpgcheck=1\n'

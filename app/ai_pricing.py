@@ -8,9 +8,15 @@ from decimal import Decimal
 from decimal import ROUND_CEILING
 import json
 import re
+import time
 
 VERSION = '2026-10-26'
 SOURCE = 'https://developers.openai.com/api/docs/pricing'
+# Bundled catalogs are deliberately short-lived. Updating prices requires a
+# reviewed source change; an old build must not silently promise a spend cap
+# using rates that have not been reverified.
+VERIFIED_AT = 1792972800  # 2026-10-26T00:00:00Z
+EXPIRES_AT = 1795651200   # 2026-11-26T00:00:00Z
 # USD per million: ordinary input, cached input, output, 30-minute cache write.
 RATES = {
     'gpt-6-astra': ('10', '1', '50', '12.5'),
@@ -30,6 +36,23 @@ ALIASES = {
 }
 TOKEN_FIELDS = ('input_tokens', 'cached_tokens', 'cache_write_tokens', 'output_tokens', 'reasoning_tokens')
 CAP_MODES = ('daily_cap', 'rate_and_daily')
+
+
+def catalog_status(now=None):
+    """Return bounded public catalog metadata without exposing request data."""
+    now = time.time() if now is None else now
+    if now < VERIFIED_AT:
+        state = 'not_yet_valid'
+        reason = 'The controller clock predates this price catalog verification.'
+    elif now >= EXPIRES_AT:
+        state = 'expired'
+        reason = 'The bundled public-price catalog has expired and needs a reviewed update.'
+    else:
+        state = 'fresh'
+        reason = 'The bundled public-price catalog is within its reviewed validity window.'
+    return {'version': VERSION, 'source': SOURCE, 'verified_at': VERIFIED_AT,
+            'expires_at': EXPIRES_AT, 'state': state, 'fresh': state == 'fresh',
+            'reason': reason}
 
 
 def identifier(value):
@@ -115,13 +138,16 @@ def estimate(data, payload):
     return result
 
 
-def reservation(payload):
+def reservation(payload, now=None):
     """Return a conservative USD ceiling before a capped provider call.
 
     UTF-8 JSON bytes are a safe upper bound for token count for the bounded text
     requests Mr Patchy sends. Unknown models, tiers, output bounds, tool fees or
     long-context prices fail closed instead of becoming a zero-dollar estimate.
     """
+    catalog = catalog_status(now)
+    if not catalog['fresh']:
+        return {'ok': False, 'reason': catalog['reason'], 'catalog': catalog}
     requested = identifier(payload.get('model'))
     model = ALIASES.get(requested, requested)
     if model not in RATES:
