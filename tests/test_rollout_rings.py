@@ -94,3 +94,27 @@ def test_parallelism_and_state_validation():
         r.admit(p, {'ring': 9}, 0)
     with pytest.raises(r.RingError):
         r.admit(p, {'ring': 0, 'done': ['h0'], 'ring_finished_at': 500}, 100)
+
+
+def test_external_host_outage_consumes_same_service_budget():
+    d=definition(rings=[{'name':'only','hosts':['h0']}],
+        limits=[{'scope':'service','name':'web','max_unavailable':1}])
+    p=r.plan(d,{**INV,'external':{'service':'web','site':'a'}})
+    assert r.admit(p,{'unavailable':['external']},100)['action']=='wait'
+    assert 'external' not in p['members']
+
+
+@pytest.mark.parametrize('bad',[float('nan'),float('inf'),float('-inf')])
+def test_nonfinite_soak_evidence_never_advances(bad):
+    p=r.plan(definition(),INV)
+    with pytest.raises(r.RingError):r.admit(p,{'done':['h0'],'ring_finished_at':bad},100)
+    with pytest.raises(r.RingError):r.admit(p,{},bad)
+
+
+def test_unknown_limited_scope_membership_requires_current_inventory():
+    with pytest.raises(r.RingError):r.plan(definition(),{**INV,'external':{'site':'a'}})
+
+
+def test_strict_definition_rejects_unknown_fields_and_newline_names():
+    with pytest.raises(r.RingError):r.validate({**definition(),'soakSeconds':100})
+    with pytest.raises(r.RingError):r.validate(definition(rings=[{'name':'ring\n','hosts':['h0']}]))

@@ -8,6 +8,7 @@ the observed state; the decision is advisory and never overrides approvals or ho
 import hashlib
 import json
 import re
+import math
 
 VERSION = 1
 MAX_RINGS = 20
@@ -16,6 +17,7 @@ MAX_LIMITS = 200
 MAX_PARALLEL = 100
 MAX_SOAK_SECONDS = 7 * 86400
 MAX_FAILURES = 1000
+MAX_INVENTORY_HOSTS=MAX_RINGS*MAX_HOSTS_PER_RING
 SCOPES = ('service', 'site')
 _NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 
@@ -31,21 +33,22 @@ def _int(value, label, low, high):
 
 
 def _name(value, label):
-    if not isinstance(value, str) or not _NAME.match(value):
+    if not isinstance(value, str) or not _NAME.fullmatch(value):
         raise RingError(f'{label} must be 1-64 letters, digits, dot, dash or underscore')
     return value
 
 
 def validate(definition):
     """Return a normalized definition or raise RingError (strict, bounded)."""
-    if not isinstance(definition, dict) or definition.get('version') != VERSION:
+    if (not isinstance(definition, dict) or type(definition.get('version')) is not int
+            or definition['version'] != VERSION or set(definition)-{'version','rings','limits'}):
         raise RingError(f'definition must be an object with version {VERSION}')
     rings = definition.get('rings')
     if not isinstance(rings, list) or not 1 <= len(rings) <= MAX_RINGS:
         raise RingError(f'rings must be a list of 1 to {MAX_RINGS} entries')
     seen_rings, seen_hosts, out = set(), set(), []
     for index, ring in enumerate(rings):
-        if not isinstance(ring, dict):
+        if not isinstance(ring, dict) or set(ring)-{'name','canary','hosts','max_parallel','soak_seconds','max_failures'}:
             raise RingError('each ring must be an object')
         name = _name(ring.get('name'), 'ring name')
         if name in seen_rings:
@@ -75,7 +78,7 @@ def validate(definition):
         raise RingError(f'limits must be a list of at most {MAX_LIMITS} entries')
     seen_limits, norm = set(), []
     for limit in limits:
-        if not isinstance(limit, dict) or limit.get('scope') not in SCOPES:
+        if not isinstance(limit, dict) or set(limit)-{'scope','name','max_unavailable'} or limit.get('scope') not in SCOPES:
             raise RingError('each limit needs scope service or site')
         key = (limit['scope'], _name(limit.get('name'), 'limit name'))
         if key in seen_limits:
@@ -92,24 +95,31 @@ def plan(definition, inventory):
     Unknown hosts are rejected rather than skipped, so the approved set is explicit.
     """
     normal = validate(definition)
-    if not isinstance(inventory, dict):
+    if not isinstance(inventory, dict) or len(inventory)>MAX_INVENTORY_HOSTS:
         raise RingError('inventory must be an object')
     missing = sorted(h for r in normal['rings'] for h in r['hosts'] if h not in inventory)
     if missing:
         raise RingError('hosts not in inventory: ' + ', '.join(missing[:20]))
-    members = {}
-    for ring in normal['rings']:
-        for host in ring['hosts']:
-            info = inventory[host] if isinstance(inventory[host], dict) else {}
-            members[host] = {s: info.get(s) for s in SCOPES}
-    body = {'definition': normal, 'members': members}
+    availability={};limited={limit['scope'] for limit in normal['limits']}
+    for host,info in inventory.items():
+        _name(host,'inventory host')
+        if not isinstance(info,dict):raise RingError('inventory membership must be an object')
+        membership={}
+        for scope in SCOPES:
+            value=info.get(scope)
+            if value is None and scope in limited:raise RingError('Missing '+scope+' membership for '+host)
+            if value is not None:_name(value,scope+' membership')
+            membership[scope]=value
+        availability[host]=membership
+    members={host:availability[host] for ring in normal['rings'] for host in ring['hosts']}
+    body = {'definition': normal, 'members': members,'availability_members':availability}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return {**body, 'digest': digest}
 
 
 def _hosts(state, key):
     value = state.get(key, [])
-    if not isinstance(value, (list, set, tuple)) or not all(isinstance(h, str) for h in value):
+    if not isinstance(value, (list, set, tuple)) or len(value)>MAX_INVENTORY_HOSTS or not all(isinstance(h, str) for h in value):
         raise RingError(f'{key} must be a list of host names')
     return set(value)
 
@@ -122,11 +132,16 @@ def admit(effective, state, now):
     Failed, uncertain, in-flight and externally unavailable hosts all consume
     availability budget; capacity is never released on an unknown outcome.
     """
+    if not isinstance(state,dict) or type(now) not in (int,float) or not math.isfinite(now):
+        raise RingError('state and finite current time are required')
     rings = effective['definition']['rings']
     ring_index = _int(state.get('ring', 0), 'ring', 0, len(rings))
     done, failed = _hosts(state, 'done'), _hosts(state, 'failed')
     flight, uncertain = _hosts(state, 'in_flight'), _hosts(state, 'uncertain')
     down = _hosts(state, 'unavailable') | flight | uncertain | failed
+    availability=effective.get('availability_members')
+    if not isinstance(availability,dict) or (done|down)-set(availability):
+        raise RingError('Current bounded availability inventory is required for every observed host')
 
     def result(action, hosts=(), reason='', blocked=()):
         return {'action': action, 'ring': ring_index, 'hosts': list(hosts), 'reason': reason, 'blocked': list(blocked)}
@@ -143,7 +158,7 @@ def admit(effective, state, now):
         finished = state.get('ring_finished_at')
         if finished is None:
             return result('wait', reason='ring finished; record ring_finished_at to begin soak')
-        if isinstance(finished, bool) or not isinstance(finished, (int, float)) or finished > now:
+        if type(finished) not in (int,float) or not math.isfinite(finished) or finished<0 or finished > now:
             raise RingError('ring_finished_at must be an epoch not after now')
         remaining = finished + ring['soak_seconds'] - now
         if remaining > 0:
@@ -155,7 +170,7 @@ def admit(effective, state, now):
     limits = {(l['scope'], l['name']): l['max_unavailable'] for l in effective['definition']['limits']}
     members = effective['members']
     groups = {}
-    for host, info in members.items():
+    for host, info in availability.items():
         for scope in SCOPES:
             if info[scope] is not None:
                 groups.setdefault((scope, info[scope]), set()).add(host)
