@@ -78,6 +78,12 @@ packages install from `requirements.lock` with pip `--require-hashes`; regenerat
 and review the lock and hashes when updating dependencies. APT and GCP CLI packages
 and source-build inputs remain outside these locks.
 
+The production Compose services drop all Linux capabilities and add back only
+`CHOWN`, `SETUID` and `SETGID` for the app/worker entrypoints, or
+`NET_BIND_SERVICE` and `DAC_READ_SEARCH` for Caddy. Custom Compose overrides that
+rely on Docker's default capability set must explicitly add the capabilities they
+need.
+
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
 cd MrPatchy
