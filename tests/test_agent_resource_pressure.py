@@ -32,6 +32,14 @@ def test_cpu_without_full_line_is_still_collected():
     assert result['cpu']['state'] == 'collected' and 'full' not in result['cpu'] and result['gaps'] == []
 
 
+def test_memory_without_full_line_is_unknown_with_gap():
+    files = healthy(); files['/proc/pressure/memory'] = PSI.splitlines()[0] + '\n'
+    result = agent.resource_pressure(reader(files), 1)
+    assert result['memory'] == {'state': 'unknown', 'unit': 'percent-stalled'}
+    assert {'signal': 'memory-pressure', 'reason': 'unavailable-or-malformed'} in result['gaps']
+    assert result['applicability'] == 'partial'
+
+
 def test_missing_psi_is_unknown_with_typed_gap():
     files = healthy(); files['/proc/pressure/cpu'] = FileNotFoundError(); files['/proc/pressure/memory'] = PermissionError('/secret/path')
     result = agent.resource_pressure(reader(files), 1)

@@ -228,7 +228,8 @@ def resource_pressure(read=lambda path:Path(path).read_text(),collected=None):
             if not isinstance(text,str) or len(text)>4096:raise ValueError('invalid pressure data')
             entry={'state':'collected','unit':'percent-stalled','some':_pressure_line(text,'some')}
             try:entry['full']=_pressure_line(text,'full')
-            except ValueError:pass # CPU "full" is absent on older kernels
+            except ValueError:
+                if name!='cpu':raise # only CPU "full" is absent on older kernels
             result[name]=entry
         except (OSError,ValueError,TypeError) as error:
             result[name]={'state':'unknown','unit':'percent-stalled'}
