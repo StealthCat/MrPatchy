@@ -38,6 +38,13 @@ class Claim(Base):
     expires: Mapped[float]=mapped_column(Double,index=True)
 
 
+class HostTurn(Base):
+    """Durable cross-worker order for fair process-investigation admission."""
+    __tablename__='ai_triage_host_turns'
+    host_id: Mapped[str]=mapped_column(String(36),primary_key=True)
+    last_turn: Mapped[int]=mapped_column(index=True)
+
+
 class Lost(ai.AIError):
     def __init__(self):
         super().__init__('Investigation ownership, evidence, approval or configuration changed; no stale result was accepted. A sent request may still be billable.')
@@ -78,6 +85,14 @@ def abandon_owner(owner):
         s.commit()
 
 
+def record_turn(s,host_id):
+    """Assign the next durable turn while the distributed admission lock is held."""
+    turn=(s.scalar(select(func.max(HostTurn.last_turn))) or 0)+1
+    row=s.get(HostTurn,host_id)
+    if row:row.last_turn=turn
+    else:s.add(HostTurn(host_id=host_id,last_turn=turn))
+
+
 def acquire(owner=None):
     lock=Lock('ai-triage')
     if not lock.acquire():return None
@@ -98,9 +113,25 @@ def acquire(owner=None):
                 Claim.expires>now).group_by(Claim.host_id)).all())
             saturated_hosts=[host_id for host_id,count in active_by_host.items()
                 if count>=ai_policy.investigation_limit(s,host_id)]
-            row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+            active_counts=(select(Claim.host_id.label('host_id'),func.count().label('active')).where(
+                Claim.expires>now).group_by(Claim.host_id).subquery())
+            # Balance live occupancy first. Ties use the durable least-recent
+            # host turn; a host with no turn sorts ahead of one already served.
+            host_id=s.scalar(select(Behavior.host_id).outerjoin(
+                ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).outerjoin(
+                active_counts,active_counts.c.host_id==Behavior.host_id).outerjoin(
+                HostTurn,HostTurn.host_id==Behavior.host_id).where(
                 Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
+                Behavior.id.not_in(select(Claim.subject)),Behavior.verdict.in_(('pending','error')),
+                ai_retry.eligible(signature,now)).group_by(
+                Behavior.host_id,active_counts.c.active,HostTurn.last_turn).order_by(
+                func.coalesce(active_counts.c.active,0),func.coalesce(HostTurn.last_turn,0),
+                func.min(Behavior.first_seen),Behavior.host_id).limit(1))
+            if not host_id:return None
+            row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                Behavior.host_id==host_id,Behavior.approved==False,
+                Behavior.id.not_in(select(Claim.subject)),
                 Behavior.verdict.in_(('pending','error')),ai_retry.eligible(signature,now)).order_by(Behavior.first_seen,Behavior.id).limit(1))
             if not row:return None
             # Approval writes use this host queue gate. Re-read after acquiring
@@ -120,7 +151,7 @@ def acquire(owner=None):
                     claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
                         boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.revision(row),
                         configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
-                    s.add(claim);s.commit()
+                    s.add(claim);record_turn(s,host_id);s.commit()
                     work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
                     return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner)
             except host_lifecycle.Inactive:return None
