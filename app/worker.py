@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle
+from . import host_lifecycle,response_status,worker_health
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -63,12 +63,19 @@ def enqueue(s,host_id,action,payload=None):
         if host_id in revisions:body['_host_revision']=revisions[host_id]
         return _enqueue_active(s,host_id,action,body)
 
-def _enqueue_active(s,host_id,action,payload=None):
+def ensure_queue_capacity(s,host_id):
+    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
+
+def stage_job(s,host_id,action,payload=None):
+    """Add a queued job with its per-job audit entry; the caller commits."""
     host=s.get(Host,host_id)
     if host and not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
-    if len(list(s.scalars(select(Job.id).where(Job.host_id==host_id,Job.state.in_(['queued','running']))).all()))>=50: raise host_lifecycle.QueueFull('Server queue is full (50 operations)')
+    ensure_queue_capacity(s,host_id)
     job=Job(id=str(uuid.uuid4()),host_id=host_id,action=action,payload=payload or {})
-    s.add(job); audit(s,'queue '+action,host_id); s.commit(); return job.id
+    s.add(job); audit(s,'queue '+action,host_id); return job.id
+
+def _enqueue_active(s,host_id,action,payload=None):
+    job_id=stage_job(s,host_id,action,payload); s.commit(); return job_id
 
 def save_inventory(s,h,inv):
     items=package_backend.installed(inv)
@@ -112,8 +119,9 @@ def update_repos(s,h):
         else:
             save_inventory(s,h,inv);s.commit()
     packages,output=package_backend.refresh(h.id,inv,repository_access(s,h.id))
+    known={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     for item in packages:
-        p=s.get(Package,h.id+':'+item['name'])
+        p=known.get(item['name'])
         if not p: continue
         # Superseding a still-outstanding update must not postpone its deadline.
         if not item['candidate']: p.available_since=0
@@ -615,14 +623,14 @@ def execute_locked(job_id):
             else: raise ValueError('Unsupported job')
             job.output=job.output.encode()[:48000].decode(errors='ignore')
             job.state='failed' if result.get('outcome') in ('rolled_back','response_incomplete') else 'complete'
-            if job.action in ('security-plan','startup-plan'):
+            if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             audit(s,('rolled back ' if result.get('outcome')=='rolled_back' else 'incomplete ' if result.get('outcome')=='response_incomplete' else 'complete ')+job.action,h.id)
         except Exception as e:
             s.rollback()
             job=s.get(Job,job_id)
             h=s.get(Host,job.host_id)
-            eligible=ai.defer_until(e) if job.action in ('security-plan','startup-plan') else None
+            eligible=ai.defer_until(e) if job.action in ('release-plan','security-plan','startup-plan') else None
             if eligible is not None:
                 job.state='queued';job.next_at=eligible
                 job.payload={**job.payload,'_ai_deferred':True}
@@ -631,7 +639,7 @@ def execute_locked(job_id):
                 s.commit();return
             uncertain=mutation_outcome_uncertain(mutation_stage,e)
             job.state='recovery_required' if protected or uncertain else 'failed'
-            if job.action in ('security-plan','startup-plan'):
+            if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
             if job.action in ('process-suspend','process-resume'):process_response.reject_unstarted(s,job)
@@ -641,13 +649,11 @@ def execute_locked(job_id):
             if job.action=='process-status':
                 response=s.get(process_response.ProcessResponse,job.payload.get('process_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    process_response.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=process_response.event,clock=time.time)
             if job.action=='quarantine-status':
                 response=s.get(quarantine.Quarantine,job.payload.get('quarantine_id'))
                 if response and response.host_id==job.host_id and (response.state!='uncertain' or response.receipt):
-                    response.state='uncertain';response.hold=True;response.receipt={};response.observed=time.time()
-                    quarantine.event(s,response,'observation_failed',job.payload.get('_actor','system'),{'job_id':job.id})
+                    response_status.mark_status_failed(s,response,job.payload.get('_actor','system'),job.id,event=quarantine.event,clock=time.time)
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
@@ -688,8 +694,8 @@ def mutation_outcome_uncertain(stage,error):
     if stage!='sent':return False
     return not (ssh.request_unstarted(error) or isinstance(error,ssh.RemoteFailure))
 
-def validate_patch(s,h,specs):
-    cfg=config(s)
+def validate_patch(s,h,specs,cfg=None):
+    cfg=cfg or config(s)
     if h.repo_error or not h.last_repo or time.time()-h.last_repo>cfg['repo_minutes']*120:
         raise ValueError('Refresh repositories before patching; metadata is stale, changed, or the latest check failed')
     for spec in specs:
@@ -721,10 +727,17 @@ def investigate_one(owner=None):
                     retry=ai_retry.failed(s,saved,e,time.time())
                     saved.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(e)
             except ai_claims.Lost:lease.lost.set()
+            else:
+                # Controlled waits are queued work, not failed runs.
+                eligible=ai.defer_until(e)
+                if getattr(e,'policy_wait',False) and eligible is not None:ai_runs.defer(lease.run_id,eligible)
 
 def _assess_behavior(s,row,cfg,secret):
-    from . import ai_policy
+    from . import ai_policy,ai_claims
     ai_policy.require([row.host_id])
+    lease=ai_claims.current.get()
+    if lease and lease.host_id==row.host_id:
+        return _assess_active_behavior(s,row,cfg,secret)
     with host_lifecycle.activity([row.host_id],'ai'):
         return _assess_active_behavior(s,row,cfg,secret)
 
@@ -844,6 +857,7 @@ def _loop(reporter):
                         except Exception:pass
                         is_leader=False
                 draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
+                worker_health.touch()
                 if draining and is_leader:leader.release();is_leader=False
                 if not draining and not is_leader:is_leader=leader.acquire(False)
                 if is_leader:

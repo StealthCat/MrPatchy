@@ -163,7 +163,7 @@ def cost_summary(run, receipts):
 
 def safe_error(error):
     from .ai import AIError
-    if isinstance(error, AIError): return str(error)[:2000]
+    if isinstance(error, AIError): return error.diagnostic
     # Never persist str(unexpected_error): request bodies, SQL parameters and
     # cryptographic failures may contain evidence or credentials.
     kind = type(error).__name__
@@ -288,7 +288,7 @@ def status(s):
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
     scoring_deferred=s.scalar(select(func.count()).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
     scoring_next=s.scalar(select(func.min(UpdateScore.next_at)).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
-    plan_rows=list(s.scalars(select(Job).where(Job.action.in_(('security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()))))
+    plan_rows=list(s.scalars(select(Job).where(Job.action.in_(('release-plan','security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()))))
     plan_rows=[row for row in plan_rows if row.payload.get('_ai_deferred') is True]
     plan_deferred=len(plan_rows)
     plan_next=min((row.next_at for row in plan_rows if row.next_at>now),default=None)
@@ -319,7 +319,7 @@ def status(s):
     return {'pending':len(rows),'oldest':min((r.first_seen for r in rows),default=None),'hourly_limit':cfg['ai_hourly_limit'],
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
-            'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
+            'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':ai_claims.PER_HOST_LIMIT,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,

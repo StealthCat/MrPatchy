@@ -24,28 +24,37 @@ MAIN_FILES = ('/etc/dnf/dnf.conf','/etc/yum.conf')
 LOCK_FILES = ('/etc/dnf/plugins/versionlock.list','/etc/yum/pluginconf.d/versionlock.list','/etc/dnf/versionlock.toml')
 
 
+
+def os_info(text):
+    """Parse os-release like target/release.py: skip comments, strip either quote style."""
+    return {k.strip():v.strip().strip('"').strip("'") for k,v in (line.split('=',1) for line in text.splitlines() if '=' in line and not line.lstrip().startswith('#'))}
+
 def source_path(name): return bool(re.fullmatch(r'/etc/yum\.repos\.d/[A-Za-z0-9_.-]+\.repo',name))
+class RepositoryRejected(ValueError):
+    """Fixed, administrator-facing diagnostic raised by the repository validators; safe to display."""
+
+
 def key_path(name): return bool(re.fullmatch(r'/etc/pki/rpm-gpg/[A-Za-z0-9_.+\-]+',name)) and '..' not in Path(name).parts
 
 def parse(text):
     cfg=configparser.ConfigParser(interpolation=None,strict=True,inline_comment_prefixes=('#',';'))
     try: cfg.read_string(text)
-    except configparser.Error as error: raise ValueError('Invalid RPM repository configuration: '+str(error)) from error
-    if cfg.defaults(): raise ValueError('RPM INI defaults are not supported')
+    except configparser.Error as error: raise RepositoryRejected('Invalid RPM repository configuration: '+str(error)) from error
+    if cfg.defaults(): raise RepositoryRejected('RPM INI defaults are not supported')
     return cfg
 
 
 def truth(value):
-    if str(value).lower() not in ('0','1','true','false','yes','no','on','off'):raise ValueError('Invalid repository boolean')
+    if str(value).lower() not in ('0','1','true','false','yes','no','on','off'):raise RepositoryRejected('Invalid repository boolean')
     return str(value).lower() in ('1','true','yes','on')
 
 
 def expand(value, variables):
     def replace(match):
         key=match[1] or match[2]
-        if key not in variables: raise ValueError('Unknown RPM repository variable: '+key)
+        if key not in variables: raise RepositoryRejected('Unknown RPM repository variable: '+key)
         result=str(variables[key])
-        if not re.fullmatch(r'[A-Za-z0-9_./-]{0,200}',result):raise ValueError('Unsafe RPM repository variable: '+key)
+        if not re.fullmatch(r'[A-Za-z0-9_./-]{0,200}',result):raise RepositoryRejected('Unsafe RPM repository variable: '+key)
         return result
     return re.sub(r'\$\{([A-Za-z0-9_]+)\}|\$([A-Za-z0-9_]+)',replace,value)
 
@@ -53,7 +62,7 @@ def expand(value, variables):
 def url(value):
     parsed=urlsplit(value)
     if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username or parsed.password or any(c.isspace() or c in '\x00"\\' for c in value):
-        raise ValueError('RPM repositories require HTTP(S) URLs without embedded credentials')
+        raise RepositoryRejected('RPM repositories require HTTP(S) URLs without embedded credentials')
     return value
 
 
@@ -68,24 +77,24 @@ def repositories(files, variables):
         if not source_path(path):continue
         cfg=parse(text)
         for name in cfg.sections():
-            if not re.fullmatch(NAME,name) or name in ids:raise ValueError('Duplicate or invalid RPM repository ID: '+name)
+            if not re.fullmatch(NAME,name) or name in ids:raise RepositoryRejected('Duplicate or invalid RPM repository ID: '+name)
             ids.add(name);item={**inherited,**dict(cfg[name])}
             if not truth(item.get('enabled','1')):continue
             unknown=set(item)-allowed
-            if unknown:raise ValueError('Unsupported active RPM repository options: '+', '.join(sorted(unknown)))
+            if unknown:raise RepositoryRejected('Unsupported active RPM repository options: '+', '.join(sorted(unknown)))
             if not truth(item.get('gpgcheck','1')) or not truth(item.get('sslverify','1')):
-                raise ValueError('RPM package signature and TLS verification must remain enabled')
+                raise RepositoryRejected('RPM package signature and TLS verification must remain enabled')
             values={key:expand(item.get(key,''),variables).split() for key in ('baseurl','metalink','mirrorlist','gpgkey')}
-            if not any(values[key] for key in ('baseurl','metalink','mirrorlist')):raise ValueError('RPM repository requires baseurl, metalink or mirrorlist')
+            if not any(values[key] for key in ('baseurl','metalink','mirrorlist')):raise RepositoryRejected('RPM repository requires baseurl, metalink or mirrorlist')
             for key in ('metalink','mirrorlist'):
-                if len(values[key])>1:raise ValueError('Only one '+key+' URL is allowed')
+                if len(values[key])>1:raise RepositoryRejected('Only one '+key+' URL is allowed')
             signed=truth(item.get('repo_gpgcheck','0'))
             for key in ('baseurl','metalink','mirrorlist'):
                 for uri in values[key]:
                     url(uri)
-                    if uri.startswith('http:') and not signed:raise ValueError('Unsigned RPM metadata must use HTTPS (or enable repo_gpgcheck)')
+                    if uri.startswith('http:') and not signed:raise RepositoryRejected('Unsigned RPM metadata must use HTTPS (or enable repo_gpgcheck)')
             for uri in values['gpgkey']:
-                if not uri.startswith('file://') or not key_path(uri[7:]):raise ValueError('RPM signing keys must reference captured /etc/pki/rpm-gpg files; import remote keys through a trusted channel first')
+                if not uri.startswith('file://') or not key_path(uri[7:]):raise RepositoryRejected('RPM signing keys must reference captured /etc/pki/rpm-gpg files; import remote keys through a trusted channel first')
             result.append({'id':name,'path':path,**item,**values,'repo_gpgcheck':signed})
     return result
 
@@ -139,7 +148,7 @@ def local_inventory():
     for name in glob.glob(KEY_ROOT+'*'):
         p=Path(name)
         if key_path(name) and p.is_file() and p.stat().st_size<2_000_000:keys[name]=base64.b64encode(p.read_bytes()).decode()
-    info={k:v.strip().strip('"') for k,v in (line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)}
+    info=os_info(Path('/etc/os-release').read_text())
     arch=rpm.expandMacro('%{_arch}')
     import dnf.rpm
     releasever=variables.get('releasever') or dnf.rpm.detect_releasever('/') or info.get('VERSION_ID','').split('.')[0]
@@ -182,9 +191,9 @@ def versionlock_name(line):
 def validate_main(inv):
     main=next((parse(inv['files'][p]) for p in MAIN_FILES if p in inv['files']),None)
     if main and main.has_section('main'):
-        if any(main.get('main',k,fallback='').strip() for k in ('password','username','proxy_password','proxy_username','sslclientcert','sslclientkey')):raise ValueError('Target DNF credentials/client certificates require a supported repository access adapter')
-        if main.get('main','reposdir',fallback=REPO_ROOT).rstrip('/')!=REPO_ROOT.rstrip('/'):raise ValueError('Custom RPM reposdir is not supported; use /etc/yum.repos.d')
-        if set(main.get('main','tsflags',fallback='').replace(',',' ').split())-{'nodocs'}:raise ValueError('Unsafe RPM tsflags require manual review (only nodocs is supported)')
+        if any(main.get('main',k,fallback='').strip() for k in ('password','username','proxy_password','proxy_username','sslclientcert','sslclientkey')):raise RepositoryRejected('Target DNF credentials/client certificates require a supported repository access adapter')
+        if main.get('main','reposdir',fallback=REPO_ROOT).rstrip('/')!=REPO_ROOT.rstrip('/'):raise RepositoryRejected('Custom RPM reposdir is not supported; use /etc/yum.repos.d')
+        if set(main.get('main','tsflags',fallback='').replace(',',' ').split())-{'nodocs'}:raise RepositoryRejected('Unsafe RPM tsflags require manual review (only nodocs is supported)')
     return main
 
 
