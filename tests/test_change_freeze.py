@@ -1,10 +1,13 @@
 import datetime as dt
 import time
+import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from app import freezes, scheduling as sched, operations
-from app.db import Session, Job, Setting
+from app.db import Session, Job, Setting, Audit
+from sqlalchemy import select
 
 
 def stamp(text): return dt.datetime.fromisoformat(text).timestamp()
@@ -58,3 +61,29 @@ def test_api_roundtrip_audit_and_validation(admin):
     assert len(body['active'])==1 and body['clear_at']==pytest.approx(now+3600,abs=2) and body['freezes'][0]['owner']
     assert 'blocks' in body['precedence']
     assert any(a['action']=='change freezes' for a in admin.get('/api/audit').json())
+
+
+def test_concurrent_freeze_edits_require_current_revision_and_keep_audit(admin):
+    before=admin.get('/api/operations/freezes').json()
+    revision=before.get('revision','')
+    start=dt.datetime.now(dt.timezone.utc);end=start+dt.timedelta(hours=1)
+    def save(index):
+        return admin.put('/api/operations/freezes',json={'expected_revision':revision,
+            'freezes':[{'start':start.isoformat(),'end':end.isoformat(),'reason':'Freeze '+str(index)}]})
+    with ThreadPoolExecutor(max_workers=2) as pool:responses=list(pool.map(save,range(2)))
+    assert sorted(response.status_code for response in responses)==[200,409]
+    body=admin.get('/api/operations/freezes').json()
+    assert body['revision']!=revision and len(body['freezes'])==1
+    with Session() as s:
+        rows=list(s.scalars(select(Audit).where(Audit.action=='change freezes')))
+        assert len(rows)==1
+        change=json.loads(rows[0].detail)
+        assert change['before']==[] and change['after']==body['freezes']
+
+
+def test_malformed_retained_freeze_policy_blocks_dispatch_and_reports_unknown(admin):
+    now=time.time();store([{'start':None,'end':now+3600,'reason':'malformed','owner':'x'}])
+    with Session() as s:assert freezes.blocked(s,now) is True
+    response=admin.get('/api/operations/freezes')
+    assert response.status_code==200 and response.json()['blocked'] is True
+    assert response.json()['policy_valid'] is False

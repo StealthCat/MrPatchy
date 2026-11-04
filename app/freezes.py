@@ -7,6 +7,9 @@ freeze is active the existing windows, holds and approvals decide as before.
 """
 import datetime
 import time
+import math
+import json
+import hashlib
 from .db import Setting
 
 KEY = 'freeze:global'
@@ -39,7 +42,24 @@ def clean(items, owner):
 
 def load(s):
     row = s.get(Setting, KEY)
-    return row.value.get('freezes', []) if row else []
+    if not row:return []
+    if not isinstance(row.value,dict):raise ValueError('Saved change freeze policy is malformed')
+    rows=row.value.get('freezes')
+    if not isinstance(rows,list) or len(rows)>MAX_FREEZES:raise ValueError('Saved change freeze policy is malformed')
+    for item in rows:
+        if not isinstance(item,dict):raise ValueError('Saved change freeze policy is malformed')
+        start,end=item.get('start'),item.get('end')
+        try:valid=(type(start) in (int,float) and type(end) in (int,float) and math.isfinite(start) and math.isfinite(end) and end>start)
+        except OverflowError:valid=False
+        if (not valid or not isinstance(item.get('reason'),str) or not item['reason'].strip() or len(item['reason'])>200
+                or not isinstance(item.get('owner'),str) or len(item['owner'])>80):
+            raise ValueError('Saved change freeze policy is malformed')
+    return rows
+
+
+def revision(s):
+    row=s.get(Setting,KEY)
+    return hashlib.sha256(json.dumps(row.value,sort_keys=True,separators=(',',':')).encode()).hexdigest() if row else ''
 
 
 def active(s, now=None):
@@ -61,4 +81,5 @@ def clear_at(s, now=None):
 
 
 def blocked(s, now=None):
-    return bool(active(s, now))
+    try:return bool(active(s, now))
+    except (ValueError,TypeError,OverflowError):return True

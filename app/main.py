@@ -1181,11 +1181,20 @@ def get_window(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id);row=s.get(Setting,'window:'+host_id)
         return row.value if row else {'windows':[]}
 
-class FreezeInput(BaseModel): freezes:list[dict]=Field(default_factory=list,max_length=50)
+class FreezeInput(BaseModel):
+    model_config={'extra':'forbid'}
+    freezes:list[dict]=Field(default_factory=list,max_length=50)
+    expected_revision:str=Field(default='',pattern=r'^(?:[a-f0-9]{64})?$')
 def freeze_view(s):
     now=time.time()
-    return {'freezes':freezes.load(s),'active':freezes.active(s,now),'clear_at':freezes.clear_at(s,now),
-            'precedence':'A change freeze blocks scheduled, manual and urgent patch/repair/release-upgrade dispatch until it ends; maintenance windows and holds apply afterwards.'}
+    base={'revision':freezes.revision(s),
+          'precedence':'A change freeze blocks scheduled, manual and urgent patch/repair/release-upgrade dispatch until it ends; maintenance windows and holds apply afterwards.'}
+    try:
+        rows=freezes.load(s);active=freezes.active(s,now);clear_at=freezes.clear_at(s,now)
+    except (ValueError,TypeError,OverflowError):
+        return {**base,'freezes':[],'active':[],'clear_at':None,'blocked':True,'policy_valid':False,
+                'error':'Saved change freeze policy is malformed; dispatch remains blocked until an administrator repairs it.'}
+    return {**base,'freezes':rows,'active':active,'clear_at':clear_at,'blocked':bool(active),'policy_valid':True}
 @app.get('/api/operations/freezes')
 def get_freezes(user=Depends(admin_user)):
     with Session() as s: return freeze_view(s)
@@ -1193,8 +1202,13 @@ def get_freezes(user=Depends(admin_user)):
 def save_freezes(body:FreezeInput,user=Depends(admin_user)):
     try: rows=freezes.clean(body.freezes,user['username'])
     except ValueError as error: raise HTTPException(400,str(error))
-    with Session() as s:
-        s.merge(Setting(key=freezes.KEY,value={'freezes':rows}));audit(s,'change freezes',f"{user['username']} saved {len(rows)} change freeze(s)");s.commit()
+    with worker.Lock('change-freeze-config'),Session() as s:
+        if body.expected_revision!=freezes.revision(s):raise HTTPException(409,'Change freeze policy changed; reload it before editing')
+        old=s.get(Setting,freezes.KEY)
+        before=old.value.get('freezes',[]) if old and isinstance(old.value,dict) else []
+        s.merge(Setting(key=freezes.KEY,value={'freezes':rows}))
+        audit(s,'change freezes',json.dumps({'actor':user['username'],'before':before,'after':rows,'previous_revision':body.expected_revision},sort_keys=True))
+        s.commit()
         return freeze_view(s)
 
 class NotificationInput(BaseModel):
