@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -48,7 +49,7 @@ def test_independent_profiles_preserve_each_other_and_redact_material(configured
     for secret in [private['certificate'], private['private_key'], 'YWJj']:
         assert secret not in json.dumps(result)
     assert 'https://patchy.internal.test, https://alias.internal.test' in calls[-1]
-    assert 'https://patchy.external.test' in calls[-1]
+    assert re.search(r'https://patchy\.external\.test(?::|/|\s|}|$)', calls[-1])
     assert 'test_dir "https://ca.example.test/directory"' in calls[-1]
     assert 'https://patchy.external.test:{$HTTPS_PORT:443}{uri}' in calls[-1]
     assert 'external' in tls.read_profiles()
