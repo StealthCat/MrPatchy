@@ -236,3 +236,16 @@ def test_bootstrap_upgrades_generated_configuration_without_port_marker(configur
     tls.bootstrap()
     assert '# mrpatchy-ports:' in path.read_text() and tls.read_profiles()==profiles
     assert not calls
+
+
+def test_unconfirmed_bootstraps_keep_last_confirmed_uploaded_key(configured,monkeypatch):
+    root,calls=configured
+    material=certificate(['patchy.internal.test'])
+    tls.apply({'domain':'patchy.internal.test','mode':'uploaded',**material})
+    confirmed=root/tls._live_state()
+    for port in ('10443','11443'):
+        monkeypatch.setenv('HTTPS_PORT',port)
+        tls.bootstrap()
+    assert len(calls)==1
+    assert (confirmed/'internal-key.pem').read_text()==material['private_key']
+    assert (confirmed/'profiles.json').exists()

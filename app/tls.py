@@ -293,12 +293,18 @@ def _live_state():
 
 
 def _shred(folder):
-    """Best-effort overwrite of secret files before removing a stale state folder."""
+    """Best-effort overwrite before unlink, not forensic erasure on SSD/COW storage."""
     for item in folder.rglob('*'):
         try:
             if item.is_file() and not item.is_symlink():
                 with open(item, 'r+b') as stream:
-                    stream.write(b'\0' * stream.seek(0, os.SEEK_END))
+                    remaining=stream.seek(0, os.SEEK_END)
+                    stream.seek(0)
+                    zeros=b'\0'*65536
+                    while remaining:
+                        written=stream.write(zeros[:min(remaining,len(zeros))])
+                        if not written:raise OSError('Cannot overwrite retired TLS state')
+                        remaining-=written
                     stream.flush()
                     os.fsync(stream.fileno())
         except OSError:
@@ -377,11 +383,11 @@ def bootstrap():
     # Re-render environment-derived ports while preserving saved profiles/material.
     # Caddy reads this generation after the app's startup health check.
     # Expiry must not prevent access to the UI for replacing an existing certificate.
-    previous = _live_state()
     folder, _ = _prepare(profiles, validate=False)
     (folder / 'Caddyfile.pending').replace(path)
     _sync_directory(directory())
-    _prune(folder.name, previous)
+    # Rendering is not a live activation receipt. Keep earlier generations until
+    # apply() has confirmed a replacement through Caddy's admin API.
 
 
 if __name__ == '__main__':

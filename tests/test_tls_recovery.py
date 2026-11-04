@@ -99,3 +99,15 @@ def test_failed_apply_does_not_prune_previous_state(tmp_path,monkeypatch):
     monkeypatch.setattr(tls.httpx,'post',boom)
     with pytest.raises(httpx.ConnectError): tls.apply({'domain':'c.example.org','mode':'internal'})
     assert {p.name for p in _state_folders(tmp_path)}==before
+
+
+def test_retired_secret_is_overwritten_in_place_before_removal(tmp_path,monkeypatch):
+    folder=tmp_path/'retired';folder.mkdir()
+    secret=b'RETIRED_TEST_SECRET' * 10000
+    path=folder/'key.pem';path.write_bytes(secret)
+    inspected=[]
+    def inspect_before_removal(*args,**kwargs):
+        inspected.append(path.read_bytes())
+    monkeypatch.setattr(tls.shutil,'rmtree',inspect_before_removal)
+    tls._shred(folder)
+    assert inspected==[b'\0'*len(secret)]
