@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.17 — 2026-11-04
+
+1. [PR #464](https://github.com/StealthCat/MrPatchy/pull/464): Bound pending SSO login states to ten per requesting source and, at the 1,000-state global cap, evict the oldest state instead of refusing every new login; admission is serialized across processes so concurrent requests cannot bypass the bounds. Compatibility: no API or configured-provider change; one abusive source receives HTTP 429 after its own allowance, while other sources retain sign-in availability and an evicted stale flow must restart. No runtime response-authorization expansion. Completes #416. This source update does not publish a Docker image.
+
 ## 1.42.16 — 2026-11-04
 
 1. [PR #463](https://github.com/StealthCat/MrPatchy/pull/463): Allow an interrupted SSH key rotation to resume through the agent-health gate only when an unfinished rotation journal exists and every recorded drift issue is the managed `authorized_keys` path; unavailable agents, missing journals and any other drift remain blocked. Compatibility: no API, configuration or response-shape change; the exception is limited to completing the already-authorized, journaled key transition and does not broaden other remote-operation authorization. Completes #429. This source update does not publish a Docker image.
