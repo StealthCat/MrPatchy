@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from sqlalchemy import select,event
-from app import ai, ai_claims, ai_runs, ai_assessments, ai_retry, worker, worker_registry
+from app import ai, ai_claims, ai_runs, ai_assessments, ai_retry, host_lifecycle, worker, worker_registry
 from app.db import Session, Host, Behavior, Setting,engine
 from app.security import seal
 
@@ -92,19 +92,88 @@ def test_refused_admission_lock_does_not_mutate_work(admin,monkeypatch):
         assert not list(s.scalars(select(ai_runs.AIRun)))
 
 
-def test_one_subject_and_one_host_cannot_occupy_multiple_slots(admin,monkeypatch):
-    seed(count=4,same_host=True);started=threading.Event();release=threading.Event();sent=[]
+def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
+    seed(count=4,same_host=True);started=threading.Event();release=threading.Event();sent=[];guard=threading.Lock()
     def post(*a,**k):
-        sent.append(1);started.set();assert release.wait(15);return result()
+        with guard:
+            sent.append(time.perf_counter())
+            if len(sent)==2:started.set()
+        assert release.wait(15);return result()
     monkeypatch.setattr(ai.transport,'post',post)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        first=pool.submit(worker.investigate_one);assert started.wait(15)
-        others=[pool.submit(worker.investigate_one) for _ in range(3)]
-        for future in others:future.result(15)
-        assert sent==[1]
+        running=[pool.submit(worker.investigate_one) for _ in range(2)];assert started.wait(15)
+        refused=[pool.submit(worker.investigate_one) for _ in range(2)]
+        for future in refused:future.result(15)
+        assert len(sent)==2
         assert admin.post('/api/investigations/subject-0/retry').status_code==409
-        status=admin.get('/api/investigation-status').json();assert status['active']==1 and status['queued']==3
-        release.set();first.result(15)
+        status=admin.get('/api/investigation-status').json()
+        assert status['active']==2 and status['queued']==2 and status['per_server_limit']==2
+        assert pause_policy(admin).status_code==409
+        with pytest.raises(host_lifecycle.Busy,match='AI investigation'):
+            with host_lifecycle.changing('host-0'):pass
+        release.set()
+        for future in running:future.result(15)
+
+
+def test_lowered_server_limit_preserves_live_leases_and_blocks_later_admission(admin):
+    seed(count=4,same_host=True)
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    configured=admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':False,'concurrency_limit':3,'expected_revision':current['revision'],
+        'reason':'Allow three reviewed investigations for this server',
+    })
+    assert configured.status_code==200
+    leases=[ai_claims.acquire() for _ in range(3)]
+    assert all(leases) and ai_claims.acquire() is None
+
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    lowered=admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':False,'concurrency_limit':1,'expected_revision':current['revision'],
+        'reason':'Return this server to serial investigation capacity',
+    })
+    assert lowered.status_code==200 and lowered.json()['concurrency_limit']==1
+    for lease in leases:lease.check()
+    assert ai_claims.acquire() is None
+    with leases.pop():pass
+    assert ai_claims.acquire() is None
+    while leases:
+        with leases.pop():pass
+    replacement=ai_claims.acquire();assert replacement
+    with replacement:pass
+
+
+def pause_policy(admin):
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    return admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':True,'expected_revision':current['revision'],
+        'reason':'Pause this server for an operator review',
+    })
+
+
+def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeypatch):
+    seed(count=1)
+    queue=worker.Lock('server-queue:host-0');assert queue.acquire(False)
+    attempted=threading.Event();native_lock=host_lifecycle.Lock
+    class ObservedLock:
+        def __init__(self,name):self.name=name;self.inner=native_lock(name)
+        def acquire(self,blocking=True):
+            if self.name=='server-queue:host-0':attempted.set()
+            return self.inner.acquire(blocking)
+        def release(self):self.inner.release()
+    monkeypatch.setattr(host_lifecycle,'Lock',ObservedLock)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting=pool.submit(ai_claims.acquire)
+            assert attempted.wait(15) and not waiting.done()
+            with Session() as s:
+                s.get(Host,'host-0').enabled=False;s.commit()
+            queue.release();queue=None
+            assert waiting.result(15) is None
+    finally:
+        if queue is not None:queue.release()
+    with Session() as s:
+        assert s.get(Behavior,'subject-0').attempted==0
+        assert not list(s.scalars(select(ai_claims.Claim)))
 
 
 @pytest.mark.parametrize('change',['evidence','approval','configuration','expiry','token','worker_boot','worker_heartbeat','worker_identity'])

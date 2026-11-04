@@ -91,28 +91,39 @@ def acquire(owner=None):
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
             signature=ai_retry.configuration(s)
-            # One process investigation per host preserves lifecycle/provider
-            # serialization and prevents a noisy host occupying every slot.
+            # Active claims are globally bounded by worker capacity. Resolve
+            # each occupied host's revisioned policy under this admission lock
+            # so a settings change and the next claim cannot cross.
+            active_by_host=dict(s.execute(select(Claim.host_id,func.count()).where(
+                Claim.expires>now).group_by(Claim.host_id)).all())
+            saturated_hosts=[host_id for host_id,count in active_by_host.items()
+                if count>=ai_policy.investigation_limit(s,host_id)]
             row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
                 Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
-                Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(select(Claim.host_id)),
+                Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
                 Behavior.verdict.in_(('pending','error')),ai_retry.eligible(signature,now)).order_by(Behavior.first_seen,Behavior.id).limit(1))
             if not row:return None
             # Approval writes use this host queue gate. Re-read after acquiring
             # it, including on MySQL repeatable-read connections.
             subject=row.id;host_id=row.host_id
-            with host_lifecycle.activity([host_id],'queue'):
-                s.rollback();row=s.get(Behavior,subject)
-                if not row or row.approved or row.verdict not in ('pending','error'):return None
-                row.attempted=now;ai_retry.begin(s,row,signature,now)
-                run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
-                s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
-                claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
-                    boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.revision(row),
-                    configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
-                s.add(claim);s.commit()
-                work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
-                return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner)
+            try:
+                with host_lifecycle.activity([host_id],'queue'):
+                    s.rollback();row=s.get(Behavior,subject)
+                    if not row or row.approved or row.verdict not in ('pending','error'):return None
+                    # Legacy/test behavior rows may predate a retained Host row;
+                    # only a present host can carry a lifecycle transition.
+                    host=s.get(Host,host_id)
+                    if host is not None and not host_lifecycle.active(host):return None
+                    row.attempted=now;ai_retry.begin(s,row,signature,now)
+                    run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
+                    s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
+                    claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
+                        boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.revision(row),
+                        configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
+                    s.add(claim);s.commit()
+                    work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
+                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner)
+            except host_lifecycle.Inactive:return None
     finally:lock.release()
 
 
