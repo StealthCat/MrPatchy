@@ -5852,6 +5852,21 @@ claimed registry digest pins. #292's Actions pins and #302's CodeQL coverage are
 separate deliveries whose history must be preserved during integration. #201
 stays partial/open; no broader deployment/security roadmap completion is claimed.
 
+### Compose capability bounding — partial #201 checkpoint
+
+The complete Compose file now drops all Linux capabilities from `app`, `worker`
+and `caddy` and adds back only what each needs. `app` and `worker` start as root
+only for the entrypoint's `chown` of the data/TLS volumes and the `gosu` drop to
+the unprivileged `mrpatchy` user, so they keep `CHOWN`, `SETUID` and `SETGID`.
+`caddy` keeps `NET_BIND_SERVICE` for ports 80/443 and `DAC_READ_SEARCH` to read
+the owner-only files on the read-only `/tls` mount. `no-new-privileges` is
+unchanged. `tests/test_compose_capabilities.py` pins this exact set.
+
+Limits: read-only root filesystems, PID/memory limits and GCP override services
+remain unfinished under #201; the dependency-vulnerability gate is tracked by the
+separate #369 checkpoint. Acceptance of the new capability set on a real Docker
+host comes from the exact-head CI Compose and HTTPS checks; no local Docker was
+available. No runtime response authority changes.
 
 ### Resumable multi-stage release configuration reviews — worker checkpoint #366
 
@@ -5906,3 +5921,24 @@ ledger-retention behavior. Provider-invoice reconciliation, signed/automated pri
 catalog lifecycle and complete multi-controller failover/reset acceptance remain
 planned. Coordinator integration, exact-head SQLite/MySQL/browser/full-suite checks
 and fresh code scanning are still required before delivery.
+
+### AI pricing catalog lifecycle alerts — worker checkpoint #370
+
+This bounded faster-AI increment warns administrators through the existing durable
+operational outbox and in-app notification history during the final seven days of a
+catalog's reviewed window. The stable subject is deduplicated while unchanged,
+escalates from medium to high and reopens delivery at expiry, and resolves when a
+reviewed catalog refresh moves outside the warning window or enabled daily-cap
+enforcement is removed. Only safe catalog version/status/expiry text is published;
+the event contains no keys, prompts, evidence or provider receipts and links to the
+administrator-only AI settings page. Per-user read/dismiss remains separate from
+operational acknowledgement and neither changes admission nor performs remediation.
+Rate-only, unthrottled, legacy and globally disabled AI modes do not receive this
+spend-guard alert.
+
+Focused acceptance covers the exact warning and expiry boundaries, repeated
+collection, acknowledged-warning escalation, per-user revision visibility,
+resolution and non-cap/disabled modes. This does not automate or sign catalog
+updates, reconcile provider invoices, add provider-derived billing truth or complete
+the remaining multi-controller/reset acceptance. Final delivery still requires the
+coordinator's exact-head full test matrix and fresh code scan.
