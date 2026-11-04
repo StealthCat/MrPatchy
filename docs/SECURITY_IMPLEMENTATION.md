@@ -2193,6 +2193,29 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Bounded same-server process triage — worker checkpoint #379
+
+This bounded threaded-execution increment permits two independent renewable process-
+triage leases for one server, while the configured fleet-wide AI executor capacity
+remains the outer bound. The subject claim stays exclusive and selection excludes a
+server once its two live leases are occupied, so one noisy server cannot consume an
+arbitrarily large pool. The investigations use independent sessions and run contexts;
+their provider calls can actually overlap instead of only occupying executor slots.
+
+The durable lease also becomes the in-flight fence for per-server AI policy and server
+lifecycle changes. Provider admission briefly serializes with policy updates, rechecks
+pause and lease ownership, then releases that gate before network I/O. Pause/resume is
+rejected while either lease remains live. Disable/delete obtains the triage admission
+gate before server activity locks, rejects a live lease, and a claim delayed behind a
+lifecycle transition re-reads active state before committing. Non-triage AI purposes
+retain their existing exclusive per-server provider gate.
+
+Focused acceptance covers real two-call same-server overlap, refusal of a third and
+fourth slot, status/UI disclosure of the bound, policy-change rejection and lifecycle
+rejection. This does not complete priority/aging across every AI purpose, make the
+per-server bound administrator-configurable, or establish full multi-controller/MySQL
+failover acceptance. Exact-head full CI and coordinator integration remain required.
+
 
 ## Portable per-server scanner records
 

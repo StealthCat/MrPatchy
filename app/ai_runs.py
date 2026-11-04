@@ -320,7 +320,7 @@ def status(s):
     return {'pending':len(rows),'oldest':min((r.first_seen for r in rows),default=None),'hourly_limit':cfg['ai_hourly_limit'],
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
-            'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':1,
+            'active':active_count,'queued':max(0,len(rows)-active_count),'reported_capacity':capacity or None,'per_server_limit':ai_claims.PER_HOST_LIMIT,
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
