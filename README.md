@@ -670,10 +670,14 @@ creates no call receipt or charge. A transmitted transient failure is not replay
 inside the HTTP request: its existing receipt and spend outcome remain, and the job
 becomes eligible for a later scheduler attempt at the shared provider floor.
 
-Release planning remains excluded because one release plan can make multiple paid
-calls without per-stage persistence; replaying the whole job could duplicate a
-successful earlier stage. Connection tests are interactive rather than durable jobs.
-Those paths, plus complete multi-controller failover acceptance, remain unfinished.
+Release configuration review planning also retains controlled rate, spend, provider-
+backoff and administrator-pause waits. Each accepted stage is sealed before the next
+provider call; an exact match resumes only unfinished stages, while changed host,
+inventory, configuration, model, policy, vendor or package-news evidence discards
+reuse and reviews the current plan again. A call interrupted before an accepted
+structured result is not replayed automatically. Connection tests remain interactive
+rather than durable jobs, and complete provider-invoice and multi-controller failover
+acceptance remain unfinished.
 
 ### Interrupted advisory-plan recovery (v1.35.4)
 

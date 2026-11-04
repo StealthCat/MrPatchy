@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.40.0 — 2026-11-04
+
+1. [PR #367](https://github.com/StealthCat/MrPatchy/pull/367): Make multi-stage distribution-release configuration review resumable: each accepted AI review is durably sealed before the next provider call, controlled rate/spend/backoff/pause waits keep the plan queued and non-approvable, and an exact evidence/model/policy/vendor/news match reuses completed stages without paying to repeat them; changed evidence conservatively re-reviews the affected plan, and deferred release plans now appear in shared AI queue status. Compatibility: no schema, target-agent, role, approval, audit, deployment or response-authorization change; interrupted calls without an accepted structured result are not replayed automatically, and provider-invoice plus multi-controller failover/reset acceptance remain unfinished. This source update does not publish a Docker image.
+
 ## 1.39.3 — 2026-11-04
 
 1. [PR #365](https://github.com/StealthCat/MrPatchy/pull/365): Align the release runner, RPM inventory and advisory ecosystem os-release parsers so they consistently ignore indented comments, trim keys and whitespace, and accept either single- or double-quoted values; this prevents valid single-quoted distribution metadata from losing its advisory ecosystem mapping. Compatibility: no API, schema, role, deployment, target action or response-authorization change; parser output changes only for previously inconsistent comments, whitespace and quote forms. This is a partial #190 consolidation only: shared hash loops, ancestor walkers and import cleanup remain unfinished. This source update does not publish a Docker image.
