@@ -293,3 +293,59 @@ def test_unrecognized_status_rows_stay_counted_and_block_admission(admin):
         ai_budget.reserve(payload())
     with Session() as session:
         assert session.query(ai_budget.BudgetEntry).count()==1
+
+
+def test_spend_history_aggregates_exact_persisted_windows_without_loading_ledger(admin):
+    from sqlalchemy import event
+    import time
+    now=time.time()
+    def entry(identifier,timezone,reset,status,reserve,actual=None):
+        created=min(reset-3600,now-60)
+        return ai_budget.BudgetEntry(id=identifier,created=created,updated=created+30,reset_at=reset,
+            timezone=timezone,model='private-model-name',status=status,reservation_usd=Decimal(reserve),actual_usd=actual,
+            pricing_version='catalog-test',pricing_source='https://pricing.example.test/private')
+    current=ai_budget._window(now,'UTC')[1]
+    older=now-2*86400
+    rows=[
+        entry('history-settled','UTC',current,'settled','9',Decimal('0.125')),
+        entry('history-reserved','UTC',current,'reserved','0.2'),
+        entry('history-sent','UTC',current,'sent','0.3'),
+        entry('history-uncertain','UTC',current,'uncertain','0.4'),
+        entry('history-other','UTC',current,'legacy_pending','0.5'),
+        entry('history-released','UTC',current,'released','99'),
+        entry('history-old','America/New_York',older,'settled','1',Decimal('0.75')),
+    ]
+    with Session() as session:session.add_all(rows);session.commit()
+    loaded=[]
+    def on_load(*args):loaded.append(1)
+    event.listen(ai_budget.BudgetEntry,'load',on_load)
+    try:response=admin.get('/api/settings/ai-spend-history?days=30')
+    finally:event.remove(ai_budget.BudgetEntry,'load',on_load)
+    assert response.status_code==200 and not loaded
+    data=response.json();assert data['days']==30 and not data['truncated']
+    assert len(data['windows'])==2
+    current_window=next(row for row in data['windows'] if row['timezone']=='UTC')
+    assert current_window=={
+        'timezone':'UTC','window_start':pytest.approx(current-86400),'reset_at':current,'call_count':5,
+        'settled_usd':'0.125','reserved_usd':'0.2','sent_usd':'0.3','uncertain_usd':'0.4',
+        'other_usd':'0.5','counted_usd':'1.525',
+    }
+    assert 'private-model-name' not in response.text
+    assert 'pricing.example.test' not in response.text
+
+
+def test_spend_history_validates_range_role_and_bounds_group_rows(admin):
+    from app.identity import User
+    import time
+    now=time.time()
+    with Session() as session:
+        session.add_all([ai_budget.BudgetEntry(id=f'history-{i}',created=now-60,updated=now-30,reset_at=now+i+1,
+            timezone='UTC',model='m',status='reserved',reservation_usd=Decimal('0.01'),
+            pricing_version='v',pricing_source='s') for i in range(12)])
+        session.commit()
+    assert admin.get('/api/settings/ai-spend-history?days=0').status_code==400
+    assert admin.get('/api/settings/ai-spend-history?days=91').status_code==400
+    result=admin.get('/api/settings/ai-spend-history?days=1').json()
+    assert result['max_windows']==4 and result['truncated'] and len(result['windows'])==4
+    with Session() as session:session.get(User,'admin').role='viewer';session.commit()
+    assert admin.get('/api/settings/ai-spend-history').status_code==403
