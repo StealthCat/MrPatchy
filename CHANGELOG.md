@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.10 — 2026-11-04
+
+1. [PR #460](https://github.com/StealthCat/MrPatchy/pull/460): Return the same `Invalid credentials or MFA code` response for every login and account step-up failure so an MFA-protected account no longer reveals whether its password was correct. Compatibility: clients matching the former `Invalid credentials` or `Invalid MFA code` strings must update; login and step-up keep their existing 401 and 403 statuses, and roles, CSRF enforcement, throttling and factor verification are unchanged. Detailed login failure reasons remain in the audit log. This source update does not publish a Docker image.
+
 ## 1.42.9 — 2026-11-04
 
 1. [PR #242](https://github.com/StealthCat/MrPatchy/pull/242): Remove retired TLS state directories after a confirmed Caddy activation, keeping the current and rollback generations and every recovery-required directory. Unconfirmed bootstrap renders and failed applies do not trigger pruning. Compatibility: no API or response-authorization change; retired profile, certificate, private-key and EAB files are overwritten in bounded chunks before best-effort removal, without a forensic-erasure guarantee on SSD or copy-on-write storage. This source update does not publish a Docker image.
