@@ -29,6 +29,7 @@ function flushNavToast(revision){
  if(pending.session===sessionRevision&&location.hash===pending.hash&&!$('#shell').classList.contains('hidden'))toast(pending.message);
 }
 function showLogin(){
+ NotificationShell.reset();
  pendingNavToast=null;sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
  packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
@@ -37,7 +38,7 @@ function showLogin(){
 }
 function isAdmin(){return currentUser?.role==='admin';}
 function currentView(revision,name){return revision===renderRevision&&page===name&&!$('#shell').classList.contains('hidden');}
-function showShell(){$('#login').classList.add('hidden');$('#shell').classList.remove('hidden');}
+function showShell(){$('#login').classList.add('hidden');$('#shell').classList.remove('hidden');NotificationShell.start();}
 function heading(title,sub,button=''){return PatchyUI.heading(page,title,sub,button);}
 function empty(title,text,action=''){return PatchyUI.empty(title,text,action);}
 function serverSelect(){return `<select id="server-select" aria-label="Select server">${hosts.map(h=>`<option value="${h.id}" ${h.id===selected?'selected':''}>${esc(h.name)}</option>`).join('')}</select>`;}
@@ -50,7 +51,9 @@ function modalRequest(){
  const sameSession=()=>session===sessionRevision;
  return {active,sameSession,close(message){if(!sameSession())return false;if(active())$('#modal').close();toast(message,true);return true;},error(error){if(!sameSession())return false;toast(error.message,!active());return true;}};
 }
+let quietRender=false;
 async function render(){
+ const quiet=quietRender;quietRender=false;
  const revision=++renderRevision;
  let requested=location.hash.slice(1)||'overview';
  if(requested.startsWith('overview/'))requested='overview';
@@ -59,7 +62,7 @@ async function render(){
  if(requested.startsWith('activity/'))requested='activity';
  if(requested.startsWith('settings/'))requested='settings';
  if(requested.startsWith('servers/'))requested='servers';
- if(!['security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs'].includes(requested))requested='overview';
+ if(!['security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
  try{
   const [me,list]=await Promise.all([api('/identity'),api('/hosts')]);
   if(revision!==renderRevision)return;
@@ -73,10 +76,33 @@ async function render(){
   $('#breadcrumb').textContent='Workspace / '+PatchyUI.pages[page][0];
   document.title=PatchyUI.pages[page][0]+' · Mr Patchy';
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
-  $('#content').innerHTML=PatchyUI.loading();
-  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics}[page])(revision);
+  if(!quiet)$('#content').innerHTML=PatchyUI.loading();
+  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
   flushNavToast(revision);
  }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
+}
+// Background refresh: keep the old view while fetching, then restore scroll and focus.
+function focusKey(el){
+ const root=$('#content');if(!el||el===document.body||!root||!root.contains(el))return null;
+ const keys=['id','href','data-action','data-id','data-nav','name'];
+ return {tag:el.tagName,attrs:keys.map(k=>[k,el.getAttribute(k)]).filter(pair=>pair[1]!==null),text:(el.textContent||'').trim().slice(0,80)};
+}
+function restoreFocus(key){
+ if(!key)return;
+ const matches=[...$('#content').querySelectorAll(key.tag.toLowerCase())].filter(el=>key.attrs.every(([k,v])=>el.getAttribute(k)===v));
+ const target=matches.find(el=>(el.textContent||'').trim().slice(0,80)===key.text)||matches[0];
+ if(target)target.focus({preventScroll:true});
+}
+async function refreshInBackground(){
+ const root=$('#content');
+ if(root.querySelector('details[open]'))return;
+ const y=window.scrollY,active=document.activeElement,key=focusKey(active),before=renderRevision,nodes=[...root.childNodes],html=root.innerHTML;
+ quietRender=true;
+ await render();
+ if(renderRevision!==before+1)return;
+ // Unchanged data: put the original nodes back so DOM, focus and assistive-technology context survive.
+ if(root.innerHTML===html){root.replaceChildren(...nodes);if(key&&active&&root.contains(active))active.focus({preventScroll:true});window.scrollTo(0,y);return;}
+ window.scrollTo(0,y);restoreFocus(key);
 }
 // Fleet contact is an observation, never a component readiness or protection claim.
 function fleetObservation(host,now){
@@ -89,7 +115,7 @@ function fleetObservation(host,now){
  return {kind:'recent',label:'Recent contact',reason:'Contact within two minutes and no stored integrity findings. Individual collectors may still be stale.'};
 }
 async function overview(revision=renderRevision){
- const snapshot=[...hosts],d=await api('/dashboard');if(!currentView(revision,'overview'))return;
+ const snapshot=[...hosts],[d,spool]=await Promise.all([api('/dashboard'),api('/spool-health').catch(()=>null)]);if(!currentView(revision,'overview'))return;
  const root=$('#content'),now=Date.now()/1000,observations=snapshot.map(host=>({host,...fleetObservation(host,now)}));
  const requested=location.hash.slice(1)||'overview';
  const section=requested==='overview/attention'?'attention':requested==='overview/monitoring'?'monitoring':'summary';
@@ -99,6 +125,13 @@ async function overview(revision=renderRevision){
  $('#breadcrumb').textContent='Workspace / Overview / '+labels[section];document.title=labels[section]+' · Fleet Overview · Mr Patchy';
  const navigation='<nav class="overview-sections" aria-label="Fleet overview pages">'+PatchyUI.sectionNavigation(entries,section,link,entries.map(item=>item[0]),[])+'</nav>';
  const recent=observations.filter(row=>row.kind==='recent').length,attention=observations.filter(row=>!['recent','disabled'].includes(row.kind)).length;
+ const num=value=>Number(value).toLocaleString();
+ const spoolSummary=()=>{
+  if(!spool?.counts)return '<section class="card fleet-reading" data-fleet-spool="unavailable"><h2>Agent event spool</h2><p class="help">Spool health could not be loaded. Absence of data is not evidence that no events were lost.</p></section>';
+  const c=spool.counts,l=spool.loss,rows=spool.servers.map(row=>`<li>${badge(row.status==='stale'?'stale':row.pressure)} <a href="${serverLink(row.host_id)}">${esc(row.name||row.host_id)}</a> · ${esc(row.utilization_percent)}% used · ${num(row.dropped_batches)} dropped batch(es), ${num(row.lost_observations)} lost observation(s)${row.status==='stale'?' · stale telemetry':''}</li>`).join('');
+  const quiet=!rows&&!c.unavailable;
+  return `<section class="card fleet-reading" data-fleet-spool="${quiet?'ok':'review'}"><h2>Agent event spool</h2><dl class="fleet-review-facts"><div><dt>Critical (≥90%)</dt><dd>${num(c.critical)}</dd></div><div><dt>Warning (≥70%)</dt><dd>${num(c.warning)}</dd></div><div><dt>Stale telemetry</dt><dd>${num(c.stale)}</dd></div><div><dt>No counters reported</dt><dd>${num(c.unavailable)}</dd></div><div><dt>Cumulative lost observations</dt><dd>${num(l.lost_observations)}</dd></div></dl>${rows?`<ul class="fleet-spool-list">${rows}</ul>${spool.more?`<p class="help">${num(spool.more)} more server(s) not listed.</p>`:''}`:`<p class="help">${quiet?'No enabled server reports spool pressure or recorded loss.':'No listed pressure or loss.'}</p>`}<p class="help">From the latest stored telemetry of ${num(c.total)} enabled server(s); not a live probe. Servers without counters are not treated as healthy, and cumulative loss stays visible after recovery. Open a server for queue details.</p></section>`;
+ };
  const stat=(label,value,detail,icon,style='')=>`<div class="stat ${style}">${PatchyUI.icon(icon)}<label>${label}</label><strong>${esc(value)}</strong><small>${detail}</small></div>`;
  const intro=heading(section==='summary'?'A healthier fleet starts here.':section==='attention'?'A closer look at your servers.':'Know what each signal means.',section==='summary'?'Stored signals, clear next steps, and room to investigate.':section==='attention'?'Review contact gaps and stored findings before deciding what to do.':'Expected timing does not prove that a check succeeded.','<button class="primary" data-admin data-action="add">+ Add server</button>');
  const notice='<p class="help fleet-snapshot-note">This page combines stored snapshots, not a live health probe. Disabled servers are excluded from package totals. Contact freshness does not verify individual collectors, Docker readiness or malware protection.</p>';
@@ -109,6 +142,7 @@ async function overview(revision=renderRevision){
    <div class="quick-links" aria-label="Fleet shortcuts"><a href="#overview/attention">${PatchyUI.icon('servers')} Review server attention ${PatchyUI.icon('arrow')}</a><a href="#packages">${PatchyUI.icon('packages')} Review updates</a><a href="#investigations">${PatchyUI.icon('investigations')} Investigate behaviors</a><a href="#schedules" data-admin>${PatchyUI.icon('schedules')} Plan patching</a></div>
    <div class="fleet-summary-grid"><section class="card fleet-reading"><div class="card-head"><h2>Review queue</h2><a class="mint" href="#overview/attention">Review servers →</a></div><dl class="fleet-review-facts"><div><dt>Stored integrity findings</dt><dd>${esc(d.integrity_alerts)}</dd></div><div><dt>Behaviors awaiting trust</dt><dd>${esc(d.investigations)}</dd></div><div><dt>Disabled servers</dt><dd>${observations.filter(row=>row.kind==='disabled').length}</dd></div></dl><p class="help">Counts are observations, not confirmed attacks. A vulnerable version or AI opinion alone does not authorize containment.</p><a href="#overview/monitoring" class="mint">Understand collection & coverage →</a></section>
    <section class="hero fleet-guide"><div><div class="eyebrow">MR PATCHY'S NEXT STEP</div><h2>${attention?'Start with the gaps.':'Keep a curious eye.'}</h2><p>${attention?'Open Server attention to review expired contact, unknown timestamps and stored findings.':'A quiet summary is useful, but it cannot certify every collector or endpoint. Review coverage before drawing conclusions.'}</p></div>${PatchyUI.mascot('welcome')}</section></div>
+   ${spoolSummary()}
    <section class="card fleet-reading"><div class="card-head"><h2>Your servers</h2><a class="mint" href="#servers">View all ${snapshot.length} →</a></div>${snapshot.length?`<div class="fleet-observation-grid">${observations.slice(0,3).map(tile).join('')}</div>`:empty('Make room for your first server','Enroll a supported Linux machine, verify installation, then review its collection results.','<button data-admin data-action="add">Enroll a server →</button>')}</section>`;
  }else if(section==='attention'){
   content=`<section class="card fleet-reading"><div class="toolbar" id="fleet-review-controls"><label>Find a server<input type="search" id="fleet-review-search" value="${esc(fleetReviewContext.q)}" placeholder="Name or address"></label><label>Review group<select id="fleet-review-filter"><option value="attention">Needs review</option><option value="all">All servers</option><option value="stale">Expired contact</option><option value="unknown">Unknown freshness</option><option value="disabled">Management disabled</option><option value="recent">Recent contact</option></select></label><button id="fleet-review-reset">Reset filters</button></div><p class="help" id="fleet-review-count" role="status"></p><div id="fleet-review-cards"></div><div class="actions"><button id="fleet-review-prev">Previous</button><span class="help" id="fleet-review-page"></span><button id="fleet-review-next">Next</button></div></section>`;
@@ -384,7 +418,7 @@ async function tlsModal(){
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset,revision=renderRevision;try{if(action==='retry-investigation'){b.disabled=true;try{const result=await api('/investigations/'+id+'/retry','POST');toast(result.detail);if(revision===renderRevision)await render();}finally{if(b.isConnected)b.disabled=false;}return;}if(action==='retriage-investigation')return requestInvestigationRetriage(id);if(action==='revoke-known-good')return requestKnownGoodRevocation(b.dataset.fingerprint,b.dataset.version,b.dataset.linked);if(action==='add')return addServer();if(action==='inspect')return inspect(id);if(action==='refresh'){await api(`/hosts/${id}/actions/refresh`,'POST');toast('Operation queued. See Activity for progress.');return;}if(action==='trust'){const approved=b.dataset.approved!=='true';modal(approved?'Approve known-good behavior':'Revoke behavior approval',`<p>${approved?'Record this exact behavior as reviewed and trusted? Its AI assessment alone is not proof of safety.':'This behavior will no longer be marked as trusted.'}</p><button class="primary" id="confirm-trust">${approved?'Approve behavior':'Revoke approval'}</button>`);const request=modalRequest();$('#confirm-trust').onclick=async event=>{const button=event.currentTarget;if(button.disabled)return;button.disabled=true;try{await api('/investigations/'+id,'PUT',{approved});request.close(approved?'Behavior approval saved':'Behavior approval revoked');if(request.sameSession()&&revision===renderRevision)await render();}catch(error){request.error(error);if(request.active())button.disabled=false;}};}}catch(e){toast(e.message);}});
 $('#close-modal').onclick=()=>{modalRevision++;releaseRequest++;$('#modal').close();};$('#modal').addEventListener('cancel',()=>{modalRevision++;releaseRequest++;});$('#refresh-page').onclick=render;$('#logout').onclick=async()=>{try{await api('/logout','POST');showLogin();}catch(e){toast(e.message);}};$('#login-form').onsubmit=async e=>{e.preventDefault();try{const d=await api('/login','POST',{password:new FormData(e.target).get('password'),username:new FormData(e.target).get('username')||'admin',otp:new FormData(e.target).get('otp')||''});csrf=d.csrf;e.target.reset();showShell();await render();resumeEnrollment();}catch(e){$('#login-error').textContent=e.message;}};window.addEventListener('hashchange',()=>{modalRevision++;releaseRequest++;$('#modal').close();window.scrollTo(0,0);render();});(async()=>{try{csrf=(await api('/session')).csrf;showShell();await render();resumeEnrollment();}catch{showLogin();}})();
 
-setInterval(()=>{if(!$('#shell').classList.contains('hidden')&&!$('#modal').open&&!document.activeElement?.closest('#server-list-controls,#fleet-review-controls')&&document.visibilityState==='visible'&&(page==='overview'||(page==='servers'&&(!location.hash.startsWith('#servers/')||location.hash.endsWith('/overview')))))render();},30000);
+setInterval(()=>{if(!$('#shell').classList.contains('hidden')&&!$('#modal').open&&!document.activeElement?.closest('#server-list-controls,#fleet-review-controls')&&document.visibilityState==='visible'&&(page==='overview'||(page==='servers'&&(!location.hash.startsWith('#servers/')||location.hash.endsWith('/overview')))))refreshInBackground();},30000);
 
 async function repositoryAccessModal(hostId){
  const revision=modalRevision;try{

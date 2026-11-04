@@ -112,3 +112,97 @@ def test_nontransient_provider_error_does_not_create_global_backoff(admin, monke
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff,'global')
         assert row.failures==0 and row.blocked_until==0
+
+
+def test_huge_retry_after_is_capped_and_admin_can_clear_it_with_audit(admin, monkeypatch):
+    configure(mode='rate')
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: response(headers={'retry-after': '300000000'}))
+    with pytest.raises(ai.AIError) as failed:
+        with ai_runs.track('triage', 'fixture-model'):ai.request(payload(), 'fixture-key')
+    cap=ai_provider_backoff.MAX_PROVIDER_DELAY
+    assert failed.value.provider_retry_after==cap
+    with Session() as session:
+        row=session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert cap-5 < row.blocked_until-time.time() <= cap
+        assert 'capped' in ai_provider_backoff.status(session)['reason']
+    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': True}
+    with Session() as session:
+        assert not ai_provider_backoff.status(session)['blocked']
+        from app.db import Audit
+        assert any(a.action=='clear AI provider backoff' for a in session.scalars(select(Audit)))
+    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': False}
+
+
+def test_internal_backoff_is_not_stored_as_provider_retry_after(admin, monkeypatch):
+    configure(mode='rate')
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: response())
+    with pytest.raises(ai.AIError) as failed:
+        with ai_runs.track('triage', 'fixture-model'):ai.request(payload(), 'fixture-key')
+    assert failed.value.retry_after>0 and failed.value.provider_retry_after==0
+
+
+def test_clear_provider_backoff_requires_admin(client):
+    assert client.post('/api/ai/provider-backoff/clear').status_code in (401, 403)
+
+
+def test_clear_revokes_provider_only_item_waits_but_keeps_attempts(admin):
+    from app import ai_retry
+    now=time.time();far=now+300000000
+    with Session() as session:
+        session.add_all([
+            ai_retry.TriageRetry(subject='legacy',configuration='c',attempts=2,state='deferred',next_at=far,provider_until=far),
+            ai_retry.TriageRetry(subject='blocked',configuration='c',attempts=5,state='blocked',next_at=0,provider_until=far),
+            ai_retry.TriageRetry(subject='policy',configuration='c',attempts=1,state='deferred',next_at=far,provider_until=0)])
+        session.commit()
+    assert ai_provider_backoff.clear(now=now) is True
+    with Session() as session:
+        legacy,blocked,policy=(session.get(ai_retry.TriageRetry,k) for k in ('legacy','blocked','policy'))
+        assert legacy.provider_until==0 and legacy.next_at<=now and legacy.attempts==2
+        assert blocked.provider_until==0 and blocked.attempts==5 and blocked.state=='blocked'
+        assert policy.next_at==far  # unrelated policy/rate waits are untouched
+        ai_retry.manual(session,type('R',(),{'id':'blocked'})(),now=now)
+
+
+@pytest.mark.parametrize('local_delay,provider_delay,expected_delay', [
+    (120, 10, 120),
+    (10, 120, 0),
+    (120, 120, 0),
+])
+def test_clear_preserves_later_local_retry_gate(admin, local_delay, provider_delay, expected_delay):
+    from app import ai_retry
+    now=time.time()
+    with Session() as session:
+        session.add(ai_retry.TriageRetry(subject='mixed',configuration='c',attempts=2,
+            state='deferred',next_at=now+max(local_delay,provider_delay),
+            provider_until=now+provider_delay))
+        session.commit()
+    assert ai_provider_backoff.clear(now=now) is True
+    with Session() as session:
+        retry=session.get(ai_retry.TriageRetry,'mixed')
+        assert retry.provider_until==0
+        assert retry.next_at==now+expected_delay
+        assert retry.state=='deferred' and retry.attempts==2
+
+
+@pytest.mark.parametrize('failure_delay',[1.25,121])
+def test_clear_releases_provider_policy_wait_after_admission_race(admin,failure_delay):
+    from app import ai_retry
+    from app.db import Behavior
+    now=time.time()
+    ai_provider_backoff.failed(ai.AIError('provider wait',transient=True,retry_after=120),now=now)
+    with Session() as session:
+        row=Behavior(id='raced',host_id='fixture',evidence={});session.add(row);session.flush()
+        ai_retry.begin(session,row,'configuration',now);session.commit()
+    with pytest.raises(ai.AIError) as refused:ai_provider_backoff.admit(now=now+1)
+    with Session() as session:
+        row=session.get(Behavior,'raced')
+        ai_retry.failed(session,row,refused.value,now+failure_delay);session.commit()
+    with Session() as session:
+        retry=session.get(ai_retry.TriageRetry,'raced')
+        assert retry.next_at<=max(now+120,now+failure_delay)
+    ai_provider_backoff.clear(now=now+failure_delay+1)
+    with Session() as session:
+        retry=session.get(ai_retry.TriageRetry,'raced')
+        assert retry.provider_until<=now+failure_delay+1 and retry.next_at<=now+failure_delay+1
+        if failure_delay<120:assert retry.provider_until==0
+        assert retry.state=='deferred' and retry.attempts==0

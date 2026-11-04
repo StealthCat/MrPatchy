@@ -1,5 +1,7 @@
 import base64
+import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager, contextmanager
 import hashlib
 import os
@@ -11,13 +13,13 @@ import threading
 import time
 import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
-from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
-from sqlalchemy.orm import defer
+from sqlalchemy.orm import defer, load_only
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
-from .security import password_hash, verify, token_hash, seal
+from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
 from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade
@@ -48,14 +50,24 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.37.1'
+APP_VERSION='1.42.7'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from .security import cipher
 from . import sso
-app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
+app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
+
+
+def _stream_limit():
+    try:
+        value = int(os.getenv('NOTIFICATION_STREAM_LIMIT', '32'))
+    except ValueError:
+        value = 32
+    return min(256, max(1, value))
+
+
+notification_streams = notification_events.StreamConnections(_stream_limit())
 @app.exception_handler(host_lifecycle.Busy)
 @app.exception_handler(host_lifecycle.Inactive)
 async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=409)
@@ -68,7 +80,11 @@ app.mount('/static',StaticFiles(directory=static),name='static')
 
 @app.middleware('http')
 async def guard(request,call_next):
-    response=await call_next(request)
+    try: response=await call_next(request)
+    except Exception:
+        # Unhandled errors would otherwise be answered outside this middleware, without the security headers.
+        logging.getLogger('mrpatchy').exception('Unhandled error for %s %s',request.method,request.url.path)
+        response=JSONResponse({'detail':'Internal server error'},status_code=500)
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
@@ -211,20 +227,29 @@ def login(body:Login,request:Request,response:Response):
         raise HTTPException(429,'Too many attempts. Try again in five minutes.')
     failure=None
     # Hash outside login_lock so password guesses cannot serialize other sign-ins. Always hash, even for missing accounts.
-    with Session() as s:
-        identity=s.get(User,body.username)
-        stored=identity.password if identity and identity.enabled else None
-    password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
-    with login_lock, Session() as s:
-        identity=s.get(User,body.username)
-        if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
-        elif not password_ok or identity.password!=stored: failure='bad password'
-        elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
-        else:
-            token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-            s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
-            audit(s,'login',identity.username+' '+ip); s.commit()
-            login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+    for attempt in range(2):
+        with Session() as s:
+            identity=s.get(User,body.username)
+            stored=identity.password if identity and identity.enabled else None
+        password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
+        upgraded=password_hash(body.password) if password_ok and needs_rehash(stored) else None
+        retry=False
+        with login_lock, Session() as s:
+            identity=s.get(User,body.username)
+            if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
+            elif not password_ok: failure='bad password'
+            elif identity.password!=stored:
+                # A concurrent correct sign-in may have just upgraded this hash: re-verify once against the current value.
+                failure='bad password'; retry=attempt==0
+            elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
+            else:
+                failure=None
+                if upgraded: identity.password=upgraded
+                token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
+                s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
+                audit(s,'login',identity.username+' '+ip); s.commit()
+                login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+        if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
         raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
@@ -240,21 +265,36 @@ def logout(request:Request,response:Response,user=Depends(self_user)):
 @app.get('/api/dashboard')
 def dashboard(user=Depends(viewer_user)):
     with Session() as s:
-        cfg=config(s); hosts=list(s.scalars(select(Host).where(Host.enabled==True,Host.deleted_at==0))); packages=list(s.scalars(select(Package).where(Package.host_id.in_(host_lifecycle.active_ids())))); now=time.time()
-        updates=[p for p in packages if p.candidate]
-        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+        cfg=config(s); now=time.time()
+        # Large inventory/telemetry/baseline blobs are never needed for the overview counts.
+        hosts=list(s.scalars(select(Host).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.enabled==True,Host.deleted_at==0)))
+        active=Package.host_id.in_(host_lifecycle.active_ids())
+        total=s.scalar(select(func.count()).select_from(Package).where(active)) or 0
+        update_counts=dict(s.execute(select(Package.priority,func.count()).where(active,Package.candidate!='',Package.candidate.is_not(None)).group_by(Package.priority)).all())
+        overdue=0
+        for priority,count in update_counts.items():
+            # Same rule as before: now > available_since + deadline hours.
+            cutoff=now-cfg['deadlines'][priority]*3600
+            overdue+=s.scalar(select(func.count()).select_from(Package).where(active,Package.candidate!='',Package.candidate.is_not(None),Package.priority==priority,Package.available_since<cutoff)) or 0
+        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':total,'updates':sum(update_counts.values()),'overdue':overdue,'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
 
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
+                      severity:str='',source:str='',host_id:str='',
                       limit:int=50,offset:int=0,user=Depends(self_user)):
     """Return a bounded, current-role-filtered page for the signed-in user."""
     with Session() as s:
-        items=notification_events.list_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed,limit=limit,offset=offset)
-        total=notification_events.count_for_user(
-            s,user['username'],unread_only=unread_only,
-            include_dismissed=include_dismissed)
+        try:
+            filters={'severity':severity,'source':source,'host_id':host_id}
+            items=notification_events.list_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,limit=limit,offset=offset,
+                **filters)
+            total=notification_events.count_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,**filters)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
         return {'items':items,'offset':offset,'limit':limit,'total':total,
                 'more':offset+len(items)<total}
 
@@ -262,6 +302,62 @@ def notification_list(unread_only:bool=False,include_dismissed:bool=False,
 def notification_unread_count(user=Depends(self_user)):
     with Session() as s:
         return {'unread':notification_events.unread_count(s,user['username'])}
+
+
+def _notification_stream_session(session,session_key,username,generation,role):
+    row=session.get(Setting,session_key)
+    identity=session.get(User,username)
+    return bool(row and row.value.get('expires',0)>=time.time()
+                and row.value.get('username')==username
+                and row.value.get('generation')==generation
+                and identity and identity.enabled
+                and identity.generation==generation
+                and identity.role==role
+                and identity.role in notification_events.ROLES)
+
+
+def _notification_sse(cursor):
+    return f'id: {cursor}\nretry: 3000\nevent: notifications\ndata: {{"cursor":"{cursor}"}}\n\n'
+
+
+@app.get('/api/notifications/stream')
+async def notification_stream(request:Request,user=Depends(self_user)):
+    """Stream bounded invalidations; list/count APIs remain authoritative."""
+    if not notification_streams.acquire():
+        raise HTTPException(429,'Notification stream capacity reached',headers={'Retry-After':'3'})
+    token=request.cookies.get('mrpatchy','')
+    session_key='session:'+token_hash(token)
+    username=user['username'];generation=user['generation'];role=user['role']
+    supplied=request.headers.get('last-event-id','')
+    last=supplied if re.fullmatch(r'[0-9a-f]{64}',supplied) else ''
+
+    async def events():
+        nonlocal last
+        heartbeat=time.monotonic()
+        try:
+            while not await request.is_disconnected():
+                with Session() as s:
+                    if not _notification_stream_session(
+                            s,session_key,username,generation,role):
+                        yield 'event: close\ndata: {}\n\n'
+                        return
+                    cursor=notification_events.stream_cursor(s,username)
+                if cursor is None:
+                    yield 'event: close\ndata: {}\n\n'
+                    return
+                if cursor!=last:
+                    last=cursor
+                    yield _notification_sse(cursor)
+                    heartbeat=time.monotonic()
+                elif time.monotonic()-heartbeat>=15:
+                    yield ': heartbeat\n\n'
+                    heartbeat=time.monotonic()
+                await asyncio.sleep(1)
+        finally:
+            notification_streams.release()
+
+    return StreamingResponse(events(),media_type='text/event-stream',headers={
+        'Cache-Control':'no-store','X-Accel-Buffering':'no','Connection':'keep-alive'})
 
 class NotificationStateInput(BaseModel):
     revision:int=Field(strict=True,ge=1)
@@ -353,8 +449,11 @@ def server_ai_policy(host_id:str,user=Depends(admin_user)):
 
 @app.put('/api/hosts/{host_id}/security/ai-policy')
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
-    from . import ai_policy
+    from . import ai_policy,ai_claims
     with worker.Lock('ai-policy-change:'+host_id):
+        with Session() as s:
+            if s.scalar(select(ai_claims.Claim.subject).where(ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
+                raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
         lock=worker.Lock('ai-provider:'+host_id)
         if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
         try:
@@ -379,6 +478,14 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+
+@app.get('/api/spool-health')
+def fleet_spool_health(user=Depends(viewer_user)):
+    with Session() as s:
+        # The rollup reads only these columns; load nothing else per server.
+        query=select(Host).options(load_only(Host.id,Host.name,Host.enabled,Host.deleted_at,Host.telemetry)).where(Host.deleted_at==0,Host.enabled==True)  # noqa: E712
+        rows=s.scalars(readable_host_records(query,Host.id,user)).all()
+        return agent_spool_health.fleet(rows)
 
 @app.get('/api/hosts/{host_id}/spool-health')
 def host_spool_health(host_id:str,user=Depends(viewer_user)):
@@ -571,15 +678,20 @@ def patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         policy=reviewed_policy(s,host_id,body.expected_recovery_policy)
-        if h.repo_error or not h.last_repo or time.time()-h.last_repo>config(s)['repo_minutes']*120: raise HTTPException(409,'Refresh repositories before patching; candidate data is stale')
+        cfg=config(s)
+        try: worker.validate_patch(s,h,[],cfg)
+        except ValueError as e: raise HTTPException(409,str(e))
         specs=[]
         if len(set(body.packages))!=len(body.packages): raise HTTPException(400,'Duplicate package selections')
         if body.expected_versions is not None and set(body.expected_versions)!=set(body.packages): raise HTTPException(400,'Expected versions must match selected packages')
         for name in body.packages:
             p=s.get(Package,host_id+':'+name)
-            if not p or not p.candidate or p.held or p.dpkg_state.split()[-1]!='installed': raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            if not p or not p.candidate: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            spec=p.name+'='+p.candidate
+            try: worker.validate_patch(s,h,[spec],cfg)
+            except ValueError: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
-            specs.append(p.name+'='+p.candidate)
+            specs.append(spec)
         return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs,'_recovery_policy':policy,'_actor':user['username']})}
 @app.get('/api/hosts/{host_id}/repositories')
 def repositories(host_id:str,user=Depends(admin_user)):
@@ -775,6 +887,13 @@ def settings(user=Depends(admin_user)):
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+
+@app.get('/api/settings/ai-spend-history')
+def ai_spend_history(days:int=30,user=Depends(admin_user)):
+    from . import ai_budget
+    if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
+    with Session() as s:return ai_budget.history(s,days)
+
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
@@ -888,6 +1007,14 @@ def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
 @app.put('/api/settings/history')
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
     return save_settings_section(body.model_dump(),'history')
+
+@app.post('/api/ai/provider-backoff/clear')
+def clear_provider_backoff(user=Depends(admin_user)):
+    from . import ai_provider_backoff
+    active=ai_provider_backoff.clear()
+    with Session() as s:
+        audit(s,'clear AI provider backoff',user['username']+(' cleared an active floor' if active else ' (no active floor)'));s.commit()
+    return {'cleared':active}
 
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}
