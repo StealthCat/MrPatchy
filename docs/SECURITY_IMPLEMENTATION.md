@@ -5881,3 +5881,28 @@ does not expand release support or response authority, and does not complete the
 remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
 integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
 required before this increment is delivered.
+
+
+### Retained AI spend history — worker checkpoint #372
+
+This bounded faster-AI increment exposes retained daily accounting windows to
+administrators instead of limiting Settings to the currently active window. The
+report groups by each ledger entry's persisted reset time and IANA timezone, so a
+later timezone change does not rewrite historical accounting. Settled calls use the
+retained public-price usage estimate; reserved, transmitted, uncertain and unknown
+unreleased states keep their conservative ceilings. Released unsent attempts do not
+count. The report contains only aggregate amounts, counts and window boundaries—no
+model names, keys, prompts, evidence, provider responses or pricing-source URLs.
+
+The administrator API validates a trailing 1–90 day range and performs fixed-precision
+SQL aggregation without materializing individual ledger records. Result groups are
+bounded to four persisted reset/timezone combinations per requested day (at most 360),
+and an explicit truncation flag discloses heavier configuration churn. AI Settings
+offers 7-, 30- and 90-day views with loading, empty, error and truncation states and
+states plainly that local public-price estimates are not provider invoices.
+
+This checkpoint changes no admission, provider-call, pause, response-authorization or
+ledger-retention behavior. Provider-invoice reconciliation, signed/automated pricing
+catalog lifecycle and complete multi-controller failover/reset acceptance remain
+planned. Coordinator integration, exact-head SQLite/MySQL/browser/full-suite checks
+and fresh code scanning are still required before delivery.
