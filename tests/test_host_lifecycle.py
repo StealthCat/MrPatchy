@@ -325,3 +325,16 @@ def test_queue_full_is_429_and_inactive_server_is_409_across_routes(admin):
     assert change(admin,other,False).status_code==200
     inactive=admin.post('/api/hosts/'+other+'/actions/refresh',json={})
     assert inactive.status_code==409,inactive.text
+
+
+def test_unknown_host_requests_leave_no_lock_state(admin):
+    before=set(worker.host_locks)
+    locks=coordination.DATA/'locks'
+    count=len(list(locks.iterdir())) if locks.exists() else 0
+    for i in range(5):
+        assert admin.put('/api/hosts/nonexistent-%d/priority'%i,json={'name':'curl','priority':'high'}).status_code==404
+    known=create(admin,'Rollout fixture')
+    response=admin.post('/api/operations/rollouts',json={'hosts':[known,'nonexistent-rollout'],'packages':['curl']})
+    assert response.status_code==404
+    assert set(worker.host_locks)==before
+    assert (len(list(locks.iterdir())) if locks.exists() else 0)==count

@@ -143,6 +143,8 @@ self_user=role_dependency('viewer',self_service=True)
 
 @contextmanager
 def host_change(host_id,allow_quarantined=False,allow_inactive=False):
+    # Unknown IDs must not create permanent lock files or in-memory lock entries.
+    with Session() as s:host_or_404(s,host_id)
     lock=worker.host_lock(host_id)
     if not lock.acquire(False): raise HTTPException(409,'Server has an active operation. Retry this configuration change when it finishes.')
     try:
@@ -1403,6 +1405,8 @@ class RolloutInput(BaseModel):
 def rollout(body:RolloutInput,user=Depends(admin_user)):
     if len(set(body.hosts))!=len(body.hosts):raise HTTPException(400,'Duplicate servers')
     if body.expected_recovery_policies is not None and set(body.expected_recovery_policies)!=set(body.hosts):raise HTTPException(400,'Review recovery policies for every server')
+    with Session() as s:
+        for host_id in body.hosts:host_or_404(s,host_id)
     with host_lifecycle.activity(body.hosts,'queue'),Session() as s:
         prepared=[]
         for host_id in body.hosts:
