@@ -605,7 +605,11 @@ The bundled public price catalog has an exact reviewed-at and expiry window show
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
 before consuming smooth-rate capacity or contacting the provider. A reviewed catalog
 update is therefore required before **2026-11-26 00:00 UTC** for capped calls to
-continue; rate-only and unthrottled modes retain their existing controls and behavior.
+continue. During the final seven days, administrators receive a durable medium-severity
+operational and in-app warning; it escalates and reopens delivery at expiry, then
+resolves after a verified refresh or when applicable cap enforcement is disabled.
+Rate-only, unthrottled, legacy and globally disabled AI modes retain their existing
+controls and do not receive this spend-guard alert.
 
 Daily accounting returns at most five exact-money status totals without loading
 ledger entries as application objects. SQLite preserves the existing nine-place

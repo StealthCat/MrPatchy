@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from app import ai, ai_admission, ai_budget, ai_pricing
+from app import ai, ai_admission, ai_budget, ai_pricing, notifications, operations
 from app.db import Session, Setting
 
 
@@ -96,6 +96,62 @@ def test_expired_catalog_does_not_add_a_spend_guard_without_a_cap(admin, monkeyp
     monkeypatch.setattr(ai_pricing.time, 'time', lambda: ai_pricing.EXPIRES_AT)
     # Budget admission remains disabled in modes that do not promise a daily cap.
     assert ai_budget.reserve(payload()) is None
+
+
+def test_capped_catalog_warning_escalates_deduplicates_and_resolves(admin):
+    configure(mode='daily_cap')
+    warning_at=ai_pricing.EXPIRES_AT-operations.AI_PRICING_CATALOG_WARNING_SECONDS
+    operations.collect_alerts(warning_at-1)
+    with Session() as session:
+        assert not session.query(operations.Alert).filter_by(kind='AI pricing catalog').count()
+        assert not session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').count()
+
+    operations.collect_alerts(warning_at)
+    operations.collect_alerts(warning_at+60)
+    with Session() as session:
+        alert=session.query(operations.Alert).filter_by(kind='AI pricing catalog').one()
+        event=session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').one()
+        revision=session.get(notifications.NotificationRevision,(event.id,event.revision))
+        assert alert.host_id=='controller' and alert.state=='open'
+        assert event.minimum_role=='admin' and event.revision==1
+        assert revision.severity=='medium' and revision.lifecycle=='active'
+        assert revision.deep_link=='#settings/ai'
+        alert.state='acknowledged';alert.notified=warning_at;alert.attempts=2
+        notifications.mark_read(session,'admin',event.id,event.revision,now=warning_at)
+        notifications.dismiss(session,'admin',event.id,event.revision,now=warning_at)
+        session.commit()
+
+    operations.collect_alerts(ai_pricing.EXPIRES_AT)
+    with Session() as session:
+        alert=session.query(operations.Alert).filter_by(kind='AI pricing catalog').one()
+        event=session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').one()
+        revision=session.get(notifications.NotificationRevision,(event.id,event.revision))
+        assert alert.state=='open' and alert.notified==0 and alert.attempts==0
+        assert 'is expired' in alert.message
+        assert event.revision==2 and revision.severity=='high' and revision.lifecycle=='active'
+        assert notifications.unread_count(session,'admin')==1
+
+    configure(mode='rate')
+    operations.collect_alerts(ai_pricing.EXPIRES_AT+60)
+    with Session() as session:
+        alert=session.query(operations.Alert).filter_by(kind='AI pricing catalog').one()
+        event=session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').one()
+        revision=session.get(notifications.NotificationRevision,(event.id,event.revision))
+        assert alert.state=='resolved'
+        assert event.revision==3 and revision.severity=='info' and revision.lifecycle=='resolved'
+
+
+@pytest.mark.parametrize('mode,enabled', [
+    ('rate',True),('unthrottled',True),('legacy',True),('daily_cap',False),('rate_and_daily',False),
+])
+def test_catalog_lifecycle_alert_only_applies_to_enabled_cap_modes(admin,mode,enabled):
+    configure(mode=mode)
+    with Session() as session:
+        row=session.get(Setting,'config');row.value={**row.value,'ai_enabled':enabled};session.commit()
+    operations.collect_alerts(ai_pricing.EXPIRES_AT)
+    with Session() as session:
+        assert not session.query(operations.Alert).filter_by(kind='AI pricing catalog').count()
+        assert not session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').count()
 
 
 def test_daily_cap_reservation_is_atomic_and_reports_reset(admin, monkeypatch):
