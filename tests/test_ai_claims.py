@@ -167,6 +167,37 @@ def test_new_pid_refresh_does_not_fence_in_flight_triage(admin,monkeypatch):
         assert not list(s.scalars(select(ai_claims.Claim)))
 
 
+@pytest.mark.parametrize('respawn',['first_call','evidence','second_call'])
+def test_new_pid_refresh_survives_followup_persistence(admin,monkeypatch,respawn):
+    seed(count=1);sent=[];requests=[]
+    identity=lambda pid:{'pid':pid,'start_ticks':5,'pid_namespace':1,'boot_id':'a'*8+'-aaaa-aaaa-aaaa-'+'a'*12,'proc_device':1,'proc_inode':2}
+    def respawned():
+        with Session() as s:
+            row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(11)};s.commit()
+    with Session() as s:
+        row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(10)};s.commit()
+    def post(*a,**k):
+        sent.append(json.loads(k['json']['input']))
+        if respawn==('first_call' if len(sent)==1 else 'second_call'):respawned()
+        return result(['executable'] if len(sent)==1 else [])
+    def ssh(host,request,**kwargs):
+        requests.append(request)
+        if respawn=='evidence':respawned()
+        return {'identity_verified':True,'sha256':'a'*64,'context':'fixture'}
+    monkeypatch.setattr(ai.transport,'post',post);monkeypatch.setattr(worker.ssh,'call',ssh)
+    worker.investigate_one()
+    with Session() as s:
+        row=s.get(Behavior,'subject-0')
+        assert len(sent)==2 and row.verdict=='low'
+        # Remote evidence is never requested for the unverified replacement PID.
+        assert [r['process_identity']['pid'] for r in requests]==[10]
+        assert row.evidence['investigation']['details']['context']=='fixture'
+        assert row.evidence['process_identity']['pid']==11
+        assert all('process_identity' not in payload for payload in sent)
+        saved=s.scalar(select(ai_assessments.Assessment));assert saved and [i['evidence'] for i in saved.inputs]==sent
+        assert not list(s.scalars(select(ai_claims.Claim)))
+
+
 @pytest.mark.parametrize('change',['evidence','approval','configuration','expiry','token','worker_boot','worker_heartbeat','worker_identity'])
 def test_changed_state_fences_late_provider_result(admin,monkeypatch,change):
     seed(count=1)
