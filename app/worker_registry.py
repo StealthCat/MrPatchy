@@ -156,7 +156,7 @@ def page(offset=0,now=None):
         for row in rows[:50]:
             data=row.value if isinstance(row.value,dict) else {}
             fields=('id','boot_id','role','deployment_type','version','started','heartbeat','uptime_seconds','coordinator','active_jobs','active_polls','pending_polls','notification_active','ai_active','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','control_revision')
-            item={k:data.get(k) for k in fields};heartbeat=data.get('heartbeat')
+            item={k:data.get(k) for k in fields}
             for key in ('started','heartbeat','uptime_seconds','active_polls','pending_polls','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','control_revision'):
                 value=item[key]
                 if not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<0:item[key]=None
