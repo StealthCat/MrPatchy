@@ -113,14 +113,13 @@ def test_bounded_retries_and_manual_reset_is_audited(admin,monkeypatch):
                 s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
     worker.investigate_one();assert len(calls)==5 and bounds==[(30,60),(30,60),(30,120),(30,120),(30,240),(30,240),(30,480),(30,480),(30,960)]
     with Session() as s:assert s.get(ai_retry.TriageRetry,'subject').state=='blocked'
-    assert admin.post('/api/investigations/subject/retry').status_code==409
-    with Session() as s:
-        s.get(ai_retry.TriageRetry,'subject').provider_until=0
-        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
+    # Only a provider-sent Retry-After blocks a manual retry; local exponential backoff does not.
+    with Session() as s:assert s.get(ai_retry.TriageRetry,'subject').provider_until==0
     assert admin.post('/api/investigations/subject/retry').status_code==200
     with Session() as s:
         assert s.get(ai_retry.TriageRetry,'subject') is None
         assert s.scalar(select(Audit).where(Audit.action=='retry AI investigation'))
+        s.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=0;s.commit()
     worker.investigate_one();assert len(calls)==6
 
 
@@ -198,8 +197,10 @@ def test_same_host_independent_subject_respects_shared_provider_floor_and_duplic
     assert len(calls)==1
     with Session() as s:
         assert s.get(Behavior,'subject').verdict=='error'
-        other=s.get(Behavior,'other');assert other.verdict=='error' and not other.approved
-        retry=s.get(ai_retry.TriageRetry,'other');assert retry.state=='deferred' and retry.attempts==0
+        # The active shared floor is checked before claiming: no run, attempt or error is created.
+        other=s.get(Behavior,'other');assert other.verdict=='pending' and not other.approved
+        assert s.get(ai_retry.TriageRetry,'other') is None
+        assert len(list(s.scalars(select(ai_runs.AIRun).where(ai_runs.AIRun.subject=='other'))))==0
 
 
 def test_manual_retry_roles_and_csrf(admin):

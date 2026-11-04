@@ -40,18 +40,40 @@ def fake_bpftrace(tmp_path,script):
 def run_loop(tmp_path,monkeypatch,on_sleep):
     """Drive the real collector loop; each sleep hands control back to the test."""
     monkeypatch.setattr(agent,'ROOT',tmp_path)
-    real_sleep=time.sleep;calls=[]
-    def sleep(seconds):
-        # Short sleeps (retry polling) vary with runner speed; only count the long
-        # cycle sleeps so the callback sees a stable 1, 2, ... sequence.
-        if seconds>=5:
-            calls.append(seconds);on_sleep(len(calls))
-        else:real_sleep(seconds)
-    monkeypatch.setattr(agent.time,'sleep',sleep)
+    import threading
+    collector_thread=threading.get_ident()
+    real_sleep=time.sleep
+    long_sleeps=[]
+
+    class CollectorClock:
+        # Patch only the agent module, never Python's shared time module.
+        def __getattr__(self,name):
+            return getattr(time,name)
+
+        def sleep(self,seconds):
+            if threading.get_ident()==collector_thread and seconds>=5:
+                long_sleeps.append(seconds)
+                on_sleep(len(long_sleeps))
+            else:
+                real_sleep(seconds)
+
+    monkeypatch.setattr(agent,'time',CollectorClock())
     with pytest.raises(StopLoop):agent.ebpf_loop()
 
 def configure(tmp_path,enabled):
     (tmp_path/'observability.json').write_text(json.dumps({'ebpf':enabled}))
+
+def test_collector_clock_patch_never_changes_shared_process_sleep(tmp_path,monkeypatch):
+    configure(tmp_path,False)
+    original=time.sleep
+    seen=[]
+    def on_sleep(count):
+        seen.append(count)
+        assert time.sleep is original
+        raise StopLoop
+    run_loop(tmp_path,monkeypatch,on_sleep)
+    assert seen==[1]
+
 
 def test_day_old_warning_with_disabled_collector_is_not_current_attention(admin):
     state,issues,stored=ingest({'ebpf-status':{'state':'disabled'},
