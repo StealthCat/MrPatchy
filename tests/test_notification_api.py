@@ -1,9 +1,13 @@
 from sqlalchemy import select
+from fastapi.testclient import TestClient
 
 from app import notifications
-from app.db import Audit, Session
+from app.db import Audit, Session, Setting
 from app.identity import User
 from app.security import password_hash
+from app.security import token_hash
+from app.main import (_notification_sse, _notification_stream_session,
+                      notification_streams)
 
 
 PASSWORD = 'notification-test-password'
@@ -148,3 +152,40 @@ def test_old_tab_revision_does_not_mark_changed_notification_read(admin):
     rows = admin.get('/api/notifications?unread_only=true').json()['items']
     changed = next(item for item in rows if item['id'] == first)
     assert changed['revision'] == 2 and changed['read'] is False
+
+
+def test_stream_requires_authentication_and_reports_capacity(admin, monkeypatch):
+    with TestClient(admin.app) as anonymous:
+        assert anonymous.get('/api/notifications/stream').status_code == 401
+    add_user('reader', 'viewer')
+    login(admin, 'reader')
+    monkeypatch.setattr(notification_streams, 'acquire', lambda: False)
+    result = admin.get('/api/notifications/stream')
+    assert result.status_code == 429
+    assert result.headers['retry-after'] == '3'
+
+
+def test_stream_session_rechecks_generation_enablement_and_expiry(admin):
+    add_user('reader', 'viewer')
+    login(admin, 'reader')
+    token = admin.cookies.get('mrpatchy')
+    key = 'session:' + token_hash(token)
+    with Session() as session:
+        row = session.get(Setting, key)
+        generation = row.value['generation']
+        assert _notification_stream_session(session, key, 'reader', generation, 'viewer')
+        user = session.get(User, 'reader')
+        user.role = 'operator'
+        session.commit()
+        assert not _notification_stream_session(session, key, 'reader', generation, 'viewer')
+        user.role = 'viewer'
+        user.generation += 1
+        session.commit()
+        assert not _notification_stream_session(session, key, 'reader', generation, 'viewer')
+
+
+def test_stream_frame_contains_only_valid_cursor_and_reconnect_metadata():
+    cursor = 'a' * 64
+    assert _notification_sse(cursor) == (
+        'id: ' + cursor + '\nretry: 3000\nevent: notifications\n'
+        'data: {"cursor":"' + cursor + '"}\n\n')

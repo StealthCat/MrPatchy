@@ -21,6 +21,18 @@ module.exports=async(page,capture)=>{
     return route.fulfill({json:{id,revision:body.revision,read_revision:body.revision,dismissed_revision:url.endsWith('/dismiss')?body.revision:0}});
   });
 
+  await page.evaluate(()=>{
+   window.NotificationShell.reset();window.notificationStreams=[];
+   window.EventSource=class{
+    constructor(url){this.url=url;this.listeners={};this.closed=false;window.notificationStreams.push(this);}
+    addEventListener(name,listener){(this.listeners[name]??=[]).push(listener);}
+    emit(name,lastEventId='a'.repeat(64)){for(const listener of this.listeners[name]||[])listener({lastEventId});}
+    close(){this.closed=true;}
+   };
+   window.NotificationShell.start();
+  });
+  await page.waitForFunction(()=>window.notificationStreams.length===1);
+
   await page.evaluate(()=>window.NotificationShell.refresh());
   const bell=page.getByRole('button',{name:/Notifications/});
   await bell.waitFor();
@@ -57,6 +69,15 @@ module.exports=async(page,capture)=>{
   assert.equal(await page.locator('#notification-center-list img[src="x"]').count(),0);
   assert.ok(listRequests.some(query=>query.includes('include_dismissed=true')&&query.includes('source=scanner')&&query.includes('limit=25')));
   assert.equal(await page.getByRole('link',{name:'Open subject'}).count(),0,'unsafe cross-origin center links remain inert');
+  const sourceFilter=page.locator('#notification-filters [name=source]');
+  await sourceFilter.focus();
+  items.push({id:'3'.repeat(64),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'scan-live',host_id:'',severity:'critical',reason:'A live durable event needs review.',deep_link:'#activity',lifecycle:'active',created:1700000100,read:false,dismissed:false});
+  unread=1;
+  await page.evaluate(()=>window.notificationStreams[0].emit('notifications'));
+  await page.locator('#notification-center-list').getByText('A live durable event needs review.',{exact:true}).waitFor();
+  assert.equal(await sourceFilter.inputValue(),'scanner','live catch-up preserves filter form state');
+  assert.equal(await sourceFilter.evaluate(node=>node===document.activeElement),true,'live catch-up does not steal filter focus');
+  assert.match(await bell.getAttribute('aria-label'),/1 unread/);
   await capture('notification-center-desktop',false);
   const locationHash=await page.evaluate(()=>location.hash);
   assert.equal(locationHash,'#notifications');
@@ -95,9 +116,10 @@ module.exports=async(page,capture)=>{
   await bell.click();
   holdMutation=true;
   const started=new Promise(resolve=>{mutationStarted=resolve;});
-  await panel.getByRole('button',{name:'Mark read'}).click();
+  await panel.locator('.notification-item').filter({hasText:'Patch verification needs review.'}).getByRole('button',{name:'Mark read'}).click();
   await started;
   await page.evaluate(()=>window.NotificationShell.reset());
+  assert.equal(await page.evaluate(()=>window.notificationStreams[0].closed),true,'logout/reset closes the account stream');
   releaseMutation();
   await page.waitForTimeout(50);
   assert.equal(await page.locator('#notification-list').textContent(),'','a late mutation response cannot restore account-scoped content after reset');
