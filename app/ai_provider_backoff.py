@@ -28,8 +28,10 @@ def admit(now=None):
     with Session() as session:
         row=session.get(ProviderBackoff,'global')
         if row and row.blocked_until>now:
-            raise AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
+            error=AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
                 policy_wait=True,retry_after=row.blocked_until-now)
+            error.provider_wait_until=row.blocked_until
+            raise error
 
 
 def failed(error,now=None):

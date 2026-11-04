@@ -182,3 +182,22 @@ def test_clear_preserves_later_local_retry_gate(admin, local_delay, provider_del
         assert retry.provider_until==0
         assert retry.next_at==now+expected_delay
         assert retry.state=='deferred' and retry.attempts==2
+
+
+def test_clear_releases_provider_policy_wait_after_admission_race(admin):
+    from app import ai_retry
+    from app.db import Behavior
+    now=time.time()
+    ai_provider_backoff.failed(ai.AIError('provider wait',transient=True,retry_after=120),now=now)
+    with Session() as session:
+        row=Behavior(id='raced',host_id='fixture',evidence={});session.add(row);session.flush()
+        ai_retry.begin(session,row,'configuration',now);session.commit()
+    with pytest.raises(ai.AIError) as refused:ai_provider_backoff.admit(now=now+1)
+    with Session() as session:
+        row=session.get(Behavior,'raced')
+        ai_retry.failed(session,row,refused.value,now+1.25);session.commit()
+    assert ai_provider_backoff.clear(now=now+2)
+    with Session() as session:
+        retry=session.get(ai_retry.TriageRetry,'raced')
+        assert retry.provider_until==0 and retry.next_at<=now+2
+        assert retry.state=='deferred' and retry.attempts==0

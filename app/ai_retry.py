@@ -5,6 +5,7 @@ sleeps occur here. Legacy/interrupted attempts retain a one-hour recovery delay.
 """
 import hashlib
 import json
+import math
 import random
 import time
 from sqlalchemy import String, Double, Integer, Text, and_, or_
@@ -59,8 +60,13 @@ def failed(s,row,error,now):
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
+        provider_wait=getattr(error,'provider_wait_until',0)
+        if type(provider_wait) in (int,float) and math.isfinite(provider_wait) and provider_wait>now:
+            retry.provider_until=provider_wait
+            retry.next_at=provider_wait
         retry.reason=('Waiting for shared AI rate eligibility; no provider request was sent.' if error.retry_after else
             'Waiting for AI policy resume; eligibility is rechecked before every provider call.')
+        if retry.provider_until:retry.reason='Waiting for shared provider backoff; no provider request was sent.'
     elif isinstance(error,AIError) and error.transient:
         provider=min(error.provider_retry_after or 0,ai_provider_backoff.MAX_PROVIDER_DELAY)
         retry.provider_until=now+provider if provider else 0
