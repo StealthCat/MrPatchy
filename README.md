@@ -969,9 +969,18 @@ limits. Provider delay floors also apply to manual Retry. Pending work, retained
 usage receipts and uncertain charges survive; no assessment or approval is inferred
 from a failure. AI pause/resume and lifecycle checks still apply to every call.
 
+The worker checks shared rate, provider backoff and daily budget eligibility before
+claiming a process investigation. In capped modes it also checks that candidate's
+bounded request reservation; unavailable prices or insufficient budget leave the
+item queued without creating a run or consuming an attempt. Deferred rate waits
+reserve staggered wake slots after the durable queue tail. Provider-only waits keep
+their exact deadline, including immediate eligibility after it expires. Every actual
+provider call still passes the final atomic admission checks.
+
 Investigations and AI logs show eligible, review-blocked and paused counts; each
 pending/error item explains its retry state and eligibility. Eligibility is not a
-promised start time: existing hourly limits and the serial worker still apply.
+promised start time: existing hourly limits, shared admission and available worker
+slots still apply.
 Legacy attempts and lost-worker attempts retain their one-hour recovery interval.
 This is process-triage scheduling only, not shared provider-wide rate admission,
 daily spend controls or faster-triage program completion. Other AI purposes retain
