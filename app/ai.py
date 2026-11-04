@@ -21,6 +21,8 @@ class AIError(RuntimeError):
     """Contains only a controlled diagnostic, never a raw provider body."""
     def __init__(self,message,*,transient=False,retry_after=0,policy_wait=False):
         super().__init__(message)
+        # The only exception text that may reach users or run history.
+        self.diagnostic=message[:2000] if isinstance(message,str) else 'AI processing failed without a controlled diagnostic; no provider result was accepted.'
         self.transient=transient
         self.retry_after=retry_after
         self.policy_wait=policy_wait
