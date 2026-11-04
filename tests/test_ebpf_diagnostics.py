@@ -42,8 +42,10 @@ def run_loop(tmp_path,monkeypatch,on_sleep):
     monkeypatch.setattr(agent,'ROOT',tmp_path)
     real_sleep=time.sleep;calls=[]
     def sleep(seconds):
-        calls.append(seconds)
-        if seconds>=5:on_sleep(len(calls))
+        # Short sleeps (retry polling) vary with runner speed; only count the long
+        # cycle sleeps so the callback sees a stable 1, 2, ... sequence.
+        if seconds>=5:
+            calls.append(seconds);on_sleep(len(calls))
         else:real_sleep(seconds)
     monkeypatch.setattr(agent.time,'sleep',sleep)
     with pytest.raises(StopLoop):agent.ebpf_loop()
