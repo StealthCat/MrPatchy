@@ -1,6 +1,8 @@
 """Conservative, read-only OS support lifecycle evaluation."""
 from datetime import datetime, timezone
 import re
+import math
+from target import release as release_rules
 
 
 CATALOG_REVIEWED = '2026-11-04'
@@ -47,11 +49,13 @@ def _parse_os_release(value):
             continue
         key, raw = line.split('=', 1)
         key = key.strip()
-        if key not in ('ID', 'VERSION_ID') or key in result:
+        if key not in ('ID', 'VERSION_ID'):
             continue
+        if key in result:return {}
         item = raw.strip()
         if len(item) >= 2 and item[0] == item[-1] and item[0] in ('"', "'"):
             item = item[1:-1]
+        if len(item)>80:return {}
         result[key] = item
     return result
 
@@ -59,7 +63,9 @@ def _parse_os_release(value):
 def _timestamp(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:result=float(value)
+    except (ValueError,OverflowError):return None
+    return result if math.isfinite(result) and 0<=result<=253402300799 else None
 
 
 def evaluate(inventory, now, max_age_seconds):
@@ -67,7 +73,8 @@ def evaluate(inventory, now, max_age_seconds):
     if not isinstance(inventory, dict):
         return _unknown('missing_inventory', 'No stored operating-system inventory is available.')
     observed, current = _timestamp(inventory.get('collected')), _timestamp(now)
-    if observed is None or current is None or isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, (int, float)) or max_age_seconds <= 0:
+    max_age_seconds=_timestamp(max_age_seconds)
+    if observed is None or current is None or max_age_seconds is None or max_age_seconds <= 0:
         return _unknown('missing_inventory', 'The inventory collection time is missing or invalid.', observed=observed)
     if observed > current + 300:
         return _unknown('stale_inventory', 'The inventory collection time is in the future; lifecycle coverage cannot be verified.', observed=observed)
@@ -82,6 +89,11 @@ def evaluate(inventory, now, max_age_seconds):
             'No verified lifecycle mapping exists for this exact distribution; derivatives are not treated as Debian or Ubuntu.',
             observed=observed, vendor=distro or None, release=release or None,
         )
+    try:derivative=release_rules.is_raspberry_pi(inventory,distro)
+    except (TypeError,AttributeError):
+        return _unknown('invalid_inventory','Distribution provenance cannot be verified from malformed package/source inventory.',observed=observed)
+    if derivative:
+        return _unknown('unsupported_distribution','Raspberry Pi vendor inventory does not establish Debian/Ubuntu lifecycle coverage.',observed=observed)
     valid = re.fullmatch(r'\d{2}\.\d{2}', release) if distro == 'ubuntu' else re.fullmatch(r'\d+', release)
     source = UBUNTU_SOURCE if distro == 'ubuntu' else DEBIAN_SOURCE
     vendor = 'Ubuntu' if distro == 'ubuntu' else 'Debian'

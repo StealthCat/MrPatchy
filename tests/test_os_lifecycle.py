@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import pytest
 
 from app import os_lifecycle
 
@@ -62,3 +63,28 @@ def test_boundaries_are_inclusive_and_ended_is_explicit():
         ts('2028-07-01T12:00:00'), 86400)
     assert ended['state'] == 'ended'
     assert ended['coverage'] == 'vendor_ended'
+
+
+@pytest.mark.parametrize('value',[float('nan'),float('inf'),float('-inf'),10**1000])
+def test_nonfinite_or_out_of_range_time_is_unknown(value):
+    inv=inventory('ID=debian\nVERSION_ID=12')
+    now=ts('2026-11-04T13:00:00')
+    assert os_lifecycle.evaluate({**inv,'collected':value},now,7200)['state']=='unknown'
+    assert os_lifecycle.evaluate(inv,value,7200)['state']=='unknown'
+    assert os_lifecycle.evaluate(inv,now,value)['state']=='unknown'
+
+
+def test_debian_id_raspberry_pi_derivative_is_not_debian_vendor_coverage():
+    inv=inventory('ID=debian\nVERSION_ID=12','arm64')
+    now=ts('2026-11-04T13:00:00')
+    for extra in ({'status':'Package: raspberrypi-sys-mods\n'},
+                  {'files':{'/etc/apt/sources.list':'deb https://archive.raspberrypi.org/debian bookworm main'}}):
+        assert os_lifecycle.evaluate({**inv,**extra},now,7200)['state']=='unknown'
+
+
+def test_ambiguous_or_oversized_vendor_identity_is_not_asserted():
+    now=ts('2026-11-04T13:00:00')
+    for os in ('ID=debian\nID=raspbian\nVERSION_ID=12','ID='+('x'*60000)+'\nVERSION_ID=12'):
+        report=os_lifecycle.evaluate(inventory(os),now,7200)
+        assert report['state']=='unknown'
+        assert len(report['vendor'] or '')<=80 and len(report['release'] or '')<=80
