@@ -1481,9 +1481,9 @@ def security_status(host_id:str,user=Depends(admin_user)):
         return legacy.value if legacy else {'state':'not_scanned','findings':[],'gaps':['No security scan has completed']}
 
 def validate_scan_paths(paths):
-    from target.agent import scan_excluded
+    from .scan_paths import canonical
     for path in paths:
-        if not path.startswith('/') or path.startswith('//') or str(Path(path))!=path or '..' in Path(path).parts or len(path)>4096 or any(ord(c)<32 for c in path) or scan_excluded(Path(path)):raise ValueError('Invalid scan directory')
+        if not canonical(path,allow_root=True):raise ValueError('Invalid scan directory')
 
 @app.post('/api/hosts/{host_id}/security')
 def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(admin_user)):
