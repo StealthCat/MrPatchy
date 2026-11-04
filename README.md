@@ -601,6 +601,17 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+Administrators can inspect retained estimates for the trailing 7, 30 or 90 days in
+AI Settings. History is grouped by the reset time and IANA timezone persisted with
+each ledger entry, so later timezone changes do not rewrite prior windows. Settled
+calls use their retained usage estimate; reserved, transmitted, uncertain and other
+unreleased calls retain their conservative ceiling, while released unsent attempts
+are excluded. The report contains bounded aggregate windows only, never provider,
+model, credential, prompt, evidence or response details. At most four reset/timezone
+groups per requested day are returned, with an explicit truncation notice if heavier
+configuration churn exceeds that bound. These local public-price estimates are not
+provider invoices.
+
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
 before consuming smooth-rate capacity or contacting the provider. A reviewed catalog
@@ -617,9 +628,8 @@ Numeric read precision; MySQL sums native DECIMAL values. Eligible ledger scanni
 remains O(N) under the shared admission lock; broader concurrency work remains open.
 
 Exact durable defer/resume for every manual/plan path, automated or signed catalog
-updates and lifecycle alerts, invoice reconciliation, long-horizon spend reports and
-full SQLite/MySQL failover/reset acceptance remain required before the shared controls
-program is complete.
+updates, invoice reconciliation and full SQLite/MySQL failover/reset acceptance
+remain required before the shared controls program is complete.
 
 ### Shared provider backoff (v1.33.0)
 
