@@ -5916,5 +5916,5 @@ Focused acceptance covers the exact warning and expiry boundaries, repeated
 collection, acknowledged-warning escalation, per-user revision visibility,
 resolution and non-cap/disabled modes. This does not automate or sign catalog
 updates, reconcile provider invoices, add provider-derived billing truth or complete
-the remaining multi-controller/reset acceptance. Coordinator integration, full
-exact-head tests and fresh code scanning remain required before delivery.
+the remaining multi-controller/reset acceptance. Final delivery still requires the
+coordinator's exact-head full test matrix and fresh code scan.
