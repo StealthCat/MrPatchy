@@ -106,8 +106,12 @@ def normalize_device(raw: Any, *, include_private: bool = False) -> dict[str, An
     if not device_id and not guids:
         return None
     flags = _flags(raw.get('Flags'))
-    releases = [r for r in (normalize_release(x) for x in
-                (raw.get('Releases') or [])[:MAX_RELEASES]) if r]
+    raw_releases = raw.get('Releases')
+    # A present but non-list Releases value is malformed provider output; the
+    # device is kept but flagged so classification stays non-healthy.
+    malformed = raw_releases is not None and not isinstance(raw_releases, list)
+    releases = [] if malformed else [
+        r for r in (normalize_release(x) for x in (raw_releases or [])[:MAX_RELEASES]) if r]
     device = {
         'device_id': device_id,
         'guids': guids,
@@ -122,6 +126,7 @@ def normalize_device(raw: Any, *, include_private: bool = False) -> dict[str, An
         'updatable': 'updatable' in flags,
         'unreachable': 'unreachable' in flags,
         'releases': releases,
+        'malformed': malformed,
     }
     if include_private:
         for field in SENSITIVE_DEVICE_FIELDS:
@@ -142,7 +147,9 @@ def classify_collection(result: Any, *, now: float | None = None,
                         max_age: int = DEFAULT_MAX_AGE) -> dict[str, Any]:
     """Classify one passive collection result for a host.
 
-    ``result`` keys: ``tool_present`` (bool), ``exit_code``, ``devices`` and
+    ``result`` keys: ``tool_present`` (bool), ``exit_code`` (int status of the
+    device enumeration; anything other than ``0``, including a missing value,
+    is a failed collection even when JSON was also supplied), ``devices`` and
     ``updates`` (parsed JSON payloads or None), ``observed_at`` (epoch seconds),
     ``catalog_refreshed_at`` (epoch seconds, optional) and ``error``.
     Returns ``{'status', 'devices': [...], 'reason'}`` where each device carries
@@ -153,6 +160,12 @@ def classify_collection(result: Any, *, now: float | None = None,
         return {'status': 'collection_failed', 'devices': [], 'reason': 'invalid result'}
     if result.get('tool_present') is False:
         return {'status': 'missing_tool', 'devices': [], 'reason': 'fwupdmgr is not installed'}
+    exit_code = result.get('exit_code')
+    if isinstance(exit_code, bool) or exit_code != 0:
+        reason = (_text(result.get('error'))
+                  or ('collection exit status missing' if exit_code is None
+                      else 'collection exited unsuccessfully'))
+        return {'status': 'collection_failed', 'devices': [], 'reason': reason}
     devices = _device_list(result.get('devices'))
     if devices is None:
         return {'status': 'collection_failed', 'devices': [],
@@ -167,7 +180,7 @@ def classify_collection(result: Any, *, now: float | None = None,
     update_ids = {}
     if updates_known:
         listed = _device_list(updates)
-        if listed is None:
+        if listed is None or any(dev['malformed'] for dev in listed):
             updates_known = False
         else:
             for dev in listed:
@@ -195,6 +208,8 @@ def classify_device(device: dict[str, Any], update_releases: list[dict[str, Any]
                     *, fresh: bool, updates_known: bool, catalog_fresh: bool) -> str:
     """Classify a single device. ``update_releases`` are applicable upgrades from
     the update listing only; historical releases never imply an update."""
+    if device.get('malformed'):
+        return 'collection_failed'
     if device.get('unreachable'):
         return 'disconnected'
     if not fresh:

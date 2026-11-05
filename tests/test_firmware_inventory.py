@@ -11,7 +11,7 @@ def dev(**kw):
 
 
 def result(devices, updates=None, **kw):
-    r = {'tool_present': True, 'devices': {'Devices': devices},
+    r = {'tool_present': True, 'exit_code': 0, 'devices': {'Devices': devices},
          'updates': updates, 'observed_at': NOW - 60, 'catalog_refreshed_at': NOW - 60}
     r.update(kw)
     return r
@@ -23,8 +23,8 @@ def classify(r):
 
 def test_missing_tool_and_malformed_are_never_healthy():
     assert classify({'tool_present': False})['status'] == 'missing_tool'
-    assert classify({'tool_present': True, 'devices': None})['status'] == 'collection_failed'
-    assert classify({'tool_present': True, 'devices': {'Devices': 'x'}})['status'] == 'collection_failed'
+    assert classify({'tool_present': True, 'exit_code': 0, 'devices': None})['status'] == 'collection_failed'
+    assert classify({'tool_present': True, 'exit_code': 0, 'devices': {'Devices': 'x'}})['status'] == 'collection_failed'
     assert classify('junk')['status'] == 'collection_failed'
     for r in (classify({'tool_present': False}), classify(result([]))):
         assert r['status'] not in fw.HEALTHY_STATUSES
@@ -84,3 +84,27 @@ def test_capabilities_explicit():
     assert set(caps) == set(fw.OPERATIONS)
     assert caps['enumerate'] and not caps['execute'] and not caps['settings']
     assert not any(fw.provider_capabilities('unknown').values())
+
+
+def test_non_list_releases_classifies_conservatively_without_raising():
+    for bad in ({'Version': '1.0'}, 'x', 5):
+        device = fw.normalize_device(dev(Releases=bad))
+        assert device['malformed'] is True and device['releases'] == []
+        r = classify(result([dev(Releases=bad)], updates={'Devices': []}))
+        assert r['status'] == 'collection_failed'
+        assert r['status'] not in fw.HEALTHY_STATUSES
+    # A malformed update listing never yields update_available or healthy.
+    upd = {'Devices': [dev(Releases={'Version': '2.0'})]}
+    r = classify(result([dev(Releases=[{'Version': '1.0'}])], updates=upd))
+    assert r['devices'][0]['status'] == 'stale_unknown'
+
+
+def test_nonzero_or_missing_exit_code_is_never_healthy():
+    current = [dev(Releases=[{'Version': '1.0'}])]
+    assert classify(result(current, updates={'Devices': []}))['status'] == 'verified_current'
+    for code in (1, 2, -1, None, '0', True):
+        r = classify(result(current, updates={'Devices': []}, exit_code=code))
+        assert r['status'] == 'collection_failed', code
+        assert r['devices'] == []
+    r = classify(result(current, updates={'Devices': []}, exit_code=1, error='boom'))
+    assert r['reason'] == 'boom'
