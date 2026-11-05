@@ -181,7 +181,7 @@ def test_queued_and_available_filters_scale_past_per_key_predicates(admin):
     from sqlalchemy import event
     from app.db import Job, engine
     seed()
-    per_host = 700
+    per_host = 800
     with Session() as s:
         s.add_all([Package(id=f'{h}:q{i:04}', host_id=h, name=f'q{i:04}', installed='1', candidate='2', priority='normal')
                    for h in ('h0', 'h1') for i in range(per_host)])
