@@ -113,3 +113,21 @@ def test_two_schedules_on_one_host_queue_one_refresh(admin):
     with Session() as s:
         refreshes = list(s.scalars(select(Job).where(Job.host_id == 'h000', Job.action == 'refresh')))
     assert len(refreshes) == 1, len(refreshes)
+
+
+def test_calendar_query_count_is_independent_of_run_count(admin, counted):
+    """Calendar must not load host rows or one Job per run, and must not cap runs at 10,000 (#434)."""
+    now = outside_schedule_window(); seed(now)
+    with Session() as s:
+        for n in range(300):
+            s.add(sched.PatchRun(id=f'r{n}', schedule_id='schedule', revision=1, host_id=f'h{n % HOSTS:03d}', trigger='regular',
+                                 due=now, expires=now + 7200, state='failed' if n % 2 else 'queued', job_id=f'j{n}'))
+        s.commit()
+    counted.clear()
+    with Session() as s:
+        events = sched.calendar(s, now - 3600, now + 86400)
+    assert len(counted) <= 6, len(counted)
+    assert not any('FROM hosts' in sql and 'count(' not in sql.lower() for sql in counted)
+    event = next(e for e in events if e['start'] == now)
+    assert event['states'] == {'failed': 150, 'queued': 150}
+    assert event['servers'] == 300  # max(host count, runs)
