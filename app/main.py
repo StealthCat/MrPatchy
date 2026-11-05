@@ -557,19 +557,26 @@ def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(admin_user)):
 def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
-        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
+        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing. Use Pinned SSH fingerprint under Server → Connection, and take the value from the target\'s trusted console.')
         try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
         except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
-class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+class Fingerprint(BaseModel):
+    fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+    replace_existing:bool=False
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
         if h.deleted_at:raise HTTPException(409,'Deleted server identity is read-only')
-        h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
+        previous=h.fingerprint or ''
+        if previous and previous!=body.fingerprint:
+            if not body.replace_existing:raise HTTPException(409,'A different SSH fingerprint is already pinned. Replace it under Server → Connection after verifying the new key from the target\'s trusted console.')
+            audit(s,'replace SSH host key',h.id+' '+previous+' -> '+body.fingerprint)
+        else:audit(s,'pin SSH host key',h.id+' '+body.fingerprint)
+        h.fingerprint=body.fingerprint; s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
