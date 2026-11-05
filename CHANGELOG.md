@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.32 — 2026-11-05
+
+1. [PR #486](https://github.com/StealthCat/MrPatchy/pull/486): Include the per-server lifecycle control-lock wait in each SSH call's existing deadline and give the transport only the remaining budget, so calls blocked behind long-running work fail busy without starting a remote command instead of waiting up to an additional hour or indefinitely. Compatibility: no API, configuration or runtime response-authorization change; callers can now receive the existing busy/timeout failure within their requested deadline when a server lock remains occupied. Material limits: once a remote mutation has started, existing receipt and reconciliation safeguards still apply, and this does not shorten the duration of the operation holding the lock. Completes #431. This source update does not publish a Docker image.
+
 ## 1.42.31 — 2026-11-05
 
 1. [PR #491](https://github.com/StealthCat/MrPatchy/pull/491): Refuse an approved release plan that expires in the queue before submitting it to the target, re-read the target receipt after a lost no-reboot rollback reply, and perform one final receipt read when a worker resumes after the four-hour observation window so completed upgrades and rollbacks are reported accurately. Compatibility: no API, configuration or runtime response-authorization change; expired plans now fail plainly and require a newly created and approved plan. Material limits: an unfinished release after the observation window still requires manual inspection, and no verify, rollback or start action is attempted after that window. Completes #426. This source update does not publish a Docker image.
