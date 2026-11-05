@@ -216,6 +216,16 @@ def test_sso_callback_failures_are_logged_and_audited(client,monkeypatch,caplog)
     assert len(unassigned_rows)==1  # repeat of the same reason+subject is rate limited
     assert 'secret-subject-value' not in ' '.join(details)
 
+def test_malformed_bpftrace_line_keeps_sibling_events():
+    from target.agent import decode_bpf_events
+    good=lambda n:json.dumps({'type':'printf','data':'%d\t0\t/bin/x\n'%n}).encode()
+    chunk=good(1)+b'\n{"type":"printf","data":"1\\t0\\t/tmp/\xff"}\n'+b'not json\n'+good(2)+b'\n'
+    rows,pending=decode_bpf_events(b'',chunk)
+    assert pending==b''
+    printf=[r for r in rows if r['type']=='printf']
+    assert len(printf)==3 and printf[1]['data'].endswith('/tmp/\udcff')
+    assert [r for r in rows if r['type']=='malformed']==[{'type':'malformed','count':1}]
+
 def test_sso_pending_states_are_bounded_per_source_and_evict_oldest(monkeypatch):
     """One unauthenticated source must not lock every user out of SSO (#416)."""
     import time
