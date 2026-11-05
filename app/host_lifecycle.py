@@ -28,13 +28,13 @@ def inactive_ids():
 
 
 @contextmanager
-def activity(host_ids,kind,blocking=True):
+def activity(host_ids,kind,blocking=True,wait=None):
     """Keep lifecycle transitions out of in-flight SSH and provider requests."""
     locks=[]
     try:
         for identifier in sorted(set(host_ids)):
             lock=Lock('server-'+kind+':'+identifier)
-            if not lock.acquire(blocking):
+            if not (lock.acquire(blocking) if wait is None else lock.acquire(blocking,wait)):
                 raise Busy('Server communication or AI work is active; retry after it finishes')
             locks.append(lock)
         revisions={}
