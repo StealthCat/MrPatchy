@@ -9,6 +9,9 @@ import sys
 
 SCHEMA_VERSION = 1
 MAX_REPORT_BYTES = 1_000_000
+MAX_ELAPSED_SECONDS = 86_400
+MAX_THROUGHPUT = 1_000_000
+MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
 STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
     'queue_age', 'receipt_persistence', 'usage_persistence',
@@ -48,8 +51,8 @@ def _summary(report, stage):
     if not isinstance(value, dict):
         raise ComparisonError(f'stages.{stage} must be an object')
     count = _integer(value.get('count'), f'stages.{stage}.count')
-    p50 = _number(value.get('p50_ms'), f'stages.{stage}.p50_ms')
-    p95 = _number(value.get('p95_ms'), f'stages.{stage}.p95_ms')
+    p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, MAX_STAGE_MS)
+    p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, MAX_STAGE_MS)
     if p95 < p50:
         raise ComparisonError(f'stages.{stage}.p95_ms must not be less than p50_ms')
     return {'count': count, 'p50_ms': p50, 'p95_ms': p95}
@@ -81,8 +84,8 @@ def _validate(report, label):
     cost_status = report.get('cost_status')
     if not isinstance(cost_status, str) or not cost_status.strip():
         raise ComparisonError(f'{label}.cost_status must explain cost availability')
-    elapsed = _number(report.get('elapsed_seconds'), f'{label}.elapsed_seconds', positive=True)
-    throughput = _number(report.get('runs_per_second'), f'{label}.runs_per_second', positive=True)
+    elapsed = _bounded(report.get('elapsed_seconds'), f'{label}.elapsed_seconds', 0.000001, MAX_ELAPSED_SECONDS)
+    throughput = _bounded(report.get('runs_per_second'), f'{label}.runs_per_second', 0.000001, MAX_THROUGHPUT)
     if not isinstance(report.get('stages'), dict):
         raise ComparisonError(f'{label}.stages must be an object')
     stages = {stage: _summary(report, stage) for stage in STAGES}
@@ -126,11 +129,14 @@ def _validate(report, label):
 
 def _delta(baseline, candidate):
     absolute = candidate - baseline
+    percent = None if baseline == 0 else absolute / baseline * 100
+    if not math.isfinite(absolute) or percent is not None and not math.isfinite(percent):
+        raise ComparisonError('derived comparison metric is not finite')
     return {
         'baseline': baseline,
         'candidate': candidate,
         'absolute': round(absolute, 6),
-        'percent': None if baseline == 0 else round(absolute / baseline * 100, 3),
+        'percent': None if percent is None else round(percent, 3),
         'percent_unavailable': 'baseline is zero' if baseline == 0 else None,
     }
 
@@ -194,7 +200,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
 
 def _load(path):
     try:
-        content = path.read_bytes()
+        with path.open('rb') as report:
+            content = report.read(MAX_REPORT_BYTES + 1)
     except OSError as error:
         raise ComparisonError(f'cannot read {path}: {error}') from error
     if len(content) > MAX_REPORT_BYTES:
@@ -215,7 +222,12 @@ def main(argv=None):
     except ComparisonError as error:
         print(f'comparison refused: {error}', file=sys.stderr)
         return 2
-    print(json.dumps(result, indent=2, sort_keys=True))
+    try:
+        serialized = json.dumps(result, indent=2, sort_keys=True, allow_nan=False)
+    except (ValueError, OverflowError) as error:
+        print(f'comparison refused: output is not strict JSON: {error}', file=sys.stderr)
+        return 2
+    print(serialized)
     return 0
 
 

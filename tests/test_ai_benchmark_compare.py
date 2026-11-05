@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -112,3 +113,46 @@ def test_cli_refuses_json_integer_over_interpreter_limit(tmp_path, capsys):
     candidate.write_text(json.dumps(report('parallel', 4)))
     assert compare_ai_benchmarks.main([str(baseline), str(candidate)]) == 2
     assert 'comparison refused: cannot read' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('value', [1e-308, 1e308, 10 ** 400])
+def test_comparison_refuses_out_of_range_elapsed_values(value):
+    candidate = report('parallel', 4)
+    candidate['elapsed_seconds'] = value
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='elapsed_seconds must be between'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
+def test_delta_refuses_nonfinite_derived_metric():
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='derived comparison metric'):
+        compare_ai_benchmarks._delta(1e-308, 1e308)
+
+
+def test_load_reads_only_limit_plus_one(monkeypatch):
+    sizes = []
+
+    class Report:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, size):
+            sizes.append(size)
+            return b' ' * size
+
+    monkeypatch.setattr(Path, 'open', lambda *args, **kwargs: Report())
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='exceeds'):
+        compare_ai_benchmarks._load(Path('oversized.json'))
+    assert sizes == [compare_ai_benchmarks.MAX_REPORT_BYTES + 1]
+
+
+def test_cli_uses_strict_json(monkeypatch, tmp_path, capsys):
+    baseline = tmp_path / 'baseline.json'
+    candidate = tmp_path / 'candidate.json'
+    baseline.write_text(json.dumps(report()))
+    candidate.write_text(json.dumps(report('parallel', 4)))
+    original = compare_ai_benchmarks._delta
+    monkeypatch.setattr(compare_ai_benchmarks, '_delta', lambda *args: {'percent': math.inf})
+    try:
+        assert compare_ai_benchmarks.main([str(baseline), str(candidate)]) == 2
+    finally:
+        monkeypatch.setattr(compare_ai_benchmarks, '_delta', original)
+    assert 'output is not strict JSON' in capsys.readouterr().err
