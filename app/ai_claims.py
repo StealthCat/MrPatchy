@@ -91,6 +91,10 @@ def acquire(owner=None):
                 recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
+            # Read-only gate: do not create runs/attempts for work that the shared
+            # rate gate, provider backoff or daily budget cannot admit right now.
+            from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing
+            if any(gate.waiting(s,now) for gate in (ai_admission,ai_provider_backoff,ai_budget)):return None
             signature=ai_retry.configuration(s)
             # Bound per-host occupancy so one noisy server cannot consume the
             # whole pool while still allowing independent work to overlap.
@@ -112,11 +116,15 @@ def acquire(owner=None):
                     # only a present host can carry a lifecycle transition.
                     host=s.get(Host,host_id)
                     if host is not None and not host_lifecycle.active(host):return None
+                    if cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
+                        try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
+                        except ai.AIError:return None
+                        if ai_budget.waiting(s,now,payload):return None
                     row.attempted=now;ai_retry.begin(s,row,signature,now)
                     run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
                     s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
                     claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
-                        boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.revision(row),
+                        boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.lease_revision(row),
                         configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
                     s.add(claim);s.commit()
                     work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
@@ -135,7 +143,7 @@ class Lease:
         claim=s.get(Claim,self.subject);row=s.get(Behavior,self.subject)
         host=s.get(Host,self.host_id)
         if (self.lost.is_set() or not claim or claim.token!=self.token or claim.expires<=time.time() or
-            not row or row.host_id!=self.host_id or ai_assessments.revision(row)!=claim.revision or
+            not row or row.host_id!=self.host_id or ai_assessments.lease_revision(row)!=claim.revision or
             ai_retry.configuration(s)!=claim.configuration or not owner_valid(s,self.owner) or
             (host is not None and not host_lifecycle.active(host))):
             self.lost.set();raise Lost()
@@ -153,7 +161,7 @@ class Lease:
             # the actual stored row, not a stale ORM copy, without relaxing any
             # equality check or tolerating changed evidence on the next read.
             s.flush();s.refresh(row)
-            claim.revision=ai_assessments.revision(row);s.commit()
+            claim.revision=ai_assessments.lease_revision(row);s.commit()
 
     def renew(self):
         lock=Lock('ai-triage')
