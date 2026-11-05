@@ -38,6 +38,18 @@ def _ident(value: Any) -> str | None:
     return value[:MAX_ID] if value else None
 
 
+_MALFORMED = object()
+
+
+def _mapping(value: Any) -> Any:
+    """Return a dict for a nested config section, {} when absent, or _MALFORMED.
+
+    Malformed nonempty sections fail closed instead of raising."""
+    if value is None or (not isinstance(value, dict) and not value):
+        return {}
+    return value if isinstance(value, dict) else _MALFORMED
+
+
 def _blocked(code: str, reason: str, feature: str, source: str | None = None) -> dict[str, Any]:
     return {'ok': False, 'code': code, 'reason': reason, 'feature': feature,
             'source': source, 'route': None}
@@ -58,30 +70,49 @@ def resolve_route(feature: str, config: Any, item_override: Any = None) -> dict[
     if not isinstance(config, dict):
         return _blocked('no_config', 'AI routing is not configured.', feature)
     selection, source = None, None
-    feature_cfg = (config.get('features') or {}).get(feature)
+    features = _mapping(config.get('features'))
+    connections = _mapping(config.get('connections'))
+    default = _mapping(config.get('default'))
+    if _MALFORMED in (features, connections, default):
+        return _blocked('invalid_config', 'AI routing configuration is malformed.', feature)
+    feature_cfg = features.get(feature)
+    if feature_cfg is not None and not isinstance(feature_cfg, dict):
+        return _blocked('invalid_config', 'AI routing configuration for this feature is malformed.',
+                        feature, 'feature')
     if isinstance(feature_cfg, dict) and feature_cfg.get('enabled') is False:
         return _blocked('feature_disabled', 'This AI feature is disabled.', feature, 'feature')
-    if isinstance(item_override, dict) and item_override:
+    if item_override is not None and not isinstance(item_override, dict):
+        return _blocked('invalid_config', 'The item route override is malformed.', feature, 'item')
+    if item_override:
         selection, source = item_override, 'item'
     elif isinstance(feature_cfg, dict) and _ident(feature_cfg.get('connection')):
         selection, source = feature_cfg, 'feature'
-    elif isinstance(config.get('default'), dict):
-        selection, source = config['default'], 'default'
+    elif isinstance(feature_cfg, dict) and feature_cfg.get('model') is not None:
+        # An explicit model without a connection is an incomplete selection:
+        # never silently substitute the default model for the requested one.
+        return _blocked('incomplete_selection',
+                        'The feature route selects a model but no provider connection.', feature, 'feature')
+    elif default:
+        selection, source = default, 'default'
     connection_id = _ident((selection or {}).get('connection'))
     if not connection_id:
         return _blocked('no_route', 'No provider connection is selected and no default exists.', feature, source)
-    connection = (config.get('connections') or {}).get(connection_id)
+    connection = connections.get(connection_id)
     if not isinstance(connection, dict):
         return _blocked('unknown_connection', 'The selected provider connection does not exist.', feature, source)
     if connection.get('enabled') is not True:
         return _blocked('connection_disabled', 'The selected provider connection is disabled.', feature, source)
+    if selection.get('model') is not None and not isinstance(selection.get('model'), str):
+        return _blocked('invalid_config', 'The selected model identifier is malformed.', feature, source)
     model = _ident(selection.get('model'))
     if not model and source != 'default':
-        model = _ident((config.get('default') or {}).get('model')) if \
-            _ident((config.get('default') or {}).get('connection')) == connection_id else None
+        model = _ident(default.get('model')) if _ident(default.get('connection')) == connection_id else None
     if not model:
         return _blocked('no_model', 'No model is selected for this route.', feature, source)
-    caps = (connection.get('models') or {}).get(model)
+    models = _mapping(connection.get('models'))
+    if models is _MALFORMED:
+        return _blocked('invalid_config', 'The selected connection model list is malformed.', feature, source)
+    caps = models.get(model)
     if not isinstance(caps, dict):
         return _blocked('unsupported_model', 'The model is not offered by the selected connection.', feature, source)
     if FEATURES[feature]['structured'] and caps.get('structured') is not True:
@@ -119,19 +150,30 @@ def revalidate(frozen: Any, config: Any, item_override: Any = None) -> dict[str,
     if not isinstance(frozen, dict) or not frozen.get('digest') or frozen.get('digest') != route_digest(frozen):
         return {'ok': False, 'code': 'frozen_route_invalid', 'reason': 'Queued route is missing or altered.',
                 'drift': None}
-    current = resolve_route(frozen.get('feature'), config, item_override)
+    feature = frozen.get('feature')
+    if not isinstance(feature, str) or not _ident(frozen.get('connection')) or not _ident(frozen.get('model')) \
+            or not _ident(frozen.get('provider')):
+        return {'ok': False, 'code': 'frozen_route_invalid', 'reason': 'Queued route is missing or altered.',
+                'drift': None}
+    current = resolve_route(feature, config, item_override)
     # Validate the frozen route itself against current policy, not the new selection.
     pinned = dict(config) if isinstance(config, dict) else {}
-    pinned['features'] = {frozen['feature']: {'connection': frozen['connection'], 'model': frozen['model']}}
+    pinned['features'] = {feature: {'connection': frozen['connection'], 'model': frozen['model']}}
     pinned['default'] = {}
-    still = resolve_route(frozen['feature'], pinned, {'connection': frozen['connection'], 'model': frozen['model']})
+    still = resolve_route(feature, pinned, {'connection': frozen['connection'], 'model': frozen['model']})
     drift = None
     if current['ok'] and current['route']['digest'] != frozen['digest']:
         drift = 'route_changed'
     elif not current['ok']:
         drift = current['code']
-    if not current['ok'] and current['code'] == 'feature_disabled':
-        return {'ok': False, 'code': 'feature_disabled', 'reason': current['reason'], 'drift': drift}
+    if not current['ok'] and current['code'] in ('feature_disabled', 'invalid_config'):
+        # A disabled feature or malformed current configuration fails closed.
+        return {'ok': False, 'code': current['code'], 'reason': current['reason'], 'drift': drift}
     if not still['ok']:
         return {'ok': False, 'code': still['code'], 'reason': still['reason'], 'drift': drift}
+    if still['route']['provider'] != frozen['provider']:
+        # Same connection/model tuple but a different provider behind it: block
+        # pending an explicit audited reroute rather than sending to the new provider.
+        return {'ok': False, 'code': 'provider_changed',
+                'reason': 'The frozen connection now points at a different provider.', 'drift': drift or 'route_changed'}
     return {'ok': True, 'code': 'ok', 'reason': '', 'drift': drift}

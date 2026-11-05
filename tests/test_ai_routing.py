@@ -87,3 +87,42 @@ def test_revalidate_respects_feature_disable():
     frozen = r.resolve_route('update_scoring', cfg())['route']
     out = r.revalidate(frozen, cfg(features={'update_scoring': {'enabled': False}}))
     assert not out['ok'] and out['code'] == 'feature_disabled'
+
+
+def test_revalidate_blocks_when_frozen_connection_changes_provider():
+    frozen = r.resolve_route('update_scoring', cfg())['route']
+    edited = cfg()
+    edited['connections']['a']['provider'] = 'anthropic'  # m1 still offered
+    out = r.revalidate(frozen, edited)
+    assert not out['ok'] and out['code'] == 'provider_changed' and out['drift'] == 'route_changed'
+
+
+def test_feature_model_without_connection_is_rejected_not_defaulted():
+    c = cfg(features={'update_scoring': {'model': 'not-offered'}})
+    res = r.resolve_route('update_scoring', c)
+    assert not res['ok'] and res['code'] == 'incomplete_selection' and res['route'] is None
+    # A feature entry that only toggles enablement still inherits the default route.
+    c = cfg(features={'update_scoring': {'enabled': True}})
+    assert r.resolve_route('update_scoring', c)['route']['model'] == 'm1'
+
+
+def test_malformed_nested_config_fails_closed():
+    frozen = r.resolve_route('update_scoring', cfg())['route']
+    bad = [
+        cfg(features=['update_scoring']),
+        cfg(connections=[{'provider': 'openai'}]),
+        cfg(default='a'),
+        cfg(features={'update_scoring': 'a'}),
+    ]
+    models_bad = cfg()
+    models_bad['connections']['a']['models'] = ['m1']
+    bad.append(models_bad)
+    model_bad = cfg(default={'connection': 'a', 'model': 7})
+    bad.append(model_bad)
+    for c in bad:
+        res = r.resolve_route('update_scoring', c)
+        assert not res['ok'] and res['code'] == 'invalid_config', c
+        out = r.revalidate(frozen, c)
+        assert not out['ok'], c
+    assert r.resolve_route('update_scoring', cfg(), ['a'])['code'] == 'invalid_config'
+    assert r.revalidate({'digest': r.route_digest({})}, cfg())['code'] == 'frozen_route_invalid'
