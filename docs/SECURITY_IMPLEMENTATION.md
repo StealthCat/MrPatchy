@@ -6038,3 +6038,28 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+### Configurable observation batch cap — partial #106 checkpoint
+
+This bounded reliability increment lets an administrator set each enrolled server's
+serialized observation-batch cap through a typed controller operation. The bridge
+accepts only integer values from 16 KiB through 1 MiB, writes a versioned root-only
+configuration atomically and restarts the collector. Normal snapshots and eBPF events
+use the same effective cap, and existing spool telemetry reports it. The default stays
+256 KiB. The controller accepts the setting only after the target returns the exact
+requested receipt, then retains the value and an audit record; viewers and operators
+cannot change it.
+
+Configuration does not change the 48 MB durable capacity, ordered commit-before-ACK
+replay, atomic observation records or explicit oversize/capacity loss accounting. An
+oversized observation is still rejected whole and counted while eligible siblings are
+queued. Unsafe, malformed or out-of-range target configuration fails visibly instead
+of silently widening a transport boundary. The target caches a verified file identity
+so high-rate eBPF intake does not reread the configuration for every event.
+
+This does not complete #106: measured adaptive pressure draining, configurable timed
+flush and graceful-shutdown checkpoints, negotiated compression and decompression
+limits, mixed-version fallback, sustained fairness, small-ARM CPU/memory/latency
+benchmarks and the #107/#108 outage/replay/health acceptance remain open. Coordinator
+integration plus exact-head SQLite/MySQL/native/full-suite checks are still required
+before delivery.

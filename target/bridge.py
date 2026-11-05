@@ -397,6 +397,14 @@ def agent_status():
             'active':active_code==0 and active=='active','enabled':enabled_code==0 and enabled=='enabled',
             'unit_path':values.get('FragmentPath'),'dropins':values.get('DropInPaths','').split()}
 
+def configure_spool(batch_limit_bytes):
+    if type(batch_limit_bytes) is not int or not 16*1024<=batch_limit_bytes<=1024*1024:
+        raise ValueError('Spool batch limit must be an integer from 16384 through 1048576 bytes')
+    config={'version':1,'batch_limit_bytes':batch_limit_bytes}
+    atomic(ROOT/'spool.json',json.dumps(config,separators=(',',':'),sort_keys=True).encode(),0o600)
+    run(['systemctl','restart','mrpatchy-agent'])
+    return {'configured':True,**config}
+
 def handle(req):
     action = req.get('action')
     if isinstance(action,str) and action.startswith('release-'):
@@ -477,6 +485,7 @@ def handle(req):
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:return {'busy':True}
             return {'busy':False}
+    if action == 'spool-config':return configure_spool(req.get('batch_limit_bytes'))
     if action == 'observability':
         if type(req.get('ebpf')) is not bool:raise ValueError('Boolean eBPF setting required')
         atomic(ROOT/'observability.json',json.dumps({'ebpf':req['ebpf']}).encode())
