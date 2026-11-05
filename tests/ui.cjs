@@ -22,6 +22,7 @@ const assert=require('assert/strict');
     await capture('login');
     await require('./ui_login_feedback.cjs')(page);
     await require('./ui_notifications.cjs')(page,capture);
+    await require('./ui_enroll_retry.cjs')(page,capture);
     await page.getByRole('button',{name:'+ Add server',exact:true}).click();
     await page.locator('[name=name]').fill('Test Ubuntu');
     await page.locator('[name=address]').fill('192.0.2.15');

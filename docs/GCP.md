@@ -111,8 +111,11 @@ explicit review of that configuration, not just deleting a mount definition.
 Use `./gcp-compose.sh logs`, `./gcp-compose.sh up -d`, and
 `./gcp-compose.sh down` for this installation. For application upgrades, pull the
 reviewed release and rerun `install-gcp.sh` with the same project/zone/instance and
-identity arguments so the base and Google CLI images are rebuilt. Using plain
-`docker compose` omits the GCP override. `.env.gcp` and generated credential mount
+identity arguments so the base and Google CLI images are rebuilt. The installer also records
+`COMPOSE_FILE`, `GCP_PROJECT` and `GCP_ZONE` in `.env`, so plain `docker compose`
+commands (README upgrade, database migration, TLS steps) keep the GCP override;
+`./gcp-compose.sh` remains the supported wrapper. Removing those `.env` lines
+makes plain `docker compose` omit the GCP override. `.env.gcp` and generated credential mount
 definitions are ignored by Git. The installer does not grant the Mr Patchy guest
 account OS Login or replace pinned SSH identities.
 
