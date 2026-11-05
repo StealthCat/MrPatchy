@@ -115,9 +115,12 @@ def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
     if not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
     kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
     stage={'started':False}
+    # One deadline covers lifecycle admission and transport: time spent waiting
+    # for the control lock is taken from the call's own budget.
+    deadline=time.monotonic()+timeout
     try:
         with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking,wait=timeout):
-            return _call(host,payload,timeout,key_file,stage)
+            return _call(host,payload,timeout,key_file,stage,deadline=deadline)
     except Exception as error:
         # Callers deciding whether a mutation may have run need to know if the
         # remote command was ever requested, including lifecycle admission and
@@ -125,9 +128,12 @@ def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
         error.remote_started=stage['started']
         raise
 
-def _call(host, payload, timeout=60, key_file=None, stage=None):
+def _call(host, payload, timeout=60, key_file=None, stage=None, deadline=None):
     stage=stage if stage is not None else {}
-    deadline=time.monotonic()+timeout
+    deadline=time.monotonic()+timeout if deadline is None else deadline
+    budget=deadline-time.monotonic()
+    if budget<=0: raise TimeoutError('SSH call exceeded its total deadline before connecting; no remote command was started')
+    connect_timeout=min(15,budget)
     from . import connections
     route=connections.for_host(host)
     tunnel=None
@@ -136,7 +142,7 @@ def _call(host, payload, timeout=60, key_file=None, stage=None):
     try:
         if route.transport=='gcp_iap': tunnel=connections.IAPSocket(route,deadline)
         client.connect(host.address,port=host.port,sock=tunnel,username='drpatch',key_filename=str(key_file or key_path(host.id)),
-                       look_for_keys=False,allow_agent=False,timeout=min(15,timeout),auth_timeout=min(15,timeout),banner_timeout=min(15,timeout),
+                       look_for_keys=False,allow_agent=False,timeout=connect_timeout,auth_timeout=connect_timeout,banner_timeout=connect_timeout,
                        disabled_algorithms={'keys':['ssh-rsa'],'pubkeys':['ssh-rsa'],
                                             'kex':['diffie-hellman-group1-sha1','diffie-hellman-group14-sha1','diffie-hellman-group-exchange-sha1']})
         client.get_transport().set_keepalive(20)

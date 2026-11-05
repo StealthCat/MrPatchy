@@ -341,3 +341,33 @@ def test_ssh_call_deadline_includes_wait_for_control_lock(admin,monkeypatch):
         assert caught.value.remote_started is False and not reached
     finally:held.release()
     assert ssh.call(record,{'action':'evidence'},timeout=1) is None and reached
+
+
+def test_ssh_call_transport_gets_only_budget_left_after_lock_wait(admin,monkeypatch):
+    # The control lock is released near the deadline: the transport phase must
+    # receive the remaining budget of the same deadline, not a fresh timeout.
+    identifier=create(admin)
+    with Session() as s:record=s.get(Host,identifier);s.expunge(record)
+    from contextlib import contextmanager
+    waits=[];budgets=[]
+    @contextmanager
+    def slow_admission(host_ids,kind,blocking=True,wait=None):
+        waits.append(wait);time.sleep(0.8);yield {}
+    monkeypatch.setattr(lifecycle,'activity',slow_admission)
+    def transport(host,payload,timeout,key_file,stage,deadline=None):
+        budgets.append(deadline-time.monotonic())
+    monkeypatch.setattr(ssh,'_call',transport)
+    ssh.call(record,{'action':'evidence'},timeout=1)
+    assert waits==[1] and budgets and budgets[0]<=0.25
+
+
+def test_ssh_transport_with_exhausted_deadline_never_starts_remote(admin,monkeypatch):
+    identifier=create(admin)
+    with Session() as s:record=s.get(Host,identifier);s.expunge(record)
+    from app import connections
+    monkeypatch.setattr(connections,'for_host',lambda host:SimpleNamespace(transport='ssh'))
+    monkeypatch.setattr(ssh.paramiko.SSHClient,'connect',lambda *a,**k:pytest.fail('expired deadline must not connect'))
+    stage={'started':False}
+    with pytest.raises(TimeoutError,match='no remote command was started'):
+        ssh._call(record,{'action':'evidence'},60,None,stage,deadline=time.monotonic()-0.01)
+    assert stage['started'] is False
