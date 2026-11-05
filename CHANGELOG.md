@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.39 — 2026-11-05
+
+1. [PR #514](https://github.com/StealthCat/MrPatchy/pull/514): Add a Host identity & recovery card to each server's Connection settings, showing the pinned SSH fingerprint or an Unpinned state and letting administrators pin or explicitly confirm an audited replacement from a trusted-console value, download or rerun the personalized installer, and finish or verify installation beside the existing Direct SSH and Google Cloud IAP controls. Compatibility: API clients replacing a different existing fingerprint must now send `replace_existing: true` or receive HTTP 409; first pins and idempotent re-pins remain compatible, host verification stays enforced, and no key is silently trusted from the connection being repaired. Material limits: this flow reuses the existing installer and verification operations rather than diagnosing the underlying route, authentication or bridge failure; the pre-existing enrollment Finish form keeps its separate browser-pattern behavior and server-side validation. Completes #511. This source update does not publish a Docker image.
+
 ## 1.42.38 — 2026-11-05
 
 1. [PR #472](https://github.com/StealthCat/MrPatchy/pull/472): Report SSH deadline timeouts after a remote command starts as an unknown remote outcome with instructions to verify target state, instead of replacing the timeout with a misleading address, port or firewall hint. Compatibility: no API, configuration or runtime response-authorization change; connection, DNS and routing failures before command start retain the existing transport guidance. Material limits: the controller cannot determine whether the timed-out remote action completed, so operators must reconcile target state before retrying, and this change does not alter the configured deadline or add automatic retry. Completes #430. This source update does not publish a Docker image.
