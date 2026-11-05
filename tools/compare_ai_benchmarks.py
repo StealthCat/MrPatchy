@@ -36,6 +36,13 @@ def _integer(value, field, *, positive=False):
     return int(value)
 
 
+def _bounded(value, field, minimum, maximum):
+    value = _number(value, field)
+    if not minimum <= value <= maximum:
+        raise ComparisonError(f'{field} must be between {minimum} and {maximum}')
+    return value
+
+
 def _summary(report, stage):
     value = report['stages'].get(stage)
     if not isinstance(value, dict):
@@ -57,10 +64,14 @@ def _validate(report, label):
     if execution not in ('serial', 'parallel'):
         raise ComparisonError(f'{label}.execution must be serial or parallel')
     concurrency = _integer(report.get('concurrency'), f'{label}.concurrency', positive=True)
+    if concurrency > 8:
+        raise ComparisonError(f'{label}.concurrency must be between 1 and 8')
     if (execution == 'serial') != (concurrency == 1):
         raise ComparisonError(f'{label}.execution does not match concurrency')
     runs = _integer(report.get('runs'), f'{label}.runs', positive=True)
-    provider_delay = _number(report.get('provider_delay_ms'), f'{label}.provider_delay_ms')
+    if not 2 <= runs <= 20:
+        raise ComparisonError(f'{label}.runs must be between 2 and 20')
+    provider_delay = _bounded(report.get('provider_delay_ms'), f'{label}.provider_delay_ms', 1, 1000)
     provider_calls = _integer(report.get('provider_calls'), f'{label}.provider_calls', positive=True)
     input_tokens = _integer(report.get('input_tokens'), f'{label}.input_tokens', positive=True)
     output_tokens = _integer(report.get('output_tokens'), f'{label}.output_tokens', positive=True)
@@ -83,6 +94,8 @@ def _validate(report, label):
         raise ComparisonError(f'{label} provider sample count does not match provider calls')
     if provider_calls != runs + stages['two_stage']['count']:
         raise ComparisonError(f'{label} provider calls do not match the one/two-stage workload')
+    if input_tokens != provider_calls * 100 or output_tokens != provider_calls * 20:
+        raise ComparisonError(f'{label} token totals do not match provider calls')
     if stages['ssh_evidence']['count'] != stages['two_stage']['count']:
         raise ComparisonError(f'{label} SSH evidence count does not match two-stage runs')
     for stage in ('admission', 'queue_age'):
@@ -96,7 +109,7 @@ def _validate(report, label):
     # arbitrary value.
     ssh_delay_source = 'report'
     if 'ssh_delay_ms' in report:
-        ssh_delay = _number(report['ssh_delay_ms'], f'{label}.ssh_delay_ms')
+        ssh_delay = _bounded(report['ssh_delay_ms'], f'{label}.ssh_delay_ms', 0, 1000)
     else:
         ssh_delay = 10
         ssh_delay_source = 'legacy fixed default'
@@ -182,10 +195,13 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
 def _load(path):
     try:
         content = path.read_bytes()
-        if len(content) > MAX_REPORT_BYTES:
-            raise ComparisonError(f'{path} exceeds the {MAX_REPORT_BYTES}-byte report limit')
+    except OSError as error:
+        raise ComparisonError(f'cannot read {path}: {error}') from error
+    if len(content) > MAX_REPORT_BYTES:
+        raise ComparisonError(f'{path} exceeds the {MAX_REPORT_BYTES}-byte report limit')
+    try:
         return json.loads(content)
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    except (UnicodeError, ValueError) as error:
         raise ComparisonError(f'cannot read {path}: {error}') from error
 
 

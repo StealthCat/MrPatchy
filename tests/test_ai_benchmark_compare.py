@@ -65,7 +65,7 @@ def test_ssh_delay_mismatch_is_refused():
     (lambda value: value.update(fixture_only=False), 'fixture-only'),
     (lambda value: value.update(errors=1), 'benchmark error'),
     (lambda value: value.update(provider_delay_ms=30), 'provider_delay_ms differs'),
-    (lambda value: value.update(input_tokens=1199), 'input_tokens differs'),
+    (lambda value: value.update(input_tokens=1300), 'token totals do not match'),
     (lambda value: value['stages']['provider'].update(count=11), 'provider sample count'),
     (lambda value: value['stages']['two_stage'].update(count=3), 'one/two-stage sample counts'),
     (lambda value: value['stages']['admission'].update(count=7), 'admission sample count'),
@@ -103,3 +103,12 @@ def test_cli_refuses_oversized_report(tmp_path, capsys):
     candidate.write_text(json.dumps(report('parallel', 4)))
     assert compare_ai_benchmarks.main([str(baseline), str(candidate)]) == 2
     assert 'exceeds the 1000000-byte report limit' in capsys.readouterr().err
+
+
+def test_cli_refuses_json_integer_over_interpreter_limit(tmp_path, capsys):
+    baseline = tmp_path / 'huge.json'
+    candidate = tmp_path / 'candidate.json'
+    baseline.write_text('{"runs":' + '9' * 5000 + '}')
+    candidate.write_text(json.dumps(report('parallel', 4)))
+    assert compare_ai_benchmarks.main([str(baseline), str(candidate)]) == 2
+    assert 'comparison refused: cannot read' in capsys.readouterr().err
