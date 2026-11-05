@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.7'
+APP_VERSION='1.42.40'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -143,6 +143,8 @@ self_user=role_dependency('viewer',self_service=True)
 
 @contextmanager
 def host_change(host_id,allow_quarantined=False,allow_inactive=False):
+    # Unknown IDs must not create permanent lock files or in-memory lock entries.
+    with Session() as s:host_or_404(s,host_id)
     lock=worker.host_lock(host_id)
     if not lock.acquire(False): raise HTTPException(409,'Server has an active operation. Retry this configuration change when it finishes.')
     try:
@@ -252,7 +254,7 @@ def login(body:Login,request:Request,response:Response):
         if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
-        raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
+        raise HTTPException(401,'Invalid credentials or MFA code')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
 @app.get('/api/session')
@@ -438,6 +440,7 @@ def delete_host(host_id:str,body:HostDeletionInput,user=Depends(admin_user)):
 
 class ServerAIInput(BaseModel):
     paused:bool
+    concurrency_limit:int|None=Field(default=None,strict=True,ge=1,le=4)
     expected_revision:str=Field(default='',max_length=36)
     reason:str=Field(min_length=10,max_length=4000)
 
@@ -451,14 +454,20 @@ def server_ai_policy(host_id:str,user=Depends(admin_user)):
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
     from . import ai_policy,ai_claims
     with worker.Lock('ai-policy-change:'+host_id):
-        with Session() as s:
-            if s.scalar(select(ai_claims.Claim.subject).where(ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
-                raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
-        lock=worker.Lock('ai-provider:'+host_id)
-        if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
-        try:
-            with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,body.expected_revision,body.reason,user['username'])
-        finally:lock.release()
+        with worker.Lock('ai-triage'):
+            with Session() as s:
+                host_or_404(s,host_id);current=ai_policy.status(s,host_id)
+                pause_change=body.paused!=current['paused']
+                if pause_change and s.scalar(select(ai_claims.Claim.subject).where(
+                    ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
+                    raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
+            lock=worker.Lock('ai-provider:'+host_id) if pause_change else None
+            if lock and not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
+            try:
+                with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,
+                    body.expected_revision,body.reason,user['username'],body.concurrency_limit)
+            finally:
+                if lock:lock.release()
 
 @app.get('/api/hosts/{host_id}/summary')
 def host_summary(host_id:str,user=Depends(viewer_user)):
@@ -550,19 +559,26 @@ def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(admin_user)):
 def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
-        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
+        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing. Use Pinned SSH fingerprint under Server → Connection, and take the value from the target\'s trusted console.')
         try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
         except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
-class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+class Fingerprint(BaseModel):
+    fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+    replace_existing:bool=False
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
         if h.deleted_at:raise HTTPException(409,'Deleted server identity is read-only')
-        h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
+        previous=h.fingerprint or ''
+        if previous and previous!=body.fingerprint:
+            if not body.replace_existing:raise HTTPException(409,'A different SSH fingerprint is already pinned. Replace it under Server → Connection after verifying the new key from the target\'s trusted console.')
+            audit(s,'replace SSH host key',h.id+' '+previous+' -> '+body.fingerprint)
+        else:audit(s,'pin SSH host key',h.id+' '+body.fingerprint)
+        h.fingerprint=body.fingerprint; s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
@@ -738,7 +754,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
-        from . import ai_retry,ai_policy,ai_claims
+        from . import ai_retry,ai_policy,ai_claims,ai_assessments
         rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
@@ -749,15 +765,23 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
                 retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
                 if row.id in claimed:retry={**retry,'state':'running','next_at':0,'reason':'A worker owns this investigation. Its result must still pass ownership and evidence checks.'}
                 if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
-            result.append(object_dict(row)|{'retry':retry})
+            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row)})
         return result
-class ApproveInput(BaseModel): approved:bool
+class ApproveInput(BaseModel):
+    approved:bool
+    expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
 @app.put('/api/investigations/{behavior_id}')
 def approve(behavior_id:str,body:ApproveInput,user=Depends(admin_user)):
     with Session() as s:
         row=s.get(Behavior,behavior_id)
         if not row: raise HTTPException(404,'Behavior not found')
         with host_lifecycle.activity([row.host_id],'queue'):
+            from . import ai_assessments
+            # Re-read under the host queue gate so a triage result or approval that landed
+            # after the administrator opened the dialog cannot be silently approved.
+            s.rollback();row=s.get(Behavior,behavior_id)
+            if not row:raise HTTPException(404,'Behavior not found')
+            if ai_assessments.revision(row)!=body.expected_revision:raise HTTPException(409,'The assessment changed since you opened it; review the current result and try again')
             row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 
 class RetriageInput(BaseModel):
@@ -1113,7 +1137,14 @@ def set_priority(host_id:str,body:PriorityInput,user=Depends(admin_user)):
         p=s.get(Package,host_id+':'+body.name)
         if not p: raise HTTPException(404,'Package not found')
         p.priority_manual=body.priority!='auto'
-        p.priority=body.priority if p.priority_manual else apt.auto_priority(p.origin,p.candidate)
+        h=s.get(Host,host_id)
+        if p.priority_manual: p.priority=body.priority
+        # No outstanding candidate means there is nothing to classify on any backend.
+        elif not p.candidate: p.priority='normal'
+        # APT classification is derived from the current candidate's origin, never a cache.
+        elif not h or (h.inventory or {}).get('package_manager','apt')=='apt': p.priority=apt.auto_priority(p.origin,p.candidate)
+        elif p.repository_priority: p.priority=p.repository_priority
+        else: h.last_repo=0  # No stored classification: keep the value and force a refresh.
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
 
 @app.get('/api/jobs/{job_id}')
@@ -1190,6 +1221,7 @@ class UserInput(BaseModel):
     password:str=Field(default='',max_length=1024)
     role:str=Field(pattern=r'^(admin|operator|viewer)$')
     enabled:bool=True
+    create:bool=False
 
 @app.get('/api/users')
 def users(user=Depends(admin_user)):
@@ -1197,12 +1229,19 @@ def users(user=Depends(admin_user)):
 
 @app.put('/api/users')
 def save_user(body:UserInput,user=Depends(admin_user)):
-    if body.username=='admin' and (body.role!='admin' or not body.enabled): raise HTTPException(400,'The bootstrap administrator must remain enabled')
-    if body.username==user['username'] and (not body.enabled or body.role!='admin'): raise HTTPException(400,'Cannot revoke your own administrator access')
     if body.password and len(body.password)<12: raise HTTPException(400,'Password must have at least 12 characters')
     with Session() as s:
         row=s.get(User,body.username)
+        if row is None:
+            # Case-insensitive backends (MySQL) load the row for a case variant above; elsewhere reject it explicitly.
+            row=s.scalars(select(User).where(func.lower(User.username)==body.username.lower())).first()
+            if row is not None and row.username!=body.username: raise HTTPException(409,'A user whose name differs only by letter case already exists. Use Edit user.')
         created=row is None
+        if not created and body.create: raise HTTPException(409,'User already exists. Use Edit user to change it.')
+        if row is not None and row.username!=body.username: raise HTTPException(409,'A user whose name differs only by letter case already exists. Use Edit user.')
+        name=body.username if created else row.username
+        if name=='admin' and (body.role!='admin' or not body.enabled): raise HTTPException(400,'The bootstrap administrator must remain enabled')
+        if name==user['username'] and (not body.enabled or body.role!='admin'): raise HTTPException(400,'Cannot revoke your own administrator access')
         if created:
             if not body.password: raise HTTPException(400,'New users require a password')
             row=User(username=body.username,password=password_hash(body.password));s.add(row);s.flush()
@@ -1230,8 +1269,8 @@ def reserve_account_attempt(username):
 
 def check_password(row,body):
     reserve_account_attempt(row.username)
-    if not verify(body.password,row.password): raise HTTPException(403,'Invalid credentials')
-    if row.otp_secret and not consume_otp(row,body.otp): raise HTTPException(403,'Invalid MFA code')
+    # One message for either factor: the reason stays out of the response so a password cannot be tested apart from the OTP.
+    if not verify(body.password,row.password) or (row.otp_secret and not consume_otp(row,body.otp)): raise HTTPException(403,'Invalid credentials or MFA code')
 
 @app.post('/api/identity/mfa')
 def begin_mfa(body:Reauthenticate,user=Depends(self_user)):
@@ -1405,6 +1444,8 @@ class RolloutInput(BaseModel):
 def rollout(body:RolloutInput,user=Depends(admin_user)):
     if len(set(body.hosts))!=len(body.hosts):raise HTTPException(400,'Duplicate servers')
     if body.expected_recovery_policies is not None and set(body.expected_recovery_policies)!=set(body.hosts):raise HTTPException(400,'Review recovery policies for every server')
+    with Session() as s:
+        for host_id in body.hosts:host_or_404(s,host_id)
     with host_lifecycle.activity(body.hosts,'queue'),Session() as s:
         prepared=[]
         for host_id in body.hosts:

@@ -32,6 +32,16 @@ RestrictAddressFamilies=AF_UNIX
 [Install]
 WantedBy=multi-user.target
 '''
+APT_KEYRINGS=Path('/etc/apt/keyrings')
+RPM_GPG_DIR=Path('/etc/pki/rpm-gpg')
+def public_dir(path):
+    # The bridge runs under umask 077; key directories must stay traversable by _apt.
+    path=Path(path)
+    if path.is_symlink(): raise ValueError('Refusing symlink destination')
+    path.mkdir(exist_ok=True,mode=0o755)
+    info=path.lstat()
+    if info.st_uid!=os.geteuid(): raise ValueError('Key directory is not owned by the bridge user')
+    if info.st_mode&0o7777!=0o755: path.chmod(0o755)
 def atomic(path, data, mode=0o600):
     path = Path(path)
     if path.is_symlink(): raise ValueError('Refusing symlink destination')
@@ -584,14 +594,14 @@ def handle(req):
         data = base64.b64decode(req['data'],validate=True)
         if len(data)>2_000_000: raise ValueError('Key too large')
         if rpm_backend():
-            Path('/etc/pki/rpm-gpg').mkdir(exist_ok=True,mode=0o755)
-            destination='/etc/pki/rpm-gpg/'+name
+            public_dir(RPM_GPG_DIR)
+            destination=str(RPM_GPG_DIR/name)
             atomic(destination,data,0o644)
             run(['rpm','--import',destination])
             return {'saved':destination}
-        Path('/etc/apt/keyrings').mkdir(exist_ok=True,mode=0o755)
-        atomic('/etc/apt/keyrings/'+name,data,0o644)
-        return {'saved':'/etc/apt/keyrings/'+name}
+        public_dir(APT_KEYRINGS)
+        atomic(APT_KEYRINGS/name,data,0o644)
+        return {'saved':str(APT_KEYRINGS/name)}
     if action == 'patch':
         if rpm_backend():return rpm_module().patch(req.get('packages',[]))
         packages = req.get('packages',[])

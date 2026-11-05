@@ -134,3 +134,20 @@ def test_legacy_bundle_without_server_list_still_activates(recovery,tmp_path):
     (bundle/'manifest.json').write_text(json.dumps({'format':1,'database':'sqlite'}))
     restored=activate(recovery,bundle,tmp_path)/'data'
     assert (restored/'ssh'/'host-a.key').is_file()
+
+
+def test_backup_refuses_while_a_replica_holds_the_maintenance_lock(recovery,tmp_path):
+    import fcntl
+    data,others=deployment(tmp_path)
+    with open(data/'database-maintenance.lock','a') as live:
+        fcntl.flock(live,fcntl.LOCK_SH)  # What a running app or worker holds (#409).
+        with pytest.raises(ValueError,match='Stop all app and worker replicas'):recovery.backup(data,*others)
+    assert recovery.calls==[]
+    recovery.backup(data,*others)  # Succeeds once the replica has stopped.
+    assert [call[:2] for call in recovery.calls]==[['restic','backup'],['restic','check']]
+
+
+def test_backup_runs_a_cheap_check_and_explicit_check_reads_all_data(recovery,tmp_path):
+    data,others=deployment(tmp_path)
+    recovery.backup(data,*others)
+    assert recovery.calls[-1]==['restic','check']

@@ -50,6 +50,7 @@ class Package(Base):
     candidate: Mapped[str] = mapped_column(String(240), default='')
     priority: Mapped[str] = mapped_column(String(20), default='normal')
     priority_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    repository_priority: Mapped[str] = mapped_column(String(20), default='')
     available_since: Mapped[float] = mapped_column(Double, default=0)
     held: Mapped[bool] = mapped_column(Boolean, default=False)
     dpkg_state: Mapped[str] = mapped_column(String(80), default='install ok installed')
@@ -129,6 +130,8 @@ def init():
         columns={c['name'] for c in inspect(connection).get_columns('packages')}
         if 'dpkg_state' not in columns:
             connection.execute(text("ALTER TABLE packages ADD COLUMN dpkg_state VARCHAR(80) NOT NULL DEFAULT 'install ok installed'"))
+        if 'repository_priority' not in columns:
+            connection.execute(text("ALTER TABLE packages ADD COLUMN repository_priority VARCHAR(20) NOT NULL DEFAULT ''"))
         score_columns={c['name'] for c in inspect(connection).get_columns('update_scores')}
         if 'next_at' not in score_columns:
             connection.execute(text('ALTER TABLE update_scores ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))

@@ -115,9 +115,12 @@ def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
     if not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
     kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
     stage={'started':False}
+    # One deadline covers lifecycle admission and transport: time spent waiting
+    # for the control lock is taken from the call's own budget.
+    deadline=time.monotonic()+timeout
     try:
-        with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking):
-            return _call(host,payload,timeout,key_file,stage)
+        with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking,wait=timeout):
+            return _call(host,payload,timeout,key_file,stage,deadline=deadline)
     except Exception as error:
         # Callers deciding whether a mutation may have run need to know if the
         # remote command was ever requested, including lifecycle admission and
@@ -125,9 +128,12 @@ def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
         error.remote_started=stage['started']
         raise
 
-def _call(host, payload, timeout=60, key_file=None, stage=None):
+def _call(host, payload, timeout=60, key_file=None, stage=None, deadline=None):
     stage=stage if stage is not None else {}
-    deadline=time.monotonic()+timeout
+    deadline=time.monotonic()+timeout if deadline is None else deadline
+    budget=deadline-time.monotonic()
+    if budget<=0: raise TimeoutError('SSH call exceeded its total deadline before connecting; no remote command was started')
+    connect_timeout=min(15,budget)
     from . import connections
     route=connections.for_host(host)
     tunnel=None
@@ -136,7 +142,7 @@ def _call(host, payload, timeout=60, key_file=None, stage=None):
     try:
         if route.transport=='gcp_iap': tunnel=connections.IAPSocket(route,deadline)
         client.connect(host.address,port=host.port,sock=tunnel,username='drpatch',key_filename=str(key_file or key_path(host.id)),
-                       look_for_keys=False,allow_agent=False,timeout=min(15,timeout),auth_timeout=min(15,timeout),banner_timeout=min(15,timeout),
+                       look_for_keys=False,allow_agent=False,timeout=connect_timeout,auth_timeout=connect_timeout,banner_timeout=connect_timeout,
                        disabled_algorithms={'keys':['ssh-rsa'],'pubkeys':['ssh-rsa'],
                                             'kex':['diffie-hellman-group1-sha1','diffie-hellman-group14-sha1','diffie-hellman-group-exchange-sha1']})
         client.get_transport().set_keepalive(20)
@@ -152,6 +158,9 @@ def _call(host, payload, timeout=60, key_file=None, stage=None):
     except paramiko.AuthenticationException as error:
         raise RuntimeError('SSH authentication rejected for drpatch. Re-run this server’s installer from a trusted console and verify its local account/key. On GCP, check OS Login username/UID conflicts and guest-agent key management; IAP does not replace SSH authentication.') from error
     except (socket.timeout, paramiko.ssh_exception.NoValidConnectionsError, socket.gaierror) as error:
+        if stage.get('started') and isinstance(error,TimeoutError):
+            # The command was already requested: this is a deadline/idle timeout, not a connection failure.
+            raise RuntimeError('SSH '+str(payload.get('action','request'))+' exceeded its '+str(int(timeout))+' s deadline; the remote outcome is unknown. Verify target state before retrying.') from error
         hint=('Check the runtime gcloud identity, IAP tunnel permissions, VM state and IAP firewall rule.'
               if route.transport=='gcp_iap' else 'Check the saved address/port, VM state, routing and SSH firewall. GCP ephemeral external IPs can change after stop/start.')
         raise RuntimeError('SSH connection unavailable. '+hint+' Verify target operation state before retrying a patch.') from error
@@ -262,6 +271,13 @@ sshd -t
 {HOST_FINGERPRINT_SCRIPT}
 printf '\nAllow SSH from your Mr Patchy server, then click Finish installation.\n'
 '''
+
+def rotation_resumable(host):
+    """True when an unfinished rotation journal exists, so a retry may finish it."""
+    journal=DATA/'ssh'/(host.id+'.rotation.json')
+    try:state=json.loads(journal.read_text())
+    except (OSError,ValueError):return False
+    return isinstance(state,dict) and not state.get('complete') and bool(state.get('old')) and bool(state.get('new'))
 
 def rotate(host):
     """Add new key, prove it works, atomically promote, then revoke old key."""
