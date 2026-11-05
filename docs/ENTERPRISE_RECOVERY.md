@@ -123,6 +123,8 @@ python scripts/recovery.py activate --app-stopped --bundle /empty/recovery-stagi
   --caddy-data /empty/caddy-data --caddy-config /empty/caddy-config
 ```
 
+Backup refuses to run while any app or worker replica still holds the shared lock on `<data>/database-maintenance.lock`, so `--app-stopped` is verified rather than trusted. After each backup it runs a plain `restic check` (repository structure and index); `python scripts/recovery.py check` performs the full `restic check --read-data`, which downloads every pack. Schedule that full check periodically (for example weekly or monthly) and apply a retention policy yourself with `restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --prune`; the script never deletes snapshots.
+
 Backup opens an existing SQLite source read-only and checks integrity plus core application tables. Restore repeats those checks; activation validates bundle files/directories before destination mutation. Restore verifies restic content and SQLite integrity; activation refuses nonempty volume destinations and nonempty MySQL databases. When run as root it sets app/TLS ownership to UID 10001 (override with --uid). Recreate containers on the restored volumes, verify login, host-key pinning, TLS and a disposable target before resuming patching. DNS, firewall, Compose/.env secrets, restic credentials and MySQL server provisioning must be recovered through your infrastructure procedures.
 
 ## Validation boundaries
