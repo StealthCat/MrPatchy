@@ -1,4 +1,5 @@
 import pytest
+
 from app import deployment_topology as t
 
 NOW=10000
