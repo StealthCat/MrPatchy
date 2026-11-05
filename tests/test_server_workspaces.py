@@ -121,7 +121,7 @@ def test_monitoring_tabs_remain_readable_but_sensitive_data_stays_admin_only(adm
     for path in ['/api/hosts/alpha/snapshot','/api/hosts/alpha/history','/api/ai/runs?host_id=alpha','/api/hosts/alpha/repositories']:
         assert admin.get(path).status_code==403,path
     assert admin.put('/api/operations/alpha/window',json={'windows':[]}).status_code==403
-    assert admin.put('/api/investigations/alpha',json={'approved':True}).status_code==403
+    assert admin.put('/api/investigations/alpha',json={'approved':True,'expected_revision':'0'*64}).status_code==403
 
 
 def test_admin_snapshot_is_current_and_scoped(admin,servers):
