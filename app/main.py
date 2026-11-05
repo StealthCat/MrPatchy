@@ -80,12 +80,17 @@ async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:10
 async def invalid_request(request,exc):
     # Never echo `input` or `ctx` (they can contain passwords); return short field-labelled messages.
     if request.url.path=='/api/login': return JSONResponse({'detail':'Invalid credentials'},status_code=422)
+    # `loc` can hold caller-chosen dict keys or forbidden extra field names, so only the first
+    # declared-looking field label is shown; dynamic/unknown locations get a generic message.
     parts=[]
     for err in exc.errors()[:5]:
-        loc=[str(x) for x in err.get('loc',()) if x not in ('body','query','path')]
+        if err.get('type')=='extra_forbidden':parts.append('Unexpected field');continue
+        loc=[x for x in err.get('loc',()) if x not in ('body','query','path','header','cookie')]
+        label=loc[0] if loc and isinstance(loc[0],str) and _VALIDATION_LABEL.fullmatch(loc[0]) else ''
         msg=str(err.get('msg',''))[:200]
-        parts.append((loc[-1]+': ' if loc else '')+msg)
-    return JSONResponse({'detail':'; '.join(parts) or 'Invalid request'},status_code=422)
+        parts.append((label+': ' if label else '')+msg)
+    return JSONResponse({'detail':('; '.join(parts) or 'Invalid request')[:1000]},status_code=422)
+_VALIDATION_LABEL=re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 static=Path(__file__).parent/'static'
 app.mount('/static',StaticFiles(directory=static),name='static')
 

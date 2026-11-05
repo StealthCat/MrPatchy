@@ -11,3 +11,15 @@ def test_other_validation_errors_are_short_and_do_not_echo_input(admin):
     detail=r.json()['detail']
     assert isinstance(detail,str) and detail.startswith('address:')
     assert 'touch' not in detail and 'input' not in detail
+
+def test_validation_errors_do_not_reflect_dynamic_or_extra_keys(admin):
+    canary='CANARY'+'k'*5015
+    r=admin.put('/api/settings/patching',json={'deadlines':{canary:'not-an-int'}})
+    assert r.status_code==422
+    detail=r.json()['detail']
+    assert isinstance(detail,str) and len(detail)<=1000
+    assert 'CANARY' not in r.text and 'k'*64 not in r.text
+    r=admin.post('/api/settings/ai-test',json={'CANARY_extra_field_'+'x'*500:1})
+    assert r.status_code==422
+    assert 'CANARY' not in r.text and 'x'*64 not in r.text
+    assert 'Unexpected field' in r.json()['detail']
