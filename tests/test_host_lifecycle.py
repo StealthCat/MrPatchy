@@ -109,7 +109,7 @@ def test_interactive_ssh_refuses_busy_lifecycle_lock_as_conflict(admin,monkeypat
     identifier=create(admin)
     class RefusedLock:
         def __init__(self,name):pass
-        def acquire(self,blocking=True):return False
+        def acquire(self,blocking=True,wait=None):return False
         def release(self):pytest.fail('An unowned lifecycle lock must not be released')
     monkeypatch.setattr(lifecycle,'Lock',RefusedLock)
     monkeypatch.setattr(ssh,'_call',lambda *a,**k:pytest.fail('Busy request must not start SSH'))
@@ -303,7 +303,7 @@ def test_inactive_investigation_actions_and_update_provider_are_blocked(admin,mo
         s.merge(Setting(key='config',value={'ai_enabled':True,'ai_updates_enabled':True,'ai_model':'fixture'}))
         s.merge(Setting(key='openai_key',value={'encrypted':seal('test-secret')}));s.commit()
     assert change(admin,identifier,False).status_code==200
-    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True}).status_code==409
+    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True,'expected_revision':'0'*64}).status_code==409
     assert admin.post('/api/investigations/inactive-behavior/retry',json={}).status_code==409
     monkeypatch.setattr(ai,'request',lambda *a,**k:pytest.fail('Disabled/deleted packages must not be sent for AI scoring'))
     update_scores.run_one()
@@ -325,3 +325,49 @@ def test_queue_full_is_429_and_inactive_server_is_409_across_routes(admin):
     assert change(admin,other,False).status_code==200
     inactive=admin.post('/api/hosts/'+other+'/actions/refresh',json={})
     assert inactive.status_code==409,inactive.text
+
+
+def test_ssh_call_deadline_includes_wait_for_control_lock(admin,monkeypatch):
+    identifier=create(admin)
+    with Session() as s:record=s.get(Host,identifier);s.expunge(record)
+    reached=[]
+    monkeypatch.setattr(ssh,'_call',lambda *args,**kwargs:reached.append(1))
+    held=coordination.Lock('server-control:'+identifier)
+    assert held.acquire(False)
+    try:
+        started=time.monotonic()
+        with pytest.raises(lifecycle.Busy) as caught:ssh.call(record,{'action':'evidence'},timeout=1)
+        assert time.monotonic()-started<2.5
+        assert caught.value.remote_started is False and not reached
+    finally:held.release()
+    assert ssh.call(record,{'action':'evidence'},timeout=1) is None and reached
+
+
+def test_ssh_call_transport_gets_only_budget_left_after_lock_wait(admin,monkeypatch):
+    # The control lock is released near the deadline: the transport phase must
+    # receive the remaining budget of the same deadline, not a fresh timeout.
+    identifier=create(admin)
+    with Session() as s:record=s.get(Host,identifier);s.expunge(record)
+    from contextlib import contextmanager
+    waits=[];budgets=[]
+    @contextmanager
+    def slow_admission(host_ids,kind,blocking=True,wait=None):
+        waits.append(wait);time.sleep(0.8);yield {}
+    monkeypatch.setattr(lifecycle,'activity',slow_admission)
+    def transport(host,payload,timeout,key_file,stage,deadline=None):
+        budgets.append(deadline-time.monotonic())
+    monkeypatch.setattr(ssh,'_call',transport)
+    ssh.call(record,{'action':'evidence'},timeout=1)
+    assert waits==[1] and budgets and budgets[0]<=0.25
+
+
+def test_ssh_transport_with_exhausted_deadline_never_starts_remote(admin,monkeypatch):
+    identifier=create(admin)
+    with Session() as s:record=s.get(Host,identifier);s.expunge(record)
+    from app import connections
+    monkeypatch.setattr(connections,'for_host',lambda host:SimpleNamespace(transport='ssh'))
+    monkeypatch.setattr(ssh.paramiko.SSHClient,'connect',lambda *a,**k:pytest.fail('expired deadline must not connect'))
+    stage={'started':False}
+    with pytest.raises(TimeoutError,match='no remote command was started'):
+        ssh._call(record,{'action':'evidence'},60,None,stage,deadline=time.monotonic()-0.01)
+    assert stage['started'] is False
