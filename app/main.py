@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, case
 from sqlalchemy.orm import defer, load_only
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
@@ -279,6 +279,36 @@ def dashboard(user=Depends(viewer_user)):
             cutoff=now-cfg['deadlines'][priority]*3600
             overdue+=s.scalar(select(func.count()).select_from(Package).where(active,Package.candidate!='',Package.candidate.is_not(None),Package.priority==priority,Package.available_since<cutoff)) or 0
         return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':total,'updates':sum(update_counts.values()),'overdue':overdue,'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+
+FLEET_UPDATE_PRIORITIES=('critical','high','normal','low')
+@app.get('/api/fleet/updates')
+def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',limit:int=50,offset:int=0,user=Depends(viewer_user)):
+    """Read-only, paged list of every available package candidate on active servers.
+
+    Uses the same active-server scope and candidate predicate as /api/dashboard so the
+    Overview count equals the unfiltered total. No per-host cap; callers page with offset.
+    """
+    if priority and priority not in FLEET_UPDATE_PRIORITIES: raise HTTPException(400,'Unknown priority')
+    if status not in ('','held','installable'): raise HTTPException(400,'Unknown status')
+    limit=max(1,min(limit,200)); offset=max(0,offset)
+    with Session() as s:
+        deadlines=config(s)['deadlines']; now=time.time()
+        active=Package.host_id.in_(host_lifecycle.active_ids())
+        conditions=[active,Package.candidate!='',Package.candidate.is_not(None)]
+        if q: conditions.append(Package.name.contains(q[:200],autoescape=True))
+        if host_id: conditions.append(Package.host_id==host_id)
+        if priority: conditions.append(Package.priority==priority)
+        if status=='held': conditions.append(Package.held==True)
+        elif status=='installable': conditions.append(Package.held==False)
+        total=s.scalar(select(func.count()).select_from(Package).where(*conditions)) or 0
+        rank=case(*[(Package.priority==name,index) for index,name in enumerate(FLEET_UPDATE_PRIORITIES)],else_=len(FLEET_UPDATE_PRIORITIES))
+        rows=s.execute(select(Package,Host.name,Host.state,Host.last_seen).join(Host,Host.id==Package.host_id).where(*conditions)
+            .order_by(rank,Package.name,Host.name,Package.id).limit(limit).offset(offset)).all()
+        items=[{'id':p.id,'host_id':p.host_id,'host_name':host_name,'name':p.name,'installed':p.installed,'candidate':p.candidate,
+            'priority':p.priority,'held':bool(p.held),'dpkg_state':p.dpkg_state,'available_since':p.available_since,
+            'due':p.available_since+deadlines.get(p.priority,deadlines['normal'])*3600,
+            'contact_stale':not(state=='online' and now-(last_seen or 0)<120)} for p,host_name,state,last_seen in rows]
+        return {'items':items,'total':total,'offset':offset,'limit':limit}
 
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
