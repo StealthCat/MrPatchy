@@ -34,6 +34,31 @@ def test_status_counts_without_loading_pending_rows(admin):
     assert not any('FROM behaviors' in q and 'count(' not in q.lower() and 'min(' not in q.lower() for q in statements)
 
 
+def test_status_counts_share_one_snapshot_under_concurrent_insert(admin):
+    now=time.time()
+    with Session() as s:
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture','ai_hourly_limit':20}))
+        s.add(Host(id='race-host',name='Race',address='192.0.2.1',fingerprint=''))
+        s.add(Behavior(id='race-1',host_id='race-host',first_seen=now-10,attempted=0,evidence={}))
+        s.commit()
+    inserted=[]
+    def insert_after_first_count(conn,cursor,statement,parameters,context,executemany):
+        # Commit a second unpaused pending behavior from another connection right
+        # after the first behavior aggregate, as a concurrent collector would.
+        if inserted or 'FROM behaviors' not in statement or 'count(' not in statement.lower():return
+        inserted.append(statement)
+        with Session() as other:
+            other.add(Behavior(id='race-2',host_id='race-host',first_seen=now-5,attempted=0,evidence={}))
+            other.commit()
+    event.listen(engine,'after_cursor_execute',insert_after_first_count)
+    try:
+        with Session() as s:status=ai_runs.status(s)
+    finally:event.remove(engine,'after_cursor_execute',insert_after_first_count)
+    assert inserted
+    assert status['paused']==0
+    assert status['pending']==status['ready']==status['queued'] and status['blocked']==0
+
+
 @pytest.mark.parametrize('marker', [True,False,1,1.0,'true',None,[],{}])
 def test_deferred_plan_counts_only_native_json_true(admin,marker):
     now=time.time()

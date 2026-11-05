@@ -268,16 +268,17 @@ def status(s):
     TR=ai_retry.TriageRetry
     pending_where=(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
     unpaused=Behavior.host_id.not_in(ai_policy.paused_ids())
-    base=select(func.count()).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id).where(*pending_where)
     ready_sql=ai_retry.eligible(signature,now)
     blocked_sql=and_(TR.subject.is_not(None),or_(TR.state=='blocked',and_(TR.state=='interrupted',TR.attempts>=ai_retry.MAX_ATTEMPTS)),~ready_sql)
     wake=case((TR.subject.is_(None),Behavior.attempted+3600),(TR.next_at!=0,TR.next_at),else_=TR.provider_until)
-    pending_count,oldest=s.execute(select(func.count(),func.min(Behavior.first_seen)).where(*pending_where)).one()
-    unpaused_count=s.scalar(base.where(unpaused))
-    ready=s.scalar(base.where(unpaused,ready_sql))
-    blocked=s.scalar(base.where(unpaused,blocked_sql))
+    def counted(condition):return func.count(case((condition,1)))
+    # One statement keeps the triage counts and minima on a single snapshot:
+    # separate reads let a concurrent insert make `paused` negative.
+    pending_count,oldest,unpaused_count,ready,blocked,retry=s.execute(select(
+        func.count(),func.min(Behavior.first_seen),counted(unpaused),counted(and_(unpaused,ready_sql)),
+        counted(and_(unpaused,blocked_sql)),func.min(case((and_(unpaused,~blocked_sql,wake>now),wake))),
+    ).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id).where(*pending_where)).one()
     paused=pending_count-unpaused_count
-    retry=s.scalar(select(func.min(wake)).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id).where(*pending_where,unpaused,~blocked_sql,wake>now))
     recent_count,recent_min=s.execute(select(func.count(),func.min(Behavior.attempted)).where(Behavior.attempted>now-3600)).one()
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
     running=s.scalar(select(AIRun).where(AIRun.purpose=='triage',AIRun.state=='running').order_by(AIRun.started.desc()).limit(1))
