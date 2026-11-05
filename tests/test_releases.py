@@ -497,3 +497,29 @@ def test_post_upgrade_rollback_handles_disappeared_normal_timer(tmp_path,monkeyp
         boot_id=lambda:'new' if rebooted else 'old',recovery_hook=lambda *a:{'reboot_required':True}))
     assert release.rollback(identifier)['state']=='rollback_reboot_pending'
     assert any(cmd[0]=='systemd-run' and 'rollback-reboot' in cmd[1] for cmd in calls)
+
+
+def test_clean_start_refusal_reports_target_reason_and_fails_without_recovery_hold(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        def call(host,req,**kw):
+            calls.append(req['action'])
+            if req['action']=='release-start':raise ssh.RemoteFailure('Release plan expired')
+            return {'state':'absent'}
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(releases.Refused,match='Release plan expired'):releases.execute(s,h,job)
+        assert calls==['release-status','release-start','release-status']
+        assert '_release_submitted' not in job.payload
+
+
+def test_rollback_refusal_is_reported_immediately(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);job.payload={**job.payload,'_release_submitted':True,'_release_health':{'key':'reboot_pending:b1','deadline':0}};s.commit()
+        def call(host,req,**kw):
+            a=req['action']
+            if a=='release-status':return {'state':'reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1'}
+            if a=='release-verify':raise OSError('down')
+            if a=='recovery-status':return {'boot_id':'b1'}
+            raise ssh.RemoteFailure('Rollback unavailable or already attempted')
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(RuntimeError,match='Rollback unavailable'):releases.execute(s,h,job)
