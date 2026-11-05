@@ -335,7 +335,7 @@ def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:st
         if q: conditions.append(Package.name.contains(q[:200],autoescape=True))
         if host_id: conditions.append(Package.host_id==host_id)
         if priority: conditions.append(Package.priority==priority)
-        queued_join=None
+        queued_join=None; queued_page_flag=None
         if status:
             # Filters use exactly the row states returned below (held > ineligible > queued > available).
             installable_state=or_(Package.dpkg_state=='installed',Package.dpkg_state.like('% installed'))
@@ -349,32 +349,39 @@ def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:st
                     # Names containing '=' never match, as in fleet_queued_keys()'s first-'=' split.
                     queued_rel=fleet_queued_relation(s)
                     queued_join=(queued_rel,(queued_rel.c.host_id==Package.host_id)&(queued_rel.c.spec==cast(Package.name+'='+Package.candidate,LargeBinary))&~Package.name.contains('=',autoescape=True))
+                    queued_page_flag=queued_rel.c.host_id.is_not(None).label('queued_on_page')
                     conditions.append(queued_rel.c.host_id.is_not(None) if status=='queued' else queued_rel.c.host_id.is_(None))
         count_from=Package if queued_join is None else Package.__table__.outerjoin(*queued_join)
         total=s.scalar(select(func.count()).select_from(count_from).where(*conditions)) or 0
         rank=case(*[(Package.priority==name,index) for index,name in enumerate(FLEET_UPDATE_PRIORITIES)],else_=len(FLEET_UPDATE_PRIORITIES))
         # Bounded projection: only the small Host fields the row needs (never inventory/telemetry/baseline/integrity).
-        page=select(Package,Host.name,Host.last_repo,Host.repo_error,Host.state,Host.last_seen).join(Host,Host.id==Package.host_id)
+        page_columns=[Package,Host.name,Host.last_repo,Host.repo_error,Host.state,Host.last_seen]
+        if queued_page_flag is not None: page_columns.append(queued_page_flag)
+        page=select(*page_columns).join(Host,Host.id==Package.host_id)
         if queued_join is not None: page=page.outerjoin(*queued_join)
         rows=s.execute(page.where(*conditions)
             .order_by(rank,Package.name,Host.name,Package.id).limit(limit).offset(offset)).all()
         # Page-bounded lookups only: open patch jobs and deferred AI priority scoring for these rows.
         page_hosts={r[0].host_id for r in rows}; page_names={r[0].name for r in rows}; deferred=set()
-        queued=fleet_queued_keys(s,page_hosts) if page_hosts else set()
+        # A queued/available filter must render membership from the same statement that
+        # selected the page. A later job lookup can observe a transition and contradict
+        # the requested filter; unfiltered/installable pages still need live page-bounded state.
+        queued=fleet_queued_keys(s,page_hosts) if page_hosts and queued_page_flag is None else set()
         if page_hosts:
             U=update_scores.UpdateScore
             deferred={tuple(r) for r in s.execute(select(U.host_id,U.name,U.installed,U.candidate).where(U.host_id.in_(page_hosts),U.name.in_(page_names),U.state=='deferred'))}
-        def candidate_status(p):
+        def candidate_status(p,queued_on_page=None):
             if p.held: return 'held'
             if not fleet_installable_state(p.dpkg_state): return 'ineligible'
+            if queued_on_page is not None: return 'queued' if queued_on_page else 'available'
             if (p.host_id,p.name,p.candidate) in queued: return 'queued'
             return 'available'
         items=[{'id':p.id,'host_id':p.host_id,'host_name':h_name,'name':p.name,'installed':p.installed,'candidate':p.candidate,
-            'priority':p.priority,'held':bool(p.held),'status':candidate_status(p),'dpkg_state':p.dpkg_state,'available_since':p.available_since,
+            'priority':p.priority,'held':bool(p.held),'status':candidate_status(p,membership[0] if membership else None),'dpkg_state':p.dpkg_state,'available_since':p.available_since,
             'priority_deferred':(p.host_id,p.name,p.installed,p.candidate) in deferred,
             'due':p.available_since+deadlines.get(p.priority,deadlines['normal'])*3600,
             'host_active':scope=='active','repo_checked':h_last_repo or 0,'repo_error':h_repo_error or '','repo_state':fleet_repo_state(h_repo_error,h_last_repo,cfg,now),
-            'contact_stale':not(h_state=='online' and now-(h_last_seen or 0)<120)} for p,h_name,h_last_repo,h_repo_error,h_state,h_last_seen in rows]
+            'contact_stale':not(h_state=='online' and now-(h_last_seen or 0)<120)} for p,h_name,h_last_repo,h_repo_error,h_state,h_last_seen,*membership in rows]
         return {'items':items,'total':total,'offset':offset,'limit':limit,'scope':scope}
 
 @app.get('/api/notifications')

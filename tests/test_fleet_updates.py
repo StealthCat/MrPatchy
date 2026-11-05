@@ -1,5 +1,6 @@
 """Fleet-wide Available patches API (#512): same scope as the Overview count, fully pageable."""
 import time
+import pytest
 from app.db import Session, Host, Package
 from app.identity import User
 
@@ -152,6 +153,45 @@ def test_status_filters_match_returned_row_states_and_totals(admin):
     assert installable['total'] == 3 and {r['status'] for r in installable['items']} == {'available', 'queued'}
     assert get(status='queued', host_id='h1')['total'] == 1 and get(status='queued', host_id='h0')['total'] == 0
     assert sum(get(status=s)['total'] for s in ('available', 'queued', 'held', 'ineligible')) == get()['total']
+
+
+@pytest.mark.parametrize(('initial_job_state', 'requested_status', 'next_job_state'), [
+    ('queued', 'queued', 'done'),
+    ('done', 'available', 'queued'),
+])
+def test_filtered_row_status_uses_same_job_snapshot_as_page(admin, initial_job_state, requested_status, next_job_state):
+    """A job transition after the page statement cannot contradict its status filter."""
+    from sqlalchemy import event
+    from app.db import Job, engine
+    seed()
+    with Session() as s:
+        s.add(Job(id='race', host_id='h1', action='patch', state=initial_job_state,
+                  payload={'packages': ['bash=2']}))
+        s.commit()
+
+    transitioned = False
+    def transition_after_page(conn, cursor, statement, *args):
+        nonlocal transitioned
+        sql = statement.lower()
+        if transitioned or 'from packages join hosts' not in sql or 'fleet_queued' not in sql:
+            return
+        transitioned = True
+        with Session() as other:
+            other.get(Job, 'race').state = next_job_state
+            other.commit()
+
+    event.listen(engine, 'after_cursor_execute', transition_after_page)
+    try:
+        response = admin.get('/api/fleet/updates', params={
+            'host_id': 'h1', 'q': 'bash', 'status': requested_status,
+        })
+    finally:
+        event.remove(engine, 'after_cursor_execute', transition_after_page)
+
+    assert transitioned and response.status_code == 200
+    body = response.json()
+    assert body['total'] == 1
+    assert [(row['id'], row['status']) for row in body['items']] == [('h1:bash', requested_status)]
 
 
 def test_page_query_projects_small_host_fields_only(admin):
