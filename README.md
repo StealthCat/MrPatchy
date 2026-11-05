@@ -398,11 +398,13 @@ The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.
 ## Upgrade
 
 1. Back up the database and all persistent volumes with app/workers stopped.
-2. Pull `main`, review `.env`, then run `docker compose up -d --build`.
+2. Pull `main` and review `.env`. Drain workers first (**Activity → Workers → Drain worker**) or wait for running jobs to finish, then run `docker compose up -d --build`. Compose lets active worker jobs drain for up to `MRPATCHY_WORKER_STOP_GRACE_PERIOD` (default `8100s`, or 2h15m); `docker compose stop -t <seconds> worker` overrides that wait for an explicit stop.
 3. Use **Servers → Manage → Finish / verify installation** to upgrade each managed bridge/collector. Legacy bootstrap targets may require a fresh installer run through a trusted console first.
 4. Regenerate unexecuted release plans after updating helpers; old plans cannot authorize changed runner, bridge or recovery/validation code. Do not update helpers while a release upgrade is running.
 5. Review queued jobs: jobs created before recovery-policy capture cannot inherit an enabled reboot/rollback policy; resubmit them after reviewing the policy.
 6. Reconcile interrupted/recovery-required jobs before resuming those hosts. Review new provenance identities rather than automatically transferring old approvals.
+
+On an existing Google Cloud install, re-run `install-gcp.sh` once so `.env` records the GCP compose files, project and zone; until then, use `./gcp-compose.sh` for upgrades, migrations and TLS changes so the gcloud runtime and IAP connectivity remain active.
 
 Schema initialization is idempotent. MySQL upgrades need ALTER privileges for existing timestamp/package-state migrations.
 
