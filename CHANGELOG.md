@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.33 — 2026-11-05
+
+1. [PR #492](https://github.com/StealthCat/MrPatchy/pull/492): Add the first, pure read-only firmware inventory contract for normalizing bounded fwupd device and release data, advertising provider capabilities, classifying explicit non-healthy states, redacting serials by default and reconciling disconnected identities without transferring approval. Compatibility: no API, persistence, collection, UI, installation or runtime response-authorization change; this module is a foundation for later firmware delivery slices. Material limits: agent/bridge collection, migrations, fleet API/UI, execution and a tested platform matrix remain unresolved under #397; malformed provider data and failed collection status are conservatively non-healthy. This source update does not publish a Docker image.
+
 ## 1.42.32 — 2026-11-05
 
 1. [PR #486](https://github.com/StealthCat/MrPatchy/pull/486): Include the per-server lifecycle control-lock wait in each SSH call's existing deadline and give the transport only the remaining budget, so calls blocked behind long-running work fail busy without starting a remote command instead of waiting up to an additional hour or indefinitely. Compatibility: no API, configuration or runtime response-authorization change; callers can now receive the existing busy/timeout failure within their requested deadline when a server lock remains occupied. Material limits: once a remote mutation has started, existing receipt and reconciliation safeguards still apply, and this does not shorten the duration of the operation holding the lock. Completes #431. This source update does not publish a Docker image.
