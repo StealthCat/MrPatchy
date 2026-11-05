@@ -8,13 +8,26 @@ from target import release
 STALE_AFTER=7*86400
 PREFIX='os-upgrade:'
 _UNSET=object()
+TIMESTAMP_LIMIT=2**53   # far beyond any real epoch second; larger values are malformed
+
+
+def _timestamp(value):
+    """Return a finite, bounded numeric timestamp or None.
+
+    Integers are range-checked before any float conversion, so arbitrarily
+    large legacy JSON integers (e.g. 10**400) are malformed rather than raising
+    OverflowError.
+    """
+    if type(value) is int:return value if -TIMESTAMP_LIMIT<=value<=TIMESTAMP_LIMIT else None
+    if type(value) is float:return value if math.isfinite(value) and -TIMESTAMP_LIMIT<=value<=TIMESTAMP_LIMIT else None
+    return None
 
 
 def snapshot(inventory):
     inv=inventory if isinstance(inventory,dict) else {}
     result={'version':1,'has_os':bool(inv.get('os')),'valid':False,'collected':0}
-    collected=inv.get('collected') or 0;files=inv.get('files',{})
-    if (type(collected) not in (int,float) or not math.isfinite(collected)
+    collected=_timestamp(inv.get('collected') or 0);files=inv.get('files',{})
+    if (collected is None
             or not isinstance(inv.get('os',''),str) or not isinstance(inv.get('status',''),str)
             or not isinstance(files,dict) or not all(isinstance(k,str) and isinstance(v,str) for k,v in files.items())):
         return result
@@ -63,8 +76,8 @@ def status(host,now=None,*,saved=_UNSET):
         return {'status':'unknown','message':'Upgrade inventory summary is unavailable; await an inventory refresh.'}
     if not value.get('has_os'):
         return {'status':'unknown','message':'No operating-system inventory has been collected yet.'}
-    collected=value.get('collected')
-    if value.get('valid') is not True or type(collected) not in (int,float) or not math.isfinite(collected):
+    collected=_timestamp(value.get('collected'))
+    if value.get('valid') is not True or collected is None:
         return {'status':'unknown','message':'Inventory is malformed; upgrade availability is not asserted.'}
     result={'checked':collected or None}
     if not collected or now-collected>STALE_AFTER or collected>now+3600:

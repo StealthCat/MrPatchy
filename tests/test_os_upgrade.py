@@ -124,3 +124,43 @@ def test_saved_status_rechecks_freshness_and_lifecycle_without_inventory():
     assert os_upgrade.status(h,NOW+8*86400,saved=saved)['status']=='stale'
     h.enabled=False
     assert os_upgrade.status(h,NOW,saved=saved)['status']=='unknown'
+
+
+@pytest.mark.parametrize('collected',[10**400,-10**400,2**53+1,float('inf'),float('-inf'),True])
+def test_unbounded_timestamps_are_malformed_not_overflow(collected):
+    inv={'os':'ID=debian\nVERSION_ID="12"\n','status':'','files':{},'collected':collected}
+    snap=os_upgrade.snapshot(inv)
+    assert snap['valid'] is False and snap['collected']==0
+    h=SimpleNamespace(inventory=inv,state='online',enabled=True,deleted_at=0)
+    assert os_upgrade.status(h,NOW)['status']=='unknown'
+    saved={'version':1,'has_os':True,'valid':True,'collected':collected,
+           'detected':{'status':'available','message':'m','distribution':'debian','from_version':'12','to_version':'13'}}
+    r=os_upgrade.status(h,NOW,saved=saved)
+    assert r['status']=='unknown' and 'malformed' in r['message']
+
+
+def test_valid_integer_and_float_timestamps_are_preserved():
+    for collected in (int(NOW-60),NOW-60.5):
+        assert os_upgrade.snapshot(host(collected=collected).inventory)['collected']==collected
+        assert os_upgrade.status(host(collected=collected),NOW)['checked']==collected
+
+
+def test_malformed_legacy_inventory_survives_backfill_and_summary(admin):
+    if engine.dialect.name!='sqlite':
+        pytest.skip('only SQLite JSON can hold integers beyond the float range')
+    with Session() as s:
+        s.add(Host(id='huge',name='Huge',address='192.0.2.2',fingerprint='test',state='online',last_seen=time.time(),
+            inventory={'os':'ID=debian\nVERSION_ID=12','collected':10**400}))
+        s.commit()
+    with engine.begin() as connection:
+        os_upgrade.backfill(connection)
+    with Session() as s:
+        saved=s.get(Setting,os_upgrade.PREFIX+'huge').value
+    assert saved['valid'] is False and saved['collected']==0
+    summary=admin.get('/api/hosts/huge/summary')
+    assert summary.status_code==200 and summary.json()['host']['os_upgrade']['status']=='unknown'
+    assert next(h for h in admin.get('/api/hosts').json() if h['id']=='huge')['os_upgrade']['status']=='unknown'
+    with Session() as s:
+        s.get(Setting,os_upgrade.PREFIX+'huge').value={**saved,'valid':True,'collected':10**400}
+        s.commit()
+    assert next(h for h in admin.get('/api/hosts').json() if h['id']=='huge')['os_upgrade']['status']=='unknown'
