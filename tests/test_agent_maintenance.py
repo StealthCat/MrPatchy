@@ -191,3 +191,22 @@ def test_bridge_verify_is_agent_status_alias_and_tolerates_missing_files(monkeyp
     # Regression for #191: legacy verify raised FileNotFoundError when a managed file was absent.
     monkeypatch.setattr(bridge, 'agent_status', lambda: {'version': 1, 'files': {'/x': {'missing': True}}})
     assert bridge.handle({'action': 'verify'}) == {'version': 1, 'files': {'/x': {'missing': True}}}
+
+
+@pytest.mark.parametrize('journal,issue_path,allowed',[
+    (True,'/opt/drpatch/.ssh/authorized_keys',True),
+    (False,'/opt/drpatch/.ssh/authorized_keys',False),
+    (True,'/usr/local/lib/mrpatchy/bridge.py',False)])
+def test_interrupted_rotation_retry_passes_health_gate(admin,enrolled,monkeypatch,tmp_path,journal,issue_path,allowed):
+    import json
+    monkeypatch.setattr(ssh,'DATA',tmp_path);(tmp_path/'ssh').mkdir()
+    if journal:(tmp_path/'ssh'/(enrolled.id+'.rotation.json')).write_text(json.dumps({'old':'o','new':'n'}))
+    with Session() as s:
+        s.add(Host(id=enrolled.id,name='agent',address='x',fingerprint='pinned',baseline=enrolled.baseline))
+        s.add(Setting(key='agent-status:'+enrolled.id,value={'state':'blocked','issues':[{'path':issue_path,'kind':'unexpected_content_or_missing'}]}));s.commit()
+        job=worker.enqueue(s,enrolled.id,'rotate-key')
+    monkeypatch.setattr(ssh,'rotate',lambda h:{'authorized_keys_sha256':'f'*64})
+    worker.execute(job)
+    with Session() as s:
+        j=s.get(Job,job)
+        assert (j.state!='failed')==allowed

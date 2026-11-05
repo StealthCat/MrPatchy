@@ -2217,6 +2217,30 @@ per-server bound administrator-configurable, or establish full multi-controller/
 failover acceptance. Exact-head full CI and coordinator integration remain required.
 
 
+### Configurable per-server process-triage occupancy — worker checkpoint #383
+
+This stacked threaded-execution increment replaces the fixed two-lease server bound
+with an administrator-controlled limit from one through four. Existing server policy
+rows without the field retain two; malformed persisted values fail closed to serial
+admission. The value shares the existing revisioned server AI policy, meaningful
+reason and audit trail, and is visible beside pause state in each server workspace.
+
+Claim admission reads live per-host claim counts and every occupied host's current
+policy under the short distributed triage lock. Lowering a limit never cancels a live
+lease or retracts a request already sent, but later claims remain blocked until the
+count falls below the new value. Raising it cannot exceed the configured fleet-wide
+executor capacity. Subject exclusivity, renewable evidence/configuration fencing,
+global/server pause, lifecycle, shared rate/spend controls and provider policy checks
+remain unchanged. Pause/resume still rejects a live leased investigation.
+
+Focused acceptance covers default/serial/three-slot admission, lowering beneath live
+occupancy, stale and invalid settings, audit/role/CSRF enforcement and responsive UI
+state. This depends on #379 / PR #380 and does not complete cross-purpose priority or
+aging, provider-specific quotas, native complete-context collection, full supported
+multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
+browser, full-suite and coordinator integration checks remain required.
+
+
 ## Portable per-server scanner records
 
 Administrators can use **Security → Export scanner record** without preparing a file
