@@ -179,3 +179,16 @@ def test_invalid_bridge_payload_does_not_partially_deploy(monkeypatch):
     with pytest.raises(ValueError,match='bridge digest'):
         bridge.handle({'action':'deploy','agent':base64.b64encode(code).decode(),'sha256':bridge.hashlib.sha256(code).hexdigest(),'bridge':base64.b64encode(code).decode(),'bridge_sha256':'bad'})
     assert not written
+
+def test_full_server_queue_does_not_abort_scheduler_tick(admin,monkeypatch):
+    with Session() as s:
+        h=create_host(s);h.last_repo=0
+        for i in range(50):s.add(Job(id=f'full-{i}',host_id=h.id,action='patch',state='queued',next_at=time.time()+3600,payload={}))
+        s.commit()
+    alerts=[];waits=iter([False,False,True])
+    monkeypatch.setattr(worker.stop,'wait',lambda _:next(waits,True))
+    monkeypatch.setattr(worker,'poll_host',lambda *a:None)
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:alerts.append(1))
+    monkeypatch.setattr(worker.log,'exception',lambda *a,**k:pytest.fail('scheduler tick failed'))
+    worker.loop()
+    assert alerts
