@@ -198,8 +198,13 @@ def test_sqlite_mysql_sqlite_full_roundtrip(client,source,tmp_path):
 def test_recovery_follows_active_profile_and_legacy_backup_refuses(isolated_profiles,monkeypatch):
     from scripts import recovery, backup
     monkeypatch.setenv('DATABASE_URL','sqlite:////old.db')
+    settings.write_profile('active',{'url':'sqlite:////data/new.db'})
+    assert recovery.active_database_url(isolated_profiles).database==str(isolated_profiles/'new.db')
+    settings.write_profile('active',{'url':'sqlite:////data/sub/../../etc/x.db'})
+    with pytest.raises(ValueError,match='container data directory'):recovery.active_database_url(isolated_profiles)
     settings.write_profile('active',{'url':'sqlite:////new.db'})
-    assert recovery.active_database_url(isolated_profiles).database=='/new.db'
+    with pytest.raises(ValueError,match='container data directory'):recovery.active_database_url(isolated_profiles)
+    settings.write_profile('active',{'url':'sqlite:////data/new.db'})
     with pytest.raises(ValueError,match='offline migration profile'):
         backup.backup(isolated_profiles,isolated_profiles/'legacy.tar.gz')
     (isolated_profiles/'database-active.json').write_text('invalid')

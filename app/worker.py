@@ -794,7 +794,15 @@ def _assess_active_behavior(s,row,cfg,secret):
             from . import known_good
             with Session() as provenance_read:updated=known_good.bind_vendor_provenance(provenance_read,row.host_id,updated,collected)
             if lease:
-                with lease.mutation() as (write,saved):saved.evidence=updated
+                with lease.mutation() as (write,saved):
+                    # The lease ignores the observation-only process identity, so a
+                    # respawn may have refreshed it since this local copy was taken.
+                    # Keep the latest observation; the remote details stay bound to
+                    # the identity they were collected for.
+                    updated=copy.deepcopy(updated)
+                    if 'process_identity' in (saved.evidence or {}):updated['process_identity']=copy.deepcopy(saved.evidence['process_identity'])
+                    else:updated.pop('process_identity',None)
+                    saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
         result=assess(row.evidence)
@@ -808,6 +816,11 @@ def _assess_active_behavior(s,row,cfg,secret):
         if lease:
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
+
+def ai_plan_waiting(s,job):
+    """True for queued AI planning jobs that must wait for AI to be enabled/resumed (no retry time)."""
+    return job.action in ('release-plan','security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,job.host_id)['paused'])
+
 
 def loop(role="embedded"):
     from .worker_registry import Registration
@@ -910,7 +923,7 @@ def _loop(reporter):
                         if len(active_jobs)>=capacity['jobs']: break
                         if j.host_id in busy_hosts:continue
                         if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
-                        if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
+                        if ai_plan_waiting(s,j):continue
                         scope=response_hold_scope(j)
                         hold_scope=(j.host_id,*scope.values())
                         if hold_scope not in hold_cache:
