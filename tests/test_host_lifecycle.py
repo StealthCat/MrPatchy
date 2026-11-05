@@ -303,7 +303,7 @@ def test_inactive_investigation_actions_and_update_provider_are_blocked(admin,mo
         s.merge(Setting(key='config',value={'ai_enabled':True,'ai_updates_enabled':True,'ai_model':'fixture'}))
         s.merge(Setting(key='openai_key',value={'encrypted':seal('test-secret')}));s.commit()
     assert change(admin,identifier,False).status_code==200
-    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True}).status_code==409
+    assert admin.put('/api/investigations/inactive-behavior',json={'approved':True,'expected_revision':'0'*64}).status_code==409
     assert admin.post('/api/investigations/inactive-behavior/retry',json={}).status_code==409
     monkeypatch.setattr(ai,'request',lambda *a,**k:pytest.fail('Disabled/deleted packages must not be sent for AI scoring'))
     update_scores.run_one()
