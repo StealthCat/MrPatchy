@@ -459,7 +459,9 @@ Google Cloud CLI for both app and worker. See [GCP setup](docs/GCP.md) for attac
 service-account/federation prerequisites and IAP enrollment. Each server's
 **Agent health** tab exposes version/drift checks and opt-in automatic helper
 maintenance; [Agent maintenance](docs/AGENT_MAINTENANCE.md) documents verification,
-retry limits and cases requiring trusted-console recovery.
+retry limits and cases requiring trusted-console recovery. Manual agent upgrades
+require a review confirmation, and the check and upgrade controls stay disabled
+while either request is pending in the current Agent health view.
 
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact
