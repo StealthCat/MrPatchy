@@ -114,6 +114,21 @@ The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
 
+### AI provider connection inventory (partial #290)
+
+Administrators can read `GET /api/settings/ai-connections` to see the existing
+OpenAI connection, saved default model and settings eligibility for each AI
+feature. Connection testing and model discovery are listed separately from
+host work. Model discovery has no selected execution model. The endpoint checks
+for the saved key record by name and returns allowlisted metadata. It does not
+decrypt credentials, contact a provider or change a route.
+
+Configuration completeness describes saved settings only. Actual calls still
+apply host policy, lifecycle, admission, budget and provider validation at
+their existing boundaries. Remaining #290 milestones include provider adapters
+and named connections, configuration migration, persisted and audited feature
+and item routes, queue/retry identity binding, accounting and Settings UI.
+
 ### Enrollment installer downloads (partial #202)
 
 Enrollment links retain their one-hour expiry and support repeated downloads for
