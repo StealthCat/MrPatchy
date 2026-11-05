@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.22'
+APP_VERSION='1.42.23'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1111,7 +1111,14 @@ def set_priority(host_id:str,body:PriorityInput,user=Depends(admin_user)):
         p=s.get(Package,host_id+':'+body.name)
         if not p: raise HTTPException(404,'Package not found')
         p.priority_manual=body.priority!='auto'
-        p.priority=body.priority if p.priority_manual else apt.auto_priority(p.origin,p.candidate)
+        h=s.get(Host,host_id)
+        if p.priority_manual: p.priority=body.priority
+        # No outstanding candidate means there is nothing to classify on any backend.
+        elif not p.candidate: p.priority='normal'
+        # APT classification is derived from the current candidate's origin, never a cache.
+        elif not h or (h.inventory or {}).get('package_manager','apt')=='apt': p.priority=apt.auto_priority(p.origin,p.candidate)
+        elif p.repository_priority: p.priority=p.repository_priority
+        else: h.last_repo=0  # No stored classification: keep the value and force a refresh.
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
 
 @app.get('/api/jobs/{job_id}')
