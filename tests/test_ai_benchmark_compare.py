@@ -85,6 +85,49 @@ def test_comparison_requires_distinct_execution_configuration():
         compare_ai_benchmarks.compare(report(), copy.deepcopy(report()))
 
 
+@pytest.mark.parametrize('elapsed', [1.234500001, 1.234567, 1.235499999])
+def test_comparison_accepts_producer_rounding_for_derived_throughput(elapsed):
+    baseline = report()
+    baseline['elapsed_seconds'] = round(elapsed, 3)
+    baseline['runs_per_second'] = round(baseline['runs'] / elapsed, 3)
+
+    result = compare_ai_benchmarks.compare(baseline, report('parallel', 4))
+
+    assert result['capability_equivalent'] is True
+
+
+def test_comparison_accepts_retained_historical_fixture_pair():
+    retained = json.loads((ROOT / 'docs' / 'benchmarks' / 'ai-parallel-v1220.json').read_text())
+
+    result = compare_ai_benchmarks.compare(retained['serial'], retained['parallel'])
+
+    assert result['capability_equivalent'] is True
+
+
+@pytest.mark.parametrize('throughput', [6.4, 6.6])
+def test_comparison_refuses_throughput_inconsistent_with_elapsed_time(throughput):
+    baseline = report()
+    baseline['elapsed_seconds'] = 1.235
+    baseline['runs_per_second'] = throughput
+
+    with pytest.raises(
+            compare_ai_benchmarks.ComparisonError,
+            match=r'baseline\.runs_per_second is inconsistent with '
+                  r'baseline\.runs / baseline\.elapsed_seconds'):
+        compare_ai_benchmarks.compare(baseline, report('parallel', 4))
+
+
+def test_comparison_identifies_inconsistent_candidate_report():
+    candidate = report('parallel', 4)
+    candidate['runs_per_second'] = 100
+
+    with pytest.raises(
+            compare_ai_benchmarks.ComparisonError,
+            match=r'candidate\.runs_per_second is inconsistent with '
+                  r'candidate\.runs / candidate\.elapsed_seconds'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
 def test_cli_emits_json_and_refuses_malformed_input(tmp_path, capsys):
     baseline = tmp_path / 'baseline.json'
     candidate = tmp_path / 'candidate.json'
