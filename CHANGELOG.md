@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.36 — 2026-11-05
+
+1. [PR #478](https://github.com/StealthCat/MrPatchy/pull/478): Require administrators to review and confirm a manual agent upgrade or repair, and keep both Agent health action buttons disabled while a check or upgrade request is pending so double submission cannot produce conflicting queue feedback. Compatibility: APIs, backend authorization, configuration and automatic maintenance are unchanged; the manual browser upgrade flow now has one additional confirmation step. Material limits: the browser guard is scoped to the currently loaded Agent health view, does not make requests idempotent, and the backend one-agent-job rule remains authoritative. Completes #441. This source update does not publish a Docker image.
+
 ## 1.42.35 — 2026-11-05
 
 1. [PR #475](https://github.com/StealthCat/MrPatchy/pull/475): Resolve every requested server ID before taking configuration-change or rollout locks, so authenticated requests naming nonexistent servers return HTTP 404 without leaving permanent coordination files or in-memory lock entries. Compatibility: existing-server workflows, API schemas, configuration and runtime response authorization are unchanged; invalid rollout requests now fail before locking any listed server. Material limits: locks for persisted valid server IDs retain their existing lifetime, and disabled or deleted retained records continue through the normal lifecycle-state rejection path. Completes #437. This source update does not publish a Docker image.
