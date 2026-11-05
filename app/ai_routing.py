@@ -32,10 +32,18 @@ MAX_ID = 128
 
 
 def _ident(value: Any) -> str | None:
+    """A stripped identifier, or None when absent, empty or longer than MAX_ID.
+
+    Overlong identifiers are never truncated: a prefix could name a different
+    connection, model or provider than the one requested."""
     if not isinstance(value, str):
         return None
     value = value.strip()
-    return value[:MAX_ID] if value else None
+    return value if value and len(value) <= MAX_ID else None
+
+
+def _overlong(value: Any) -> bool:
+    return isinstance(value, str) and len(value.strip()) > MAX_ID
 
 
 _MALFORMED = object()
@@ -83,6 +91,12 @@ def resolve_route(feature: str, config: Any, item_override: Any = None) -> dict[
         return _blocked('feature_disabled', 'This AI feature is disabled.', feature, 'feature')
     if item_override is not None and not isinstance(item_override, dict):
         return _blocked('invalid_config', 'The item route override is malformed.', feature, 'item')
+    for section_source, section in (('item', item_override), ('feature', feature_cfg), ('default', default)):
+        # Reject overlong identifiers before precedence or fallback so a
+        # truncated prefix can never select a different connection or model.
+        if isinstance(section, dict) and any(_overlong(section.get(key)) for key in ('connection', 'model')):
+            return _blocked('invalid_config', f'A routing identifier is longer than {MAX_ID} characters.',
+                            feature, section_source)
     if item_override:
         selection, source = item_override, 'item'
     elif isinstance(feature_cfg, dict) and _ident(feature_cfg.get('connection')):

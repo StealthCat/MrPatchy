@@ -126,3 +126,47 @@ def test_malformed_nested_config_fails_closed():
         assert not out['ok'], c
     assert r.resolve_route('update_scoring', cfg(), ['a'])['code'] == 'invalid_config'
     assert r.revalidate({'digest': r.route_digest({})}, cfg())['code'] == 'frozen_route_invalid'
+
+
+def test_overlong_identifiers_are_rejected_not_truncated_to_a_configured_prefix():
+    conn, model = 'c' * r.MAX_ID, 'm' * r.MAX_ID
+    c = cfg()
+    c['connections'][conn] = {'provider': 'openai', 'enabled': True, 'models': {model: {'structured': True}}}
+    # The exact 128-character identifiers still resolve.
+    ok = r.resolve_route('update_scoring', c, {'connection': conn, 'model': model})
+    assert ok['ok'] and (ok['route']['connection'], ok['route']['model']) == (conn, model)
+    # Overlong item overrides sharing the configured prefix are rejected, never truncated.
+    for override in ({'connection': conn + '-different', 'model': model},
+                     {'connection': conn, 'model': model + '-different'},
+                     {'connection': conn + '-different'}):
+        res = r.resolve_route('update_scoring', c, override)
+        assert (res['ok'], res['code'], res['source'], res['route']) == (False, 'invalid_config', 'item', None)
+    # Feature routes: an overlong connection does not fall through to the default route,
+    # and an overlong model does not inherit the default model.
+    for feature_cfg in ({'connection': conn + '-different', 'model': model},
+                        {'connection': conn, 'model': model + '-different'},
+                        {'connection': 'a', 'model': 'm1' + 'x' * r.MAX_ID}):
+        c['features'] = {'update_scoring': feature_cfg}
+        res = r.resolve_route('update_scoring', c)
+        assert (res['ok'], res['code'], res['source']) == (False, 'invalid_config', 'feature')
+    c['features'] = {}
+    c['default'] = {'connection': conn + '-different', 'model': model}
+    assert r.resolve_route('triage_first', c)['code'] == 'invalid_config'
+    # A genuinely absent model still inherits the default model on the same connection.
+    c['default'] = {'connection': conn, 'model': model}
+    c['features'] = {'update_scoring': {'connection': conn}}
+    res = r.resolve_route('update_scoring', c)
+    assert res['ok'] and res['route']['model'] == model
+
+
+def test_overlong_provider_or_frozen_identifiers_fail_closed():
+    c = cfg()
+    c['connections']['a']['provider'] = 'p' * (r.MAX_ID + 1)
+    assert r.resolve_route('triage_first', c)['code'] == 'unknown_provider'
+    good = r.resolve_route('triage_first', cfg())['route']
+    tampered = {**good, 'model': good['model'] + 'x' * r.MAX_ID}
+    tampered['digest'] = r.route_digest(tampered)
+    assert r.revalidate(tampered, cfg())['code'] == 'frozen_route_invalid'
+    # Overlong current item override blocks revalidation instead of selecting a prefix.
+    res = r.revalidate(good, cfg(), {'connection': 'a', 'model': 'm1' + 'x' * r.MAX_ID})
+    assert not res['ok'] and res['code'] == 'invalid_config'
