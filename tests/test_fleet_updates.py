@@ -209,7 +209,7 @@ def test_queued_and_available_filters_scale_past_per_key_predicates(admin):
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
     assert queued.status_code == 200 and available.status_code == 200
-    every = get()['total']
+    every = get().json()['total']
     assert queued.json()['total'] == len(queued_ids)
     # Both bash rows stay available: no open job lists exactly bash=2 as a text array member on their host.
     assert available.json()['total'] == every - len(queued_ids) - 1  # minus the held curl row
