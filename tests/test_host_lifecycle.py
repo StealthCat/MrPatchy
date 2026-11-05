@@ -109,7 +109,7 @@ def test_interactive_ssh_refuses_busy_lifecycle_lock_as_conflict(admin,monkeypat
     identifier=create(admin)
     class RefusedLock:
         def __init__(self,name):pass
-        def acquire(self,blocking=True):return False
+        def acquire(self,blocking=True,wait=None):return False
         def release(self):pytest.fail('An unowned lifecycle lock must not be released')
     monkeypatch.setattr(lifecycle,'Lock',RefusedLock)
     monkeypatch.setattr(ssh,'_call',lambda *a,**k:pytest.fail('Busy request must not start SSH'))
