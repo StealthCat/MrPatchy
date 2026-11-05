@@ -173,7 +173,7 @@ def test_filtered_row_status_uses_same_job_snapshot_as_page(admin, initial_job_s
     def transition_after_page(conn, cursor, statement, *args):
         nonlocal transitioned
         sql = statement.lower()
-        if transitioned or 'from packages join hosts' not in sql or 'fleet_queued' not in sql:
+        if transitioned or 'join hosts' not in sql or 'fleet_queued' not in sql:
             return
         transitioned = True
         with Session() as other:
