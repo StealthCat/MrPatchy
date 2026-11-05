@@ -95,13 +95,14 @@ def save_inventory(s,h,inv):
     for item in items:
         names.add(item['name']); p=old.get(item['name'])
         if not p:
-            p=Package(id=h.id+':'+item['name'],host_id=h.id,**item); s.add(p)
+            p=Package(id=h.id+':'+item['name'],host_id=h.id,repository_priority=item.get('priority','') if item.get('candidate') else '',**item); s.add(p)
             if old: audit(s,'package installed',h.name+' '+item['name']+' '+item['installed'])
         else:
             if p.installed!=item['installed']: audit(s,'package version changed',h.name+' '+p.name+' '+p.installed+' → '+item['installed'])
             p.installed=item['installed']; p.held=item['held']; p.dpkg_state=item['dpkg_state']
             if p.candidate and not still_newer.get(item['name'],False):
-                p.candidate=''; p.available_since=0
+                # The cached repository classification belongs to the cleared candidate.
+                p.candidate=''; p.available_since=0; p.repository_priority=''
     for name,p in old.items():
         if name not in names:
             audit(s,'package removed',h.name+' '+p.name+' '+p.installed); s.delete(p)
@@ -127,6 +128,9 @@ def update_repos(s,h):
         if not item['candidate']: p.available_since=0
         elif not p.candidate or not p.available_since: p.available_since=time.time()
         for key in ['candidate','origin']: setattr(p,key,item[key])
+        # Remember the repository classification even under a manual override so
+        # resetting to auto can restore it (RPM severity is not derivable from origin).
+        p.repository_priority=item['priority']
         if not p.priority_manual: p.priority=item['priority']
     h.last_repo=time.time(); h.repo_error=''; s.commit(); return output
 
@@ -597,9 +601,9 @@ def execute_locked(job_id):
                     if any(policy.values()) and existing:
                         raise ValueError('Pre-patch health failed: automatic reboot/rollback requires clean service health; no package changes attempted: '+json.dumps(sorted(existing)))
                     job.payload={**job.payload,'_health_before':health_before};s.commit()
-                protected=job.action=='patch' and any(policy.values())
+                use_protection=job.action=='patch' and any(policy.values())
                 request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
-                if protected:
+                if use_protection:
                     if policy.get('rollback'):
                         original=ssh.call(h,{'action':'patch-inspect'},timeout=120)
                         if original.get('version')!=1 or not original.get('configs'):
@@ -609,6 +613,8 @@ def execute_locked(job_id):
                         job.payload={**job.payload,'_patch_original':original};s.commit()
                         request['original']=original
                     request.update(action='protected-patch',job_id=job.id,policy=policy)
+                    # Failures before this point (read-only inspect, helper check) changed nothing
+                    protected=True
                 tracked_mutation=not protected
                 if tracked_mutation:mutation_stage='sent'
                 result=ssh.call(h,request,timeout=7500 if protected else 3700)
@@ -642,7 +648,7 @@ def execute_locked(job_id):
                 audit(s,'deferred '+job.action,job.host_id+' controlled AI wait')
                 s.commit();return
             uncertain=mutation_outcome_uncertain(mutation_stage,e)
-            job.state='recovery_required' if protected or uncertain else 'failed'
+            job.state='failed' if isinstance(e,releases.Refused) else 'recovery_required' if protected or uncertain else 'failed'
             if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)

@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.42.29 — 2026-11-05
+
+1. [PR #485](https://github.com/StealthCat/MrPatchy/pull/485): Give every package-priority selector and repository-source editor a specific accessible name, and replace nested installer-download buttons with valid styled download links across enrollment and server management. Compatibility: no API, configuration, permission, runtime response-authorization or workflow change; existing installer URLs and download behavior are preserved. Material limits: this fixes the reported naming and nested-control defects only and does not constitute a complete accessibility audit. Completes #442. This source update does not publish a Docker image.
+
+## 1.42.28 — 2026-11-05
+
+1. [PR #479](https://github.com/StealthCat/MrPatchy/pull/479): Preserve a reviewed package-update selection across search edits, the Updates only filter and package-priority saves, count selections hidden by the current filter, and submit the selected packages with their reviewed candidate versions. Compatibility: no API, configuration or runtime response-authorization change; changing hosts, clearing the selection or successfully queuing the installation resets the client-side selection. Material limits: a package that disappears while Updates only is active can remain counted as hidden until an unfiltered reload, and the server rejects it if its candidate is missing or changed; selections remain capped at 500 packages. Completes #440. This source update does not publish a Docker image.
+
+## 1.42.27 — 2026-11-05
+
+1. [PR #481](https://github.com/StealthCat/MrPatchy/pull/481): Require recovery backups to acquire the database maintenance lock exclusively before reading deployment state, refusing while any app or worker replica is live, and replace the automatic post-backup full-pack read with a structural `restic check` while retaining `--read-data` for the explicit check action. The recovery guide now distinguishes routine and periodic full verification and provides an operator-run retention example. Compatibility: `--app-stopped` remains required, and backups attempted while replicas hold the shared lock now fail instead of trusting the assertion; there is no API or runtime response-authorization change. Material limits: the script never deletes snapshots, off-host transports remain operator-configured, and full data checks and retention must be scheduled separately. Completes #409. This source update does not publish a Docker image.
+
+## 1.42.26 — 2026-11-05
+
+1. [PR #459](https://github.com/StealthCat/MrPatchy/pull/459): Keep add-server step 1 editable and retryable after a definite client-side rejection, show the possible-created-server warning only when a network, server, timeout or rate-limit outcome is uncertain, and apply the server address character rule in the browser before submission. Compatibility: no API, configuration or runtime response-authorization change; uncertain submission outcomes deliberately keep Continue disabled until the operator reviews the server list. Completes #438. This source update does not publish a Docker image.
+
+## 1.42.25 — 2026-11-05
+
+1. [PR #457](https://github.com/StealthCat/MrPatchy/pull/457): Create APT and RPM repository-key directories with an explicit `0755` mode despite the bridge's restrictive umask, and repair existing bridge-owned `0700` key directories before saving a key so `_apt` and package tooling can traverse them. Compatibility: no API, configuration or runtime response-authorization change; symlink destinations and directories not owned by the bridge user remain refused. Completes #421. This source update does not publish a Docker image.
+
+## 1.42.24 — 2026-11-05
+
+1. [PR #462](https://github.com/StealthCat/MrPatchy/pull/462): Report clean target-side release start, status and rollback refusals with their actual message, and fail a refused start without placing the server in `recovery_required` when a follow-up status confirms that no receipt or target mutation exists. Compatibility: no API, configuration or runtime response-authorization change; transport failures and any submitted or uncertain release still retain the existing observation and reconciliation safeguards. Material limits: central plan-expiry validation, an unchanged-boot status re-read during rollback recovery and a final status read before the four-hour observation timeout remain unresolved under #426. This source update does not publish a Docker image.
+
+## 1.42.23 — 2026-11-05
+
+1. [PR #456](https://github.com/StealthCat/MrPatchy/pull/456): Preserve each RPM update candidate's repository severity while a manual package-priority override is active, so resetting that package to auto restores the repository classification instead of applying the APT origin rule; candidate installation clears the cached classification, and APT continues deriving auto priority from the current candidate. Compatibility: startup adds the nullable-default `packages.repository_priority` column to existing databases; old RPM rows without a stored classification retain their current priority and force a repository refresh on auto reset, while packages without an outstanding candidate reset to normal. No runtime response-authorization change. Completes #433. This source update does not publish a Docker image.
+
+## 1.42.22 — 2026-11-05
+
+1. [PR #461](https://github.com/StealthCat/MrPatchy/pull/461): Fail a protected patch normally when its read-only configuration inspection or helper-version validation fails before `protected-patch` is sent, instead of marking the job `recovery_required` and holding the server when no target mutation began. Compatibility: no API, configuration, recovery-policy or runtime response-authorization change; failures after the protected mutation is submitted retain the existing reconciliation hold. Completes #427. This source update does not publish a Docker image.
+
 ## 1.42.21 — 2026-11-04
 
 1. [PR #458](https://github.com/StealthCat/MrPatchy/pull/458): Keep the eBPF execution collector running when one bpftrace line or decoded event is malformed, retain valid sibling events from the same read, preserve non-UTF-8 paths through surrogate escaping, and record skipped input in the eBPF diagnostic. Compatibility: no API, configuration or runtime response-authorization change; malformed lines and failing individual events are skipped rather than restarting the collector, while the existing oversized-line limit still stops and restarts that collector run. Completes #422. This source update does not publish a Docker image.

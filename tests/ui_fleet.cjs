@@ -15,6 +15,17 @@ module.exports=async(page,capture)=>{
   await page.locator('[data-nav=packages]').click();await page.locator('.pkg-check').first().waitFor();
   await page.locator('#select-all-updates').click();assert.equal(await page.locator('.pkg-check:checked').count(),2);
   await page.locator('#clear-updates').click();assert.equal(await page.locator('.pkg-check:checked').count(),0);
+  // Selection survives a filter edit and a priority save (issue #440).
+  await page.locator('.pkg-check').first().check();
+  await page.locator('#package-search').fill('ssl');await page.waitForTimeout(500);
+  assert.equal(await page.locator('.pkg-check:checked').count(),1);assert.match(await page.locator('#selection-summary').innerText(),/^1 selected/);
+  await page.locator('#updates-only').check();await page.waitForTimeout(200);
+  assert.equal(await page.locator('.pkg-check:checked').count(),1);
+  const prio=route=>route.fulfill({json:{ok:true}});await page.route('**/api/hosts/*/priority',prio);
+  try{await page.locator('.priority-select').first().selectOption('low');await page.waitForTimeout(300);}finally{await page.unroute('**/api/hosts/*/priority',prio);}
+  assert.equal(await page.locator('.pkg-check:checked').count(),1);
+  await page.locator('#updates-only').uncheck();await page.locator('#package-search').fill('');await page.waitForTimeout(500);
+  await page.locator('#clear-updates').click();assert.equal(await page.locator('.pkg-check:checked').count(),0);
   await page.locator('.package-assessment summary').first().click();await page.getByText('Security repository classification merits timely review.').waitFor();
   await page.locator('.package-assessment summary').nth(1).click();await page.getByText('Next eligible scoring attempt:',{exact:false}).waitFor();
   await page.getByText('Not scheduled',{exact:true}).waitFor();
