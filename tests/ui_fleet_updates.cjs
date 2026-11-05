@@ -6,8 +6,9 @@ module.exports=async(page)=>{
  const handler=route=>{
   const u=new URL(route.request().url());requests.push(u);
   if(mode==='fail')return route.fulfill({status:500,json:{detail:'Update list unavailable'}});
+  if(u.searchParams.get('scope')==='inactive')return route.fulfill({json:{items:[{id:'off:x',host_id:'off',host_name:'retired',name:'xpkg',installed:'1',candidate:'2',priority:'normal',held:false,status:'available',repo_state:'unknown',repo_checked:0,repo_error:'',host_active:false,dpkg_state:'install ok installed',available_since:0,due:1e9,contact_stale:true}],total:1,offset:0,limit:50,scope:'inactive'}});
   const q=u.searchParams.get('q')||'',offset=Number(u.searchParams.get('offset')),limit=Number(u.searchParams.get('limit'));
-  const all=Array.from({length:total},(_,i)=>({id:'h'+(i%2)+':p'+i,host_id:'h'+(i%2),host_name:i%2?'beta':'alpha',name:'pkg'+i,installed:'1',candidate:'2',priority:'normal',held:false,dpkg_state:'install ok installed',available_since:0,due:1e9,contact_stale:i===0})).filter(r=>r.name.includes(q));
+  const all=Array.from({length:total},(_,i)=>({id:'h'+(i%2)+':p'+i,host_id:'h'+(i%2),host_name:i%2?'beta':'alpha',name:'pkg'+i,installed:'1',candidate:'2',priority:'normal',held:i===2,status:i===1?'queued':i===2?'held':i===3?'ineligible':'available',priority_deferred:i===4,repo_state:i===0?'failed':'current',repo_checked:1e9,repo_error:i===0?'mirror unreachable':'',host_active:true,dpkg_state:'install ok installed',available_since:0,due:1e9,contact_stale:i===0})).filter(r=>r.name.includes(q));
   return route.fulfill({json:{items:all.slice(offset,offset+limit),total:all.length,offset,limit}});
  };
  const dashboard=async route=>{const r=await route.fetch();return route.fulfill({response:r,json:{...await r.json(),updates:total}});};
@@ -19,6 +20,9 @@ module.exports=async(page)=>{
   assert.ok(page.url().endsWith('#updates'));assert.equal(requests.at(-1).searchParams.get('host_id'),null);
   await page.getByText('120 matching updates.').waitFor();assert.equal(await page.locator('#fleet-updates-table tbody tr').count(),50);
   await page.getByText('Server contact is stale').waitFor();
+  for(const text of ['Queued for installation','Held by target policy','Not installable (package state)','AI priority scoring deferred','Repository check failed','mirror unreachable'])await page.getByText(text,{exact:false}).first().waitFor();
+  await page.locator('#fleet-updates-scope').selectOption('inactive');await page.getByText('1 matching update retained on disabled servers; not included in active fleet totals.').waitFor();await page.getByText('Disabled server · inactive record').waitFor();assert.equal(requests.at(-1).searchParams.get('scope'),'inactive');
+  await page.locator('#fleet-updates-scope').selectOption('');await page.getByText('120 matching updates.').waitFor();
   await page.locator('#fleet-updates-next').click();await page.getByText('Page 2 of 3').waitFor();
   await page.locator('#fleet-updates-next').click();await page.getByText('Page 3 of 3').waitFor();
   assert.equal(await page.locator('#fleet-updates-table tbody tr').count(),20);assert.equal(await page.locator('#fleet-updates-next').isDisabled(),true);

@@ -55,7 +55,7 @@ def test_filters_and_zero_results(admin):
     assert get(q='bash')['total'] == 2
     assert get(priority='low')['total'] == 1
     assert get(status='held')['total'] == 1 and get(status='installable')['total'] == 3
-    assert get(q='no-such-package') == {'items': [], 'total': 0, 'offset': 0, 'limit': 50}
+    assert get(q='no-such-package') == {'items': [], 'total': 0, 'offset': 0, 'limit': 50, 'scope': 'active'}
     assert admin.get('/api/fleet/updates', params={'priority': 'urgent'}).status_code == 400
     assert admin.get('/api/fleet/updates', params={'status': 'x'}).status_code == 400
 
@@ -66,3 +66,42 @@ def test_viewer_can_read_and_view_is_read_only(admin):
     with Session() as s: before = [(p.id, p.candidate, p.priority, p.held) for p in s.query(Package).order_by(Package.id)]
     assert admin.get('/api/fleet/updates', params={'q': 'bash', 'status': 'held'}).status_code == 200
     with Session() as s: assert before == [(p.id, p.candidate, p.priority, p.held) for p in s.query(Package).order_by(Package.id)]
+
+
+def test_inactive_scope_lists_disabled_server_candidates_outside_active_totals(admin):
+    seed()
+    inactive = admin.get('/api/fleet/updates', params={'scope': 'inactive'}).json()
+    assert inactive['scope'] == 'inactive' and inactive['total'] == 1
+    assert [(r['id'], r['host_active']) for r in inactive['items']] == [('off:x', False)]  # deleted 'gone' stays hidden
+    assert admin.get('/api/fleet/updates', params={'scope': 'inactive', 'host_id': 'off'}).json()['total'] == 1
+    assert admin.get('/api/fleet/updates', params={'scope': 'inactive', 'host_id': 'gone'}).json()['total'] == 0
+    assert admin.get('/api/fleet/updates', params={'host_id': 'off'}).json()['total'] == 0
+    assert admin.get('/api/fleet/updates').json()['total'] == admin.get('/api/dashboard').json()['updates'] == 4
+    assert admin.get('/api/fleet/updates', params={'scope': 'all'}).status_code == 400
+
+
+def test_repository_freshness_and_candidate_status_are_distinguished(admin):
+    from app.db import Job
+    from app.update_scores import UpdateScore
+    seed()
+    now = time.time()
+    with Session() as s:
+        s.get(Host, 'h0').last_repo = now
+        s.get(Host, 'h1').last_repo = now - 3 * 3600   # older than 2x the 60-minute repository interval
+        s.get(Host, 'stale').last_repo = now; s.get(Host, 'stale').repo_error = 'mirror unreachable'
+        s.get(Package, 'h0:bash').dpkg_state = 'install ok half-configured'
+        s.add(Package(id='h1:zlib', host_id='h1', name='zlib', installed='1', candidate='2', priority='low'))
+        s.add(Job(id='j1', host_id='h1', action='patch', state='queued', payload={'packages': ['bash=2']}))
+        s.add(Job(id='j2', host_id='h1', action='patch', state='done', payload={'packages': ['zlib=2']}))
+        s.add(UpdateScore(id='u1', host_id='h1', name='zlib', installed='1', candidate='2', state='deferred'))
+        s.commit()
+    rows = {r['id']: r for r in admin.get('/api/fleet/updates').json()['items']}
+    assert rows['h1:bash']['status'] == 'queued'
+    assert rows['h0:bash']['status'] == 'ineligible'
+    assert rows['h0:curl:arm64']['status'] == 'held'
+    assert rows['h1:zlib']['status'] == 'available' and rows['h1:zlib']['priority_deferred']
+    assert not rows['h1:bash']['priority_deferred']
+    assert rows['h0:bash']['repo_state'] == 'current' and rows['h1:bash']['repo_state'] == 'stale'
+    assert rows['stale:vim']['repo_state'] == 'failed' and rows['stale:vim']['repo_error'] == 'mirror unreachable'
+    with Session() as s: s.get(Host, 'h0').last_repo = 0; s.commit()
+    assert {r['id']: r for r in admin.get('/api/fleet/updates').json()['items']}['h0:bash']['repo_state'] == 'unknown'
