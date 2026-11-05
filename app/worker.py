@@ -794,7 +794,15 @@ def _assess_active_behavior(s,row,cfg,secret):
             from . import known_good
             with Session() as provenance_read:updated=known_good.bind_vendor_provenance(provenance_read,row.host_id,updated,collected)
             if lease:
-                with lease.mutation() as (write,saved):saved.evidence=updated
+                with lease.mutation() as (write,saved):
+                    # The lease ignores the observation-only process identity, so a
+                    # respawn may have refreshed it since this local copy was taken.
+                    # Keep the latest observation; the remote details stay bound to
+                    # the identity they were collected for.
+                    updated=copy.deepcopy(updated)
+                    if 'process_identity' in (saved.evidence or {}):updated['process_identity']=copy.deepcopy(saved.evidence['process_identity'])
+                    else:updated.pop('process_identity',None)
+                    saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
         result=assess(row.evidence)
