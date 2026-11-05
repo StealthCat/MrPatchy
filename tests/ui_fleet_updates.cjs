@@ -31,6 +31,7 @@ module.exports=async(page)=>{
   await page.locator('#fleet-updates-search').fill('nothing-like-this');await page.getByText('0 matching updates.').waitFor();await page.getByRole('heading',{name:'No matching updates'}).waitFor();
   await page.locator('#fleet-updates-reset').click();await page.getByText('120 matching updates.').waitFor();assert.ok(page.url().endsWith('#updates'));
   await page.locator('#fleet-updates-priority').selectOption('low');await page.waitForURL(/#updates\?priority=low/);for(let n=0;n<50&&requests.at(-1).searchParams.get('priority')!=='low';n++)await page.waitForTimeout(100);assert.equal(requests.at(-1).searchParams.get('priority'),'low');
+  for(const value of ['queued','ineligible','available','held','installable']){await page.locator('#fleet-updates-status').selectOption(value);for(let n=0;n<50&&requests.at(-1).searchParams.get('status')!==value;n++)await page.waitForTimeout(100);assert.equal(requests.at(-1).searchParams.get('status'),value);}
   mode='fail';await page.locator('#fleet-updates-reset').click();await page.getByRole('button',{name:'Retry'}).waitFor();mode='rows';await page.getByRole('button',{name:'Retry'}).click();await page.getByText('120 matching updates.').waitFor();
   await page.getByRole('navigation',{name:'Main navigation'}).getByRole('link',{name:'Available patches'}).waitFor();
   for(const width of [320,768,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);}

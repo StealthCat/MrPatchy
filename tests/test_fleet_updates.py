@@ -118,3 +118,59 @@ def test_apt_and_rpm_candidates_keep_native_version_and_architecture_identity(ad
     assert (rows['h1:libssl3:amd64']['name'], rows['h1:libssl3:amd64']['candidate']) == ('libssl3:amd64', '3.0.2-0ubuntu1.18')
     assert (rows['h1:kernel:x86_64']['installed'], rows['h1:kernel:x86_64']['candidate']) == ('0:5.14.0-427.el9', '1:5.14.0-503.el9')
     assert rows['h1:kernel:x86_64']['status'] == 'available' and rows['h1:kernel:x86_64']['name'] == 'kernel:x86_64'
+
+
+def _status_fixture():
+    from app.db import Job
+    seed()
+    with Session() as s:
+        s.get(Package, 'h0:bash').dpkg_state = 'install ok half-configured'
+        s.add(Package(id='h1:zlib', host_id='h1', name='zlib', installed='1', candidate='2', priority='low'))
+        s.add(Package(id='h0:held-broken', host_id='h0', name='held-broken', installed='1', candidate='2', priority='low',
+                      held=True, dpkg_state='install ok half-configured'))
+        s.add(Job(id='j1', host_id='h1', action='patch', state='queued', payload={'packages': ['bash=2']}))
+        s.add(Job(id='j2', host_id='h1', action='patch', state='running', payload={'packages': ['zlib=1']}))  # other version: not queued
+        s.add(Job(id='j3', host_id='stale', action='patch', state='done', payload={'packages': ['vim=9']}))
+        s.commit()
+
+
+def test_status_filters_match_returned_row_states_and_totals(admin):
+    _status_fixture()
+    get = lambda **p: admin.get('/api/fleet/updates', params=p).json()
+    every = {r['id']: r['status'] for r in get(limit=200)['items']}
+    assert every == {'h0:bash': 'ineligible', 'h1:bash': 'queued', 'h0:curl:arm64': 'held', 'h0:held-broken': 'held',
+                     'stale:vim': 'available', 'h1:zlib': 'available'}
+    for state in ('available', 'queued', 'held', 'ineligible'):
+        body = get(status=state)
+        assert body['total'] == sum(v == state for v in every.values())
+        assert {r['status'] for r in body['items']} <= {state}
+        # Page boundaries: one row per page reaches exactly the filtered set.
+        seen = [get(status=state, limit=1, offset=o)['items'][0]['id'] for o in range(body['total'])]
+        assert sorted(seen) == sorted(k for k, v in every.items() if v == state)
+        assert get(status=state, limit=1, offset=body['total'])['items'] == []
+    installable = get(status='installable')
+    assert installable['total'] == 3 and {r['status'] for r in installable['items']} == {'available', 'queued'}
+    assert get(status='queued', host_id='h1')['total'] == 1 and get(status='queued', host_id='h0')['total'] == 0
+    assert sum(get(status=s)['total'] for s in ('available', 'queued', 'held', 'ineligible')) == get()['total']
+
+
+def test_page_query_projects_small_host_fields_only(admin):
+    from sqlalchemy import event
+    from app.db import engine
+    _status_fixture()
+    with Session() as s:
+        h = s.get(Host, 'h0'); h.inventory = {'big': 'x' * 1000}; h.telemetry = {'t': 1}; h.baseline = {'b': 1}
+        s.commit()
+    statements = []
+    capture = lambda conn, cursor, statement, *a: statements.append(statement)
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        for params in ({}, {'status': 'queued'}, {'status': 'available', 'limit': 2}, {'scope': 'inactive'}):
+            assert admin.get('/api/fleet/updates', params=params).status_code == 200
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+    related = [st for st in statements if 'packages' in st or 'update_scores' in st or 'jobs' in st]
+    assert related
+    for st in related:
+        for heavy in ('hosts.inventory', 'hosts.telemetry', 'hosts.baseline', 'hosts.integrity', 'jobs.output'):
+            assert heavy not in st, (heavy, st)
