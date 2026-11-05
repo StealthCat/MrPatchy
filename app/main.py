@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.13'
+APP_VERSION='1.42.35'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -143,6 +143,8 @@ self_user=role_dependency('viewer',self_service=True)
 
 @contextmanager
 def host_change(host_id,allow_quarantined=False,allow_inactive=False):
+    # Unknown IDs must not create permanent lock files or in-memory lock entries.
+    with Session() as s:host_or_404(s,host_id)
     lock=worker.host_lock(host_id)
     if not lock.acquire(False): raise HTTPException(409,'Server has an active operation. Retry this configuration change when it finishes.')
     try:
@@ -736,7 +738,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
-        from . import ai_retry,ai_policy,ai_claims
+        from . import ai_retry,ai_policy,ai_claims,ai_assessments
         rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
@@ -747,15 +749,23 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
                 retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
                 if row.id in claimed:retry={**retry,'state':'running','next_at':0,'reason':'A worker owns this investigation. Its result must still pass ownership and evidence checks.'}
                 if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
-            result.append(object_dict(row)|{'retry':retry})
+            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row)})
         return result
-class ApproveInput(BaseModel): approved:bool
+class ApproveInput(BaseModel):
+    approved:bool
+    expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
 @app.put('/api/investigations/{behavior_id}')
 def approve(behavior_id:str,body:ApproveInput,user=Depends(admin_user)):
     with Session() as s:
         row=s.get(Behavior,behavior_id)
         if not row: raise HTTPException(404,'Behavior not found')
         with host_lifecycle.activity([row.host_id],'queue'):
+            from . import ai_assessments
+            # Re-read under the host queue gate so a triage result or approval that landed
+            # after the administrator opened the dialog cannot be silently approved.
+            s.rollback();row=s.get(Behavior,behavior_id)
+            if not row:raise HTTPException(404,'Behavior not found')
+            if ai_assessments.revision(row)!=body.expected_revision:raise HTTPException(409,'The assessment changed since you opened it; review the current result and try again')
             row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 
 class RetriageInput(BaseModel):
@@ -1111,7 +1121,14 @@ def set_priority(host_id:str,body:PriorityInput,user=Depends(admin_user)):
         p=s.get(Package,host_id+':'+body.name)
         if not p: raise HTTPException(404,'Package not found')
         p.priority_manual=body.priority!='auto'
-        p.priority=body.priority if p.priority_manual else apt.auto_priority(p.origin,p.candidate)
+        h=s.get(Host,host_id)
+        if p.priority_manual: p.priority=body.priority
+        # No outstanding candidate means there is nothing to classify on any backend.
+        elif not p.candidate: p.priority='normal'
+        # APT classification is derived from the current candidate's origin, never a cache.
+        elif not h or (h.inventory or {}).get('package_manager','apt')=='apt': p.priority=apt.auto_priority(p.origin,p.candidate)
+        elif p.repository_priority: p.priority=p.repository_priority
+        else: h.last_repo=0  # No stored classification: keep the value and force a refresh.
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
 
 @app.get('/api/jobs/{job_id}')
@@ -1411,6 +1428,8 @@ class RolloutInput(BaseModel):
 def rollout(body:RolloutInput,user=Depends(admin_user)):
     if len(set(body.hosts))!=len(body.hosts):raise HTTPException(400,'Duplicate servers')
     if body.expected_recovery_policies is not None and set(body.expected_recovery_policies)!=set(body.hosts):raise HTTPException(400,'Review recovery policies for every server')
+    with Session() as s:
+        for host_id in body.hosts:host_or_404(s,host_id)
     with host_lifecycle.activity(body.hosts,'queue'),Session() as s:
         prepared=[]
         for host_id in body.hosts:
