@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.22 — 2026-11-05
+
+1. [PR #461](https://github.com/StealthCat/MrPatchy/pull/461): Fail a protected patch normally when its read-only configuration inspection or helper-version validation fails before `protected-patch` is sent, instead of marking the job `recovery_required` and holding the server when no target mutation began. Compatibility: no API, configuration, recovery-policy or runtime response-authorization change; failures after the protected mutation is submitted retain the existing reconciliation hold. Completes #427. This source update does not publish a Docker image.
+
 ## 1.42.21 — 2026-11-04
 
 1. [PR #458](https://github.com/StealthCat/MrPatchy/pull/458): Keep the eBPF execution collector running when one bpftrace line or decoded event is malformed, retain valid sibling events from the same read, preserve non-UTF-8 paths through surrogate escaping, and record skipped input in the eBPF diagnostic. Compatibility: no API, configuration or runtime response-authorization change; malformed lines and failing individual events are skipped rather than restarting the collector, while the existing oversized-line limit still stops and restarts that collector run. Completes #422. This source update does not publish a Docker image.

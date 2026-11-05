@@ -597,9 +597,9 @@ def execute_locked(job_id):
                     if any(policy.values()) and existing:
                         raise ValueError('Pre-patch health failed: automatic reboot/rollback requires clean service health; no package changes attempted: '+json.dumps(sorted(existing)))
                     job.payload={**job.payload,'_health_before':health_before};s.commit()
-                protected=job.action=='patch' and any(policy.values())
+                use_protection=job.action=='patch' and any(policy.values())
                 request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
-                if protected:
+                if use_protection:
                     if policy.get('rollback'):
                         original=ssh.call(h,{'action':'patch-inspect'},timeout=120)
                         if original.get('version')!=1 or not original.get('configs'):
@@ -609,6 +609,8 @@ def execute_locked(job_id):
                         job.payload={**job.payload,'_patch_original':original};s.commit()
                         request['original']=original
                     request.update(action='protected-patch',job_id=job.id,policy=policy)
+                    # Failures before this point (read-only inspect, helper check) changed nothing
+                    protected=True
                 tracked_mutation=not protected
                 if tracked_mutation:mutation_stage='sent'
                 result=ssh.call(h,request,timeout=7500 if protected else 3700)
