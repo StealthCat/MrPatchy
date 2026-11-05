@@ -70,3 +70,53 @@ def test_concurrent_sso_replacements_confirming_same_binding_conflict(admin,monk
         assert s.get(Setting,sso.binding_key('sub-race')).value=={'username':'one'}
         details=[a.detail for a in s.scalars(select(Audit)) if a.action=='bind SSO identity']
         assert sum('previous original' in d for d in details)==1
+
+def test_stale_replacement_after_removal_conflicts_and_does_not_recreate(admin,monkeypatch):
+    monkeypatch.setattr(sso,'issuer','https://issuer.example')
+    for name in ('original','replacement','other'):add_user(admin,name)
+    r=admin.put('/api/operations/sso-binding',json={'subject':'sub-stale','username':'original'});digest=r.json()['subject_digest']
+    assert admin.delete('/api/operations/sso-bindings/'+digest).status_code==200
+    stale=admin.put('/api/operations/sso-binding',json={'subject':'sub-stale','username':'replacement','replace_username':'original'})
+    assert stale.status_code==409
+    with Session() as s:
+        assert s.get(Setting,sso.binding_key('sub-stale')) is None
+        details=[a.detail for a in s.scalars(select(Audit)) if a.action=='bind SSO identity' and digest in a.detail]
+        assert not any('→ replacement' in d for d in details)
+    # A confirmation naming a different current binding also conflicts.
+    assert admin.put('/api/operations/sso-binding',json={'subject':'sub-stale','username':'original'}).status_code==200
+    assert admin.put('/api/operations/sso-binding',json={'subject':'sub-stale','username':'replacement','replace_username':'other'}).status_code==409
+    with Session() as s:assert s.get(Setting,sso.binding_key('sub-stale')).value=={'username':'original'}
+    # The fresh unbound-create path is unchanged.
+    assert admin.put('/api/operations/sso-binding',json={'subject':'sub-new','username':'other'}).status_code==200
+    with Session() as s:assert s.get(Setting,sso.binding_key('sub-new')).value=={'username':'other'}
+
+def test_removal_and_replacement_of_same_subject_are_serialized_with_accurate_audit(admin,monkeypatch):
+    import threading
+    from fastapi import HTTPException
+    from app import main
+    monkeypatch.setattr(sso,'issuer','https://issuer.example')
+    for name in ('original','updated'):add_user(admin,name)
+    digest=admin.put('/api/operations/sso-binding',json={'subject':'sub-del','username':'original'}).json()['subject_digest']
+    paused=threading.Event();release=threading.Event();real_audit=main.audit
+    def slow_audit(s,action,detail):
+        if action=='remove SSO binding':
+            paused.set();release.wait(10)
+        return real_audit(s,action,detail)
+    monkeypatch.setattr(main,'audit',slow_audit)
+    results={}
+    def remove():
+        try:results['remove']=main.delete_sso_binding(digest,{'username':'admin'})['ok']
+        except HTTPException as exc:results['remove']=exc.status_code
+    def replace():
+        try:results['replace']=main.bind_sso(main.SSOBinding(subject='sub-del',username='updated',replace_username='original'),{'username':'admin'})['ok']
+        except HTTPException as exc:results['replace']=exc.status_code
+    a=threading.Thread(target=remove);a.start()
+    assert paused.wait(10)
+    b=threading.Thread(target=replace);b.start()
+    b.join(0.5);release.set();a.join(20);b.join(20)
+    assert results=={'remove':True,'replace':409}
+    with Session() as s:
+        assert s.get(Setting,sso.binding_key('sub-del')) is None
+        removals=[a.detail for a in s.scalars(select(Audit)) if a.action=='remove SSO binding' and digest in a.detail]
+        assert removals==['admin removed subject '+digest+' → original']
+        assert not any(a.action=='bind SSO identity' and '→ updated' in a.detail for a in s.scalars(select(Audit)))

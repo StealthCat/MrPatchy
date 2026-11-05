@@ -1511,7 +1511,13 @@ def bind_sso(body:SSOBinding,user=Depends(admin_user)):
         s.execute(update(Setting).where(Setting.key==key).values(key=key))
         previous=s.scalar(select(Setting).where(Setting.key==key).with_for_update().execution_options(populate_existing=True))
         old=previous.value.get('username') if previous else None
-        if old is not None and old!=body.username and body.replace_username!=old:
+        if body.replace_username:
+            # An explicitly confirmed prior binding must still be the current state, including when the
+            # binding was removed meanwhile: a stale confirmation never recreates or overwrites a binding.
+            if old!=body.replace_username:
+                s.rollback()
+                raise HTTPException(409,'This subject binding changed (now '+('bound to '+old if old is not None else 'unbound')+'). Reload the bindings and retry.')
+        elif old is not None and old!=body.username:
             s.rollback()
             raise HTTPException(409,'This subject is already bound to '+old+'. Resend with replace_username set to confirm the replacement.')
         if previous:previous.value={'username':body.username}
@@ -1532,10 +1538,17 @@ def list_sso_bindings(user=Depends(admin_user)):
 def delete_sso_binding(digest:str,user=Depends(admin_user)):
     if not re.fullmatch(r'[0-9a-f]{16}',digest):raise HTTPException(400,'Invalid subject digest')
     with Session() as s:
-        rows=s.scalars(select(Setting).where(Setting.key.like('oidc:'+digest+'%'))).all()
-        if len(rows)!=1:raise HTTPException(404,'SSO binding not found')
+        # Take the same write/row lock bind_sso() uses before reading, so the read, delete and audited
+        # account are one step serialized with a concurrent replacement of this subject.
+        matching=Setting.key.like('oidc:'+digest+'%')
+        s.execute(update(Setting).where(matching).values(key=Setting.key))
+        rows=s.scalars(select(Setting).where(matching).with_for_update().execution_options(populate_existing=True)).all()
+        if len(rows)!=1:s.rollback();raise HTTPException(404,'SSO binding not found')
         old=rows[0].value.get('username');s.delete(rows[0])
-        audit(s,'remove SSO binding',user['username']+' removed subject '+digest+' → '+str(old));s.commit()
+        audit(s,'remove SSO binding',user['username']+' removed subject '+digest+' → '+str(old))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject binding changed concurrently; reload the bindings and retry.')
     return {'ok':True}
 
 class SMTPInput(BaseModel):
