@@ -158,6 +158,9 @@ def _call(host, payload, timeout=60, key_file=None, stage=None, deadline=None):
     except paramiko.AuthenticationException as error:
         raise RuntimeError('SSH authentication rejected for drpatch. Re-run this server’s installer from a trusted console and verify its local account/key. On GCP, check OS Login username/UID conflicts and guest-agent key management; IAP does not replace SSH authentication.') from error
     except (socket.timeout, paramiko.ssh_exception.NoValidConnectionsError, socket.gaierror) as error:
+        if stage.get('started') and isinstance(error,TimeoutError):
+            # The command was already requested: this is a deadline/idle timeout, not a connection failure.
+            raise RuntimeError('SSH '+str(payload.get('action','request'))+' exceeded its '+str(int(timeout))+' s deadline; the remote outcome is unknown. Verify target state before retrying.') from error
         hint=('Check the runtime gcloud identity, IAP tunnel permissions, VM state and IAP firewall rule.'
               if route.transport=='gcp_iap' else 'Check the saved address/port, VM state, routing and SSH firewall. GCP ephemeral external IPs can change after stop/start.')
         raise RuntimeError('SSH connection unavailable. '+hint+' Verify target operation state before retrying a patch.') from error
