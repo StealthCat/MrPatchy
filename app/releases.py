@@ -266,6 +266,9 @@ RECEIPT_PHASES={'accepted','snapshotting','upgrading','configuring','reboot_pend
                 'rolling_back','rollback_reboot_pending','rolled_back','complete','recovery_required'}
 TRANSPORT_ERRORS=(OSError,RuntimeError,ValueError,ssh.paramiko.SSHException)
 
+class Refused(ValueError):
+    """The target cleanly refused a release command before changing anything."""
+
 def execute(s,host,job):
     """Resume observation after central restarts; accepted target jobs are never replayed."""
     row=s.get(ReleasePlan,job.payload['plan_id']);plan=body(row)
@@ -292,11 +295,23 @@ def execute(s,host,job):
     while time.time()<deadline:
         if state is None:
             try:state=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+            except ssh.RemoteFailure as refusal:
+                # A target-side refusal is not a lost connection; retrying silently hides it.
+                raise Refused(str(refusal)[:1000])
             except TRANSPORT_ERRORS:time.sleep(5);continue
         if state.get('state')=='absent':
             if submitted:raise RuntimeError('Target receipt disappeared after submission; refusing to replay release upgrade')
             job.payload={**job.payload,'_release_submitted':True};s.commit();submitted=True
             try:state=ssh.call(host,{'action':'release-start','job_id':job.id,'plan':plan,'digest':row.digest},timeout=180)
+            except ssh.RemoteFailure as refusal:
+                # The target validates the plan before writing a receipt. A refusal
+                # with no receipt means nothing started, so report it plainly.
+                try:seen=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+                except TRANSPORT_ERRORS:seen=None
+                if seen is not None and seen.get('state')=='absent':
+                    job.payload={k:v for k,v in job.payload.items() if k!='_release_submitted'};s.commit()
+                    raise Refused(str(refusal)[:1000])
+                state=seen;time.sleep(5);continue
             except TRANSPORT_ERRORS:
                 # The detached process may have accepted the command before SSH
                 # disconnected. Query its receipt; never send start a second time.
@@ -334,6 +349,7 @@ def execute(s,host,job):
                 state={**state,'state':'rollback_reboot_pending','boot_before':boot['boot_id'],'rollback_attempted':True}
                 remember(state)
                 try:state=ssh.call(host,{'action':'release-rollback','job_id':job.id},timeout=1900)
+                except ssh.RemoteFailure as refusal:raise RuntimeError('Release rollback refused: '+str(refusal)[:900])
                 except TRANSPORT_ERRORS:pass
                 continue
         time.sleep(5)
