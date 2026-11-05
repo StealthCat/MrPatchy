@@ -1274,6 +1274,19 @@ def revoke_sessions(body:Reauthenticate,user=Depends(self_user)):
         row.generation+=1;audit(s,'revoke sessions',row.username);s.commit()
     return {'ok':True,'sign_in_again':True}
 
+@app.post('/api/users/{username}/mfa/reset')
+def reset_user_mfa(username:str,body:Reauthenticate,user=Depends(admin_user)):
+    # The administrator re-authenticates with their own credentials; the target's factors are cleared and sessions revoked via generation.
+    with login_lock, Session() as s:
+        actor=s.get(User,user['username']);check_password(actor,body)
+        row=s.get(User,username)
+        if row is None:raise HTTPException(404,'User not found')
+        if row.username==actor.username:raise HTTPException(400,'Use Account to manage your own MFA')
+        had=bool(row.otp_secret or row.otp_pending)
+        row.otp_secret='';row.otp_pending='';row.otp_counter=-1;row.generation+=1
+        audit(s,'reset user MFA',actor.username+' → '+row.username+'; MFA was '+('enabled or pending' if had else 'not configured'));s.commit()
+    return {'ok':True,'had_mfa':had}
+
 class WindowInput(BaseModel): windows:list[dict]=Field(default_factory=list,max_length=20)
 @app.put('/api/operations/{host_id}/window')
 def save_window(host_id:str,body:WindowInput,user=Depends(admin_user)):
@@ -1449,13 +1462,35 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
     username:str=Field(min_length=1,max_length=64)
+    replace_username:str|None=Field(default=None,max_length=64)
+def sso_digest(key):return key.removeprefix('oidc:')[:16]
 @app.put('/api/operations/sso-binding')
 def bind_sso(body:SSOBinding,user=Depends(admin_user)):
     if not sso.issuer:raise HTTPException(409,'Configure OIDC deployment variables first')
+    key=sso.binding_key(body.subject)
     with Session() as s:
         if not s.get(User,body.username):raise HTTPException(404,'Create the local account/role first')
-        s.merge(Setting(key=sso.binding_key(body.subject),value={'username':body.username}))
-        audit(s,'bind SSO identity',user['username']+' → '+body.username);s.commit()
+        previous=s.get(Setting,key);old=previous.value.get('username') if previous else None
+        if old is not None and old!=body.username and body.replace_username!=old:
+            raise HTTPException(409,'This subject is already bound to '+old+'. Resend with replace_username set to confirm the replacement.')
+        s.merge(Setting(key=key,value={'username':body.username}))
+        audit(s,'bind SSO identity',user['username']+' → '+body.username+'; subject '+sso_digest(key)+'; previous '+(old or 'none'));s.commit()
+    return {'ok':True,'subject_digest':sso_digest(key)}
+
+@app.get('/api/operations/sso-bindings')
+def list_sso_bindings(user=Depends(admin_user)):
+    with Session() as s:
+        rows=s.scalars(select(Setting).where(Setting.key.like('oidc:%')).order_by(Setting.key)).all()
+        return [{'subject_digest':sso_digest(r.key),'username':r.value.get('username')} for r in rows]
+
+@app.delete('/api/operations/sso-bindings/{digest}')
+def delete_sso_binding(digest:str,user=Depends(admin_user)):
+    if not re.fullmatch(r'[0-9a-f]{16}',digest):raise HTTPException(400,'Invalid subject digest')
+    with Session() as s:
+        rows=s.scalars(select(Setting).where(Setting.key.like('oidc:'+digest+'%'))).all()
+        if len(rows)!=1:raise HTTPException(404,'SSO binding not found')
+        old=rows[0].value.get('username');s.delete(rows[0])
+        audit(s,'remove SSO binding',user['username']+' removed subject '+digest+' → '+str(old));s.commit()
     return {'ok':True}
 
 class SMTPInput(BaseModel):
