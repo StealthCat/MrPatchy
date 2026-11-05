@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.8'
+APP_VERSION='1.42.22'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -252,7 +252,7 @@ def login(body:Login,request:Request,response:Response):
         if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
-        raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
+        raise HTTPException(401,'Invalid credentials or MFA code')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
 @app.get('/api/session')
@@ -1195,6 +1195,7 @@ class UserInput(BaseModel):
     password:str=Field(default='',max_length=1024)
     role:str=Field(pattern=r'^(admin|operator|viewer)$')
     enabled:bool=True
+    create:bool=False
 
 @app.get('/api/users')
 def users(user=Depends(admin_user)):
@@ -1202,12 +1203,19 @@ def users(user=Depends(admin_user)):
 
 @app.put('/api/users')
 def save_user(body:UserInput,user=Depends(admin_user)):
-    if body.username=='admin' and (body.role!='admin' or not body.enabled): raise HTTPException(400,'The bootstrap administrator must remain enabled')
-    if body.username==user['username'] and (not body.enabled or body.role!='admin'): raise HTTPException(400,'Cannot revoke your own administrator access')
     if body.password and len(body.password)<12: raise HTTPException(400,'Password must have at least 12 characters')
     with Session() as s:
         row=s.get(User,body.username)
+        if row is None:
+            # Case-insensitive backends (MySQL) load the row for a case variant above; elsewhere reject it explicitly.
+            row=s.scalars(select(User).where(func.lower(User.username)==body.username.lower())).first()
+            if row is not None and row.username!=body.username: raise HTTPException(409,'A user whose name differs only by letter case already exists. Use Edit user.')
         created=row is None
+        if not created and body.create: raise HTTPException(409,'User already exists. Use Edit user to change it.')
+        if row is not None and row.username!=body.username: raise HTTPException(409,'A user whose name differs only by letter case already exists. Use Edit user.')
+        name=body.username if created else row.username
+        if name=='admin' and (body.role!='admin' or not body.enabled): raise HTTPException(400,'The bootstrap administrator must remain enabled')
+        if name==user['username'] and (not body.enabled or body.role!='admin'): raise HTTPException(400,'Cannot revoke your own administrator access')
         if created:
             if not body.password: raise HTTPException(400,'New users require a password')
             row=User(username=body.username,password=password_hash(body.password));s.add(row);s.flush()
@@ -1235,8 +1243,8 @@ def reserve_account_attempt(username):
 
 def check_password(row,body):
     reserve_account_attempt(row.username)
-    if not verify(body.password,row.password): raise HTTPException(403,'Invalid credentials')
-    if row.otp_secret and not consume_otp(row,body.otp): raise HTTPException(403,'Invalid MFA code')
+    # One message for either factor: the reason stays out of the response so a password cannot be tested apart from the OTP.
+    if not verify(body.password,row.password) or (row.otp_secret and not consume_otp(row,body.otp)): raise HTTPException(403,'Invalid credentials or MFA code')
 
 @app.post('/api/identity/mfa')
 def begin_mfa(body:Reauthenticate,user=Depends(self_user)):

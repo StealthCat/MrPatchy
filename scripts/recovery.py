@@ -140,6 +140,13 @@ def mysql_options(url,directory):
         if not ca:raise ValueError('Remote MySQL backup/restore requires MYSQL_SSL_CA (MariaDB client)')
         options+='ssl-ca='+escape(ca)+'\nssl-verify-server-cert=1\n'
     return private_file(path,options)
+CONTAINER_DATA_DIR='/data'
+def host_sqlite_url(url,data):
+    """Profiles store container paths (/data/...); this script runs on the host, so rebase them onto --data."""
+    if url.get_backend_name()!='sqlite' or not url.database or url.database==':memory:':return url
+    base=os.path.normpath(CONTAINER_DATA_DIR);path=os.path.normpath(url.database)
+    if path==base or not path.startswith(base+os.sep):raise ValueError('Active SQLite database must be inside the container data directory')
+    return url.set(database=str(Path(data)/os.path.relpath(path,base)))
 def active_database_url(data):
     data=Path(data)
     profile=data/'database-active.json'
@@ -147,8 +154,9 @@ def active_database_url(data):
         from cryptography.fernet import Fernet
         try:
             value=json.loads(Fernet((data/'secret.key').read_bytes()).decrypt(json.loads(profile.read_text())['encrypted'].encode()))
-            return make_url(value['url'])
+            url=make_url(value['url'])
         except Exception:raise ValueError('Cannot read active database profile; restore the matching secret.key') from None
+        return host_sqlite_url(url,data)
     return make_url(os.getenv('DATABASE_URL') or 'sqlite:///'+str(data/'mrpatchy.db'))
 
 def backup(data,tls,caddy_data,caddy_config):

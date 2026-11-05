@@ -55,6 +55,14 @@ def revision(row):
     return digest([state_hash(row),row.approved,row.attempted])
 
 
+def lease_revision(row):
+    # Same as revision() but ignores the observation-only process_identity, which
+    # record_behavior refreshes whenever a new PID of the behavior appears. An
+    # in-flight triage lease must survive that refresh.
+    evidence={key:value for key,value in (row.evidence or {}).items() if key!='process_identity'}
+    return digest([digest([row.id,row.host_id,evidence,row.verdict,row.analysis]),row.approved,row.attempted])
+
+
 def refresh_info(row):
     return {} if not row else {'id':row.id,'created':row.created,'actor':row.actor,'reason':row.reason,
         'previous':row.previous,'withdrew_approval':row.withdrew_approval,'bypass_cache':True}
