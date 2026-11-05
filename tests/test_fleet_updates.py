@@ -174,3 +174,61 @@ def test_page_query_projects_small_host_fields_only(admin):
     for st in related:
         for heavy in ('hosts.inventory', 'hosts.telemetry', 'hosts.baseline', 'hosts.integrity', 'jobs.output'):
             assert heavy not in st, (heavy, st)
+
+
+def test_queued_and_available_filters_scale_past_per_key_predicates(admin):
+    """>1,100 queued identities: database-side membership, bounded binds, exact identity, stable paging."""
+    from sqlalchemy import event
+    from app.db import Job, engine
+    seed()
+    per_host = 700
+    with Session() as s:
+        s.add_all([Package(id=f'{h}:q{i:04}', host_id=h, name=f'q{i:04}', installed='1', candidate='2', priority='normal')
+                   for h in ('h0', 'h1') for i in range(per_host)])
+        # h0: even packages queued across two overlapping jobs (duplicates must not duplicate rows).
+        evens = [f'q{i:04}=2' for i in range(0, per_host, 2)]
+        s.add(Job(id='big0', host_id='h0', action='patch', state='queued', payload={'packages': evens}))
+        s.add(Job(id='big0b', host_id='h0', action='patch', state='running', payload={'packages': evens[:100]}))
+        # h1: every package queued, plus non-matching shapes: wrong version/case, nested, non-text.
+        s.add(Job(id='big1', host_id='h1', action='patch', state='queued',
+                  payload={'packages': [f'q{i:04}=2' for i in range(per_host)] + ['bash=9', 'BASH=2', ['bash=2'], 7]}))
+        s.add(Job(id='scalar', host_id='h1', action='patch', state='queued', payload={'packages': 'bash=2'}))
+        s.add(Job(id='obj', host_id='h1', action='patch', state='queued', payload={'packages': {'bash=2': 1}}))
+        s.add(Job(id='done', host_id='h0', action='patch', state='done', payload={'packages': ['bash=2']}))
+        s.add(Job(id='other', host_id='h0', action='patch', state='queued', payload={'packages': ['q0001=2']}))  # h0 odd: queued
+        s.commit()
+    queued_ids = {f'h0:q{i:04}' for i in range(0, per_host, 2)} | {'h0:q0001'} | {f'h1:q{i:04}' for i in range(per_host)}
+    assert len(queued_ids) > 1100
+    get = lambda **p: admin.get('/api/fleet/updates', params=p)
+    statements = []
+    capture = lambda conn, cursor, statement, parameters, *a: statements.append((statement, parameters))
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        queued = get(status='queued', limit=1)
+        available = get(status='available', limit=1)
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+    assert queued.status_code == 200 and available.status_code == 200
+    every = get()['total']
+    assert queued.json()['total'] == len(queued_ids)
+    # Both bash rows stay available: no open job lists exactly bash=2 as a text array member on their host.
+    assert available.json()['total'] == every - len(queued_ids) - 1  # minus the held curl row
+    for statement, parameters in statements:
+        if 'packages' in statement:
+            assert len(parameters or ()) < 50, (len(parameters), statement[:200])
+    # Page boundaries reach exactly the queued set with row states agreeing with the filter.
+    seen = []
+    for offset in range(0, len(queued_ids), 200):
+        items = get(status='queued', limit=200, offset=offset).json()['items']
+        assert {r['status'] for r in items} == {'queued'}
+        seen += [r['id'] for r in items]
+    assert len(seen) == len(set(seen)) and set(seen) == queued_ids
+    assert get(status='queued', limit=200, offset=len(queued_ids)).json()['items'] == []
+    avail = []
+    for offset in range(0, available.json()['total'], 200):
+        items = get(status='available', limit=200, offset=offset).json()['items']
+        assert {r['status'] for r in items} == {'available'}
+        avail += [r['id'] for r in items]
+    assert not set(avail) & queued_ids and 'h0:bash' in avail and 'h1:bash' in avail
+    assert get(status='queued', host_id='h0').json()['total'] == per_host // 2 + 1
+    assert get(status='queued', host_id='h1').json()['total'] == per_host

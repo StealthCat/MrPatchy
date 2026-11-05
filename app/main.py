@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, update, case, or_, and_, not_, false
+from sqlalchemy import select, func, update, case, or_, not_, text, String, LargeBinary, cast
 from sqlalchemy.orm import defer, load_only
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
@@ -295,10 +295,25 @@ def fleet_queued_keys(s,host_ids):
     """(host_id, name, candidate) of every package in an open patch job for these hosts."""
     keys=set()
     for job_host,payload in s.execute(select(Job.host_id,Job.payload).where(Job.host_id.in_(host_ids),Job.action=='patch',Job.state.in_(('queued','running')))):
-        for spec in (payload or {}).get('packages',[]) if isinstance(payload,dict) else []:
+        packages=payload.get('packages') if isinstance(payload,dict) else None
+        for spec in packages if isinstance(packages,list) else ():
             if isinstance(spec,str) and '=' in spec:
                 name,candidate=spec.split('=',1); keys.add((job_host,name,candidate))
     return keys
+def fleet_queued_relation(s):
+    """Distinct (host_id, spec) of every package spec in an open patch job, expanded in the database.
+
+    Mirrors fleet_queued_keys() without binding one parameter per package: only JSON-array
+    ``packages`` payloads and their text members count, and specs compare byte-for-byte.
+    """
+    if s.get_bind().dialect.name=='sqlite':
+        sql=("SELECT DISTINCT j.host_id AS host_id, CAST(e.value AS BLOB) AS spec FROM jobs AS j, json_each(j.payload, '$.packages') AS e "
+             "WHERE j.action='patch' AND j.state IN ('queued','running') AND json_type(j.payload, '$.packages')='array' AND e.type='text'")
+    else:
+        sql=("SELECT DISTINCT j.host_id AS host_id, CAST(JSON_UNQUOTE(e.elem) AS BINARY) AS spec FROM jobs AS j, "
+             "JSON_TABLE(j.payload, '$.packages[*]' COLUMNS (elem JSON PATH '$')) AS e "
+             "WHERE j.action='patch' AND j.state IN ('queued','running') AND JSON_TYPE(JSON_EXTRACT(j.payload, '$.packages'))='ARRAY' AND JSON_TYPE(e.elem)='STRING'")
+    return text(sql).columns(host_id=String,spec=LargeBinary).subquery('fleet_queued')
 @app.get('/api/fleet/updates')
 def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:str='active',limit:int=50,offset:int=0,user=Depends(viewer_user)):
     """Read-only, paged list of every available package candidate.
@@ -320,6 +335,7 @@ def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:st
         if q: conditions.append(Package.name.contains(q[:200],autoescape=True))
         if host_id: conditions.append(Package.host_id==host_id)
         if priority: conditions.append(Package.priority==priority)
+        queued_join=None
         if status:
             # Filters use exactly the row states returned below (held > ineligible > queued > available).
             installable_state=or_(Package.dpkg_state=='installed',Package.dpkg_state.like('% installed'))
@@ -328,13 +344,19 @@ def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:st
             else:
                 conditions+= [Package.held==False,installable_state]
                 if status in ('queued','available'):
-                    keys=fleet_queued_keys(s,scope_ids if not host_id else [host_id])
-                    match=or_(*[and_(Package.host_id==h,Package.name==n,Package.candidate==c) for h,n,c in keys]) if keys else false()
-                    conditions.append(match if status=='queued' else not_(match))
-        total=s.scalar(select(func.count()).select_from(Package).where(*conditions)) or 0
+                    # Database-side membership: a distinct relation outer-joined on exact host and
+                    # "name=candidate" bytes, so cost and bind count never grow with the queue size.
+                    # Names containing '=' never match, as in fleet_queued_keys()'s first-'=' split.
+                    queued_rel=fleet_queued_relation(s)
+                    queued_join=(queued_rel,(queued_rel.c.host_id==Package.host_id)&(queued_rel.c.spec==cast(Package.name+'='+Package.candidate,LargeBinary))&~Package.name.contains('=',autoescape=True))
+                    conditions.append(queued_rel.c.host_id.is_not(None) if status=='queued' else queued_rel.c.host_id.is_(None))
+        count_from=Package if queued_join is None else Package.__table__.outerjoin(*queued_join)
+        total=s.scalar(select(func.count()).select_from(count_from).where(*conditions)) or 0
         rank=case(*[(Package.priority==name,index) for index,name in enumerate(FLEET_UPDATE_PRIORITIES)],else_=len(FLEET_UPDATE_PRIORITIES))
         # Bounded projection: only the small Host fields the row needs (never inventory/telemetry/baseline/integrity).
-        rows=s.execute(select(Package,Host.name,Host.last_repo,Host.repo_error,Host.state,Host.last_seen).join(Host,Host.id==Package.host_id).where(*conditions)
+        page=select(Package,Host.name,Host.last_repo,Host.repo_error,Host.state,Host.last_seen).join(Host,Host.id==Package.host_id)
+        if queued_join is not None: page=page.outerjoin(*queued_join)
+        rows=s.execute(page.where(*conditions)
             .order_by(rank,Package.name,Host.name,Package.id).limit(limit).offset(offset)).all()
         # Page-bounded lookups only: open patch jobs and deferred AI priority scoring for these rows.
         page_hosts={r[0].host_id for r in rows}; page_names={r[0].name for r in rows}; deferred=set()
