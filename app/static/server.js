@@ -595,14 +595,25 @@ async function renderServerAIPolicy(panel,hostId,deleted=false){
  const base='/hosts/'+hostId+'/security/ai-policy';let policy=await api(base);
  const show=()=>{
   if(!panel.isConnected)return;
-  panel.innerHTML=`<div class="toolbar"><div><h3>AI integration · ${policy.paused?'Paused':policy.global_enabled?'Eligible':'Globally disabled'}</h3><p class="help">Applies only to this server. Inventory, patching, schedules, scanning and monitoring continue. Historical AI results remain available.</p></div>${deleted?'':`<button id="server-ai-toggle">${policy.paused?'Resume AI':'Pause AI'}</button>`}</div><p class="help">${policy.paused?'New provider calls, including queued proposals, are blocked.':policy.global_enabled?'Processing remains subject to global configuration, eligibility and quotas.':'Global AI is off. Resuming here cannot enable it.'} ${policy.updated?'Last changed '+date(policy.updated)+' by '+esc(policy.actor)+'.':''}</p>`;
+  const limit=Number.isSafeInteger(policy.concurrency_limit)?policy.concurrency_limit:2;
+  const minimum=Number.isSafeInteger(policy.concurrency_limit_min)?policy.concurrency_limit_min:1;
+  const maximum=Number.isSafeInteger(policy.concurrency_limit_max)?policy.concurrency_limit_max:4;
+  panel.innerHTML=`<div class="toolbar"><div><h3>AI integration · ${policy.paused?'Paused':policy.global_enabled?'Eligible':'Globally disabled'}</h3><p class="help">Applies only to this server. Inventory, patching, schedules, scanning and monitoring continue. Historical AI results remain available.</p></div>${deleted?'':`<div class="actions"><button id="server-ai-capacity">Change AI capacity</button><button id="server-ai-toggle">${policy.paused?'Resume AI':'Pause AI'}</button></div>`}</div><p><strong>${limit} process investigation slot${limit===1?'':'s'}</strong></p><p class="help">The server may occupy at most this many global AI worker slots. Supported range: ${minimum}–${maximum}. ${policy.paused?'New provider calls, including queued proposals, are blocked.':policy.global_enabled?'Processing remains subject to global configuration, eligibility and quotas.':'Global AI is off. Resuming here cannot enable it.'} ${policy.updated?'Last changed '+date(policy.updated)+' by '+esc(policy.actor)+'.':''}</p>`;
   if(deleted)return;
-  panel.querySelector('button').onclick=()=>{
+  panel.querySelector('#server-ai-toggle').onclick=()=>{
    modal(policy.paused?'Resume server AI':'Pause server AI',`<p>Change AI processing for this server only? Historical results are retained. A request already in flight must finish before this change can be saved. Resume respects global settings and existing retry limits.</p><form id="server-ai-form"><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Save AI state</button></form>`);
    const form=$('#server-ai-form'),revision=modalRevision;
    form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button');button.disabled=true;try{
-    const saved=await api(base,'PUT',{paused:!policy.paused,expected_revision:policy.revision,reason:new FormData(form).get('reason')});
+    const saved=await api(base,'PUT',{paused:!policy.paused,concurrency_limit:limit,expected_revision:policy.revision,reason:new FormData(form).get('reason')});
     if(modalRevision!==revision||!panel.isConnected)return;policy=saved;$('#modal').close();show();toast('Server AI state saved');
+   }catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
+  };
+  panel.querySelector('#server-ai-capacity').onclick=()=>{
+   modal('Change server AI capacity',`<p>Choose how many independent process investigations this server may occupy. Global concurrency, pause, rate and spend controls still apply. Lowering the value does not cancel work already sent.</p><form id="server-ai-capacity-form"><label>Process investigation slots<select name="limit">${Array.from({length:maximum-minimum+1},(_,index)=>minimum+index).map(value=>`<option value="${value}" ${value===limit?'selected':''}>${value}</option>`).join('')}</select></label><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Save AI capacity</button></form>`);
+   const form=$('#server-ai-capacity-form'),revision=modalRevision;
+   form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button');button.disabled=true;try{
+    const data=new FormData(form);const saved=await api(base,'PUT',{paused:policy.paused,concurrency_limit:Number(data.get('limit')),expected_revision:policy.revision,reason:data.get('reason')});
+    if(modalRevision!==revision||!panel.isConnected)return;policy=saved;$('#modal').close();show();toast('Server AI capacity saved');
    }catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
   };
  };show();

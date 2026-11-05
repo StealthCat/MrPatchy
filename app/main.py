@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.36'
+APP_VERSION='1.42.37'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -438,6 +438,7 @@ def delete_host(host_id:str,body:HostDeletionInput,user=Depends(admin_user)):
 
 class ServerAIInput(BaseModel):
     paused:bool
+    concurrency_limit:int|None=Field(default=None,strict=True,ge=1,le=4)
     expected_revision:str=Field(default='',max_length=36)
     reason:str=Field(min_length=10,max_length=4000)
 
@@ -451,14 +452,20 @@ def server_ai_policy(host_id:str,user=Depends(admin_user)):
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
     from . import ai_policy,ai_claims
     with worker.Lock('ai-policy-change:'+host_id):
-        with Session() as s:
-            if s.scalar(select(ai_claims.Claim.subject).where(ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
-                raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
-        lock=worker.Lock('ai-provider:'+host_id)
-        if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
-        try:
-            with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,body.expected_revision,body.reason,user['username'])
-        finally:lock.release()
+        with worker.Lock('ai-triage'):
+            with Session() as s:
+                host_or_404(s,host_id);current=ai_policy.status(s,host_id)
+                pause_change=body.paused!=current['paused']
+                if pause_change and s.scalar(select(ai_claims.Claim.subject).where(
+                    ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
+                    raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
+            lock=worker.Lock('ai-provider:'+host_id) if pause_change else None
+            if lock and not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
+            try:
+                with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,
+                    body.expected_revision,body.reason,user['username'],body.concurrency_limit)
+            finally:
+                if lock:lock.release()
 
 @app.get('/api/hosts/{host_id}/summary')
 def host_summary(host_id:str,user=Depends(viewer_user)):

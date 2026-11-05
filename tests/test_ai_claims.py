@@ -115,6 +115,33 @@ def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
         for future in running:future.result(15)
 
 
+def test_lowered_server_limit_preserves_live_leases_and_blocks_later_admission(admin):
+    seed(count=4,same_host=True)
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    configured=admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':False,'concurrency_limit':3,'expected_revision':current['revision'],
+        'reason':'Allow three reviewed investigations for this server',
+    })
+    assert configured.status_code==200
+    leases=[ai_claims.acquire() for _ in range(3)]
+    assert all(leases) and ai_claims.acquire() is None
+
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    lowered=admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':False,'concurrency_limit':1,'expected_revision':current['revision'],
+        'reason':'Return this server to serial investigation capacity',
+    })
+    assert lowered.status_code==200 and lowered.json()['concurrency_limit']==1
+    for lease in leases:lease.check()
+    assert ai_claims.acquire() is None
+    with leases.pop():pass
+    assert ai_claims.acquire() is None
+    while leases:
+        with leases.pop():pass
+    replacement=ai_claims.acquire();assert replacement
+    with replacement:pass
+
+
 def pause_policy(admin):
     current=admin.get('/api/hosts/host-0/security/ai-policy').json()
     return admin.put('/api/hosts/host-0/security/ai-policy',json={
