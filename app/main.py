@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.39'
+APP_VERSION='1.42.40'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1543,14 +1543,44 @@ class SpoolBatchInput(BaseModel):
 
 @app.put('/api/operations/{host_id}/spool')
 def configure_spool(host_id:str,body:SpoolBatchInput,user=Depends(admin_user)):
-    expected={'configured':True,'version':1,'batch_limit_bytes':body.batch_limit_bytes}
+    limit = body.batch_limit_bytes
+    expected = {'configured': True, 'version': 1, 'batch_limit_bytes': limit}
     with host_change(host_id),Session() as s:
-        h=host_or_404(s,host_id)
-        result=ssh.call(h,{'action':'spool-config','batch_limit_bytes':body.batch_limit_bytes},lifecycle_blocking=False)
-        if result!=expected:raise HTTPException(502,'Target did not confirm the requested spool configuration')
-        s.merge(Setting(key='spool:'+host_id,value={'version':1,'batch_limit_bytes':body.batch_limit_bytes}))
-        audit(s,'configure agent spool',host_id+' batch_limit_bytes='+str(body.batch_limit_bytes));s.commit()
-    return result
+        h = host_or_404(s, host_id)
+        rejected = False
+        try:
+            result = ssh.call(h, {'action': 'spool-config', 'batch_limit_bytes': limit}, lifecycle_blocking=False)
+        except Exception as error:
+            if ssh.request_unstarted(error):
+                raise
+            rejected = isinstance(error, ssh.RemoteFailure)
+            result = None
+        detail = f'{host_id} batch_limit_bytes={limit}'
+        if (result != expected or result['configured'] is not True
+                or type(result['version']) is not int or type(result['batch_limit_bytes']) is not int):
+            # The bridge lock serializes this observation with the original request.
+            # A lost receipt must never cause a second configuration mutation.
+            try:
+                observed = ssh.call(h, {'action': 'spool-config-status'}, timeout=10, lifecycle_blocking=False)
+            except Exception:
+                observed = None
+            if (isinstance(observed, dict) and type(observed.get('version')) is int and observed['version'] == 1
+                    and type(observed.get('batch_limit_bytes')) is int
+                    and 16*1024 <= observed['batch_limit_bytes'] <= 1024*1024
+                    and type(observed.get('active')) is bool):
+                detail += f" observed_batch_limit_bytes={observed['batch_limit_bytes']} active={observed['active']}"
+            else:
+                observed = None
+                detail += ' target state unverified'
+            if rejected or observed is None or not observed['active'] or observed['batch_limit_bytes'] != limit:
+                audit(s, 'configure agent spool failed', detail)
+                s.commit()
+                raise HTTPException(502, 'Target did not confirm the requested spool configuration. Check collector state before retrying.')
+            detail += ' verified by readback'
+        s.merge(Setting(key='spool:'+host_id, value={'version': 1, 'batch_limit_bytes': limit}))
+        audit(s, 'configure agent spool', detail)
+        s.commit()
+    return expected
 
 class ReconcileInput(BaseModel):
     verified_target_state:bool=False

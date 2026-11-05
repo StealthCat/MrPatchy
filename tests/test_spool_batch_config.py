@@ -78,6 +78,7 @@ def test_agent_rejects_malformed_or_unsafe_configuration(tmp_path, monkeypatch, 
 def test_bridge_persists_validated_configuration_before_restart(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(bridge, "ROOT", tmp_path)
+    monkeypatch.setattr(bridge, "spool_service_active", lambda: True, raising=False)
     monkeypatch.setattr(bridge, "run", lambda command, **kwargs: calls.append(command) or "")
 
     result = bridge.handle({"action": "spool-config", "batch_limit_bytes": 32 * 1024})
@@ -86,6 +87,52 @@ def test_bridge_persists_validated_configuration_before_restart(tmp_path, monkey
     assert json.loads((tmp_path / "spool.json").read_text()) == {"version": 1, "batch_limit_bytes": 32 * 1024}
     assert (tmp_path / "spool.json").stat().st_mode & 0o777 == 0o600
     assert calls == [["systemctl", "restart", "mrpatchy-agent"]]
+    assert bridge.handle({"action": "spool-config-status"}) == {
+        "version": 1, "batch_limit_bytes": 32 * 1024, "active": True,
+    }
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("previous_cap,was_active", [(None, False), (256 * 1024, True)])
+def test_restart_failure_restores_previous_config_and_service(tmp_path, monkeypatch, previous_cap, was_active):
+    path = tmp_path / "spool.json"
+    if previous_cap is not None:
+        write_config(tmp_path, previous_cap)
+    previous = path.read_bytes() if path.exists() else None
+    monkeypatch.setattr(bridge, "ROOT", tmp_path)
+    monkeypatch.setattr(bridge, "spool_service_active", lambda: was_active, raising=False)
+    calls = []
+
+    def service(command, **kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            assert json.loads(path.read_bytes())["batch_limit_bytes"] == MAXIMUM
+            raise RuntimeError("restart failed")
+        assert (path.read_bytes() if path.exists() else None) == previous
+
+    monkeypatch.setattr(bridge, "run", service)
+    with pytest.raises(RuntimeError, match="previous configuration and service state restored"):
+        bridge.handle({"action": "spool-config", "batch_limit_bytes": MAXIMUM})
+
+    assert calls == [
+        ["systemctl", "restart", "mrpatchy-agent"],
+        ["systemctl", "restart" if was_active else "stop", "mrpatchy-agent"],
+    ]
+    assert (path.read_bytes() if path.exists() else None) == previous
+
+
+def test_restart_failure_reports_unverified_service_recovery(tmp_path, monkeypatch):
+    path = write_config(tmp_path, MINIMUM)
+    monkeypatch.setattr(bridge, "ROOT", tmp_path)
+    monkeypatch.setattr(bridge, "spool_service_active", lambda: True, raising=False)
+
+    def service(command, **kwargs):
+        raise TimeoutError("private service diagnostics")
+
+    monkeypatch.setattr(bridge, "run", service)
+    with pytest.raises(RuntimeError, match="recovery could not be verified"):
+        bridge.handle({"action": "spool-config", "batch_limit_bytes": MAXIMUM})
+    assert json.loads(path.read_bytes())["batch_limit_bytes"] == MINIMUM
 
 
 @pytest.mark.parametrize("value", [True, "32768", MINIMUM - 1, MAXIMUM + 1])
@@ -143,3 +190,55 @@ def test_admin_api_rejects_invalid_values_roles_and_unconfirmed_receipts(admin, 
         session.get(User, "admin").role = "viewer"
         session.commit()
     assert admin.put(f"/api/operations/{host_id}/spool", json={"batch_limit_bytes": MINIMUM}).status_code == 403
+
+
+@pytest.mark.parametrize("observed,active,expected_status", [
+    (MINIMUM, True, 200),
+    (MINIMUM, False, 502),
+    (MAXIMUM, True, 502),
+    (None, None, 502),
+])
+def test_lost_spool_receipt_uses_readback_without_replay(admin, monkeypatch, observed, active, expected_status):
+    host_id = create_host(admin)
+    calls = []
+
+    def remote(host, payload, **kwargs):
+        calls.append(payload)
+        if len(calls) == 1 or observed is None:
+            raise main.ssh.RemoteProtocolError("truncated SSH reply")
+        return {"version": 1, "batch_limit_bytes": observed, "active": active}
+
+    monkeypatch.setattr(main.ssh, "call", remote)
+    response = admin.put(f"/api/operations/{host_id}/spool", json={"batch_limit_bytes": MINIMUM})
+    assert response.status_code == expected_status
+    assert calls == [{"action": "spool-config", "batch_limit_bytes": MINIMUM}, {"action": "spool-config-status"}]
+    with Session() as session:
+        setting = session.get(Setting, "spool:" + host_id)
+        if expected_status == 200:
+            assert setting.value == {"version": 1, "batch_limit_bytes": MINIMUM}
+            assert "verified by readback" in session.query(Audit).filter_by(action="configure agent spool").one().detail
+        else:
+            assert setting is None
+            assert session.query(Audit).filter_by(action="configure agent spool failed").one().detail.startswith(host_id)
+
+
+def test_definite_target_rejection_preserves_controller_setting(admin, monkeypatch):
+    host_id = create_host(admin)
+    with Session() as session:
+        session.add(Setting(key="spool:" + host_id, value={"version": 1, "batch_limit_bytes": MAXIMUM}))
+        session.commit()
+
+    def remote(host, payload, **kwargs):
+        if payload["action"] == "spool-config":
+            raise main.ssh.RemoteFailure("private service diagnostics")
+        return {"version": 1, "batch_limit_bytes": MINIMUM, "active": True}
+
+    monkeypatch.setattr(main.ssh, "call", remote)
+    response = admin.put(f"/api/operations/{host_id}/spool", json={"batch_limit_bytes": MINIMUM})
+    assert response.status_code == 502
+    assert "private service diagnostics" not in response.text
+    with Session() as session:
+        assert session.get(Setting, "spool:" + host_id).value["batch_limit_bytes"] == MAXIMUM
+        record = session.query(Audit).filter_by(action="configure agent spool failed").one()
+        assert f"observed_batch_limit_bytes={MINIMUM}" in record.detail
+        assert "private service diagnostics" not in record.detail

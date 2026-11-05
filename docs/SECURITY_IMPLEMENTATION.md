@@ -6047,8 +6047,12 @@ accepts only integer values from 16 KiB through 1 MiB, writes a versioned root-o
 configuration atomically and restarts the collector. Normal snapshots and eBPF events
 use the same effective cap, and existing spool telemetry reports it. The default stays
 256 KiB. The controller accepts the setting only after the target returns the exact
-requested receipt, then retains the value and an audit record; viewers and operators
-cannot change it.
+requested receipt or verifies the requested cap and an active collector through a
+serialized read-only check after an uncertain reply. A failed restart restores the
+prior configuration or its absence and checks the prior collector running state.
+The controller audits unconfirmed outcomes with the observed target state when
+available, keeps the last confirmed setting, and never replays a lost request.
+Only administrators can change the cap.
 
 Configuration does not change the 48 MB durable capacity, ordered commit-before-ACK
 replay, atomic observation records or explicit oversize/capacity loss accounting. An
