@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.38 — 2026-11-05
+
+1. [PR #472](https://github.com/StealthCat/MrPatchy/pull/472): Report SSH deadline timeouts after a remote command starts as an unknown remote outcome with instructions to verify target state, instead of replacing the timeout with a misleading address, port or firewall hint. Compatibility: no API, configuration or runtime response-authorization change; connection, DNS and routing failures before command start retain the existing transport guidance. Material limits: the controller cannot determine whether the timed-out remote action completed, so operators must reconcile target state before retrying, and this change does not alter the configured deadline or add automatic retry. Completes #430. This source update does not publish a Docker image.
+
 ## 1.42.37 — 2026-11-05
 
 1. [PR #384](https://github.com/StealthCat/MrPatchy/pull/384): Let administrators configure each server to occupy one to four concurrent AI process-investigation slots in its revisioned, audited AI policy. Legacy or absent settings keep the previous default of two, malformed stored values fail closed to one, and lowering the limit preserves live leases while blocking later admission until occupancy falls below the new bound. Compatibility: there is no schema migration or API removal, and existing clients may omit `concurrency_limit` to retain the current effective value; global capacity, pause, lifecycle, rate, spend and provider controls remain authoritative. Material limits: this does not add cross-purpose priority or aging, provider-specific quotas, native complete-context collection or complete multi-controller failover. Partially delivers #383, which remains open. This source update does not publish a Docker image.
