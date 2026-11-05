@@ -8,10 +8,12 @@ import time
 from fastapi import APIRouter,HTTPException,Request
 from fastapi.responses import RedirectResponse
 from authlib.integrations.starlette_client import OAuth
-from sqlalchemy import delete,select,func
+from sqlalchemy import delete,select
 from .db import Session,Setting,audit
 from .identity import User
 from .security import token_hash
+from .coordination import Lock
+from .enrollment_downloads import source_id
 
 router=APIRouter()
 log=logging.getLogger('mrpatchy.sso')
@@ -66,6 +68,28 @@ async def validate_provider():
         if url.scheme!='https' or not url.hostname or url.username or url.password:raise HTTPException(400,'OIDC endpoints must use HTTPS')
     return metadata
 
+PENDING_GLOBAL=1000
+PENDING_PER_SOURCE=10
+def admit_state(state_hash,source):
+    """Record a pending login state; one source cannot exhaust the shared cap.
+
+    A per-source limit refuses only the noisy source. At the global cap the oldest
+    state is evicted instead of refusing every user. Count and insert run under a
+    cross-process lock so concurrent requests cannot overshoot the bounds.
+    """
+    with Lock('sso-pending-state'):
+        with Session() as s:
+            now=time.time()
+            rows=[]
+            for entry in s.scalars(select(Setting).where(Setting.key.like('oidc-state:%'))):
+                if entry.value['expires']<now:s.delete(entry)
+                else:rows.append(entry)
+            if sum(1 for r in rows if r.value.get('source')==source)>=PENDING_PER_SOURCE:
+                s.commit();raise HTTPException(429,'Too many pending SSO logins',headers={'Retry-After':'60'})
+            rows.sort(key=lambda r:r.value['expires'])
+            for old in rows[:max(0,len(rows)-PENDING_GLOBAL+1)]:s.delete(old)
+            s.add(Setting(key='oidc-state:'+state_hash,value={'expires':now+300,'source':source}));s.commit()
+
 @router.get('/api/sso')
 def info():return {'enabled':bool(issuer)}
 @router.get('/auth/sso')
@@ -75,12 +99,7 @@ async def start(request:Request):
     if not base.startswith('https://'):raise HTTPException(503,'PUBLIC_URL must use HTTPS for SSO')
     await validate_provider()
     state=secrets.token_urlsafe(32)
-    with Session() as s:
-        for entry in s.scalars(select(Setting).where(Setting.key.like('oidc-state:%'))):
-            if entry.value['expires']<time.time():s.delete(entry)
-        s.flush()
-        if s.scalar(select(func.count()).select_from(Setting).where(Setting.key.like('oidc-state:%')))>=1000:raise HTTPException(429,'Too many pending SSO logins')
-        s.add(Setting(key='oidc-state:'+token_hash(state),value={'expires':time.time()+300}));s.commit()
+    admit_state(token_hash(state),source_id(request))
     return await oauth.provider.authorize_redirect(request,base+'/auth/sso/callback',state=state)
 @router.get('/auth/sso/callback')
 async def callback(request:Request):
