@@ -42,3 +42,31 @@ def test_sso_bindings_list_replace_confirmation_and_delete(admin,monkeypatch):
     assert admin.get('/api/operations/sso-bindings').json()==[]
     with Session() as s:
         assert any(a.action=='remove SSO binding' and digest in a.detail for a in s.scalars(select(Audit)))
+
+def test_concurrent_sso_replacements_confirming_same_binding_conflict(admin,monkeypatch):
+    # Two administrators both confirm replacing the same 'original' binding; only one may win.
+    import threading
+    from fastapi import HTTPException
+    from app import main
+    monkeypatch.setattr(sso,'issuer','https://issuer.example')
+    for name in ('original','one','two'):add_user(admin,name)
+    assert admin.put('/api/operations/sso-binding',json={'subject':'sub-race','username':'original'}).status_code==200
+    first_in=threading.Event();release=threading.Event();real_audit=main.audit
+    def slow_audit(s,action,detail):
+        if action=='bind SSO identity' and '→ one' in detail:
+            first_in.set();release.wait(10)
+        return real_audit(s,action,detail)
+    monkeypatch.setattr(main,'audit',slow_audit)
+    results={}
+    def run(target):
+        try:results[target]=main.bind_sso(main.SSOBinding(subject='sub-race',username=target,replace_username='original'),{'username':'admin'})['ok']
+        except HTTPException as exc:results[target]=exc.status_code
+    a=threading.Thread(target=run,args=('one',));a.start()
+    assert first_in.wait(10)
+    b=threading.Thread(target=run,args=('two',));b.start()
+    b.join(0.5);release.set();a.join(20);b.join(20)
+    assert results=={'one':True,'two':409}
+    with Session() as s:
+        assert s.get(Setting,sso.binding_key('sub-race')).value=={'username':'one'}
+        details=[a.detail for a in s.scalars(select(Audit)) if a.action=='bind SSO identity']
+        assert sum('previous original' in d for d in details)==1

@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import defer, load_only
+from sqlalchemy.exc import IntegrityError, OperationalError
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
@@ -1470,11 +1471,22 @@ def bind_sso(body:SSOBinding,user=Depends(admin_user)):
     key=sso.binding_key(body.subject)
     with Session() as s:
         if not s.get(User,body.username):raise HTTPException(404,'Create the local account/role first')
-        previous=s.get(Setting,key);old=previous.value.get('username') if previous else None
+        # Take the binding's write lock before reading it (the no-op UPDATE takes SQLite's write lock; the
+        # locking read takes the row lock and reads the latest commit on MySQL/PostgreSQL) so the replace
+        # confirmation, the write and the audited previous binding are one expected-value step: a concurrent
+        # replace that confirmed the same old binding conflicts instead of silently overwriting it.
+        s.execute(update(Setting).where(Setting.key==key).values(key=key))
+        previous=s.scalar(select(Setting).where(Setting.key==key).with_for_update().execution_options(populate_existing=True))
+        old=previous.value.get('username') if previous else None
         if old is not None and old!=body.username and body.replace_username!=old:
+            s.rollback()
             raise HTTPException(409,'This subject is already bound to '+old+'. Resend with replace_username set to confirm the replacement.')
-        s.merge(Setting(key=key,value={'username':body.username}))
-        audit(s,'bind SSO identity',user['username']+' → '+body.username+'; subject '+sso_digest(key)+'; previous '+(old or 'none'));s.commit()
+        if previous:previous.value={'username':body.username}
+        else:s.add(Setting(key=key,value={'username':body.username}))
+        audit(s,'bind SSO identity',user['username']+' → '+body.username+'; subject '+sso_digest(key)+'; previous '+(old or 'none'))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject was bound concurrently; reload the bindings and retry.')
     return {'ok':True,'subject_digest':sso_digest(key)}
 
 @app.get('/api/operations/sso-bindings')
