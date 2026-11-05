@@ -1531,6 +1531,20 @@ def observability(host_id:str,body:ObservabilityInput,user=Depends(admin_user)):
         audit(s,'configure eBPF',host_id+' '+str(body.ebpf));s.commit()
     return result
 
+class SpoolBatchInput(BaseModel):
+    batch_limit_bytes:int=Field(ge=16*1024,le=1024*1024,strict=True)
+
+@app.put('/api/operations/{host_id}/spool')
+def configure_spool(host_id:str,body:SpoolBatchInput,user=Depends(admin_user)):
+    expected={'configured':True,'version':1,'batch_limit_bytes':body.batch_limit_bytes}
+    with host_change(host_id),Session() as s:
+        h=host_or_404(s,host_id)
+        result=ssh.call(h,{'action':'spool-config','batch_limit_bytes':body.batch_limit_bytes},lifecycle_blocking=False)
+        if result!=expected:raise HTTPException(502,'Target did not confirm the requested spool configuration')
+        s.merge(Setting(key='spool:'+host_id,value={'version':1,'batch_limit_bytes':body.batch_limit_bytes}))
+        audit(s,'configure agent spool',host_id+' batch_limit_bytes='+str(body.batch_limit_bytes));s.commit()
+    return result
+
 class ReconcileInput(BaseModel):
     verified_target_state:bool=False
     verified_ai_receipts:bool=False
