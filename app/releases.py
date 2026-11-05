@@ -294,6 +294,13 @@ def execute(s,host,job):
 
     # Always read the receipt once, even when resumed after the window: a finished
     # upgrade must be reported as such, not as an expired observation.
+    if state is not None and time.time()>=deadline:
+        # A saved rollback receipt skips the read below; a no-reboot rollback may
+        # have finished while no worker was observing, so read the target once.
+        # Only a finished receipt replaces the saved one; no target action is taken.
+        try:seen=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+        except (ssh.RemoteFailure,)+TRANSPORT_ERRORS:seen=None
+        if isinstance(seen,dict) and seen.get('state') in ('complete','rolled_back'):state=seen
     first=True
     while first or time.time()<deadline:
         first=False

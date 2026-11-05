@@ -571,3 +571,35 @@ def test_no_reboot_rollback_with_lost_reply_is_seen_in_the_receipt(admin,monkeyp
         monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
         assert releases.execute(s,h,job)['outcome']=='rolled_back'
         assert 'release-status' in calls and 'release-rollback' not in calls
+
+
+@pytest.mark.parametrize('target',['rolled_back','complete'])
+def test_resume_after_window_with_saved_rollback_receipt_reads_target_once(admin,monkeypatch,target):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        saved_receipt={'state':'rollback_reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1','rollback_attempted':True}
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True,'_release_receipt':saved_receipt};s.commit()
+        def call(host,req,**kw):
+            a=req['action'];calls.append(a)
+            if a=='recovery-status':return {'boot_id':'b1'}
+            if a=='release-status':return {'state':target,'digest':row.digest,'job':job.id}
+            if a=='release-restored':return {'state':'rolled_back'}
+            raise AssertionError(req)
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        assert releases.execute(s,h,job)['outcome']==target
+        assert calls[0]=='release-status'
+        assert not {'release-verify','release-rollback','release-start'}&set(calls)
+
+
+def test_resume_after_window_with_saved_rollback_receipt_unfinished_takes_no_action(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        saved_receipt={'state':'rollback_reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1','rollback_attempted':True}
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True,'_release_receipt':saved_receipt};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action'])
+            if req['action']=='release-status':return {'state':'absent'}
+            raise AssertionError(req)
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(RuntimeError,match='four-hour'):releases.execute(s,h,job)
+        assert calls==['release-status']
