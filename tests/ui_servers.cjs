@@ -130,7 +130,10 @@ module.exports=async(page,capture)=>{
   await open('Repositories');await page.getByText('/etc/apt/sources.list',{exact:true}).waitFor();
   await open('Connection');await page.locator('#server-connection-form').waitFor();
   assert.equal(await page.locator('#pinned-fingerprint').textContent(),'SHA256:fixture');await page.getByRole('link',{name:'Download / rerun installer',exact:false}).waitFor();
-  await page.locator('#server-fingerprint-form [name=fingerprint]').fill('SHA256:'+'c'.repeat(43));await page.locator('#server-fingerprint-form [name=replace_existing]').check();await page.getByRole('button',{name:'Replace pinned fingerprint',exact:true}).click();
+  const fingerprintInput=page.locator('#server-fingerprint-form [name=fingerprint]');const mismatch=()=>fingerprintInput.evaluate(el=>el.validity.patternMismatch);
+  await fingerprintInput.fill('SHA256:not-a-fingerprint');assert.equal(await mismatch(),true);
+  await fingerprintInput.fill('SHA256:'+'a/b+'.repeat(10)+'c/d');assert.equal(await mismatch(),false);
+  await fingerprintInput.fill('SHA256:'+'c'.repeat(43));await page.locator('#server-fingerprint-form [name=replace_existing]').check();await page.getByRole('button',{name:'Replace pinned fingerprint',exact:true}).click();
   await page.getByText('Fingerprint saved.',{exact:false}).waitFor();assert.equal(writes.at(-1).body.replace_existing,true);assert.equal(await page.locator('#pinned-fingerprint').textContent(),'SHA256:'+'c'.repeat(43));
   await page.locator('#server-connection-form [name=transport]').selectOption('gcp_iap');
   await page.locator('#server-connection-form [name=project]').fill('test-project');
