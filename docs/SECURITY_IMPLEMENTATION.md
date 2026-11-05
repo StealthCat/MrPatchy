@@ -2193,6 +2193,21 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Retained process-triage timing sample — worker checkpoint #522
+
+The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
+recently started completed or failed process investigations (up to 100, configurable
+with `limit`). It reads at most 2,048 retained timing events plus a truncation probe,
+without returning event messages, run IDs or evidence. Each allowlisted stage reports
+its sample and error counts and nearest-rank p50/p95 milliseconds, including both
+successful and failed samples. Missing percentiles are null. Runs without valid
+samples, discarded malformed events and event truncation are visible.
+
+A run can supply multiple provider or persistence samples, and stages overlap.
+These are retained diagnostic samples, subject to pruning or incomplete writes.
+Dashboard presentation and matched serial/parallel production measurement remain
+open. There is no new collection, migration, provider call or admission change.
+
 ### Bounded same-server process triage — worker checkpoint #379
 
 This bounded threaded-execution increment permits two independent renewable process-
