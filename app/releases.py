@@ -292,7 +292,11 @@ def execute(s,host,job):
         if job.payload.get('_release_receipt')!=small:
             job.payload={**job.payload,'_release_receipt':small};job.output=json.dumps(small);s.commit()
 
-    while time.time()<deadline:
+    # Always read the receipt once, even when resumed after the window: a finished
+    # upgrade must be reported as such, not as an expired observation.
+    first=True
+    while first or time.time()<deadline:
+        first=False
         if state is None:
             try:state=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
             except ssh.RemoteFailure as refusal:
@@ -301,6 +305,8 @@ def execute(s,host,job):
             except TRANSPORT_ERRORS:time.sleep(5);continue
         if state.get('state')=='absent':
             if submitted:raise RuntimeError('Target receipt disappeared after submission; refusing to replay release upgrade')
+            # Approved plans can wait in the queue past their expiry; the target would refuse.
+            if plan.get('expires',0)<time.time():raise Refused('Release plan expired before it could be started; create and approve a new plan')
             job.payload={**job.payload,'_release_submitted':True};s.commit();submitted=True
             try:state=ssh.call(host,{'action':'release-start','job_id':job.id,'plan':plan,'digest':row.digest},timeout=180)
             except ssh.RemoteFailure as refusal:
@@ -322,6 +328,7 @@ def execute(s,host,job):
             if phase=='rolled_back':ssh.call(host,{'action':'release-restored','plan':plan},timeout=120)
             row.state=phase;s.commit();return {'outcome':phase,'release_plan':row.id}
         if phase=='recovery_required':raise RuntimeError(state.get('error','Release upgrade needs recovery'))
+        if time.time()>=deadline:break
         if phase in ('reboot_pending','rollback_reboot_pending'):
             key=phase+':'+str(state.get('boot_before',''))
             health=job.payload.get('_release_health',{})
@@ -336,6 +343,9 @@ def execute(s,host,job):
                         ssh.call(host,{'action':'release-restored','plan':plan},timeout=120)
                         state={**state,'state':'rolled_back','boot_after':boot['boot_id']};remember(state)
                         row.state='rolled_back';s.commit();return {'outcome':'rolled_back','release_plan':row.id}
+                    # A no-reboot rollback can finish with its reply lost; its receipt says so.
+                    seen=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+                    if seen.get('state') in ('complete','rolled_back'):state=seen;continue
                 else:
                     completed=ssh.call(host,{'action':'release-verify','job_id':job.id},timeout=600)
                     if completed.get('state')=='complete':state=completed;continue

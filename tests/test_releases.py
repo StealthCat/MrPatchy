@@ -523,3 +523,51 @@ def test_rollback_refusal_is_reported_immediately(admin,monkeypatch):
             raise ssh.RemoteFailure('Rollback unavailable or already attempted')
         monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
         with pytest.raises(RuntimeError,match='Rollback unavailable'):releases.execute(s,h,job)
+
+
+def test_expired_plan_is_refused_centrally_before_release_start(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        plan=releases.body(row);plan['expires']=time.time()-1;releases.store(row,plan);s.commit()
+        job.payload={**job.payload,'digest':row.digest};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action']);return {'state':'absent'}
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(releases.Refused,match='expired'):releases.execute(s,h,job)
+        assert calls==['release-status'] and '_release_submitted' not in job.payload
+
+
+def test_resume_after_observation_window_still_reads_the_receipt(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action']);return {'state':'complete','digest':row.digest,'job':job.id}
+        monkeypatch.setattr(ssh,'call',call)
+        assert releases.execute(s,h,job)['outcome']=='complete' and calls==['release-status']
+
+
+def test_expired_window_with_unfinished_receipt_does_not_act_on_target(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action']);return {'state':'upgrading','digest':row.digest,'job':job.id}
+        monkeypatch.setattr(ssh,'call',call)
+        with pytest.raises(RuntimeError,match='four-hour'):releases.execute(s,h,job)
+        assert calls==['release-status']
+
+
+def test_no_reboot_rollback_with_lost_reply_is_seen_in_the_receipt(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        saved_receipt={'state':'rollback_reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1','rollback_attempted':True}
+        job.payload={**job.payload,'_release_submitted':True,'_release_receipt':saved_receipt,'_release_health':{'key':'rollback_reboot_pending:b1','deadline':time.time()+900}};s.commit()
+        def call(host,req,**kw):
+            a=req['action'];calls.append(a)
+            if a=='recovery-status':return {'boot_id':'b1'}
+            if a=='release-status':return {'state':'rolled_back','digest':row.digest,'job':job.id}
+            return {'state':'rolled_back'}
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        assert releases.execute(s,h,job)['outcome']=='rolled_back'
+        assert 'release-status' in calls and 'release-rollback' not in calls
