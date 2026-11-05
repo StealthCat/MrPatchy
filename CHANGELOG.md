@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.34 — 2026-11-05
+
+1. [PR #473](https://github.com/StealthCat/MrPatchy/pull/473): Clear stale sign-in errors after a successful login and explicit sign-out, and explain when password changes, session revocation, MFA enrollment or an expired established session require signing in again. Compatibility: login APIs, authentication policy, configuration and runtime response authorization are unchanged; this is browser feedback only. Material limits: an explicit sign-out intentionally shows no forced-sign-out reason, failed login attempts and the initial session probe do not claim that a prior session expired, and the sign-out form still resets the username field. Completes #439. This source update does not publish a Docker image.
+
 ## 1.42.33 — 2026-11-05
 
 1. [PR #492](https://github.com/StealthCat/MrPatchy/pull/492): Add the first, pure read-only firmware inventory contract for normalizing bounded fwupd device and release data, advertising provider capabilities, classifying explicit non-healthy states, redacting serials by default and reconciling disconnected identities without transferring approval. Compatibility: no API, persistence, collection, UI, installation or runtime response-authorization change; this module is a foundation for later firmware delivery slices. Material limits: agent/bridge collection, migrations, fleet API/UI, execution and a tested platform matrix remain unresolved under #397; malformed provider data and failed collection status are conservatively non-healthy. This source update does not publish a Docker image.
