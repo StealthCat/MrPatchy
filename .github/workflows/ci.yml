@@ -18,11 +18,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '26'
       - name: Source version and changelog consistency
@@ -47,6 +47,12 @@ jobs:
           python -m pip install --quiet -r requirements-lint.txt
           ruff check --no-cache --select F app target scripts tools
           ruff check --no-cache --select F821 tests
+      - name: Dependency vulnerability gate
+        # Policy and exception rules: docs/SECURITY_IMPLEMENTATION.md (issue #201).
+        run: |
+          python -m pip install --quiet -r requirements-audit.txt
+          pip-audit --require-hashes --disable-pip --no-deps -r requirements.lock --format json --output pip-audit.json || test -s pip-audit.json
+          python tools/dependency_policy.py pip-audit.json
       - name: Python byte-compilation
         run: python -m compileall -q app target scripts tools tests
       - name: Shell syntax
@@ -66,8 +72,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
       - name: Coordinator version and PR traceability
@@ -82,8 +88,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
           cache: pip
@@ -100,13 +106,15 @@ jobs:
       - run: docker build -t mrpatchy:test .
       - name: Native Caddy dual-issuer adapter checks
         run: |
-          docker create --name mrpatchy-caddy-adapter caddy:2.10
+          docker create --name mrpatchy-caddy-adapter caddy:2.10@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
           docker cp mrpatchy-caddy-adapter:/usr/bin/caddy /tmp/mrpatchy-caddy
           docker rm mrpatchy-caddy-adapter
           CADDY_BIN=/tmp/mrpatchy-caddy python -m pytest tests/test_tls_profiles.py -k native_caddy -q
       - name: Compose HTTPS startup smoke test
         run: |
           printf '%s\n' 'ADMIN_PASSWORD=ci-disposable-password-only' 'DOMAIN=localhost' 'PUBLIC_URL=https://localhost' > .env.ci
+          docker compose --env-file .env.ci config --quiet
+          GCP_PROJECT=ci-disposable-project GCP_ZONE=us-central1-a docker compose --env-file .env.ci -f compose.yaml -f compose.gcp.yaml config --quiet
           docker compose --env-file .env.ci up --build -d --wait
           for attempt in $(seq 1 20); do
             docker compose --env-file .env.ci cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/mrpatchy-ci-root.crt && break
@@ -151,8 +159,8 @@ jobs:
       TEST_DATABASE_URL: mysql+pymysql://mrpatchy_test:disposable-test-password@127.0.0.1:3306/mrpatchy_test?charset=utf8mb4
       MRPATCHY_TEST_SHARD: ${{ matrix.shard }}/4
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
           cache: pip
@@ -173,8 +181,8 @@ jobs:
       matrix:
         target: ['ubuntu:24.04', 'debian:bookworm-slim']
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
           cache: pip
@@ -192,13 +200,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements*.txt
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '26'
           cache: npm
@@ -222,7 +230,7 @@ jobs:
       matrix:
         target: ['fedora:44', 'almalinux:9']
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Native RPM fixture tools
         timeout-minutes: 5
         run: |
@@ -242,7 +250,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: docker build -t mrpatchy:base .
       - run: docker build -f deploy/Dockerfile.gcp -t mrpatchy:gcp .
       - name: Verify unprivileged Google CLI runtime

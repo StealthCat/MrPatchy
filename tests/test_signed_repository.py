@@ -61,7 +61,7 @@ def test_central_apt_verifies_signatures_and_package_hashes(tmp_path,monkeypatch
         ca=cert.public_bytes(serialization.Encoding.PEM).decode()
         (tmp_path/'cert.pem').write_text(ca)
         (tmp_path/'key.pem').write_bytes(tlskey.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
-        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(tmp_path/'cert.pem',tmp_path/'key.pem')
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2;context.load_cert_chain(tmp_path/'cert.pem',tmp_path/'key.pem')
         server.socket=context.wrap_socket(server.socket,server_side=True)
         uri='https://127.0.0.1:'+str(server.server_port)
         access={'ca':ca,'mirrors':{'file:/fixture':uri},'credentials':[{'machine':uri,'login':'test','password':'secret'}]}

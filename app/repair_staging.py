@@ -2,6 +2,7 @@
 import base64
 import time
 import uuid
+from types import SimpleNamespace
 from sqlalchemy import String,Double,JSON,Text,select
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
@@ -91,8 +92,7 @@ def validate(result,row):
     if result['state']=='not_found' and (result['received'] or any(facts.values())):raise ValueError('Contradictory missing stage')
     if result['state']=='capacity_reached' and (result['received'] or any(facts.values()) or result['readiness'] is None):raise ValueError('Contradictory staging capacity refusal')
     if result['readiness'] is not None:
-        class Original:pass
-        original=Original();original.id=row.quarantine_id;original.plan=row.plan['quarantine_plan']
+        original=SimpleNamespace(id=row.quarantine_id,plan=row.plan['quarantine_plan'])
         repair_preparation.validate(result['readiness'],original,row.plan['manifest'])
     if result['state']=='blocked' and (not result['readiness'] or result['readiness']['state']!='blocked'):raise ValueError('Missing blocked readiness observation')
 

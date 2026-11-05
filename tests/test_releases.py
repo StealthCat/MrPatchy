@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 import uuid
 import pytest
-from app import releases,worker,ssh
+from app import ai_runs,releases,worker,ssh
 from app.db import Session,Host,Job,Setting
 from app.security import unseal
 from target import release
@@ -258,6 +258,62 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
         assert row.digest==release.digest(release.canonical(plan))
 
 
+@pytest.mark.parametrize('change_completed_evidence',[False,True])
+def test_release_plan_deferral_resumes_only_exact_completed_reviews(admin,monkeypatch,tmp_path,change_completed_evidence):
+    first='/etc/nginx/one.conf';second='/etc/nginx/two.conf'
+    inv=inventory();inv['status']='Package: nginx\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\nConffiles:\n'
+    for path,content in ((first,'old one\n'),(second,'old two\n')):
+        inv['status']+=f' {path} {hashlib.md5(content.encode()).hexdigest()}\n'
+    inv['status']+='\n'
+    target=release.transition(inv)
+    inspection={'inventory':inv,'fingerprint':release.fingerprint(inv),'target':target,'blockers':[],
+        'custom_validator':True,'execution_files':{},'services':['nginx.service'],
+        'runner_sha256':release.digest(Path(release.__file__).read_bytes())}
+    configs={path:{'package':'nginx','content':content,'sha256':release.digest(content.encode()),
+        'uid':0,'gid':0,'mode':0o644} for path,content in ((first,'old one\n'),(second,'old two\n'))}
+    monkeypatch.setattr(releases.apt,'DATA',tmp_path)
+    monkeypatch.setattr(releases,'simulate',lambda *a:(tmp_path,tmp_path/'apt.conf',
+        {'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main\n'},[],
+        [{'action':'install','package':'nginx','version':'2'}]))
+    monkeypatch.setattr(releases,'vendor_files',lambda *a:{first:'vendor one\n',second:'vendor two\n'})
+    monkeypatch.setattr(ssh,'call',lambda host,request,**kw: inspection if request['action']=='release-inspect'
+        else {'configs':configs} if request['action']=='release-configs' else pytest.fail(request['action']))
+    calls=[]
+    def pause_second(session,target,path,current,vendor,news,**kwargs):
+        calls.append(path)
+        if path==second:raise releases.ai.AIError('Daily cap reached.',policy_wait=True,retry_after=90)
+        return {'content':current+'planned\n','reason':'Preserve the first local setting','blockers':[]}
+    monkeypatch.setattr(releases,'ai_review',pause_second)
+    with Session() as session:
+        host=Host(id='release-resume-host',name='Release resume host',address='192.0.2.40',fingerprint='fixture')
+        row=releases.ReleasePlan(id=str(uuid.uuid4()),host_id=host.id)
+        job=Job(id=str(uuid.uuid4()),host_id=host.id,action='release-plan',payload={'plan_id':row.id})
+        row.job_id=job.id;session.add_all([host,row,job]);session.commit();job_id=job.id;plan_id=row.id
+    worker.execute(job_id)
+    with Session() as session:
+        job=session.get(Job,job_id);row=session.get(releases.ReleasePlan,plan_id);partial=releases.body(row)
+        assert job.state=='queued' and 89<=job.next_at-time.time()<=90 and job.payload['_ai_deferred'] is True
+        assert row.state=='planning' and list(partial['review_progress']['results'])==[first]
+        assert [review['path'] for review in partial['reviews']]==[first]
+        assert ai_runs.status(session)['plan_deferred']==1
+        job.next_at=0;session.commit()
+    if change_completed_evidence:
+        configs[first]={**configs[first],'content':'changed one\n','sha256':release.digest(b'changed one\n')}
+    resumed=[]
+    def finish(session,target,path,current,vendor,news,**kwargs):
+        resumed.append(path)
+        return {'content':current+'planned\n','reason':'Preserve the current local setting','blockers':[]}
+    monkeypatch.setattr(releases,'ai_review',finish)
+    worker.execute(job_id)
+    with Session() as session:
+        job=session.get(Job,job_id);row=session.get(releases.ReleasePlan,plan_id);plan=releases.body(row)
+        assert job.state=='complete' and '_ai_deferred' not in job.payload
+        assert row.state=='ready' and 'review_progress' not in plan
+        assert [review['path'] for review in plan['reviews']]==[first,second]
+    assert calls==[first,second]
+    assert resumed==([first,second] if change_completed_evidence else [second])
+
+
 def test_service_recovery_ignores_transient_login_sessions():
     output='nginx.service loaded active running Web server\nuser@1000.service loaded active running User manager\nssh@old-connection.service loaded active running SSH session\nssh.service loaded active running SSH daemon\nmrpatchy-release-job.service loaded active running Release runner\n'
     assert release.service_inventory(output)==['nginx.service','ssh.service']
@@ -443,3 +499,109 @@ def test_post_upgrade_rollback_handles_disappeared_normal_timer(tmp_path,monkeyp
         boot_id=lambda:'new' if rebooted else 'old',recovery_hook=lambda *a:{'reboot_required':True}))
     assert release.rollback(identifier)['state']=='rollback_reboot_pending'
     assert any(cmd[0]=='systemd-run' and 'rollback-reboot' in cmd[1] for cmd in calls)
+
+
+def test_clean_start_refusal_reports_target_reason_and_fails_without_recovery_hold(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        def call(host,req,**kw):
+            calls.append(req['action'])
+            if req['action']=='release-start':raise ssh.RemoteFailure('Release plan expired')
+            return {'state':'absent'}
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(releases.Refused,match='Release plan expired'):releases.execute(s,h,job)
+        assert calls==['release-status','release-start','release-status']
+        assert '_release_submitted' not in job.payload
+
+
+def test_rollback_refusal_is_reported_immediately(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);job.payload={**job.payload,'_release_submitted':True,'_release_health':{'key':'reboot_pending:b1','deadline':0}};s.commit()
+        def call(host,req,**kw):
+            a=req['action']
+            if a=='release-status':return {'state':'reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1'}
+            if a=='release-verify':raise OSError('down')
+            if a=='recovery-status':return {'boot_id':'b1'}
+            raise ssh.RemoteFailure('Rollback unavailable or already attempted')
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(RuntimeError,match='Rollback unavailable'):releases.execute(s,h,job)
+
+
+def test_expired_plan_is_refused_centrally_before_release_start(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        plan=releases.body(row);plan['expires']=time.time()-1;releases.store(row,plan);s.commit()
+        job.payload={**job.payload,'digest':row.digest};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action']);return {'state':'absent'}
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(releases.Refused,match='expired'):releases.execute(s,h,job)
+        assert calls==['release-status'] and '_release_submitted' not in job.payload
+
+
+def test_resume_after_observation_window_still_reads_the_receipt(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action']);return {'state':'complete','digest':row.digest,'job':job.id}
+        monkeypatch.setattr(ssh,'call',call)
+        assert releases.execute(s,h,job)['outcome']=='complete' and calls==['release-status']
+
+
+def test_expired_window_with_unfinished_receipt_does_not_act_on_target(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action']);return {'state':'upgrading','digest':row.digest,'job':job.id}
+        monkeypatch.setattr(ssh,'call',call)
+        with pytest.raises(RuntimeError,match='four-hour'):releases.execute(s,h,job)
+        assert calls==['release-status']
+
+
+def test_no_reboot_rollback_with_lost_reply_is_seen_in_the_receipt(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        saved_receipt={'state':'rollback_reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1','rollback_attempted':True}
+        job.payload={**job.payload,'_release_submitted':True,'_release_receipt':saved_receipt,'_release_health':{'key':'rollback_reboot_pending:b1','deadline':time.time()+900}};s.commit()
+        def call(host,req,**kw):
+            a=req['action'];calls.append(a)
+            if a=='recovery-status':return {'boot_id':'b1'}
+            if a=='release-status':return {'state':'rolled_back','digest':row.digest,'job':job.id}
+            return {'state':'rolled_back'}
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        assert releases.execute(s,h,job)['outcome']=='rolled_back'
+        assert 'release-status' in calls and 'release-rollback' not in calls
+
+
+@pytest.mark.parametrize('target',['rolled_back','complete'])
+def test_resume_after_window_with_saved_rollback_receipt_reads_target_once(admin,monkeypatch,target):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        saved_receipt={'state':'rollback_reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1','rollback_attempted':True}
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True,'_release_receipt':saved_receipt};s.commit()
+        def call(host,req,**kw):
+            a=req['action'];calls.append(a)
+            if a=='recovery-status':return {'boot_id':'b1'}
+            if a=='release-status':return {'state':target,'digest':row.digest,'job':job.id}
+            if a=='release-restored':return {'state':'rolled_back'}
+            raise AssertionError(req)
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        assert releases.execute(s,h,job)['outcome']==target
+        assert calls[0]=='release-status'
+        assert not {'release-verify','release-rollback','release-start'}&set(calls)
+
+
+def test_resume_after_window_with_saved_rollback_receipt_unfinished_takes_no_action(admin,monkeypatch):
+    with Session() as s:
+        h,row,job=release_job(s);calls=[]
+        saved_receipt={'state':'rollback_reboot_pending','digest':row.digest,'job':job.id,'boot_before':'b1','rollback_attempted':True}
+        job.payload={**job.payload,'_release_started':time.time()-5*3600,'_release_submitted':True,'_release_receipt':saved_receipt};s.commit()
+        def call(host,req,**kw):
+            calls.append(req['action'])
+            if req['action']=='release-status':return {'state':'absent'}
+            raise AssertionError(req)
+        monkeypatch.setattr(ssh,'call',call);monkeypatch.setattr(releases.time,'sleep',lambda n:None)
+        with pytest.raises(RuntimeError,match='four-hour'):releases.execute(s,h,job)
+        assert calls==['release-status']

@@ -12,6 +12,8 @@ engine = create_engine(URL, pool_pre_ping=True, **({'connect_args': {'check_same
 if URL.startswith('sqlite'):
     @event.listens_for(engine, 'connect')
     def sqlite_setup(conn, _):
+        from .sqlite_money import MoneySum
+        conn.create_aggregate('mrpatchy_money_sum', 1, MoneySum)
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA foreign_keys=ON')
 Session = sessionmaker(engine, expire_on_commit=False)
@@ -48,6 +50,7 @@ class Package(Base):
     candidate: Mapped[str] = mapped_column(String(240), default='')
     priority: Mapped[str] = mapped_column(String(20), default='normal')
     priority_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    repository_priority: Mapped[str] = mapped_column(String(20), default='')
     available_since: Mapped[float] = mapped_column(Double, default=0)
     held: Mapped[bool] = mapped_column(Boolean, default=False)
     dpkg_state: Mapped[str] = mapped_column(String(80), default='install ok installed')
@@ -106,7 +109,7 @@ def config(s):
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
 def register_models():
     # Imports register mappings only; no DDL or web application bootstrap.
-    from . import identity,operations,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good  # noqa: F401
+    from . import identity,operations,notifications,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good  # noqa: F401
     from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health,service_monitor,execution_scans  # noqa: F401
 
 def init():
@@ -127,6 +130,8 @@ def init():
         columns={c['name'] for c in inspect(connection).get_columns('packages')}
         if 'dpkg_state' not in columns:
             connection.execute(text("ALTER TABLE packages ADD COLUMN dpkg_state VARCHAR(80) NOT NULL DEFAULT 'install ok installed'"))
+        if 'repository_priority' not in columns:
+            connection.execute(text("ALTER TABLE packages ADD COLUMN repository_priority VARCHAR(20) NOT NULL DEFAULT ''"))
         score_columns={c['name'] for c in inspect(connection).get_columns('update_scores')}
         if 'next_at' not in score_columns:
             connection.execute(text('ALTER TABLE update_scores ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
