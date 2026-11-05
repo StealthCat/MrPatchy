@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.25 — 2026-11-05
+
+1. [PR #457](https://github.com/StealthCat/MrPatchy/pull/457): Create APT and RPM repository-key directories with an explicit `0755` mode despite the bridge's restrictive umask, and repair existing bridge-owned `0700` key directories before saving a key so `_apt` and package tooling can traverse them. Compatibility: no API, configuration or runtime response-authorization change; symlink destinations and directories not owned by the bridge user remain refused. Completes #421. This source update does not publish a Docker image.
+
 ## 1.42.24 — 2026-11-05
 
 1. [PR #462](https://github.com/StealthCat/MrPatchy/pull/462): Report clean target-side release start, status and rollback refusals with their actual message, and fail a refused start without placing the server in `recovery_required` when a follow-up status confirms that no receipt or target mutation exists. Compatibility: no API, configuration or runtime response-authorization change; transport failures and any submitted or uncertain release still retain the existing observation and reconciliation safeguards. Material limits: central plan-expiry validation, an unchanged-boot status re-read during rollback recovery and a final status read before the four-hour observation timeout remain unresolved under #426. This source update does not publish a Docker image.
