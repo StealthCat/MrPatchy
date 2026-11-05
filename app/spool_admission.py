@@ -13,6 +13,7 @@ PRIORITIES=('security','normal','low')   # most to least important
 ADMIT='admit'
 REFUSE='refuse'
 REASONS=('invalid','oversize','free_space_reserve','capacity','critical_pressure')
+COUNTER_MAX=2**53   # loss counters saturate here (largest exactly-representable JSON/float integer bound)
 
 
 def _count(value):
@@ -58,8 +59,28 @@ def admit(record_bytes,priority,*,logical_bytes,physical_bytes,capacity_bytes,fr
     written=size+overhead
     if free-written<reserve:return _refuse('free_space_reserve',level)
     if logical+size>capacity or physical+written>capacity:return _refuse('capacity',level)
-    if level=='critical' and priority!='security':return _refuse('critical_pressure',level)
+    # The priority gate uses the projected post-append pressure as well as the
+    # current one, so a lower-priority record cannot cross from warning into the
+    # critical headroom (or fill the spool) that is reserved for security records.
+    projected=pressure(logical+size,physical+written,capacity)
+    if priority!='security' and 'critical' in (level,projected):return _refuse('critical_pressure',level)
     return {'decision':ADMIT,'reason':None,'pressure':level,'counted_loss':False}
+
+
+def _counter(value):
+    """Previous ledger counter: non-negative integer, clamped to COUNTER_MAX.
+
+    Unlike _count, a value at or above the bound is kept (saturated) rather than
+    rejected, so the ledger never resets its own earlier output within an epoch.
+    """
+    if isinstance(value,bool) or not isinstance(value,(int,float)):return 0
+    if isinstance(value,float) and (not math.isfinite(value) or not value.is_integer()):return 0
+    if value<0:return 0
+    return min(int(value),COUNTER_MAX)
+
+
+def _add(current,n):
+    return min(_counter(current)+n,COUNTER_MAX)
 
 
 def loss_ledger(ledger,decision,priority,observations=1):
@@ -67,16 +88,20 @@ def loss_ledger(ledger,decision,priority,observations=1):
 
     The ledger carries an epoch so a reset database is distinguishable from
     zero historical loss. Admitted decisions return the ledger unchanged.
+    Counters are monotonic within an epoch and saturate at COUNTER_MAX; once
+    any counter saturates the ledger carries 'saturated': True.
     """
     base=ledger if isinstance(ledger,dict) else {}
     epoch=base.get('epoch') if isinstance(base.get('epoch'),str) and base.get('epoch') else 'unknown'
     by=dict(base.get('by_reason',{})) if isinstance(base.get('by_reason'),dict) else {}
     out={'epoch':epoch,'by_reason':by,'by_priority':dict(base.get('by_priority',{})) if isinstance(base.get('by_priority'),dict) else {}}
-    if decision.get('decision')!=REFUSE:return out
+    if base.get('saturated') is True:out['saturated']=True
+    if not isinstance(decision,dict) or decision.get('decision')!=REFUSE:return out
     n=_count(observations)
     n=1 if n is None else n
     reason=decision.get('reason') if decision.get('reason') in REASONS else 'invalid'
-    by[reason]=(_count(by.get(reason)) or 0)+n
+    by[reason]=_add(by.get(reason),n)
     key=priority if priority in PRIORITIES else 'invalid'
-    out['by_priority'][key]=(_count(out['by_priority'].get(key)) or 0)+n
+    out['by_priority'][key]=_add(out['by_priority'].get(key),n)
+    if COUNTER_MAX in (by[reason],out['by_priority'][key]):out['saturated']=True
     return out
