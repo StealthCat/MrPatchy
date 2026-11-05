@@ -105,3 +105,16 @@ def test_repository_freshness_and_candidate_status_are_distinguished(admin):
     assert rows['stale:vim']['repo_state'] == 'failed' and rows['stale:vim']['repo_error'] == 'mirror unreachable'
     with Session() as s: s.get(Host, 'h0').last_repo = 0; s.commit()
     assert {r['id']: r for r in admin.get('/api/fleet/updates').json()['items']}['h0:bash']['repo_state'] == 'unknown'
+
+
+def test_apt_and_rpm_candidates_keep_native_version_and_architecture_identity(admin):
+    seed()
+    with Session() as s:
+        s.add_all([
+            Package(id='h1:libssl3:amd64', host_id='h1', name='libssl3:amd64', installed='3.0.2-0ubuntu1.15', candidate='3.0.2-0ubuntu1.18', priority='high'),
+            Package(id='h1:kernel:x86_64', host_id='h1', name='kernel:x86_64', installed='0:5.14.0-427.el9', candidate='1:5.14.0-503.el9', priority='high'),
+        ]); s.commit()
+    rows = {r['id']: r for r in admin.get('/api/fleet/updates', params={'priority': 'high'}).json()['items']}
+    assert (rows['h1:libssl3:amd64']['name'], rows['h1:libssl3:amd64']['candidate']) == ('libssl3:amd64', '3.0.2-0ubuntu1.18')
+    assert (rows['h1:kernel:x86_64']['installed'], rows['h1:kernel:x86_64']['candidate']) == ('0:5.14.0-427.el9', '1:5.14.0-503.el9')
+    assert rows['h1:kernel:x86_64']['status'] == 'available' and rows['h1:kernel:x86_64']['name'] == 'kernel:x86_64'
