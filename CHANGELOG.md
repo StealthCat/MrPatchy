@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.30 — 2026-11-05
+
+1. [PR #489](https://github.com/StealthCat/MrPatchy/pull/489): Bind behavior approval and revocation to the exact assessment revision shown to the administrator, expose that revision in the investigations listing, reject stale decisions with HTTP 409 and refresh the web view before another decision. Compatibility: API clients calling `PUT /api/investigations/{id}` must now send the 64-character `expected_revision` returned by `GET /api/investigations`; omitting or malforming it returns HTTP 422. Runtime response authorization is unchanged. Material limits: the revision fence applies to behavior approval and revocation only; AI assessments remain advisory, and this change does not alter triage admission, evidence validation or known-good scope. Completes #413. This source update does not publish a Docker image.
+
 ## 1.42.29 — 2026-11-05
 
 1. [PR #485](https://github.com/StealthCat/MrPatchy/pull/485): Give every package-priority selector and repository-source editor a specific accessible name, and replace nested installer-download buttons with valid styled download links across enrollment and server management. Compatibility: no API, configuration, permission, runtime response-authorization or workflow change; existing installer URLs and download behavior are preserved. Material limits: this fixes the reported naming and nested-control defects only and does not constitute a complete accessibility audit. Completes #442. This source update does not publish a Docker image.
