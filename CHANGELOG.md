@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.20 — 2026-11-04
+
+1. [PR #467](https://github.com/StealthCat/MrPatchy/pull/467): Keep an in-flight AI behavior-triage lease valid when the same behavior re-spawns under a new process identity, while preserving the latest observed identity through follow-up evidence collection so a validated provider verdict is not discarded or overwritten by stale observation state. Compatibility: no API, configuration, approval, retry or runtime response-authorization change; only the observation-only `process_identity` is excluded from the live lease revision, while evidence, approval, attempt and AI-configuration changes still fence late results, and remote evidence remains bound to the originally verified identity. Completes #412. This source update does not publish a Docker image.
+
 ## 1.42.19 — 2026-11-04
 
 1. [PR #465](https://github.com/StealthCat/MrPatchy/pull/465): Make encrypted off-host recovery backups follow an activated SQLite migration profile by rebasing its container `/data/...` database path onto the host `--data` directory, while refusing the `/data` directory itself, traversal escapes and paths outside that container data root. Compatibility: default deployments and non-SQLite profiles are unchanged; recovery backup now rejects active SQLite profiles outside `/data`, and a source-path symlink remains subject to the host filesystem's normal resolution behavior. No API or runtime response-authorization change. Completes #408. This source update does not publish a Docker image.
