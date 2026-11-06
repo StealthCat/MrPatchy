@@ -2158,6 +2158,18 @@ and per-server occupancy can still delay dispatch. Existing counts and
 non-administrator fields are preserved. Production throughput comparisons and
 the broader dashboard acceptance remain open.
 
+### Live process-triage lease telemetry
+
+The administrator investigation status API reports
+`active_lease_expires_at`, the earliest expiry among currently live process
+investigation claims, or null when no claim is live. Expired claims are
+excluded. The AI worker status displays this boundary with the active count so
+an administrator can tell when an unrenewed slot becomes eligible for fenced
+recovery. Expiry does not prove a provider request stopped or was not billed.
+This telemetry is read-only: it does not renew, reconcile, cancel, retry or
+otherwise alter a claim. Full multi-controller failover and production
+recovery acceptance remain open.
+
 ### Fleet-wide exact-match known-good cache
 
 Additional user requirement (2026-10-30): once an item has completed triage and is
