@@ -42,7 +42,7 @@ module.exports=async(page,capture)=>{
  assert.match(await page.locator('#ai-settings-form').textContent(),/Provider backoff active.*2 consecutive.*recorded.*next eligible/s);
  await page.getByRole('button',{name:'Review and clear provider backoff'}).click();
  const clearForm=page.locator('#provider-backoff-clear-form');await clearForm.waitFor();
- assert.match(await clearForm.textContent(),/newer or expired floor will be preserved.*sends no provider or target request/s);
+ assert.match(await page.locator('#modal-body').textContent(),/newer or expired floor will be preserved.*sends no provider or target request/s);
  await clearForm.getByLabel('Reason').fill('Reviewed provider status and current quota.');
  await clearForm.getByLabel('Type CLEAR BACKOFF').fill('CLEAR BACKOFF');
  await clearForm.getByRole('button',{name:'Clear reviewed provider backoff'}).click();
