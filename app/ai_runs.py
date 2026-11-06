@@ -260,13 +260,25 @@ def task_failure(error):
     log.error('AI worker task failed: %s',message)
 
 
+def _pending_behavior_scope():
+    from . import host_lifecycle
+    return (Behavior.approved==False,Behavior.verdict.in_(('pending','error')),
+        Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
+
+
+def viewer_status(s):
+    pending,oldest=s.execute(select(func.count(),func.min(Behavior.first_seen))
+        .select_from(Behavior).where(*_pending_behavior_scope())).one()
+    return {'pending':pending,'oldest':oldest,'enabled':config(s)['ai_enabled']}
+
+
 def status(s):
     from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,ai_provider_backoff,worker_registry
     from .update_scores import UpdateScore
     now=time.time(); cfg=config(s)
     signature=ai_retry.configuration(s)
     TR=ai_retry.TriageRetry
-    pending_where=(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
+    pending_where=_pending_behavior_scope()
     unpaused=Behavior.host_id.not_in(ai_policy.paused_ids())
     ready_sql=ai_retry.eligible(signature,now)
     blocked_sql=and_(TR.subject.is_not(None),or_(TR.state=='blocked',and_(TR.state=='interrupted',TR.attempts>=ai_retry.MAX_ATTEMPTS)),~ready_sql)
