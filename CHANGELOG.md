@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.41 — 2026-11-05
+
+1. [PR #251](https://github.com/StealthCat/MrPatchy/pull/251): Add composite indexes for the retained jobs table's host/state, host/action/created, host-history, fleet-history and state/created query shapes, including idempotent startup creation for existing databases, so scheduler admission, queue checks, latest refreshes and Activity history avoid full-table scans and temporary ordering. Compatibility: this is an additive schema change with no API, ordering, recovery or runtime response-authorization change; the first start after upgrade creates the missing indexes and may take time on a large history table. Material limits: indexes consume database storage and add normal write-maintenance cost, and the change does not add job retention or rewrite other queries. This source update does not publish a Docker image. Completes #130.
+
 ## 1.42.40 — 2026-11-05
 
 1. [PR #261](https://github.com/StealthCat/MrPatchy/pull/261): Compute AI investigation-status triage counts, retry minima, recent attempts and deferred-plan summaries with bounded SQL aggregates, and count recent automatic security/startup plans without loading full pending behavior or job rows. Related triage counts now share one database statement so a concurrent insert cannot make the paused count negative, while the status response shape and existing eligibility rules remain unchanged. Compatibility: no API, schema, configuration or runtime response-authorization change. Material limits: the queries still inspect the matching database rows and do not change AI admission, provider calls or retry policy; this source update does not publish a Docker image. Completes #184.
