@@ -6047,7 +6047,9 @@ configuration, a shared provider backoff, a smooth-rate wait and a fully consume
 daily-cap window as separate fixed-code entries. When several finite gates overlap,
 the reported next start is the latest gate time rather than an earlier time at which
 another control would still refuse the call. An indefinite policy/configuration hold
-never claims a future start.
+never claims a future start. A retained budget window that outlives the currently
+configured timezone reset likewise exposes that reset only as a recheck boundary and
+does not claim that headroom will be available then.
 
 The snapshot is read-only and contains no model name, key, prompt, evidence, provider
 body, call/run identifier or ledger record. It performs no provider or target traffic.

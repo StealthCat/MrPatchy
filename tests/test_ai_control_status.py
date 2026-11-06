@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import datetime, timezone
 
 from app import ai_admission, ai_budget, ai_control_status, ai_provider_backoff
 from app.db import Session, Setting
@@ -57,6 +58,32 @@ def test_indefinite_policy_or_configuration_blocker_refuses_a_claimed_time(admin
         result = ai_control_status.snapshot(session, 1000)
     assert not result['can_start_now'] and result['next_start_at'] is None
     assert [item['code'] for item in result['blockers']] == ['disabled', 'configuration', 'rate_throttle']
+
+
+def test_timezone_overlap_exposes_recheck_without_promising_headroom(admin):
+    now = datetime(2026, 3, 8, 8, 0, tzinfo=timezone.utc).timestamp()
+    created = datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc).timestamp()
+    configure(mode='daily_cap', cap=1)
+    old_reset = ai_budget._window(created, 'Pacific/Pago_Pago')[1]
+    configured_reset = ai_budget._window(now, 'Pacific/Kiritimati')[1]
+    with Session() as session:
+        settings = session.get(Setting, 'config').value
+        settings['ai_budget_timezone'] = 'Pacific/Kiritimati'
+        session.merge(Setting(key='config', value=settings))
+        session.add(ai_budget.BudgetEntry(id='old-window', created=created, updated=created,
+            reset_at=old_reset, timezone='Pacific/Pago_Pago', model='fixture-model', status='sent',
+            reservation_usd=Decimal('1'), pricing_version='fixture', pricing_source='fixture'))
+        session.commit()
+        result = ai_control_status.snapshot(session, now)
+        assert ai_budget.status(session, configured_reset)['remaining_usd'] == '0'
+        assert ai_budget.status(session, old_reset)['remaining_usd'] == '1'
+
+    blocker = result['blockers'][0]
+    assert blocker['code'] == 'daily_cap'
+    assert blocker['next_at'] is None
+    assert blocker['recheck_at'] == configured_reset
+    assert result['next_start_at'] is None
+    assert 'recheck boundary only' in blocker['message']
 
 
 def test_unthrottled_configured_snapshot_is_read_only_and_explains_remaining_gates(admin):

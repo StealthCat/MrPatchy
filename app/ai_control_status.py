@@ -29,8 +29,8 @@ def snapshot(session, now=None):
     provider = ai_provider_backoff.status(session, now)
     blockers = []
 
-    def add(code, message, next_at=None):
-        blockers.append({'code': code, 'message': message, 'next_at': next_at})
+    def add(code, message, next_at=None, recheck_at=None):
+        blockers.append({'code': code, 'message': message, 'next_at': next_at, 'recheck_at': recheck_at})
 
     if not settings['ai_enabled']:
         add('disabled', 'Central AI provider calls are disabled by an administrator.')
@@ -41,7 +41,11 @@ def snapshot(session, now=None):
     if admission['mode'] in ('rate', 'rate_and_daily') and admission['next_at'] and admission['next_at'] > now:
         add('rate_throttle', 'The shared smooth-rate throttle is waiting for its next start.', admission['next_at'])
     if budget['enabled'] and _money_exhausted(budget['remaining_usd']):
-        add('daily_cap', 'The daily spend cap has no remaining recorded headroom.', budget['next_reset'])
+        if budget['next_reset_authoritative']:
+            add('daily_cap', 'The daily spend cap has no remaining recorded headroom.', budget['next_reset'])
+        else:
+            add('daily_cap', 'The daily spend cap has no remaining recorded headroom; retained prior windows make the configured reset a recheck boundary only.',
+                recheck_at=budget['next_reset'])
 
     indefinite = any(item['next_at'] is None for item in blockers)
     finite = [item['next_at'] for item in blockers if item['next_at'] is not None]
