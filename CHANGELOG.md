@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.45 — 2026-11-06
+
+1. [PR #572](https://github.com/StealthCat/MrPatchy/pull/572): Reject invalid or oversized OpenAI Responses API requests locally with a fixed, redacted diagnostic. The shared request path validates strict UTF-8 JSON against a 2,000,000-byte encoded ceiling before provider backoff, budget or rate admission, then sends the validated bytes. Compatibility: valid requests keep their existing wire format and structured pricing inputs. The response limit, API, schema and runtime response authorization remain unchanged. The ceiling applies to the shared Responses API request body. This source update does not publish a Docker image. Completes #568.
+
 ## 1.42.44 — 2026-11-06
 
 1. [PR #565](https://github.com/StealthCat/MrPatchy/pull/565): Cap pooled OpenAI Responses API replies at 2,000,000 decoded bytes with bounded streaming for identity and gzip. Oversized declared bodies are refused before reading, and oversized or invalid replies are closed without accepting partial results. Compatibility: provider POSTs advertise gzip and also accept identity. Unsupported or malformed encodings are rejected. Calls with unavailable usage remain conservatively counted when sent, and requests are never replayed automatically. Schema, API and response authorization are unchanged. The limit applies to pooled Responses API POST replies. This source update does not publish a Docker image. Completes #564.

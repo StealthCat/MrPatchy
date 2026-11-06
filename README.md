@@ -646,6 +646,10 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+The shared OpenAI Responses API client validates outgoing JSON against a
+2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
+requests receive a redacted local error without contacting the provider.
+
 Pooled OpenAI Responses API replies are limited to 2,000,000 decoded bytes and
 accept gzip or uncompressed bodies. Oversized or invalid replies produce a
 redacted diagnostic without accepting partial output or retrying automatically.
