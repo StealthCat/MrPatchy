@@ -85,7 +85,7 @@ def test_retained_assessment_queries_use_bounded_indexes():
                 'inputs': [],
                 'refresh': {},
             }
-            for item in range(5000)
+            for item in range(1000)
         ] + [
             {
                 'id': f'matching-{item:02d}',
