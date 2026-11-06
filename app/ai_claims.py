@@ -142,9 +142,14 @@ class Lease:
         self.stopped=threading.Event();self.lost=threading.Event()
 
     def validate(self,s):
-        claim=s.get(Claim,self.subject);row=s.get(Behavior,self.subject)
-        host=s.get(Host,self.host_id)
-        if (self.lost.is_set() or not claim or claim.token!=self.token or claim.expires<=time.time() or
+        if self.lost.is_set():raise Lost()
+        claim=s.get(Claim,self.subject)
+        if not claim or claim.token!=self.token or claim.expires<=time.time():
+            self.lost.set();raise Lost()
+        row=s.get(Behavior,self.subject)
+        host=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==self.host_id)).one_or_none()
+        # Recheck expiry and the heartbeat fence after database I/O.
+        if (self.lost.is_set() or claim.expires<=time.time() or
             not row or row.host_id!=self.host_id or ai_assessments.lease_revision(row)!=claim.revision or
             ai_retry.configuration(s)!=claim.configuration or not owner_valid(s,self.owner) or
             (host is not None and not host_lifecycle.active(host))):
