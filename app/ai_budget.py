@@ -71,7 +71,7 @@ def _window_start(reset_at,name):
 def _state(session,cfg,now):
     mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
-    groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
+    groups={key:(Decimal(0),0,None) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
     if enabled:
         # At most five result rows, regardless of receipt amounts or unknown statuses.
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
@@ -81,11 +81,11 @@ def _state(session,cfg,now):
         total=_aggregate(session,amount)
         # A row also counts while the window it was admitted under (its own reset_at) is still
         # open, so changing the reset timezone cannot hand back spend from that window.
-        query=select(bucket,total).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+        query=select(bucket,total,func.count(),func.min(BudgetEntry.created)).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
-        for key,value in session.execute(query):
+        for key,value,call_count,oldest in session.execute(query):
             total=Decimal(value or 0);counted+=total
-            if key in groups:groups[key]+=total
+            if key in groups:groups[key]=(total,call_count,oldest)
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
@@ -176,10 +176,14 @@ def status(session,now=None):
     enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
-    uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
+    sent,sent_count,sent_oldest=groups['sent']
+    uncertain,uncertain_count,uncertain_oldest=groups['uncertain']
+    oldest=min((t for t in (sent_oldest,uncertain_oldest) if t is not None),default=None)
+    reserved=groups['reserved'][0];settled=groups['settled'][0]
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
-        'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
+        'uncertain_usd':_money(sent+uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
+        'unreconciled_call_count':sent_count+uncertain_count,'oldest_unreconciled_reservation_at':oldest,
         'next_reset':reset if enabled else None,'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
         'pricing_catalog':ai_pricing.catalog_status(now)}
 

@@ -215,6 +215,8 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
     assert state['ai_control_mode']=='rate_and_daily'
     assert state['ai_budget']['cap_usd']=='12.5'
     assert state['ai_budget']['timezone']=='America/New_York'
+    assert state['ai_budget']['unreconciled_call_count']==0
+    assert state['ai_budget']['oldest_unreconciled_reservation_at'] is None
     assert state['ai_budget']['pricing_catalog']['state']=='fresh'
     assert state['ai_budget']['pricing_catalog']['expires_at']==ai_pricing.EXPIRES_AT
     body['ai_budget_timezone']='Not/A_Zone'
@@ -275,8 +277,37 @@ def test_status_totals_use_sql_aggregates_without_loading_ledger(admin):
     assert result['settled_usd']=='0.0000009'
     assert result['reserved_usd']=='0.4'
     assert result['uncertain_usd']=='0.35'
+    assert result['unreconciled_call_count']==100
+    assert result['oldest_unreconciled_reservation_at']==now
     assert result['counted_usd']=='0.7500009'
     assert result['remaining_usd']=='99.2499991'
+
+
+def test_reconciliation_summary_keeps_still_counted_prior_windows(admin):
+    from datetime import datetime, timezone
+
+    now=datetime(2026,3,9,0,30,tzinfo=timezone.utc).timestamp()
+    configure(mode='daily_cap',cap=Decimal('100'),timezone='UTC')
+    rows=[
+        ('sent-prior','sent',now-7200,now+3600),
+        ('uncertain-current','uncertain',now-60,now+86400),
+        ('sent-expired','sent',now-14400,now-3600),
+        ('unknown-prior','legacy_pending',now-10800,now+3600),
+    ]
+    with Session() as session:
+        session.add_all([
+            ai_budget.BudgetEntry(id=identifier,created=created,updated=now,reset_at=reset,
+                timezone='America/New_York',model='m',status=status,reservation_usd=Decimal('1'),
+                pricing_version='v',pricing_source='s')
+            for identifier,status,created,reset in rows
+        ])
+        session.commit()
+        result=ai_budget.status(session,now)
+
+    assert result['counted_usd']=='3'
+    assert result['uncertain_usd']=='2'
+    assert result['unreconciled_call_count']==2
+    assert result['oldest_unreconciled_reservation_at']==now-7200
 
 
 def test_unrecognized_status_rows_stay_counted_and_block_admission(admin):

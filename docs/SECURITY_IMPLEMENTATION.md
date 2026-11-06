@@ -5991,6 +5991,12 @@ unreleased states keep their conservative ceilings. Released unsent attempts do 
 count. The report contains only aggregate amounts, counts and window boundaries—no
 model names, keys, prompts, evidence, provider responses or pricing-source URLs.
 
+The current-budget summary also reports the number of counted transmitted calls
+awaiting reconciliation and the oldest retained reservation time among them.
+It includes sent and uncertain rows from still-counted prior windows. The
+display uses reservation time because the ledger has no separate transmission
+timestamp. No call identifiers or diagnostic evidence are needed.
+
 The administrator API validates a trailing 1–90 day range and performs fixed-precision
 SQL aggregation without materializing individual ledger records. Result groups are
 bounded to four persisted reset/timezone combinations per requested day (at most 360),
