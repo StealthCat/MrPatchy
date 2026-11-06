@@ -444,9 +444,10 @@ class ServerAIInput(BaseModel):
 
 @app.get('/api/hosts/{host_id}/security/ai-policy')
 def server_ai_policy(host_id:str,user=Depends(admin_user)):
-    from . import ai_policy
+    from . import ai_policy,ai_claims
     with Session() as s:
-        host_or_404(s,host_id);return ai_policy.status(s,host_id)
+        host_or_404(s,host_id)
+        return ai_policy.status(s,host_id)|ai_claims.occupancy(s,host_id)
 
 @app.put('/api/hosts/{host_id}/security/ai-policy')
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
@@ -462,8 +463,11 @@ def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user
             lock=worker.Lock('ai-provider:'+host_id) if pause_change else None
             if lock and not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
             try:
-                with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,
-                    body.expected_revision,body.reason,user['username'],body.concurrency_limit)
+                with Session() as s:
+                    host=host_or_404(s,host_id)
+                    occupancy=ai_claims.occupancy(s,host_id)
+                    return ai_policy.save(s,host,body.paused,body.expected_revision,body.reason,
+                        user['username'],body.concurrency_limit)|occupancy
             finally:
                 if lock:lock.release()
 
