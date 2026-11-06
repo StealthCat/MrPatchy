@@ -104,7 +104,12 @@ def test_actual_admission_query_uses_index_with_retained_history(admin):
         else:
             rows = plan.mappings().all()
             behavior_rows = [row for row in rows if row.get('table') == 'behaviors']
-            assert behavior_rows and all(row.get('key') == ADMISSION_INDEX for row in behavior_rows), rows
+            # Each verdict-range subquery uses the admission index. The outer
+            # query then resolves the winning identity through the primary key.
+            indexed = [row for row in behavior_rows if row.get('key') == ADMISSION_INDEX]
+            assert len(indexed) == 2, rows
+            assert all(row.get('type') != 'ALL' for row in behavior_rows), rows
+            assert all(row.get('key') in (ADMISSION_INDEX, 'PRIMARY') for row in behavior_rows), rows
 
     with lease:
         pass
