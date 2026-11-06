@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from decimal import Decimal
 import threading
 
@@ -97,6 +98,54 @@ def test_expired_catalog_does_not_add_a_spend_guard_without_a_cap(admin, monkeyp
     monkeypatch.setattr(ai_pricing.time, 'time', lambda: ai_pricing.EXPIRES_AT)
     # Budget admission remains disabled in modes that do not promise a daily cap.
     assert ai_budget.reserve(payload()) is None
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'rate', 'unthrottled'])
+def test_uncapped_reservation_skips_shared_lock_and_quote(admin, monkeypatch, mode):
+    configure(mode=mode)
+    actions = []
+    lock = ai_budget.Lock
+    quote = ai_pricing.reservation
+
+    def record_lock(name):
+        actions.append(name)
+        return lock(name)
+
+    def record_quote(request):
+        actions.append('quote')
+        return quote(request)
+
+    monkeypatch.setattr(ai_budget, 'Lock', record_lock)
+    monkeypatch.setattr(ai_pricing, 'reservation', record_quote)
+    assert ai_budget.reserve(payload()) is None
+    assert actions == []
+    with Session() as session:
+        assert session.query(ai_budget.BudgetEntry).count() == 0
+
+
+@pytest.mark.parametrize('new_mode,new_cap', [
+    ('rate', Decimal('1')),
+    ('daily_cap', Decimal('0.000001')),
+])
+def test_capped_reservation_rereads_settings_after_lock(admin, monkeypatch, new_mode, new_cap):
+    configure(cap=Decimal('1'))
+    lock = ai_budget.Lock
+
+    @contextmanager
+    def change_settings_while_entering(name):
+        assert name == 'ai-shared-budget'
+        configure(mode=new_mode, cap=new_cap)
+        with lock(name):
+            yield
+
+    monkeypatch.setattr(ai_budget, 'Lock', change_settings_while_entering)
+    if new_mode == 'rate':
+        assert ai_budget.reserve(payload('unknown-model')) is None
+    else:
+        with pytest.raises(ai.AIError, match='no remaining safe reservation'):
+            ai_budget.reserve(payload())
+    with Session() as session:
+        assert session.query(ai_budget.BudgetEntry).count() == 0
 
 
 def test_capped_catalog_warning_escalates_deduplicates_and_resolves(admin):

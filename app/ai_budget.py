@@ -107,8 +107,13 @@ def waiting(session,now,payload=None):
 def reserve(payload):
     """Atomically retain a conservative per-call amount before rate admission."""
     from .ai import AIError
+    with Session() as session:
+        if config(session)['ai_control_mode'] not in ai_pricing.CAP_MODES:
+            return None
+
     quote=ai_pricing.reservation(payload)
     with Lock('ai-shared-budget'):
+        # Read again after waiting: the preflight does not authorize a capped reservation.
         with Session() as session:
             cfg=config(session)
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
