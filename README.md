@@ -646,6 +646,10 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+A confirmed local HTTP connection-pool timeout receives a short local retry delay
+without creating or changing the fleet-wide provider backoff. Provider and ambiguous
+network timeouts still apply the shared cooldown and conservative spend accounting.
+
 The shared OpenAI Responses API client validates outgoing JSON against a
 2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
 requests receive a redacted local error without contacting the provider.
