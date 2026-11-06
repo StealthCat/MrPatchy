@@ -29,6 +29,7 @@ def report(execution='serial', concurrency=1):
                           'p95_ms': 0 if name == 'queue_age' else 20}
                    for name, count in counts.items()},
         'input_tokens': 1200, 'output_tokens': 240,
+        'workload_fingerprint': {'version': 1, 'sha256': 'a' * 64},
         'cost_status': 'unavailable: synthetic model, no paid calls', 'errors': 0,
     }
 
@@ -38,6 +39,9 @@ def test_comparison_reports_equivalent_deltas_and_zero_percent():
     assert result['capability_equivalent'] is True
     assert result['baseline']['name'] == 'serial.json'
     assert result['capability']['provider_calls'] == 12
+    assert result['capability']['workload_fingerprint'] == {
+        'version': 1, 'sha256': 'a' * 64,
+    }
     assert result['deltas']['elapsed_seconds']['percent'] == -62.5
     assert result['deltas']['runs_per_second']['percent'] == 166.675
     queue = result['deltas']['stages']['queue_age']['p50_ms']
@@ -60,6 +64,31 @@ def test_ssh_delay_mismatch_is_refused():
     candidate['ssh_delay_ms'] = 15
     with pytest.raises(compare_ai_benchmarks.ComparisonError, match='ssh_delay_ms differs'):
         compare_ai_benchmarks.compare(report(), candidate)
+
+
+def test_workload_fingerprint_mismatch_is_refused_even_when_counts_match():
+    candidate = report('parallel', 4)
+    candidate['workload_fingerprint']['sha256'] = 'b' * 64
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='workload_fingerprint differs'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
+@pytest.mark.parametrize(('fingerprint', 'message'), [
+    (None, 'must contain only version and sha256'),
+    ({'version': 1}, 'must contain only version and sha256'),
+    ({'version': 1, 'sha256': 'a' * 64, 'requests': []}, 'must contain only version and sha256'),
+    ({'version': 2, 'sha256': 'a' * 64}, 'version 2 is unsupported'),
+    ({'version': 1, 'sha256': 'A' * 64}, '64 lowercase hexadecimal characters'),
+    ({'version': 1, 'sha256': 'a' * 63}, '64 lowercase hexadecimal characters'),
+])
+def test_workload_fingerprint_is_required_and_bounded(fingerprint, message):
+    baseline = report()
+    if fingerprint is None:
+        baseline.pop('workload_fingerprint')
+    else:
+        baseline['workload_fingerprint'] = fingerprint
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=message):
+        compare_ai_benchmarks.compare(baseline, report('parallel', 4))
 
 
 @pytest.mark.parametrize(('mutate', 'message'), [
@@ -96,12 +125,13 @@ def test_comparison_accepts_producer_rounding_for_derived_throughput(elapsed):
     assert result['capability_equivalent'] is True
 
 
-def test_comparison_accepts_retained_historical_fixture_pair():
+def test_comparison_refuses_historical_fixture_pair_without_workload_fingerprint():
     retained = json.loads((ROOT / 'docs' / 'benchmarks' / 'ai-parallel-v1220.json').read_text())
 
-    result = compare_ai_benchmarks.compare(retained['serial'], retained['parallel'])
-
-    assert result['capability_equivalent'] is True
+    with pytest.raises(
+            compare_ai_benchmarks.ComparisonError,
+            match='baseline.workload_fingerprint must contain only version and sha256'):
+        compare_ai_benchmarks.compare(retained['serial'], retained['parallel'])
 
 
 @pytest.mark.parametrize('throughput', [6.4, 6.6])

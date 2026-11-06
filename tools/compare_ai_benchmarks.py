@@ -9,6 +9,7 @@ import sys
 
 
 SCHEMA_VERSION = 1
+WORKLOAD_FINGERPRINT_VERSION = 1
 MAX_REPORT_BYTES = 1_000_000
 MAX_ELAPSED_SECONDS = 86_400
 MAX_THROUGHPUT = 1_000_000
@@ -60,6 +61,24 @@ def _summary(report, stage):
     return {'count': count, 'p50_ms': p50, 'p95_ms': p95}
 
 
+def _workload_fingerprint(report, label):
+    value = report.get('workload_fingerprint')
+    if not isinstance(value, dict) or set(value) != {'version', 'sha256'}:
+        raise ComparisonError(
+            f'{label}.workload_fingerprint must contain only version and sha256')
+    version = _integer(
+        value.get('version'), f'{label}.workload_fingerprint.version', positive=True)
+    if version != WORKLOAD_FINGERPRINT_VERSION:
+        raise ComparisonError(
+            f'{label}.workload_fingerprint.version {version} is unsupported')
+    digest = value.get('sha256')
+    if (not isinstance(digest, str) or len(digest) != 64 or
+            any(character not in '0123456789abcdef' for character in digest)):
+        raise ComparisonError(
+            f'{label}.workload_fingerprint.sha256 must be 64 lowercase hexadecimal characters')
+    return {'version': version, 'sha256': digest}
+
+
 def _validate_derived_throughput(runs, elapsed, throughput, label):
     """Reconcile two independently rounded values without a loose tolerance."""
     with localcontext() as context:
@@ -105,6 +124,7 @@ def _validate(report, label):
     cost_status = report.get('cost_status')
     if not isinstance(cost_status, str) or not cost_status.strip():
         raise ComparisonError(f'{label}.cost_status must explain cost availability')
+    workload_fingerprint = _workload_fingerprint(report, label)
     elapsed = _bounded(report.get('elapsed_seconds'), f'{label}.elapsed_seconds', 0.000001, MAX_ELAPSED_SECONDS)
     throughput = _bounded(report.get('runs_per_second'), f'{label}.runs_per_second', 0.000001, MAX_THROUGHPUT)
     _validate_derived_throughput(runs, elapsed, throughput, label)
@@ -145,7 +165,8 @@ def _validate(report, label):
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
         'output_tokens': output_tokens, 'errors': errors,
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
-        'cost_status': cost_status, 'stages': stages,
+        'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
+        'stages': stages,
     }
 
 
@@ -172,6 +193,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     for field in controls:
         if base[field] != current[field]:
             raise ComparisonError(f'capability mismatch: {field} differs')
+    if base['workload_fingerprint'] != current['workload_fingerprint']:
+        raise ComparisonError('capability mismatch: workload_fingerprint differs')
     for stage in STAGES:
         if base['stages'][stage]['count'] != current['stages'][stage]['count']:
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
@@ -198,6 +221,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'capability': {
             'runs': base['runs'], 'provider_calls': base['provider_calls'],
             'input_tokens': base['input_tokens'], 'output_tokens': base['output_tokens'],
+            'workload_fingerprint': base['workload_fingerprint'],
             'stage_samples': {stage: base['stages'][stage]['count'] for stage in STAGES},
         },
         'deltas': {
