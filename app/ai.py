@@ -190,12 +190,15 @@ def _request(payload,key,timeout=60,reservation=None):
         else:ai_provider_backoff.succeeded(request_started)
         raise error from None
     except httpx.TimeoutException as exception:
-        ai_budget.mark_uncertain(reservation,'Provider outcome is unknown after a timeout; the full reservation remains counted.')
         if isinstance(exception,httpx.PoolTimeout):
+            # The transport sends once, with no redirects or automatic retries.
+            message='The local AI connection pool timed out before sending the request.'
+            ai_budget.release_unsent(reservation,message,pool_timeout_call_id=call_id or '')
             # A local connection wait carries no provider Retry-After floor.
-            error=AIError('The local AI connection pool timed out before sending the request.',transient=True)
+            error=AIError(message,transient=True)
             error.retry_after=LOCAL_POOL_RETRY_SECONDS
             raise error from None
+        ai_budget.mark_uncertain(reservation,'Provider outcome is unknown after a timeout; the full reservation remains counted.')
         error=AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.',transient=True)
         error.retry_after=ai_provider_backoff.failed(error)
         raise error from None

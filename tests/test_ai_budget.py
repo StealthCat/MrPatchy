@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import threading
 
+import httpx
 import pytest
 
 from app import ai, ai_admission, ai_budget, ai_pricing, notifications, operations
@@ -202,6 +203,38 @@ def test_unsent_failure_releases_reservation(admin, monkeypatch):
     with Session() as session:
         assert ai_budget.status(session)['counted_usd']=='0'
         assert session.get(ai_budget.BudgetEntry, identifier).status=='released'
+
+
+@pytest.mark.parametrize('failure', [httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError])
+def test_transport_failures_with_uncertain_outcomes_remain_counted(admin, monkeypatch, failure):
+    configure(cap=Decimal('1'))
+    monkeypatch.setattr(ai_pricing.time, 'time', lambda: 1793404800.0)
+
+    def fail(*args, **kwargs):
+        raise failure('fixture transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', fail)
+    with pytest.raises(ai.AIError) as error:
+        ai.request(payload(), 'fixture-key')
+    assert 'fixture transport detail' not in str(error.value)
+    with Session() as session:
+        assert session.query(ai_budget.BudgetEntry).one().status == 'uncertain'
+        assert Decimal(ai_budget.status(session)['uncertain_usd']) == ai_pricing.reservation(payload())['amount_usd']
+
+
+@pytest.mark.parametrize('call_id', ['', 'call-one'])
+def test_pool_timeout_release_requires_matching_sent_call(admin, monkeypatch, call_id):
+    configure(cap=Decimal('1'))
+    monkeypatch.setattr(ai_pricing.time, 'time', lambda: 1793404800.0)
+    identifier = ai_budget.reserve(payload())
+    ai_budget.mark_sent(identifier, call_id)
+    ai_budget.release_unsent(identifier, 'Wrong receipt.', pool_timeout_call_id='call-two')
+    ai_budget.release_unsent(identifier, 'No receipt was supplied.')
+    with Session() as session:
+        assert session.get(ai_budget.BudgetEntry, identifier).status == 'sent'
+    ai_budget.release_unsent(identifier, 'Pool timeout.', pool_timeout_call_id=call_id)
+    with Session() as session:
+        assert session.get(ai_budget.BudgetEntry, identifier).status == 'released'
 
 
 def test_settings_expose_combined_cap_and_validate_timezone(admin):
