@@ -1,4 +1,5 @@
 import json
+import gzip
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,8 +21,11 @@ def provider(monkeypatch):
         def do_POST(self):
             body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             calls.append((self.client_address,self.headers,body));release.wait(10)
-            data=b'{"ok":true}'
+            size=body.get('response_size')
+            data=(b'x'*size if type(size) is int and size>=0 else b'{"ok":true}')
+            if body.get('gzip'):data=gzip.compress(data)
             self.send_response(503 if body.get('fail') else 302 if body.get('redirect') else 200)
+            if body.get('gzip'):self.send_header('Content-Encoding','gzip')
             self.send_header('Content-Length',str(len(data)));self.send_header('Set-Cookie','provider-session=must-not-be-reused')
             self.send_header('Location','/unexpected-redirect');self.end_headers()
             try:self.wfile.write(data);self.wfile.flush()
@@ -110,3 +114,44 @@ def test_real_response_timeout_is_preserved_without_retry(provider):
             transport.post(url,headers={'Authorization':'Bearer fixture'},json={},timeout=.1)
         assert len(calls)==1
     finally:release.set()
+
+
+def test_decoded_response_body_stops_at_the_configured_limit(provider,monkeypatch):
+    url,calls,clients,_=provider
+    monkeypatch.setattr(transport,'MAX_RESPONSE_BYTES',64,raising=False)
+    assert len(send(url,response_size=64).content)==64
+    with pytest.raises(httpx.RequestError):send(url,response_size=65)
+    with pytest.raises(httpx.RequestError):send(url,response_size=65,gzip=True)
+    assert send(url).json()=={'ok':True}
+    assert len(calls)==4 and len(clients)==1 and not clients[0][0].cookies
+
+
+@pytest.mark.parametrize('declared,chunks,expected_reads',[
+    ('65',[b'unread'],0),
+    ('invalid',[b'a'*32,b'b'*34,b'unread'],2),
+])
+def test_declared_and_streamed_overflow_close_without_exposing_content(monkeypatch,declared,chunks,expected_reads):
+    state={'reads':0,'closed':False}
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for chunk in chunks:
+                state['reads']+=1;yield chunk
+        def close(self):state['closed']=True
+    class Client:
+        headers=httpx.Headers()
+        cookies=httpx.Cookies()
+        def send(self,request,**kwargs):
+            assert kwargs=={'follow_redirects':False,'stream':True}
+            return httpx.Response(200,headers={'content-length':declared,'x-private':'secret-value'},
+                stream=Stream(),request=request)
+        def close(self):pass
+    transport.close();monkeypatch.setattr(transport,'MAX_RESPONSE_BYTES',64)
+    monkeypatch.setattr(transport.httpx,'Client',lambda **kwargs:Client())
+    try:
+        with pytest.raises(transport.ResponseTooLarge) as raised:
+            send('https://example.invalid')
+        assert state=={'reads':expected_reads,'closed':True}
+        assert raised.value.response.status_code==200 and raised.value.response.content==b''
+        assert 'x-private' not in raised.value.response.headers
+        assert 'secret-value' not in str(raised.value)
+    finally:transport.close()

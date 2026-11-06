@@ -9,10 +9,38 @@ import threading
 import httpx
 
 MAX_CONNECTIONS = 16
+MAX_RESPONSE_BYTES = 2_000_000
+READ_CHUNK_BYTES = 64 * 1024
 _condition = threading.Condition()
 _client = None
 _active = 0
 _closing = False
+
+
+class ResponseTooLarge(httpx.RequestError):
+    """A redacted bounded-response failure with safe status metadata only."""
+    def __init__(self,response):
+        headers={name:response.headers[name] for name in ('retry-after','x-request-id') if name in response.headers}
+        snapshot=httpx.Response(response.status_code,headers=headers,content=b'',
+            request=response.request,extensions=response.extensions)
+        super().__init__('Provider response exceeded the decoded response limit.',request=response.request)
+        self.response=snapshot
+
+
+def _bounded(response):
+    """Read decoded bytes to a fixed ceiling and always release the response."""
+    try:
+        declared=response.headers.get('content-length','')
+        if declared.isascii() and declared.isdigit() and int(declared)>MAX_RESPONSE_BYTES:
+            raise ResponseTooLarge(response)
+        chunks=[];size=0
+        for chunk in response.iter_bytes(chunk_size=min(READ_CHUNK_BYTES,MAX_RESPONSE_BYTES+1)):
+            size+=len(chunk)
+            if size>MAX_RESPONSE_BYTES:raise ResponseTooLarge(response)
+            chunks.append(chunk)
+        return httpx.Response(response.status_code,headers=response.headers,content=b''.join(chunks),
+            request=response.request,extensions=response.extensions)
+    finally:response.close()
 
 
 @contextmanager
@@ -44,7 +72,7 @@ def post(url, *, headers, json, timeout):
                     ('accept','accept-encoding','connection','user-agent') if name in client.headers}
         request = httpx.Request('POST', url, headers={**defaults, **headers}, json=json,
                                 extensions={'timeout': deadline.as_dict()})
-        try: return client.send(request, follow_redirects=False)
+        try:return _bounded(client.send(request,follow_redirects=False,stream=True))
         finally: client.cookies.clear()
 
 

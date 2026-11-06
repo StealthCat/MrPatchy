@@ -6038,3 +6038,29 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+### Bounded decoded AI provider responses — worker checkpoint #564
+
+The shared provider transport now reads response bodies in bounded decoded chunks
+and accepts at most 2,000,000 bytes. A valid declared `Content-Length` above that
+ceiling is refused before body consumption; missing, malformed, compressed,
+chunked or dishonest lengths remain subject to the same decoded-byte ceiling while
+streaming. Every underlying response is closed on success, overflow or transport
+failure. A complete bounded body is reconstructed with its status and safe request
+metadata so existing structured parsing, usage receipts and HTTP error handling
+remain unchanged.
+
+An oversized successful response produces a fixed diagnostic and no partial result.
+The transmitted call keeps its full conservative spend reservation as uncertain
+because reliable usage is unavailable, and it is never automatically retried.
+Oversized HTTP failures retain status-based transient handling and a valid bounded
+`Retry-After` floor without persisting response bodies or arbitrary headers. Existing
+per-request credentials, cookie clearing, redirect refusal, timeouts, connection
+reuse, shutdown/drain, pause/lifecycle, admission and response-authorization
+boundaries remain in force.
+
+This is a finite safe-transport checkpoint, not a claim that upstream memory use,
+provider throughput, connection capacity, model discovery or the broader faster-AI
+program is complete. Coordinator integration with ready pooled-discovery and
+configurable-connection work must preserve this decoded-response ceiling, followed
+by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
