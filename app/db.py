@@ -123,6 +123,7 @@ def register_models():
 
 def init():
     register_models()
+    from .ai_assessments import Assessment
     # Reflection and DDL must share a connection. SQLite PRAGMA reflection can
     # otherwise observe an old per-connection schema after another pooled
     # connection changed it. An actual catalog query refreshes the schema view.
@@ -148,8 +149,9 @@ def init():
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
         # create_all() never adds indexes to a table that already exists.
-        for index in Job.__table__.indexes:
-            index.create(connection,checkfirst=True)
+        for model in (Job, Assessment):
+            for index in model.__table__.indexes:
+                index.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):

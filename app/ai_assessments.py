@@ -8,7 +8,7 @@ import hashlib
 import json
 import time
 import uuid
-from sqlalchemy import String, Text, Double, JSON, select
+from sqlalchemy import String, Text, Double, JSON, Index, select
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
 
@@ -30,6 +30,12 @@ class Assessment(Base):
     snapshot: Mapped[dict]=mapped_column(JSON)
     inputs: Mapped[list]=mapped_column(JSON,default=list)
     refresh: Mapped[dict]=mapped_column(JSON,default=dict)
+    # Assessments are retained independently of diagnostic pruning. Keep the
+    # exact-state lookup and per-host history bounded as that history grows.
+    __table_args__=(
+        Index('ix_ai_assessments_subject_state_created','subject','state_hash',created.desc(),id.desc()),
+        Index('ix_ai_assessments_subject_host_created','subject','host_id',created.desc(),id.desc()),
+    )
 
 
 class Refresh(Base):
