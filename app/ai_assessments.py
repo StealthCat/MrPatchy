@@ -49,6 +49,20 @@ class Refresh(Base):
     withdrew_approval: Mapped[bool]=mapped_column(default=False)
 
 
+def exact_history_query(subject, state):
+    query=(select(Assessment).where(Assessment.subject==subject,Assessment.state_hash==state)
+        .order_by(Assessment.created.desc(),Assessment.id.desc()))
+    return query.with_hint(Assessment,
+        'FORCE INDEX FOR ORDER BY (ix_ai_assessments_subject_state_created)',dialect_name='mysql')
+
+
+def subject_history_query(subject, host_id):
+    query=(select(Assessment).where(Assessment.subject==subject,Assessment.host_id==host_id)
+        .order_by(Assessment.created.desc(),Assessment.id.desc()))
+    return query.with_hint(Assessment,
+        'FORCE INDEX FOR ORDER BY (ix_ai_assessments_subject_host_created)',dialect_name='mysql')
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
@@ -81,7 +95,7 @@ def queue(s,row,expected,reason,actor,withdraw_approval):
     if s.get(Refresh,row.id):raise ValueError('A re-triage request already exists')
     if row.approved and not withdraw_approval:raise ValueError('Explicitly confirm withdrawal of the current approval before re-triage')
     ai_retry.manual(s,row)
-    saved=s.scalar(select(Assessment).where(Assessment.subject==row.id,Assessment.state_hash==state_hash(row)).order_by(Assessment.created.desc(),Assessment.id.desc()).limit(1))
+    saved=s.scalar(exact_history_query(row.id,state_hash(row)).limit(1))
     if not saved:
         # Preserve only what actually exists; do not invent an old model, run,
         # input binding or assessment timestamp from the current saved settings.

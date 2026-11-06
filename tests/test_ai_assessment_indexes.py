@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, inspect, text
 
 from app import ai_assessments, db
 
@@ -64,18 +64,8 @@ def test_assessment_indexes_are_in_shared_metadata():
 def test_retained_assessment_queries_use_bounded_indexes():
     db.init()
     table = ai_assessments.Assessment.__table__
-    exact = (
-        select(table)
-        .where(table.c.subject == 'target', table.c.state_hash == 'state')
-        .order_by(table.c.created.desc(), table.c.id.desc())
-        .limit(1)
-    )
-    history = (
-        select(table)
-        .where(table.c.subject == 'target', table.c.host_id == 'target-host')
-        .order_by(table.c.created.desc(), table.c.id.desc())
-        .limit(21)
-    )
+    exact = ai_assessments.exact_history_query('target', 'state').limit(1)
+    history = ai_assessments.subject_history_query('target', 'target-host').limit(21)
 
     with db.engine.begin() as connection:
         connection.execute(table.delete())
@@ -141,3 +131,4 @@ def test_retained_assessment_queries_use_bounded_indexes():
                 )
                 assert assessment_plan.get('key') == expected, assessment_plan
                 assert 'filesort' not in str(assessment_plan.get('Extra', '')).lower()
+                assert f'FORCE INDEX FOR ORDER BY ({expected})' in str(compiled)
