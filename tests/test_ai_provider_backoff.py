@@ -274,3 +274,62 @@ def test_clear_releases_provider_policy_wait_after_admission_race(admin,failure_
         assert retry.provider_until<=now+failure_delay+1 and retry.next_at<=now+failure_delay+1
         if failure_delay<120:assert retry.provider_until==0
         assert retry.state=='deferred' and retry.attempts==0
+
+
+def test_local_pool_timeout_keeps_other_provider_work_eligible(admin, monkeypatch):
+    configure()
+
+    def pool_timeout(*args, **kwargs):
+        raise httpx.PoolTimeout('raw transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', pool_timeout)
+    with pytest.raises(ai.AIError) as failed:
+        ai.request(payload(), 'fixture-key')
+    with Session() as session:
+        assert session.get(ai_provider_backoff.ProviderBackoff, 'global') is None
+
+    error = failed.value
+    assert error.transient and error.provider_retry_after == 0
+    assert ai.defer_until(error, now=1000) == 1005
+    assert 'local AI connection pool' in error.diagnostic
+    assert 'raw transport detail' not in error.diagnostic
+
+    monkeypatch.setattr(ai.transport, 'post', lambda *args, **kwargs: success())
+    with ai_runs.track('connection_test', 'fixture-model'):
+        assert ai.request(payload(), 'fixture-key') == {}
+
+
+def test_local_pool_timeout_preserves_a_concurrent_provider_floor(admin, monkeypatch):
+    configure()
+    now = time.time()
+
+    def concurrent_provider_failure(*args, **kwargs):
+        error = ai.AIError('provider wait', transient=True, retry_after=120)
+        ai_provider_backoff.failed(error, now=now)
+        raise httpx.PoolTimeout('local contention')
+
+    monkeypatch.setattr(ai.transport, 'post', concurrent_provider_failure)
+    with pytest.raises(ai.AIError):
+        ai.request(payload(), 'fixture-key')
+
+    with Session() as session:
+        status = ai_provider_backoff.status(session, now=now)
+        assert status['blocked'] and status['failures'] == 1
+        assert status['next_at'] == now + 120
+        assert status['reason'] == 'Provider Retry-After floor is active.'
+
+
+def test_ambiguous_read_timeout_still_creates_shared_backoff(admin, monkeypatch):
+    configure()
+
+    def read_timeout(*args, **kwargs):
+        raise httpx.ReadTimeout('raw transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', read_timeout)
+    with pytest.raises(ai.AIError, match='OpenAI API request timed out') as failed:
+        ai.request(payload(), 'fixture-key')
+    assert failed.value.transient and failed.value.retry_after >= 30
+
+    with Session() as session:
+        status = ai_provider_backoff.status(session)
+        assert status['blocked'] and status['failures'] == 1

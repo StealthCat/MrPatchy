@@ -2164,6 +2164,13 @@ explicitly requested or the entry no longer matches/is no longer valid.
 
 ### Throttling, daily cap and unthrottled operation
 
+The shared Responses API request path validates strict UTF-8 JSON against a
+2,000,000-byte encoded ceiling before shared rate, budget and provider-backoff
+admission. Refused bodies create no provider receipt and expose a fixed local
+diagnostic. Valid bodies send the validated bytes and retain their structured
+evidence for pricing and accounting. This checkpoint covers outbound request
+validation. Production throughput and wider transport acceptance remain open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -4864,6 +4871,22 @@ APP_VERSION/README/changelog/UI/API synchronize at v1.32.0 with major fixed at 1
 Rebuild the controller first to create the ledger table, then matching workers. No
 target-helper/agent update, Docker publication, Git tag or schedule change is included.
 
+
+## Faster AI triage — local connection-pool contention
+
+A confirmed local HTTP pool timeout defers the affected request without creating,
+extending or clearing fleet-wide provider backoff. Advisory plans and scoring use
+the five-second local eligibility delay. Process triage keeps its existing bounded
+per-item retry schedule and has no provider Retry-After floor for this failure.
+Other workers can continue when shared rate, budget, provider and policy controls
+permit. Read timeouts and other ambiguous transport failures keep their existing
+shared backoff and budget treatment.
+
+Issue #605 preserves #589's matching-receipt release of confirmed unsent spend
+reservations. The acceptance checks cover another request proceeding after local contention, a
+concurrent provider floor surviving unchanged and an ambiguous read timeout
+still creating shared backoff. Native exact-head CI and the broader parallel
+triage and multi-controller acceptance remain separate milestones.
 
 ## v1.33.0 — Fleet-wide provider backoff and Retry-After admission
 
