@@ -51,30 +51,18 @@ def _bounded(value, field, minimum, maximum):
     return value
 
 
-def _summary(report, stage, maximum_ms):
+def _summary(report, stage, queue_age):
     value = report['stages'].get(stage)
     if not isinstance(value, dict):
         raise ComparisonError(f'stages.{stage} must be an object')
     count = _integer(value.get('count'), f'stages.{stage}.count')
-    p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, maximum_ms)
-    p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, maximum_ms)
+    # Observed queue age includes the seed and time spent in the fixture.
+    max_ms = MAX_STAGE_MS + queue_age * 1000 if stage == 'queue_age' else MAX_STAGE_MS
+    p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, max_ms)
+    p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, max_ms)
     if p95 < p50:
         raise ComparisonError(f'stages.{stage}.p95_ms must not be less than p50_ms')
     return {'count': count, 'p50_ms': p50, 'p95_ms': p95}
-
-
-def _queue_age(report, label):
-    age = LEGACY_QUEUE_AGE_SECONDS
-    if 'queue_age_seconds' in report:
-        field = f'{label}.queue_age_seconds'
-        age = _integer(report['queue_age_seconds'], field)
-        if age > MAX_QUEUE_AGE_SECONDS:
-            raise ComparisonError(f'{field} must be between 0 and {MAX_QUEUE_AGE_SECONDS}')
-    if 'initial_fixture_queue_age_seconds' in report:
-        field = f'{label}.initial_fixture_queue_age_seconds'
-        if _integer(report['initial_fixture_queue_age_seconds'], field) != age:
-            raise ComparisonError(f'{field} does not match the configured or legacy queue age')
-    return age
 
 
 def _workload_fingerprint(report, label):
@@ -114,6 +102,33 @@ def _validate_derived_throughput(runs, elapsed, throughput, label):
             f'{label}.runs / {label}.elapsed_seconds')
 
 
+def _queue_age(report, label):
+    """Return the seeded fixture queue age, which is an input, not a result.
+
+    The configurable producer reports ``queue_age_seconds`` and mirrors it in
+    ``initial_fixture_queue_age_seconds``. Earlier reports carried only the
+    latter, and reports older than that used a fixed two-second seed. Normalize
+    only those documented contracts and refuse any disagreement.
+    """
+    values = {}
+    for key in ('queue_age_seconds', 'initial_fixture_queue_age_seconds'):
+        if key in report:
+            value = _integer(report[key], f'{label}.{key}')
+            if value > MAX_QUEUE_AGE_SECONDS:
+                raise ComparisonError(
+                    f'{label}.{key} must be between 0 and {MAX_QUEUE_AGE_SECONDS}')
+            values[key] = value
+    if len(set(values.values())) > 1:
+        raise ComparisonError(
+            f'{label}.queue_age_seconds disagrees with '
+            f'{label}.initial_fixture_queue_age_seconds')
+    if 'queue_age_seconds' in values:
+        return values['queue_age_seconds'], 'report'
+    if values:
+        return values['initial_fixture_queue_age_seconds'], 'report initial fixture field'
+    return LEGACY_QUEUE_AGE_SECONDS, 'legacy fixed default'
+
+
 def _validate(report, label):
     if not isinstance(report, dict):
         raise ComparisonError(f'{label} report must be a JSON object')
@@ -146,10 +161,8 @@ def _validate(report, label):
     _validate_derived_throughput(runs, elapsed, throughput, label)
     if not isinstance(report.get('stages'), dict):
         raise ComparisonError(f'{label}.stages must be an object')
-    queue_age = _queue_age(report, label)
-    # Queue age contains the configured seed as well as measured fixture time.
-    stages = {stage: _summary(report, stage, MAX_STAGE_MS + (queue_age * 1000 if stage == 'queue_age' else 0))
-              for stage in STAGES}
+    queue_age, queue_age_source = _queue_age(report, label)
+    stages = {stage: _summary(report, stage, queue_age) for stage in STAGES}
     if stages['run']['count'] != runs:
         raise ComparisonError(f'{label} run sample count does not match runs')
     if stages['one_stage']['count'] + stages['two_stage']['count'] != runs:
@@ -180,7 +193,8 @@ def _validate(report, label):
     return {
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
-        'ssh_delay_source': ssh_delay_source, 'queue_age_seconds': queue_age,
+        'ssh_delay_source': ssh_delay_source,
+        'queue_age_seconds': queue_age, 'queue_age_source': queue_age_source,
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
         'output_tokens': output_tokens, 'errors': errors,
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
@@ -208,8 +222,10 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     current = _validate(candidate, 'candidate')
     if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
         raise ComparisonError('candidate must use a distinct execution configuration')
-    controls = ('runs', 'provider_delay_ms', 'ssh_delay_ms', 'queue_age_seconds',
-                'provider_calls', 'input_tokens', 'output_tokens')
+    controls = (
+        'runs', 'provider_delay_ms', 'ssh_delay_ms', 'queue_age_seconds',
+        'provider_calls', 'input_tokens', 'output_tokens',
+    )
     for field in controls:
         if base[field] != current[field]:
             raise ComparisonError(f'capability mismatch: {field} differs')
@@ -228,6 +244,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'provider_delay_ms': base['provider_delay_ms'],
             'ssh_delay_ms': base['ssh_delay_ms'],
             'ssh_delay_source': base['ssh_delay_source'],
+            'queue_age_seconds': base['queue_age_seconds'],
+            'queue_age_source': base['queue_age_source'],
             'cost_status': base['cost_status'],
         },
         'candidate': {
@@ -236,13 +254,14 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'provider_delay_ms': current['provider_delay_ms'],
             'ssh_delay_ms': current['ssh_delay_ms'],
             'ssh_delay_source': current['ssh_delay_source'],
+            'queue_age_seconds': current['queue_age_seconds'],
+            'queue_age_source': current['queue_age_source'],
             'cost_status': current['cost_status'],
         },
         'capability': {
             'runs': base['runs'], 'provider_calls': base['provider_calls'],
             'input_tokens': base['input_tokens'], 'output_tokens': base['output_tokens'],
             'workload_fingerprint': base['workload_fingerprint'],
-            'queue_age_seconds': base['queue_age_seconds'],
             'stage_samples': {stage: base['stages'][stage]['count'] for stage in STAGES},
         },
         'deltas': {

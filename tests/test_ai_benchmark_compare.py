@@ -66,23 +66,64 @@ def test_ssh_delay_mismatch_is_refused():
         compare_ai_benchmarks.compare(report(), candidate)
 
 
-def test_cli_refuses_different_queue_ages_without_emitting_deltas(tmp_path, capsys):
-    baseline = tmp_path / 'serial.json'
-    candidate = tmp_path / 'parallel.json'
-    baseline.write_text(json.dumps(dict(report(), initial_fixture_queue_age_seconds=2)))
-    candidate.write_text(json.dumps(dict(report('parallel', 4),
-        queue_age_seconds=60, initial_fixture_queue_age_seconds=60)))
-    assert compare_ai_benchmarks.main([str(baseline), str(candidate)]) == 2
-    output = capsys.readouterr()
-    assert output.out == ''
-    assert 'queue_age_seconds differs' in output.err
-
-
-def test_legacy_queue_age_matches_explicit_default():
-    baseline = dict(report(), initial_fixture_queue_age_seconds=2)
-    candidate = dict(report('parallel', 4), queue_age_seconds=2)
+def test_legacy_reports_use_fixed_two_second_queue_age():
+    baseline = report()
+    candidate = report('parallel', 4)
+    candidate['initial_fixture_queue_age_seconds'] = 2
     result = compare_ai_benchmarks.compare(baseline, candidate)
-    assert result['capability']['queue_age_seconds'] == 2
+    assert result['baseline']['queue_age_seconds'] == 2
+    assert result['baseline']['queue_age_source'] == 'legacy fixed default'
+    assert result['candidate']['queue_age_seconds'] == 2
+    assert result['candidate']['queue_age_source'] == 'report initial fixture field'
+
+
+def test_matching_configured_queue_age_is_accepted():
+    baseline = report()
+    candidate = report('parallel', 4)
+    for item in (baseline, candidate):
+        item['queue_age_seconds'] = 60
+        item['initial_fixture_queue_age_seconds'] = 60
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['capability_equivalent'] is True
+    assert result['candidate']['queue_age_seconds'] == 60
+    assert result['candidate']['queue_age_source'] == 'report'
+
+
+@pytest.mark.parametrize('legacy_candidate', [False, True])
+def test_queue_age_mismatch_is_refused_even_with_matching_fingerprint(legacy_candidate):
+    baseline = report()
+    baseline['queue_age_seconds'] = 60
+    baseline['initial_fixture_queue_age_seconds'] = 60
+    candidate = report('parallel', 4)
+    if not legacy_candidate:
+        candidate['queue_age_seconds'] = 2
+        candidate['initial_fixture_queue_age_seconds'] = 2
+    assert baseline['workload_fingerprint'] == candidate['workload_fingerprint']
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='queue_age_seconds differs'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
+def test_queue_age_fields_that_disagree_are_refused():
+    candidate = report('parallel', 4)
+    candidate['queue_age_seconds'] = 2
+    candidate['initial_fixture_queue_age_seconds'] = 60
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='disagrees with'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
+@pytest.mark.parametrize(('field', 'value', 'message'), [
+    ('queue_age_seconds', -1, 'must be non-negative'),
+    ('queue_age_seconds', 86_401, 'must be between 0 and 86400'),
+    ('queue_age_seconds', 1.5, 'must be an integer'),
+    ('queue_age_seconds', True, 'must be a finite number'),
+    ('queue_age_seconds', '2', 'must be a finite number'),
+    ('initial_fixture_queue_age_seconds', math.inf, 'must be a finite number'),
+])
+def test_malformed_queue_age_is_refused(field, value, message):
+    candidate = report('parallel', 4)
+    candidate[field] = value
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=message):
+        compare_ai_benchmarks.compare(report(), candidate)
 
 
 def test_maximum_seeded_age_accepts_measured_queue_overhead():
@@ -91,20 +132,11 @@ def test_maximum_seeded_age_accepts_measured_queue_overhead():
     for value in (baseline, candidate):
         value['stages']['queue_age'].update(p50_ms=86400001, p95_ms=86400002)
     result = compare_ai_benchmarks.compare(baseline, candidate)
-    assert result['capability']['queue_age_seconds'] == 86400
+    assert result['baseline']['queue_age_seconds'] == result['candidate']['queue_age_seconds'] == 86400
 
-
-@pytest.mark.parametrize('invalid', [False, '2', None, -1, 86401, 2.5])
-def test_queue_age_refuses_malformed_settings(invalid):
-    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.queue_age_seconds'):
-        compare_ai_benchmarks.compare(report(), dict(report('parallel', 4), queue_age_seconds=invalid))
-
-
-@pytest.mark.parametrize('explicit', [{}, {'queue_age_seconds': 2}])
-def test_queue_age_refuses_conflicting_legacy_value(explicit):
-    candidate = dict(report('parallel', 4), initial_fixture_queue_age_seconds=60, **explicit)
-    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='initial_fixture_queue_age_seconds'):
-        compare_ai_benchmarks.compare(report(), candidate)
+    candidate['stages']['provider']['p95_ms'] = 86400001
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='stages.provider.p95_ms'):
+        compare_ai_benchmarks.compare(baseline, candidate)
 
 
 def test_workload_fingerprint_mismatch_is_refused_even_when_counts_match():
