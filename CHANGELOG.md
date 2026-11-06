@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.42 — 2026-11-06
+
+1. [PR #596](https://github.com/StealthCat/MrPatchy/pull/596): Keep MySQL fleet and per-server Activity history on the existing ordered indexes with an order-only hint, avoiding retained-history filesorts for paginated requests while preserving stable newest-first ordering. Compatibility: there is no schema, settings, API, SQLite, authorization, redaction or runtime response-authorization change; existing installations already receive the named indexes through the idempotent startup migration. Material limits: the optimization depends on those existing MySQL indexes, does not add job retention or change other job-query plans, and this source update does not publish a Docker image. Completes #130.
+
 ## 1.42.41 — 2026-11-05
 
 1. [PR #251](https://github.com/StealthCat/MrPatchy/pull/251): Add composite indexes for the retained jobs table's host/state, host/action/created, host-history, fleet-history and state/created query shapes, including idempotent startup creation for existing databases, so scheduler admission, queue checks, latest refreshes and Activity history avoid full-table scans and temporary ordering. Compatibility: this is an additive schema change with no API, ordering, recovery or runtime response-authorization change; the first start after upgrade creates the missing indexes and may take time on a large history table. Material limits: indexes consume database storage and add normal write-maintenance cost, and the change does not add job retention or rewrite other queries. This source update does not publish a Docker image. Completes #130.
