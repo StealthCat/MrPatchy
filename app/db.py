@@ -66,6 +66,9 @@ class Behavior(Base):
     first_seen: Mapped[float] = mapped_column(Double, default=time.time)
     last_seen: Mapped[float] = mapped_column(Double, default=time.time)
     attempted: Mapped[float] = mapped_column(Double, default=0)
+    # Admission repeatedly filters the small pending/error tail out of retained
+    # completed behavior history, then applies retry/policy joins and ordering.
+    __table_args__=(Index('ix_behaviors_admission','approved','verdict','first_seen','id'),)
 class Job(Base):
     __tablename__ = 'jobs'
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -148,8 +151,9 @@ def init():
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
         # create_all() never adds indexes to a table that already exists.
-        for index in Job.__table__.indexes:
-            index.create(connection,checkfirst=True)
+        for model in (Job, Behavior):
+            for index in model.__table__.indexes:
+                index.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):
