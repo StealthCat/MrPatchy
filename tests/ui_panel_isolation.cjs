@@ -4,6 +4,7 @@ module.exports=async(page)=>{
  const prefix='/api/hosts/'+host.id+'/security/';
  const failing={archive:true,monitor:true,policy:true};const log=[];
  let releasePolicy;const policyWait=new Promise(resolve=>releasePolicy=resolve);let holdPolicy=true;
+ let releaseMonitor;const monitorWait=new Promise(resolve=>releaseMonitor=resolve);let holdMonitor=false;const incidentRequests=[];
  const handler=async route=>{
   const url=new URL(route.request().url());
   if(!url.pathname.startsWith(prefix))return route.fallback();
@@ -13,6 +14,8 @@ module.exports=async(page)=>{
    if(failing.policy)return route.fulfill({status:503,json:{detail:'Scheduled scan policy unavailable'}});
   }
   if(url.pathname===prefix+'evidence-archives'&&failing.archive)return route.fulfill({status:503,json:{detail:'Evidence archive storage temporarily unavailable'}});
+  if(url.pathname===prefix+'persistence-incidents'){incidentRequests.push(url.searchParams.get('offset'));return route.fulfill({json:{items:[],more:true}});}
+  if(url.pathname===prefix+'persistence-monitor'&&route.request().method()==='GET'&&holdMonitor)await monitorWait;
   if(url.pathname===prefix+'persistence-monitor'&&failing.monitor)return route.fulfill({status:503,json:{detail:'Monitor policy unavailable'}});
   return route.fallback();
  };
@@ -46,14 +49,26 @@ module.exports=async(page)=>{
   failing.archive=false;
   await panel.getByRole('button',{name:'Retry'}).click();
   await page.locator('#server-tab-body').getByText('Evidence archive storage temporarily unavailable').waitFor({state:'detached'});
-  // File integrity: monitor failure keeps inspection forms and incidents usable.
+  // File integrity: a held, then failed, monitor policy never blocks incidents or inspection forms,
+  // and policy Retry reloads only the policy panel without resetting the incident page.
+  holdMonitor=true;
   await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);
+  const incidents=page.locator('#persistence-incidents');
+  await incidents.getByRole('heading',{name:'Startup-change incidents'}).waitFor();
+  assert.equal(await page.locator('#persistence-monitor-form').count(),0);
+  assert.equal(await page.locator('#persistence-monitor').getByText('Monitor policy unavailable').count(),0);
+  assert.equal(await page.locator('#security-inspection-form').count(),1);
+  await incidents.locator('#startup-next').click();
+  await page.waitForFunction(()=>{const prev=document.querySelector('#startup-prev');return prev&&!prev.disabled;});
+  assert.equal(incidentRequests.at(-1),'10');
+  holdMonitor=false;releaseMonitor();
   const monitor=page.locator('#persistence-monitor').filter({hasText:'Monitor policy unavailable'});
   await monitor.waitFor();
-  assert.equal(await page.locator('#security-inspection-form').count(),1);
   assert.equal(await page.getByText('Unable to load this server tab').count(),0);
-  await page.locator('#persistence-incidents').getByRole('heading',{name:'Startup-change incidents'}).waitFor();
+  const incidentCount=incidentRequests.length;
   failing.monitor=false;await monitor.getByRole('button',{name:'Retry'}).click();
   await page.locator('#persistence-monitor-form').waitFor();
- }finally{releasePolicy();await page.unroute('**/api/**',handler);}
+  assert.equal(incidentRequests.length,incidentCount,'policy retry must not reload startup incidents');
+  assert.equal(await incidents.locator('#startup-prev').isDisabled(),false,'policy retry must keep the incident page');
+ }finally{releasePolicy();releaseMonitor();await page.unroute('**/api/**',handler);}
 };
