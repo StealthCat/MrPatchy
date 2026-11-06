@@ -51,13 +51,16 @@ def _bounded(value, field, minimum, maximum):
     return value
 
 
-def _summary(report, stage):
+def _summary(report, stage, queue_age):
     value = report['stages'].get(stage)
     if not isinstance(value, dict):
         raise ComparisonError(f'stages.{stage} must be an object')
     count = _integer(value.get('count'), f'stages.{stage}.count')
-    p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, MAX_STAGE_MS)
-    p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, MAX_STAGE_MS)
+    # Observed queue age is the seeded fixture age plus measured wait, so its
+    # bound includes the (already validated) seed.
+    max_ms = MAX_STAGE_MS + queue_age * 1000 if stage == 'queue_age' else MAX_STAGE_MS
+    p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, max_ms)
+    p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, max_ms)
     if p95 < p50:
         raise ComparisonError(f'stages.{stage}.p95_ms must not be less than p50_ms')
     return {'count': count, 'p50_ms': p50, 'p95_ms': p95}
@@ -159,7 +162,8 @@ def _validate(report, label):
     _validate_derived_throughput(runs, elapsed, throughput, label)
     if not isinstance(report.get('stages'), dict):
         raise ComparisonError(f'{label}.stages must be an object')
-    stages = {stage: _summary(report, stage) for stage in STAGES}
+    queue_age, queue_age_source = _queue_age(report, label)
+    stages = {stage: _summary(report, stage, queue_age) for stage in STAGES}
     if stages['run']['count'] != runs:
         raise ComparisonError(f'{label} run sample count does not match runs')
     if stages['one_stage']['count'] + stages['two_stage']['count'] != runs:
@@ -187,7 +191,6 @@ def _validate(report, label):
     else:
         ssh_delay = 10
         ssh_delay_source = 'legacy fixed default'
-    queue_age, queue_age_source = _queue_age(report, label)
     return {
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
