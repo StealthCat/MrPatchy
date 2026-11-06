@@ -5866,6 +5866,25 @@ are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
 
+### Configurable bounded AI HTTP connections — worker checkpoint #560
+
+Each controller and worker process now validates a startup-only
+`MRPATCHY_AI_HTTP_CONNECTIONS` ceiling from 1 through 64 (default 16) before
+creating its reusable AI HTTP client. The same ceiling bounds total and keepalive
+connections; invalid configuration refuses worker registration and provider
+transport instead of silently falling back or opening an unbounded pool. Complete
+Compose installation passes the setting to both application and worker processes.
+
+Worker registrations expose the effective process-local ceiling alongside AI task
+capacity. The dashboard labels it as a transport limit rather than available task
+or provider capacity. Existing AI concurrency, shared admission, rate/spend and
+provider backoff, pause/lifecycle checks, per-request credentials, cookie clearing,
+redirect refusal, timeouts, shutdown/drain behavior and single-attempt accounting
+remain unchanged. This configuration does not increase AI task concurrency by
+itself, guarantee sockets are available, establish provider throughput or complete
+the faster-AI performance program.
+
+
 ## Password hashes and secret-key handling
 
 - Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
