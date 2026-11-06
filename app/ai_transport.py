@@ -6,13 +6,96 @@ its own receipt. Shutdown waits for admitted sends; drain only closes an idle po
 from contextlib import contextmanager
 import atexit
 import threading
+import zlib
 import httpx
 
 MAX_CONNECTIONS = 16
+MAX_RESPONSE_BYTES = 2_000_000
+READ_CHUNK_BYTES = 64 * 1024
 _condition = threading.Condition()
 _client = None
 _active = 0
 _closing = False
+
+
+def _safe_snapshot(response):
+    headers={name:response.headers[name] for name in ('retry-after','x-request-id') if name in response.headers}
+    return httpx.Response(response.status_code,headers=headers,content=b'',
+        request=response.request,extensions=response.extensions)
+
+
+class ResponseTooLarge(httpx.RequestError):
+    """A redacted bounded-response failure with safe status metadata only."""
+    def __init__(self,response):
+        super().__init__('Provider response exceeded the decoded response limit.',request=response.request)
+        self.response=_safe_snapshot(response)
+
+
+class ResponseDecodeError(httpx.RequestError):
+    """A redacted failure for unsupported or invalid provider encodings."""
+    def __init__(self,response):
+        super().__init__('Provider response encoding could not be decoded safely.',request=response.request)
+        self.response=_safe_snapshot(response)
+
+
+def _declared_over_limit(value):
+    if not value.isascii() or not value.isdigit():return False
+    normalized=value.lstrip('0') or '0';limit=str(MAX_RESPONSE_BYTES)
+    return len(normalized)>len(limit) or (len(normalized)==len(limit) and normalized>limit)
+
+
+def _append_bounded(chunks,size,chunk,response):
+    size+=len(chunk)
+    if size>MAX_RESPONSE_BYTES:raise ResponseTooLarge(response)
+    if chunk:chunks.append(chunk)
+    return size
+
+
+def _read_identity(response):
+    chunks=[];size=0
+    for chunk in response.iter_raw(chunk_size=min(READ_CHUNK_BYTES,MAX_RESPONSE_BYTES+1)):
+        size=_append_bounded(chunks,size,chunk,response)
+    return b''.join(chunks)
+
+
+def _read_gzip(response):
+    chunks=[];size=0;decoder=None;complete=False
+    try:
+        for wire in response.iter_raw(chunk_size=min(READ_CHUNK_BYTES,MAX_RESPONSE_BYTES+1)):
+            pending=wire
+            while pending:
+                if decoder is None:
+                    decoder=zlib.decompressobj(16+zlib.MAX_WBITS);complete=False
+                before=len(pending)
+                decoded=decoder.decompress(pending,MAX_RESPONSE_BYTES-size+1)
+                size=_append_bounded(chunks,size,decoded,response)
+                if decoder.eof:
+                    pending=decoder.unused_data;decoder=None;complete=True
+                else:
+                    pending=decoder.unconsumed_tail
+                if pending and len(pending)==before and not decoded:
+                    raise ResponseDecodeError(response)
+    except zlib.error as exc:
+        raise ResponseDecodeError(response) from exc
+    if decoder is not None or not complete:raise ResponseDecodeError(response)
+    return b''.join(chunks)
+
+
+def _bounded(response):
+    """Decode raw provider bytes to a fixed ceiling and release the response."""
+    try:
+        declared=response.headers.get('content-length','')
+        if _declared_over_limit(declared):raise ResponseTooLarge(response)
+        encoding=response.headers.get('content-encoding','').strip().lower()
+        if encoding in ('','identity'):content=_read_identity(response)
+        elif encoding=='gzip':content=_read_gzip(response)
+        else:raise ResponseDecodeError(response)
+        headers=[(name,value) for name,value in response.headers.multi_items()
+            if name.lower() not in ('content-encoding','content-length','transfer-encoding')]
+        headers.append(('content-length',str(len(content))))
+        return httpx.Response(response.status_code,headers=headers,content=content,
+            request=response.request,extensions=response.extensions)
+    finally:response.close()
 
 
 @contextmanager
@@ -33,7 +116,7 @@ def _borrow():
             _condition.notify_all()
 
 
-def _send(method, url, *, headers, timeout, json=None):
+def _send(method, url, *, headers, timeout, json=None, encoded_body=None):
     # Build directly, rather than Client.build_request: never merge a previous
     # response's cookies or any credential-bearing client defaults into a send.
     deadline = httpx.Timeout(timeout, connect=min(timeout, 10), pool=min(timeout, 5))
@@ -41,11 +124,14 @@ def _send(method, url, *, headers, timeout, json=None):
         # Preserve HTTPX's public negotiation/user-agent defaults through a small
         # allowlist; never copy authorization, cookies or arbitrary client state.
         defaults = {name:client.headers[name] for name in
-                    ('accept','accept-encoding','connection','user-agent') if name in client.headers}
+                    ('accept','connection','user-agent') if name in client.headers}
+        defaults['accept-encoding']='gzip'
         values={'headers':{**defaults, **headers},'extensions':{'timeout':deadline.as_dict()}}
         if json is not None:values['json']=json
+        if encoded_body is not None:values['content']=encoded_body
         request = httpx.Request(method, url, **values)
-        try: return client.send(request, follow_redirects=False)
+        if encoded_body is not None:request.headers.setdefault('content-type','application/json')
+        try:return _bounded(client.send(request,follow_redirects=False,stream=True))
         finally: client.cookies.clear()
 
 
@@ -53,8 +139,8 @@ def get(url, *, headers, timeout):
     return _send('GET',url,headers=headers,timeout=timeout)
 
 
-def post(url, *, headers, json, timeout):
-    return _send('POST',url,headers=headers,json=json,timeout=timeout)
+def post(url, *, headers, json, timeout, encoded_body=None):
+    return _send('POST',url,headers=headers,json=json,timeout=timeout,encoded_body=encoded_body)
 
 
 def close(*, wait=True):

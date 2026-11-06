@@ -2164,6 +2164,13 @@ explicitly requested or the entry no longer matches/is no longer valid.
 
 ### Throttling, daily cap and unthrottled operation
 
+The shared Responses API request path validates strict UTF-8 JSON against a
+2,000,000-byte encoded ceiling before shared rate, budget and provider-backoff
+admission. Refused bodies create no provider receipt and expose a fixed local
+diagnostic. Valid bodies send the validated bytes and retain their structured
+evidence for pricing and accounting. This checkpoint covers outbound request
+validation. Production throughput and wider transport acceptance remain open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -2177,7 +2184,7 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
 - In cap mode configure a positive USD amount, an explicit IANA timezone and the next calendar-day reset, including daylight-saving transitions. Changes to amount/timezone/mode are revision-checked and audited; prevent resets, restarts, clock changes or mode toggles from silently granting duplicate budget.
 - Reserve cost atomically before admitting each paid call, accounting for all outstanding reservations across workers/purposes, selected model/tier, bounded input and output/reasoning tokens, supported charges and the potential follow-up stage. Define whether an entire multi-stage run is reserved in advance or deferred between stages; never skip a required stage or accept an incomplete verdict because funds run out.
-- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
+- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts with unknown transmission outcomes and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
@@ -2192,6 +2199,16 @@ Issue reproduction/fixes retain priority over these roadmap milestones. Reconcil
 unfinished related work first and use the existing cycle budget, source/PR versioning
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
+
+### Release definitely unsent spend — worker checkpoint #588
+
+A confirmed local HTTP connection-pool acquisition timeout releases only the
+matching request's reservation and records a redacted reason in the ledger. The
+shared client sends once without following redirects or automatically retrying.
+Other transport timeouts, interrupted workers and lost replies retain conservative
+charges when the provider outcome is unknown. The existing transient backoff still
+applies. This is a partial shared-controls increment. Cross-worker failover and
+end-to-end spend and throughput acceptance remain open.
 
 ### Bounded same-server process triage — worker checkpoint #379
 
@@ -6056,3 +6073,38 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+### Bounded decoded AI provider responses — worker checkpoint #564
+
+The shared provider transport now advertises only `gzip` (with implicit identity),
+reads raw response bytes and performs its own bounded identity/gzip decoding. It
+accepts at most 2,000,000 decoded bytes. Incremental gzip output is limited to the
+remaining allowance plus one byte before each allocation, including across split
+and concatenated gzip members, so an expansion bomb is refused without first
+materializing its expanded body. A normalized decimal `Content-Length` above the
+ceiling is refused before body consumption without converting attacker-controlled
+digit strings to an integer; missing, malformed, compressed, chunked or dishonest
+lengths remain subject to the decoded-byte ceiling while streaming.
+
+Malformed/truncated gzip and unadvertised or ambiguous content encodings produce a
+fixed redacted transport failure. Successful decoding removes consumed encoding and
+framing headers and records the bounded decoded length. Every underlying response
+is closed on success, overflow or decoding/transport failure. A complete bounded
+body is reconstructed with its status and safe request metadata so existing
+structured parsing, usage receipts and HTTP error handling remain unchanged.
+
+An oversized successful response produces a fixed diagnostic and no partial result.
+The transmitted call keeps its full conservative spend reservation as uncertain
+because reliable usage is unavailable, and it is never automatically retried.
+Oversized and invalid-encoding HTTP failures retain status-based transient handling
+and a valid bounded `Retry-After` floor without persisting response bodies or
+arbitrary headers. Both retain the conservative spend reservation as uncertain when
+usage cannot be recovered. Existing per-request credentials, cookie clearing,
+redirect refusal, timeouts, connection reuse, shutdown/drain, pause/lifecycle,
+admission and response-authorization boundaries remain in force.
+
+This is a finite safe-transport checkpoint, not a claim that upstream memory use,
+provider throughput, connection capacity, model discovery or the broader faster-AI
+program is complete. Coordinator integration with ready pooled-discovery and
+configurable-connection work must preserve this decoded-response ceiling, followed
+by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
