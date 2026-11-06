@@ -2137,6 +2137,13 @@ separately instead of promising a fixed production speedup.
 
 ### Parallel execution and latency work
 
+Worker checkpoint #603 adds a server/package/state/candidate index for exact
+score history and deferred scoring lookups. Startup creates it idempotently on
+existing databases and keeps retained scores and existing indexes. A fixture with
+5,000 unrelated scores on one server verifies the actual query plans and retained
+results. This is partial scoring performance work. Idle candidate hashing and
+end-to-end production throughput acceptance remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.

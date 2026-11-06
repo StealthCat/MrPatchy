@@ -144,6 +144,8 @@ def init():
         score_columns={c['name'] for c in inspect(connection).get_columns('update_scores')}
         if 'next_at' not in score_columns:
             connection.execute(text('ALTER TABLE update_scores ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
+        from .update_scores import SCORE_HISTORY_INDEX
+        SCORE_HISTORY_INDEX.create(connection,checkfirst=True)
         job_columns={c['name'] for c in inspect(connection).get_columns('jobs')}
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
