@@ -226,6 +226,24 @@ def test_oversized_response_retains_charge_and_preserves_status_backoff(admin,mo
         assert backoff['blocked'] is transient
 
 
+@pytest.mark.parametrize('status,retry_after,transient',[(200,None,False),(503,'75',True)])
+def test_invalid_response_encoding_retains_charge_and_preserves_status_backoff(admin,monkeypatch,status,retry_after,transient):
+    configure(cap=Decimal('1'))
+    headers={'x-private':'secret-provider-value'}
+    if retry_after:headers['retry-after']=retry_after
+    response=httpx.Response(status,headers=headers,content=b'',request=httpx.Request('POST',ai.URL))
+    monkeypatch.setattr(ai.transport,'post',lambda *args,**kwargs:(_ for _ in ()).throw(ai.transport.ResponseDecodeError(response)))
+    with pytest.raises(ai.AIError) as raised:ai.request(payload(),'fixture-key')
+    assert raised.value.transient is transient
+    assert 'secret-provider-value' not in raised.value.diagnostic
+    with Session() as session:
+        row=session.query(ai_budget.BudgetEntry).one()
+        assert row.status=='uncertain' and 'content encoding' in row.reason
+        assert ai_budget.status(session)['uncertain_usd']!='0'
+        backoff=ai_provider_backoff.status(session)
+        assert backoff['blocked'] is transient
+
+
 def test_settings_expose_combined_cap_and_validate_timezone(admin):
     body={'ai_model':'gpt-6-luna','ai_enabled':False,'ai_updates_enabled':True,
           'ai_hourly_limit':20,'ai_update_hourly_limit':20,
