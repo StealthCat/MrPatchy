@@ -19,6 +19,17 @@ module.exports=async(page,capture)=>{
  await page.locator('[href="#settings/patching"]').first().click();await page.locator('#patch-settings-form').waitFor();
  assert.equal(await page.locator('[name=repo_minutes]').inputValue(),'35');
  await page.goBack();await page.locator('#history-settings-form').waitFor();
+ const providerRevision='a'.repeat(64);let providerActive=true,clearRequest=null;
+ const settingsHandler=async route=>{
+  const response=await route.fetch(),json=await response.json();
+  json.ai_provider_backoff=providerActive?{blocked:true,next_at:1793491200,failures:2,
+   reason:'Transient provider or transport failure; bounded exponential backoff is active.',
+   updated_at:1793404800,revision:providerRevision}:{blocked:false,next_at:null,failures:0,reason:'',updated_at:null,revision:''};
+  await route.fulfill({response,json});
+ };
+ const clearHandler=async route=>{clearRequest=route.request().postDataJSON();providerActive=false;await route.fulfill({json:{cleared:true}});};
+ await page.route('**/api/settings',settingsHandler);
+ await page.route('**/api/ai/provider-backoff/clear',clearHandler);
  const spendReads=[];
  await page.route('**/api/settings/ai-spend-history?*',route=>{
   const days=Number(new URL(route.request().url()).searchParams.get('days'));spendReads.push(days);
@@ -28,6 +39,17 @@ module.exports=async(page,capture)=>{
  });
  await page.locator('[href="#settings/ai"]').first().click();await page.locator('#ai-settings-form').waitFor();
  await page.locator('#ai-spend-history table').waitFor();
+ assert.match(await page.locator('#ai-settings-form').textContent(),/Provider backoff active.*2 consecutive.*recorded.*next eligible/s);
+ await page.getByRole('button',{name:'Review and clear provider backoff'}).click();
+ const clearForm=page.locator('#provider-backoff-clear-form');await clearForm.waitFor();
+ assert.match(await clearForm.textContent(),/newer or expired floor will be preserved.*sends no provider or target request/s);
+ await clearForm.getByLabel('Reason').fill('Reviewed provider status and current quota.');
+ await clearForm.getByLabel('Type CLEAR BACKOFF').fill('CLEAR BACKOFF');
+ await clearForm.getByRole('button',{name:'Clear reviewed provider backoff'}).click();
+ await page.getByText('Reviewed provider backoff cleared.').waitFor();
+ await page.locator('#ai-settings-form').waitFor();
+ assert.deepEqual(clearRequest,{expected_revision:providerRevision,reason:'Reviewed provider status and current quota.',confirmation:'CLEAR BACKOFF'});
+ assert.equal(await page.locator('#provider-backoff-clear').count(),0);
  assert.match(await page.locator('#ai-spend-history').textContent(),/local public-price estimates.*not provider invoices/s);
  assert.equal(await page.locator('#ai-spend-history img[src=x]').count(),0);assert.equal(await page.evaluate(()=>window.__spendInjected),undefined);
  await page.locator('#ai-spend-history-days').selectOption('7');await page.getByRole('status').filter({hasText:'No retained billable AI calls'}).waitFor();
@@ -65,5 +87,7 @@ module.exports=async(page,capture)=>{
  }
  await page.locator('[data-nav=settings]').click();
  await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
+ await page.unroute('**/api/settings',settingsHandler);
+ await page.unroute('**/api/ai/provider-backoff/clear',clearHandler);
  await capture('settings-sections');
 };
