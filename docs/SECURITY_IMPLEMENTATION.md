@@ -2164,6 +2164,13 @@ explicitly requested or the entry no longer matches/is no longer valid.
 
 ### Throttling, daily cap and unthrottled operation
 
+The shared Responses API request path validates strict UTF-8 JSON against a
+2,000,000-byte encoded ceiling before shared rate, budget and provider-backoff
+admission. Refused bodies create no provider receipt and expose a fixed local
+diagnostic. Valid bodies send the validated bytes and retain their structured
+evidence for pricing and accounting. This checkpoint covers outbound request
+validation. Production throughput and wider transport acceptance remain open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -6064,3 +6071,38 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+### Bounded decoded AI provider responses — worker checkpoint #564
+
+The shared provider transport now advertises only `gzip` (with implicit identity),
+reads raw response bytes and performs its own bounded identity/gzip decoding. It
+accepts at most 2,000,000 decoded bytes. Incremental gzip output is limited to the
+remaining allowance plus one byte before each allocation, including across split
+and concatenated gzip members, so an expansion bomb is refused without first
+materializing its expanded body. A normalized decimal `Content-Length` above the
+ceiling is refused before body consumption without converting attacker-controlled
+digit strings to an integer; missing, malformed, compressed, chunked or dishonest
+lengths remain subject to the decoded-byte ceiling while streaming.
+
+Malformed/truncated gzip and unadvertised or ambiguous content encodings produce a
+fixed redacted transport failure. Successful decoding removes consumed encoding and
+framing headers and records the bounded decoded length. Every underlying response
+is closed on success, overflow or decoding/transport failure. A complete bounded
+body is reconstructed with its status and safe request metadata so existing
+structured parsing, usage receipts and HTTP error handling remain unchanged.
+
+An oversized successful response produces a fixed diagnostic and no partial result.
+The transmitted call keeps its full conservative spend reservation as uncertain
+because reliable usage is unavailable, and it is never automatically retried.
+Oversized and invalid-encoding HTTP failures retain status-based transient handling
+and a valid bounded `Retry-After` floor without persisting response bodies or
+arbitrary headers. Both retain the conservative spend reservation as uncertain when
+usage cannot be recovered. Existing per-request credentials, cookie clearing,
+redirect refusal, timeouts, connection reuse, shutdown/drain, pause/lifecycle,
+admission and response-authorization boundaries remain in force.
+
+This is a finite safe-transport checkpoint, not a claim that upstream memory use,
+provider throughput, connection capacity, model discovery or the broader faster-AI
+program is complete. Coordinator integration with ready pooled-discovery and
+configurable-connection work must preserve this decoded-response ceiling, followed
+by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
