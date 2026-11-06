@@ -29,7 +29,8 @@ def provider(monkeypatch):
         def do_GET(self):
             calls.append((self.client_address,self.headers,None));release.wait(10)
             data=b'{"data":[]}'
-            self.send_response(200);self.send_header('Content-Length',str(len(data)))
+            self.send_response(302 if self.path.endswith('/redirect') else 200)
+            self.send_header('Content-Length',str(len(data)));self.send_header('Location','/unexpected-redirect')
             self.send_header('Set-Cookie','provider-session=must-not-be-reused');self.end_headers()
             try:self.wfile.write(data);self.wfile.flush()
             except ConnectionError:pass
@@ -67,10 +68,11 @@ def test_get_shares_socket_without_body_credentials_or_cookies(provider):
     assert transport.get(url,headers={'Authorization':'Bearer discovery-one'},timeout=20).status_code==200
     assert send(url,'fixture-two').status_code==200
     assert transport.get(url,headers={'Authorization':'Bearer discovery-three'},timeout=20).status_code==200
+    assert transport.get(url+'/redirect',headers={'Authorization':'Bearer discovery-four'},timeout=20).status_code==302
     assert len(clients)==1 and len({call[0] for call in calls})==1
     assert [headers['Authorization'] for _,headers,_ in calls]==[
-        'Bearer discovery-one','Bearer fixture-two','Bearer discovery-three']
-    assert calls[0][2] is None and calls[2][2] is None
+        'Bearer discovery-one','Bearer fixture-two','Bearer discovery-three','Bearer discovery-four']
+    assert calls[0][2] is None and calls[2][2] is None and calls[3][2] is None
     assert all('Cookie' not in headers for _,headers,_ in calls)
     assert all('Content-Length' not in headers for _,headers,body in calls if body is None)
     assert not clients[0][0].cookies
