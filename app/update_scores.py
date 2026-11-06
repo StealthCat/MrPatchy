@@ -87,6 +87,10 @@ def scoring_candidates(s):
             yield package,host,key,scores.get(key),deferred.get((host.id,package.name),())
 
 
+def _batch_scores(s, ids):
+    return {row.id:row for row in s.scalars(select(UpdateScore).where(UpdateScore.id.in_(ids)))}
+
+
 def run_one():
     lock=Lock('ai-update-scoring')
     if not lock.acquire(False):return
@@ -127,7 +131,8 @@ def run_one():
                 with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
                     key=unseal(encrypted)
                     with Session() as s:
-                        for identifier in ids:s.get(UpdateScore,identifier).run_id=run_id
+                        scores=_batch_scores(s,ids)
+                        for identifier in ids:scores[identifier].run_id=run_id
                         s.commit()
                     result=ai.request({'model':cfg['ai_model'],'store':False,'max_output_tokens':4000,'instructions':INSTRUCTIONS,
                         'input':json.dumps(batch),'text':{'format':{'type':'json_schema','name':'update_importance','strict':True,'schema':SCHEMA}}},key)
@@ -139,8 +144,9 @@ def run_one():
                             any(not isinstance(row.get(k),str) or not 1<=len(row[k])<=4000 for k in ('explanation','limitations'))):
                             raise ai.AIError('Update scoring returned invalid scores or explanations; no assessment accepted.')
                     with Session() as s:
+                        scores=_batch_scores(s,ids)
                         for item in rows:
-                            row=s.get(UpdateScore,item['id']);package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
+                            row=scores[item['id']];package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
                             if not package or not host or not package.candidate or identity(host,package)!=row.id:
                                 row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
                             row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()
@@ -151,8 +157,9 @@ def run_one():
                 (error.policy_wait or error.transient))
             next_at=time.time()+delay if deferred else 0
             with Session() as s:
+                scores=_batch_scores(s,ids)
                 for identifier in ids:
-                    row=s.get(UpdateScore,identifier)
+                    row=scores[identifier]
                     row.state='deferred' if deferred else 'error';row.next_at=next_at
                     row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else ai_runs.safe_error(error))
                 s.commit()
