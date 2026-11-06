@@ -64,6 +64,11 @@ def test_real_fleet_and_host_history_ordering_uses_bounded_indexes(admin):
                 assert ('ix_jobs_host_history' if host else 'ix_jobs_history') in details
             else:
                 rows=connection.exec_driver_sql('EXPLAIN '+sql,parameters).mappings().all()
-                assert all('filesort' not in str(row.get('Extra','')).lower() for row in rows)
+                assert all('filesort' not in str(row.get('Extra','')).lower() for row in rows), (host or 'fleet', rows)
+                if connection.dialect.name=='mysql':
+                    history_index='ix_jobs_host_history' if host else 'ix_jobs_history'
+                    job_plan=next(row for row in rows if row['table']=='jobs')
+                    assert job_plan['key']==history_index, job_plan
+                    assert f'FORCE INDEX FOR ORDER BY ({history_index})' in sql
         items=response.json()
         assert items==sorted(items,key=lambda item:(-item['created'],item['id']))

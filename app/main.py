@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.41'
+APP_VERSION='1.42.47'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -888,6 +888,9 @@ def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(viewer_user)):
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             query=query.where(Job.host_id==host_id)
+        # MySQL can choose a competing access path and sort retained history despite LIMIT.
+        history_index='ix_jobs_host_history' if host_id else 'ix_jobs_history'
+        query=query.with_hint(Job,f'FORCE INDEX FOR ORDER BY ({history_index})',dialect_name='mysql')
         return [public_job(x) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
 def audit_log(offset:int=0,limit:int=200,user=Depends(admin_user)):
