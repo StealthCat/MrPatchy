@@ -14,6 +14,7 @@ PASSWORD = os.environ['ADMIN_PASSWORD']
 # test_every_route_has_an_expected_role, so each new route forces a role decision.
 EXPECTED_ROLES = {
     ('GET','/'):'public',
+    ('GET','/api/ai/known-good/summary'):'admin',
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
     ('POST','/api/ai/provider-backoff/clear'):'admin',
     ('GET','/api/ai/runs'):'admin',
