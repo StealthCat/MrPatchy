@@ -6038,3 +6038,17 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+### Batched outbound AI pause-policy reads — worker checkpoint #573
+
+The existing outbound provider guard reads scoped server pause settings in
+batches of at most 200 distinct keys and checks global AI enablement once.
+A five-server scoring-sized scope uses two SELECTs in the disposable SQLite
+regression, compared with 12 on the previous path. Missing policy rows retain
+the default, any paused or malformed row blocks before global enablement is
+checked, and an empty scope keeps the provider setup path available.
+
+Provider locks, lease ownership checks, shared admission, budget accounting,
+and response authorization continue to apply. This is an admission database
+read improvement. Native integration and end-to-end performance acceptance
+for the faster-AI program remain open.
