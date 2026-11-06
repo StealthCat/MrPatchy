@@ -6045,17 +6045,20 @@ under #201. No Docker runtime was available locally.
 This bounded faster-AI increment shortens the database work performed while holding
 the distributed automatic security-plan queue lock. After the existing policy,
 pause, quarantine, lifecycle, prior-attempt and YARA filters select at most 100
-incidents, one projected host query verifies candidate host rows and one projected
-job query reads queued/running security or startup-plan occupancy. A successful
-enqueue updates the in-memory occupied-host set, so another incident on the same
-host remains deferred exactly as it was when each loop iteration queried the job
-table again.
+incidents, one projected eligibility query joins each bounded incident ID to its
+canonical host identity and uses a correlated `EXISTS` to read queued/running
+security or startup-plan occupancy. Keeping both comparisons in SQL preserves the
+database's host-ID collation. A successful enqueue updates an in-memory set with
+the canonical host ID, so another collating-equal incident remains deferred exactly
+as it was when each loop iteration queried the job table again.
 
 The 12-host SQLite reproduction admits at most the existing ten plans. Current main
 performs ten final host lookups plus ten final pending-job lookups; the candidate
-uses two bounded reads, reducing the fixture from 151 to 133 SELECT statements.
-Focused coverage also retains a pre-existing startup-plan occupant and verifies that
-two eligible incidents on one host still produce only one automatic plan.
+uses one bounded eligibility read, reducing the fixture from 151 to 132 SELECT
+statements. Focused coverage also retains a pre-existing startup-plan occupant and
+verifies that two eligible incidents on one host still produce only one automatic
+plan. Native MySQL coverage exercises differently cased stored/candidate host IDs,
+an existing collating-equal occupant and within-tick canonical-host deduplication.
 
 This changes no schema, public API, provider call, spend control, plan content,
 response authority or incident ordering. Per-policy pause and quarantine reads that

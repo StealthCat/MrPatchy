@@ -240,17 +240,22 @@ def auto_plan_tick(now=None):
                 offset+=100
             candidates=rows[:100]
             if not candidates:return
-            candidate_hosts={row.host_id for row in candidates}
-            known_hosts=set(s.scalars(select(Host.id).where(Host.id.in_(candidate_hosts))))
-            occupied_hosts=set(s.scalars(select(Job.host_id).where(
-                Job.host_id.in_(candidate_hosts),Job.action.in_(['security-plan','startup-plan']),
-                Job.state.in_(['queued','running']))))
+            occupied=select(Job.id).where(
+                Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
+                Job.state.in_(['queued','running'])).exists()
+            eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
+                select(Incident.host_id,Host.id,occupied).join(Host,Host.id==Incident.host_id)
+                .where(Incident.id.in_([row.id for row in candidates])))}
+            occupied_hosts=set()
             for row in candidates:
                 if remaining<=0:break
-                if row.host_id in occupied_hosts or row.host_id not in known_hosts:continue
+                status=eligibility.get(row.host_id)
+                if not status:continue
+                canonical_host,has_active_plan=status
+                if has_active_plan or canonical_host in occupied_hosts:continue
                 try:
                     enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
-                    occupied_hosts.add(row.host_id);remaining-=1
+                    occupied_hosts.add(canonical_host);remaining-=1
                 except ValueError:continue
 
 
