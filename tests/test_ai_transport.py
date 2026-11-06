@@ -26,6 +26,13 @@ def provider(monkeypatch):
             self.send_header('Location','/unexpected-redirect');self.end_headers()
             try:self.wfile.write(data);self.wfile.flush()
             except ConnectionError:pass
+        def do_GET(self):
+            calls.append((self.client_address,self.headers,None));release.wait(10)
+            data=b'{"data":[]}'
+            self.send_response(200);self.send_header('Content-Length',str(len(data)))
+            self.send_header('Set-Cookie','provider-session=must-not-be-reused');self.end_headers()
+            try:self.wfile.write(data);self.wfile.flush()
+            except ConnectionError:pass
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=True
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     yield 'http://127.0.0.1:'+str(server.server_port),calls,clients,release
@@ -55,10 +62,27 @@ def test_reuses_socket_but_not_credentials_cookies_or_redirects(provider):
     assert send(url).status_code==200 and len(clients)==2
 
 
+def test_get_shares_socket_without_body_credentials_or_cookies(provider):
+    url,calls,clients,_=provider
+    assert transport.get(url,headers={'Authorization':'Bearer discovery-one'},timeout=20).status_code==200
+    assert send(url,'fixture-two').status_code==200
+    assert transport.get(url,headers={'Authorization':'Bearer discovery-three'},timeout=20).status_code==200
+    assert len(clients)==1 and len({call[0] for call in calls})==1
+    assert [headers['Authorization'] for _,headers,_ in calls]==[
+        'Bearer discovery-one','Bearer fixture-two','Bearer discovery-three']
+    assert calls[0][2] is None and calls[2][2] is None
+    assert all('Cookie' not in headers for _,headers,_ in calls)
+    assert all('Content-Length' not in headers for _,headers,body in calls if body is None)
+    assert not clients[0][0].cookies
+
+
 def test_parallel_requests_isolate_auth_and_shutdown_waits_for_inflight(provider):
     url,calls,clients,release=provider;release.clear()
+    def request(index):
+        if index%2:return send(url,'fixture-'+str(index),index=index)
+        return transport.get(url,headers={'Authorization':'Bearer fixture-'+str(index)},timeout=5)
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures=[executor.submit(send,url,'fixture-'+str(i),index=i) for i in range(4)]
+        futures=[executor.submit(request,i) for i in range(4)]
         with transport._condition:
             assert transport._condition.wait_for(lambda:transport._active==4,timeout=5)
         assert transport.close(wait=False) is False
@@ -70,7 +94,10 @@ def test_parallel_requests_isolate_auth_and_shutdown_waits_for_inflight(provider
         assert all(f.result(timeout=10).status_code==200 for f in futures)
         assert closing.result(timeout=10) and clients[0][0].is_closed
     assert len(calls)==4
-    assert all(headers['Authorization']=='Bearer fixture-'+str(body['index']) and 'Cookie' not in headers for _,headers,body in calls)
+    assert sorted(headers['Authorization'] for _,headers,_ in calls)==[
+        'Bearer fixture-0','Bearer fixture-1','Bearer fixture-2','Bearer fixture-3']
+    assert sum(body is None for _,_,body in calls)==2
+    assert all('Cookie' not in headers for _,headers,_ in calls)
 
 
 def test_timeout_bounds_are_per_request_and_errors_are_not_retried(monkeypatch):
@@ -87,6 +114,9 @@ def test_timeout_bounds_are_per_request_and_errors_are_not_retried(monkeypatch):
         assert len(seen)==1 and seen[0].extensions['timeout']=={'connect':5,'pool':5,'read':5,'write':5}
         with pytest.raises(httpx.ReadTimeout):transport.post('https://example.invalid',headers={},json={},timeout=60)
         assert seen[-1].extensions['timeout']=={'connect':10,'pool':5,'read':60,'write':60}
+        with pytest.raises(httpx.ReadTimeout):transport.get('https://example.invalid',headers={},timeout=20)
+        assert len(seen)==3 and seen[-1].method=='GET' and seen[-1].content==b''
+        assert seen[-1].extensions['timeout']=={'connect':10,'pool':5,'read':20,'write':20}
     finally:transport.close()
 
 

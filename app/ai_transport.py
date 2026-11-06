@@ -33,7 +33,7 @@ def _borrow():
             _condition.notify_all()
 
 
-def post(url, *, headers, json, timeout):
+def _send(method, url, *, headers, timeout, json=None):
     # Build directly, rather than Client.build_request: never merge a previous
     # response's cookies or any credential-bearing client defaults into a send.
     deadline = httpx.Timeout(timeout, connect=min(timeout, 10), pool=min(timeout, 5))
@@ -42,10 +42,19 @@ def post(url, *, headers, json, timeout):
         # allowlist; never copy authorization, cookies or arbitrary client state.
         defaults = {name:client.headers[name] for name in
                     ('accept','accept-encoding','connection','user-agent') if name in client.headers}
-        request = httpx.Request('POST', url, headers={**defaults, **headers}, json=json,
-                                extensions={'timeout': deadline.as_dict()})
+        values={'headers':{**defaults, **headers},'extensions':{'timeout':deadline.as_dict()}}
+        if json is not None:values['json']=json
+        request = httpx.Request(method, url, **values)
         try: return client.send(request, follow_redirects=False)
         finally: client.cookies.clear()
+
+
+def get(url, *, headers, timeout):
+    return _send('GET',url,headers=headers,timeout=timeout)
+
+
+def post(url, *, headers, json, timeout):
+    return _send('POST',url,headers=headers,json=json,timeout=timeout)
 
 
 def close(*, wait=True):

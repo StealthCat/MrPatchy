@@ -121,7 +121,7 @@ def list_models(key):
     key=key.strip()
     if not key or not re.fullmatch(r'[!-~]{1,1000}',key):raise AIError('Save a valid API key in Settings before loading models.')
     try:
-        response=httpx.get(MODELS_URL,headers={'Authorization':'Bearer '+key},timeout=20)
+        response=transport.get(MODELS_URL,headers={'Authorization':'Bearer '+key},timeout=20)
         response.raise_for_status()
     except httpx.HTTPStatusError as error:raise http_error(error.response) from None
     except httpx.TimeoutException:raise AIError('OpenAI model discovery timed out. Retry after checking outbound HTTPS connectivity.') from None
