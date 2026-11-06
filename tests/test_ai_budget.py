@@ -342,10 +342,30 @@ def test_spend_history_validates_range_role_and_bounds_group_rows(admin):
         session.add_all([ai_budget.BudgetEntry(id=f'history-{i}',created=now-60,updated=now-30,reset_at=now+i+1,
             timezone='UTC',model='m',status='reserved',reservation_usd=Decimal('0.01'),
             pricing_version='v',pricing_source='s') for i in range(12)])
+        session.add_all([
+            ai_budget.BudgetEntry(id=identifier,created=now-3600,updated=now-30,reset_at=now-60,
+                timezone=zone,model='m',status='reserved',reservation_usd=Decimal(amount),
+                pricing_version='v',pricing_source='s')
+            for identifier,zone,amount in [
+                ('history-match','America/New_York','0.25'),
+                ('history-other-case','america/new_york','9.00'),
+            ]
+        ])
         session.commit()
     assert admin.get('/api/settings/ai-spend-history?days=0').status_code==400
     assert admin.get('/api/settings/ai-spend-history?days=91').status_code==400
     result=admin.get('/api/settings/ai-spend-history?days=1').json()
     assert result['max_windows']==4 and result['truncated'] and len(result['windows'])==4
+    assert all(row['timezone']=='UTC' for row in result['windows'])
+    base='/api/settings/ai-spend-history?days=1'
+    filtered=admin.get(base+'&timezone=America%2FNew_York')
+    assert filtered.status_code==200
+    data=filtered.json()
+    assert not data['truncated'] and len(data['windows'])==1
+    row=data['windows'][0]
+    assert row['timezone']=='America/New_York' and row['call_count']==1
+    assert row['reserved_usd']=='0.25' and row['counted_usd']=='0.25'
+    assert admin.get(base+'&timezone=Europe%2FLondon').json()['windows']==[]
+    assert admin.get(base+'&timezone=Invalid%2FTimezone').status_code==400
     with Session() as session:session.get(User,'admin').role='viewer';session.commit()
-    assert admin.get('/api/settings/ai-spend-history').status_code==403
+    assert admin.get(base+'&timezone=America%2FNew_York').status_code==403
