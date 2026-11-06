@@ -2164,6 +2164,13 @@ explicitly requested or the entry no longer matches/is no longer valid.
 
 ### Throttling, daily cap and unthrottled operation
 
+The shared Responses API request path validates strict UTF-8 JSON against a
+2,000,000-byte encoded ceiling before shared rate, budget and provider-backoff
+admission. Refused bodies create no provider receipt and expose a fixed local
+diagnostic. Valid bodies send the validated bytes and retain their structured
+evidence for pricing and accounting. This checkpoint covers outbound request
+validation. Production throughput and wider transport acceptance remain open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
