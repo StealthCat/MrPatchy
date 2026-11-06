@@ -4660,6 +4660,29 @@ recorded in the completion report after publication; no earlier or failed head m
 merged.
 
 
+### Indexed retained assessment lookup/history — worker checkpoint #607
+
+Retained Assessment provenance grows independently of diagnostic pruning. Exact-state
+Re-triage preservation and the authenticated per-subject/per-host history endpoint
+previously filtered through separate single-column indexes and then sorted matching
+rows in temporary storage. This bounded faster-triage increment gives those two
+existing query shapes composite subject/state/creation and subject/host/creation
+indexes, including deterministic ID ordering. Existing installations reconcile the
+indexes idempotently during the established controller-owned startup migration; new
+installations receive them from shared SQLAlchemy metadata.
+
+Acceptance covers an old SQLite schema with retained data, repeat startup, exact
+newest-result/history ordering amid 5,000 unrelated retained rows and SQLite query
+plans without temporary sorting. The same test asserts the selected key and absence
+of filesort on the existing MySQL acceptance job. Index construction has the ordinary
+startup DDL lock, time and disk implications; no history is pruned and no cache,
+classification, approval, role, pause, admission or response-authorization semantics
+change. This is a finite lookup/persistence performance milestone only: the broader
+parallel investigation, fleet cache and shared rate/spend program remains incomplete,
+and coordinator integration plus exact integrated-head SQLite/MySQL acceptance remain
+pending.
+
+
 ## v1.29.0 — Audited fleet candidate invalidation and linked review
 
 Issue-first reconciliation read current main `05c46912`, repository instructions,
