@@ -4670,7 +4670,7 @@ existing query shapes composite subject/state/creation and subject/host/creation
 indexes, including deterministic ID ordering. Existing installations reconcile the
 indexes idempotently during the established controller-owned startup migration; new
 installations receive them from shared SQLAlchemy metadata. MySQL queries use narrow
-ordering hints for these exact paths so its optimizer cannot regress to intersecting
+join-scoped index hints for these exact paths so its optimizer cannot regress to intersecting
 the legacy single-column indexes and filesorting retained matches.
 
 Acceptance covers an old SQLite schema with retained data, repeat startup, exact

@@ -131,4 +131,4 @@ def test_retained_assessment_queries_use_bounded_indexes():
                 )
                 assert assessment_plan.get('key') == expected, assessment_plan
                 assert 'filesort' not in str(assessment_plan.get('Extra', '')).lower()
-                assert f'FORCE INDEX FOR ORDER BY ({expected})' in str(compiled)
+                assert f'FORCE INDEX FOR JOIN ({expected})' in str(compiled)

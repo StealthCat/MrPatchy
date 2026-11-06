@@ -53,14 +53,14 @@ def exact_history_query(subject, state):
     query=(select(Assessment).where(Assessment.subject==subject,Assessment.state_hash==state)
         .order_by(Assessment.created.desc(),Assessment.id.desc()))
     return query.with_hint(Assessment,
-        'FORCE INDEX FOR ORDER BY (ix_ai_assessments_subject_state_created)',dialect_name='mysql')
+        'FORCE INDEX FOR JOIN (ix_ai_assessments_subject_state_created)',dialect_name='mysql')
 
 
 def subject_history_query(subject, host_id):
     query=(select(Assessment).where(Assessment.subject==subject,Assessment.host_id==host_id)
         .order_by(Assessment.created.desc(),Assessment.id.desc()))
     return query.with_hint(Assessment,
-        'FORCE INDEX FOR ORDER BY (ix_ai_assessments_subject_host_created)',dialect_name='mysql')
+        'FORCE INDEX FOR JOIN (ix_ai_assessments_subject_host_created)',dialect_name='mysql')
 
 
 def digest(value):
