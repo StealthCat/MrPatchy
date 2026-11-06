@@ -89,6 +89,40 @@ def test_matching_configured_queue_age_is_accepted():
     assert result['candidate']['queue_age_source'] == 'report'
 
 
+def test_maximum_seeded_queue_age_with_fixture_overhead_is_accepted():
+    baseline = report()
+    candidate = report('parallel', 4)
+    for item in (baseline, candidate):
+        item['queue_age_seconds'] = 86_400
+        item['initial_fixture_queue_age_seconds'] = 86_400
+        item['stages']['queue_age'].update(p50_ms=86_400_010, p95_ms=86_400_020)
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['capability_equivalent'] is True
+    assert result['deltas']['stages']['queue_age']['p50_ms']['baseline'] == 86_400_010
+
+
+def test_observed_queue_age_beyond_seed_plus_stage_limit_is_refused():
+    candidate = report('parallel', 4)
+    candidate['queue_age_seconds'] = 60
+    candidate['stages']['queue_age'].update(p50_ms=0, p95_ms=86_460_001)
+    baseline = report()
+    baseline['queue_age_seconds'] = 60
+    with pytest.raises(compare_ai_benchmarks.ComparisonError,
+                       match=r'stages.queue_age.p95_ms must be between 0 and 86460000'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
+def test_seeded_queue_age_does_not_widen_other_stage_bounds():
+    candidate = report('parallel', 4)
+    candidate['queue_age_seconds'] = 60
+    candidate['stages']['admission'].update(p95_ms=86_400_001)
+    baseline = report()
+    baseline['queue_age_seconds'] = 60
+    with pytest.raises(compare_ai_benchmarks.ComparisonError,
+                       match=r'stages.admission.p95_ms must be between 0 and 86400000'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
 @pytest.mark.parametrize('legacy_candidate', [False, True])
 def test_queue_age_mismatch_is_refused_even_with_matching_fingerprint(legacy_candidate):
     baseline = report()
