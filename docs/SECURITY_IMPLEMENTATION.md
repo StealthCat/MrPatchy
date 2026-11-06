@@ -2183,6 +2183,13 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 
 ### Finite implementation and acceptance milestones
 
+Initial triage preflight reuses the global settings and encrypted key already
+loaded under the admission lock. The rate and budget preflights retain their
+order and the retry signature retains its existing format. Capped eligibility
+still reads current settings after the queue lock, and the provider reservation
+remains authoritative. This reduces repeated settings reads. Production
+throughput remains unverified.
+
 1. **Baseline, transport and known-good reuse:** record queue/admission/provider/SSH/persistence stage timing, p50/p95 end-to-end latency, throughput, calls/tokens/cost, errors and backlog age for representative one/two-stage workloads; add safe client pooling, evidence deduplication and the fleet-wide exact-match known-good cache with explicit re-triage, without changing the capability contract.
 2. **Threaded execution:** deliver configurable concurrent tasks, atomic claims/leases, context/session isolation, fair scheduling, pause-safe same-host/cross-host admission, drain and recovery. Compare serial and parallel execution on identical delayed I/O fixtures: four eligible independent investigations must actually overlap and complete materially faster than their serial sum without lost work or reduced checks. Report measured production limits separately.
 3. **Shared controls and UI:** deliver pacing, daily cap and unthrottled settings, conservative migration, complete billable-path coverage, reservations/reconciliation and clear queue/spend diagnostics. Document operator tuning and upgrade behavior; changing a label or merely raising existing limits does not complete this milestone.
