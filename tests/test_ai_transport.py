@@ -10,10 +10,12 @@ from app import ai_transport as transport
 
 
 @pytest.fixture
-def provider(monkeypatch):
+def provider(monkeypatch, request):
     transport.close()
     real_client=httpx.Client; clients=[]; calls=[]; release=threading.Event(); release.set()
     def factory(**kwargs):
+        if hasattr(request, 'param'):
+            kwargs['limits'] = httpx.Limits(max_connections=request.param)
         client=real_client(**kwargs,trust_env=False);clients.append((client,kwargs));return client
     monkeypatch.setattr(transport.httpx,'Client',factory)
     class Handler(BaseHTTPRequestHandler):
@@ -281,3 +283,43 @@ def test_declared_and_streamed_overflow_close_without_exposing_content(monkeypat
         assert 'x-private' not in raised.value.response.headers
         assert 'secret-value' not in str(raised.value)
     finally:transport.close()
+
+
+@pytest.mark.parametrize('provider', [1], indirect=True)
+def test_saturated_pool_releases_daily_cap_without_sending(provider, admin, monkeypatch):
+    from decimal import Decimal
+    from app import ai, ai_budget, ai_pricing, ai_runs
+    from app.db import Session, Setting
+
+    url, calls, clients, _ = provider
+    monkeypatch.setattr(ai, 'URL', url)
+    monkeypatch.setattr(ai_pricing.time, 'time', lambda: 1793404800.0)
+    payload = {'model': 'gpt-6-luna', 'input': 'fixture', 'max_output_tokens': 1000}
+    quote = ai_pricing.reservation(payload)['amount_usd']
+    with Session() as session:
+        session.merge(Setting(key='config', value={
+            'ai_enabled': True, 'ai_control_mode': 'daily_cap',
+            'ai_daily_cap_usd': float(quote + Decimal('0.000001')), 'ai_budget_timezone': 'UTC',
+        }))
+        session.commit()
+
+    assert send(url).status_code == 200
+    with clients[0][0].stream('POST', url, json={}) as held:
+        assert held.status_code == 200
+        with pytest.raises(ai.AIError) as error:
+            with ai_runs.track('test', payload['model']) as run_id:
+                ai.request(payload, 'fixture-key', timeout=0.1)
+        assert error.value.transient
+        assert error.value.retry_after > 0
+        assert len(calls) == 2
+        held.read()
+
+    with Session() as session:
+        entry = session.query(ai_budget.BudgetEntry).one()
+        assert entry.status == 'released'
+        assert entry.reason == 'The local AI connection pool timed out before sending the request.'
+        receipt = session.query(ai_runs.AICall).filter_by(run_id=run_id).one()
+        assert entry.call_id == receipt.id
+        assert session.get(ai_runs.AIRun, run_id).message == entry.reason
+        assert ai_budget.status(session)['counted_usd'] == '0'
+    assert ai_budget.reserve(payload) is not None
