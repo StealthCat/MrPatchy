@@ -103,20 +103,38 @@ def test_uncontrolled_plan_error_remains_terminal(admin, monkeypatch):
 
 
 def test_ready_plan_precedes_future_plan_backoff(admin):
+    from app.identity import User
+
     now=time.time()
     with Session() as session:
-        for identifier in ('ready-plan-host','future-plan-host'):
+        for identifier in ('ready-plan-host','future-plan-host','paused-plan-host'):
             session.add(Host(id=identifier,name=identifier,address='192.0.2.10',fingerprint='',state='online'))
         session.add_all([
             Job(id='ready-plan',host_id='ready-plan-host',action='security-plan',payload={'_ai_deferred':True},next_at=0),
             Job(id='future-plan',host_id='future-plan-host',action='startup-plan',payload={'_ai_deferred':True},next_at=now+300),
+            Job(id='paused-plan',host_id='paused-plan-host',action='security-plan',payload={'_ai_deferred':True},next_at=0),
+            Setting(key='server-ai:paused-plan-host',value={'paused':True}),
             Setting(key='worker:heartbeat',value={'seen':now}),
         ])
         session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model'}))
         session.merge(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
         session.commit();status=ai_runs.status(session)
         assert status['reason']=='ready' and status['plan_ready']==1
-        assert status['plan_deferred']==2 and status['plan_next_at']==pytest.approx(now+300)
+        assert status['plan_deferred']==3 and status['plan_next_at']==pytest.approx(now+300)
+    response=admin.get('/api/investigation-status')
+    assert response.status_code==200
+    assert response.json()['plan_deferred_by_action']=={
+        'release-plan':{'deferred':0,'ready':0,'next_at':None},
+        'security-plan':{'deferred':2,'ready':1,'next_at':None},
+        'startup-plan':{'deferred':1,'ready':0,'next_at':pytest.approx(now+300)},
+    }
+    assert 'paused-plan-host' not in response.text
+    with Session() as session:
+        session.get(User,'admin').role='viewer'
+        session.commit()
+    viewer=admin.get('/api/investigation-status')
+    assert viewer.status_code==200
+    assert set(viewer.json())=={'pending','oldest','enabled'}
 
 
 def test_indefinite_policy_wait_records_deferred_run(admin, monkeypatch):
