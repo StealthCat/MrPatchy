@@ -1,6 +1,6 @@
 """Database reads under the server activity guard."""
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, select
 from app import host_lifecycle
 from app.coordination import Lock
 from app.db import Host, Session, engine
@@ -23,13 +23,32 @@ def test_activity_reads_only_lifecycle_fields_in_batches(admin, monkeypatch, bat
 
     event.listen(engine, 'before_cursor_execute', capture)
     try:
-        with host_lifecycle.activity(['unknown-bootstrap', *reversed(expected), 'guard-0'], 'ai') as revisions:
+        with host_lifecycle.activity([*reversed(expected), 'guard-0'], 'ai') as revisions:
             assert revisions == expected
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
 
     projection = 'SELECT hosts.id, hosts.enabled, hosts.deleted_at, hosts.lifecycle_revision'
     assert reads == [projection] * expected_reads
+
+
+def test_activity_omits_revision_for_unpersisted_bootstrap_host(admin):
+    with host_lifecycle.activity(['unknown-bootstrap'], 'ai') as revisions:
+        assert revisions == {}
+
+
+def test_activity_preserves_requested_revision_key_under_mysql_collation(admin):
+    if engine.dialect.name not in ('mysql', 'mariadb'):
+        pytest.skip('Requires a case-insensitive MySQL host ID collation')
+    with Session() as s:
+        s.add(Host(id='guard-alias', name='Fixture', address='192.0.2.1', fingerprint='',
+                   lifecycle_revision='revision-alias'))
+        s.commit()
+        if s.scalar(select(Host.id).where(Host.id=='GUARD-ALIAS')) is None:
+            pytest.skip('The configured MySQL host ID collation is case-sensitive')
+
+    with host_lifecycle.activity(['guard-alias', 'GUARD-ALIAS'], 'ai') as revisions:
+        assert revisions == {'guard-alias': 'revision-alias', 'GUARD-ALIAS': 'revision-alias'}
 
 
 @pytest.mark.parametrize('state', [{'enabled': False}, {'deleted_at': 1}])

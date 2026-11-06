@@ -45,11 +45,19 @@ def activity(host_ids,kind,blocking=True,wait=None):
             # Bootstrap/native callers may use unpersisted typed SSH hosts.
             # Missing rows retain that behavior and contribute no revision.
             lifecycle_fields=select(Host.id,Host.enabled,Host.deleted_at,Host.lifecycle_revision)
+            mysql=s.get_bind().dialect.name in ('mysql','mariadb')
             for start in range(0,len(identifiers),ACTIVITY_READ_BATCH):
                 batch=identifiers[start:start+ACTIVITY_READ_BATCH]
-                for host in s.execute(lifecycle_fields.where(Host.id.in_(batch))):
+                hosts={host.id:host for host in s.execute(lifecycle_fields.where(Host.id.in_(batch)))}
+                for identifier in batch:
+                    host=hosts.get(identifier)
+                    # MySQL collations can match a different spelling. Keep
+                    # the caller's revision key and use the database's equality.
+                    if host is None and mysql:
+                        host=s.execute(lifecycle_fields.where(Host.id==identifier)).one_or_none()
+                    if host is None:continue
                     if not active(host):raise Inactive('Server management is disabled or deleted')
-                    revisions[host.id]=host.lifecycle_revision
+                    revisions[identifier]=host.lifecycle_revision
         yield revisions
     finally:
         for lock in reversed(locks):lock.release()
