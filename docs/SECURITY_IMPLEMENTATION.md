@@ -6038,3 +6038,28 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+
+### Batched automatic security-plan eligibility — worker checkpoint #592
+
+This bounded faster-AI increment shortens the database work performed while holding
+the distributed automatic security-plan queue lock. After the existing policy,
+pause, quarantine, lifecycle, prior-attempt and YARA filters select at most 100
+incidents, one projected host query verifies candidate host rows and one projected
+job query reads queued/running security or startup-plan occupancy. A successful
+enqueue updates the in-memory occupied-host set, so another incident on the same
+host remains deferred exactly as it was when each loop iteration queried the job
+table again.
+
+The 12-host SQLite reproduction admits at most the existing ten plans. Current main
+performs ten final host lookups plus ten final pending-job lookups; the candidate
+uses two bounded reads, reducing the fixture from 151 to 133 SELECT statements.
+Focused coverage also retains a pre-existing startup-plan occupant and verifies that
+two eligible incidents on one host still produce only one automatic plan.
+
+This changes no schema, public API, provider call, spend control, plan content,
+response authority or incident ordering. Per-policy pause and quarantine reads that
+occur before candidate selection remain separate work, and this checkpoint does not
+complete smooth shared planning admission, threaded investigations, production
+throughput or failover acceptance. Coordinator integration, exact-head SQLite/MySQL/
+full-suite checks and fresh code-scanning inventory remain required before delivery.

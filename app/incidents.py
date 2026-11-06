@@ -238,11 +238,19 @@ def auto_plan_tick(now=None):
                 rows+=[r for r in batch if r.evidence.get('scan_context',{}).get('engine')!='YARA']
                 if len(batch)<100:break
                 offset+=100
-            for row in rows[:100]:
+            candidates=rows[:100]
+            if not candidates:return
+            candidate_hosts={row.host_id for row in candidates}
+            known_hosts=set(s.scalars(select(Host.id).where(Host.id.in_(candidate_hosts))))
+            occupied_hosts=set(s.scalars(select(Job.host_id).where(
+                Job.host_id.in_(candidate_hosts),Job.action.in_(['security-plan','startup-plan']),
+                Job.state.in_(['queued','running']))))
+            for row in candidates:
                 if remaining<=0:break
-                pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
-                if pending or not s.get(Host,row.host_id):continue
-                try:enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True});remaining-=1
+                if row.host_id in occupied_hosts or row.host_id not in known_hosts:continue
+                try:
+                    enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
+                    occupied_hosts.add(row.host_id);remaining-=1
                 except ValueError:continue
 
 
