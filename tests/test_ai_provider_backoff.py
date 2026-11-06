@@ -1,14 +1,15 @@
 import json
+from contextlib import contextmanager
 import subprocess
 import sys
 import time
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app import ai, ai_admission, ai_provider_backoff, ai_runs
-from app.db import Session, Setting
+from app.db import Session, Setting, engine
 
 
 def configure(mode='unthrottled'):
@@ -100,6 +101,73 @@ def test_older_parallel_success_does_not_clear_a_newer_failure(admin):
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff,'global')
         assert row.failures==0 and row.blocked_until==0
+
+
+@pytest.mark.parametrize('state', ['absent', 'clear', 'newer'])
+def test_healthy_completion_skips_global_lock_and_update(admin, monkeypatch, state):
+    configure()
+    if state != 'absent':
+        with Session() as session:
+            active = state == 'newer'
+            session.add(ai_provider_backoff.ProviderBackoff(
+                id='global', updated=101, failures=int(active),
+                blocked_until=221 if active else 0,
+                reason='Provider Retry-After floor is active.' if active else ''))
+            session.commit()
+
+    locks, updates = [], []
+    original_lock = ai_provider_backoff.Lock
+
+    def record_lock(name):
+        locks.append(name)
+        return original_lock(name)
+
+    def record_sql(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith('update ai_provider_backoff'):
+            updates.append(statement)
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', record_lock)
+    event.listen(engine, 'before_cursor_execute', record_sql)
+    try:
+        for _ in range(3):
+            ai_provider_backoff.succeeded(request_started=100, now=102)
+        # A clear row should be a no-op even for requests newer than the row.
+        if state == 'clear':
+            ai_provider_backoff.succeeded(request_started=102, now=103)
+    finally:
+        event.remove(engine, 'before_cursor_execute', record_sql)
+
+    assert (len(locks), len(updates)) == (0, 0)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        if state == 'absent':
+            assert row is None
+        else:
+            assert row.updated == 101
+            assert row.failures == int(state == 'newer')
+            assert row.blocked_until == (221 if state == 'newer' else 0)
+
+
+def test_eligible_reset_rechecks_after_concurrent_failure(admin, monkeypatch):
+    configure()
+    first = ai.AIError('provider wait', transient=True, retry_after=30)
+    ai_provider_backoff.failed(first, now=100)
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def concurrent_failure(name):
+        with monkeypatch.context() as inner:
+            inner.setattr(ai_provider_backoff, 'Lock', original_lock)
+            later = ai.AIError('provider wait', transient=True, retry_after=120)
+            ai_provider_backoff.failed(later, now=102)
+        with original_lock(name):
+            yield
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', concurrent_failure)
+    ai_provider_backoff.succeeded(request_started=101, now=103)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.failures, row.blocked_until, row.updated) == (2, 222, 102)
 
 
 def test_nontransient_provider_error_does_not_create_global_backoff(admin, monkeypatch):
