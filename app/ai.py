@@ -215,14 +215,40 @@ def _request(payload,key,timeout,reservation,encoded_body):
             ai_budget.reconcile(reservation,values)
         response.raise_for_status()
         ai_provider_backoff.succeeded(request_started)
+    except transport.ResponseTooLarge as exception:
+        ai_runs.response_received(exception.response)
+        ai_budget.mark_uncertain(reservation,'Provider returned an oversized response; the full reservation remains counted because usage is unavailable.')
+        if exception.response.status_code>=400:
+            error=http_error(exception.response)
+            if error.transient:error.retry_after=ai_provider_backoff.failed(error)
+            else:ai_provider_backoff.succeeded(request_started)
+            raise error from None
+        ai_provider_backoff.succeeded(request_started)
+        raise AIError('OpenAI returned a response larger than Mr Patchy accepts. No result was accepted; review the provider or HTTPS proxy before retrying.') from None
+    except transport.ResponseDecodeError as exception:
+        ai_runs.response_received(exception.response)
+        ai_budget.mark_uncertain(reservation,'Provider returned an invalid or unsupported content encoding; the full reservation remains counted because usage is unavailable.')
+        if exception.response.status_code>=400:
+            error=http_error(exception.response)
+            if error.transient:error.retry_after=ai_provider_backoff.failed(error)
+            else:ai_provider_backoff.succeeded(request_started)
+            raise error from None
+        ai_provider_backoff.succeeded(request_started)
+        raise AIError('OpenAI returned a response encoding Mr Patchy could not decode safely. No result was accepted; review the provider or HTTPS proxy before retrying.') from None
     except httpx.HTTPStatusError as exception:
         error=http_error(exception.response)
         if error.transient:error.retry_after=ai_provider_backoff.failed(error)
         else:ai_provider_backoff.succeeded(request_started)
         raise error from None
-    except httpx.TimeoutException:
-        ai_budget.mark_uncertain(reservation,'Provider outcome is unknown after a timeout; the full reservation remains counted.')
-        error=AIError('OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.',transient=True)
+    except httpx.TimeoutException as exception:
+        if isinstance(exception,httpx.PoolTimeout):
+            # The transport sends once, with no redirects or automatic retries.
+            message='The local AI connection pool timed out before sending the request.'
+            ai_budget.release_unsent(reservation,message,pool_timeout_call_id=call_id or '')
+        else:
+            ai_budget.mark_uncertain(reservation,'Provider outcome is unknown after a timeout; the full reservation remains counted.')
+            message='OpenAI API request timed out. Check outbound HTTPS connectivity or retry after the backoff.'
+        error=AIError(message,transient=True)
         error.retry_after=ai_provider_backoff.failed(error)
         raise error from None
     except httpx.RequestError as exception:
