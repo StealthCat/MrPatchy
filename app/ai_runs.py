@@ -286,9 +286,9 @@ def status(s):
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
     latest=s.scalar(select(AIRun).where(AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1))
-    run_count=s.scalar(select(func.count()).select_from(AIRun).where(AIRun.purpose=='triage',AIRun.started>now-3600))
+    run_count,oldest_run=s.execute(select(func.count(),func.min(AIRun.started)).where(
+        AIRun.purpose=='triage',AIRun.started>now-3600)).one()
     used=max(recent_count,run_count)
-    oldest_run=s.scalar(select(func.min(AIRun.started)).where(AIRun.purpose=='triage',AIRun.started>now-3600))
     admission=ai_admission.status(s)
     budget=ai_budget.status(s,now)
     provider_backoff=ai_provider_backoff.status(s,now)
@@ -296,8 +296,8 @@ def status(s):
         UpdateScore.installed==Package.installed,UpdateScore.candidate==Package.candidate)
     scoring_where=(UpdateScore.state=='deferred',Package.candidate!='',
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
-    scoring_deferred=s.scalar(select(func.count()).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
-    scoring_next=s.scalar(select(func.min(UpdateScore.next_at)).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
+    scoring_deferred,scoring_next=s.execute(select(func.count(),func.min(UpdateScore.next_at))
+        .select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where)).one()
     # JSON numeric 1 compares equal to true after scalar extraction on SQLite.
     # Retained malformed markers must match the public API's `is True` contract.
     marker_type=(func.json_type(Job.payload,'$._ai_deferred')=='true' if s.get_bind().dialect.name=='sqlite' else
