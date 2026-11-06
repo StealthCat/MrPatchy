@@ -68,8 +68,10 @@ module.exports=async(page,capture)=>{
   await page.getByRole('link',{name:'← AI activity',exact:true}).click();await page.locator('#ai-log-table').waitFor();assert(page.url().endsWith('/ai'));
   await page.locator('[data-ai-run="cost-complete"]').waitFor();
   await page.locator('#ai-log-next').click();
+  await page.locator('[data-ai-run="cost-complete"]').waitFor({state:'hidden'});
   await page.locator('[data-ai-run="cost-legacy"]').waitFor();
   await page.locator('#ai-log-state').selectOption('error');
+  await page.locator('[data-ai-run="cost-legacy"]').waitFor({state:'hidden'});
   await page.locator('[data-ai-run="cost-partial"]').waitFor();
   assert.equal(await page.locator('[data-ai-run="cost-complete"]').count(),0);
   assert.equal(await page.locator('#ai-log-prev').isDisabled(),true);
