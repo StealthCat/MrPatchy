@@ -137,12 +137,18 @@ def mark_sent(identifier,call_id):
             session.commit()
 
 
-def release_unsent(identifier,reason):
+def release_unsent(identifier,reason,*,pool_timeout_call_id=None):
+    """Release before transmission, or after a matching pool acquisition failure."""
     if not identifier:return
     with Lock('ai-shared-budget'):
         with Session() as session:
             row=session.get(BudgetEntry,identifier)
-            if row and row.status=='reserved':
+            if not row:return
+            if pool_timeout_call_id is None:
+                unsent=row.status=='reserved'
+            else:
+                unsent=row.status=='sent' and row.call_id==pool_timeout_call_id
+            if unsent:
                 row.status='released';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
 
 
