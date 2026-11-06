@@ -6106,3 +6106,29 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+### Configurable AI benchmark persistence latency — worker checkpoint #613
+
+The disposable serial/parallel triage benchmark now accepts a bounded
+`--persistence-delay-ms` input. The synthetic delay is applied independently to
+billable request-receipt creation and usage reconciliation, and both operations keep
+their separate measured stages. Machine-readable output records the configured delay,
+completed and approved subject counts, provider calls and token totals so comparisons
+can reject a workload or result mismatch instead of reporting an invalid speedup.
+
+Focused coverage rejects values outside 0–1000 milliseconds and runs the same four
+subjects serially and with two workers. Both executions complete four low-risk,
+non-approved subjects, make six provider calls, account for 600 input and 120 output
+tokens, and record the configured delay in all six receipt and usage measurements.
+The reproducible 12-subject comparison in
+`docs/benchmarks/ai-persistence-delay.json` used a 5 ms loopback provider, a 20 ms
+synthetic receipt/usage persistence delay and the existing 10 ms SSH fixture. It
+measured 8.647 subjects/second serially and 19.497 with four workers (2.255x), with
+identical provider calls, tokens, completed subjects and zero errors.
+
+This fixture isolates controlled accounting-persistence pressure; it does not emulate
+database lock, network or failover behavior and does not establish production, TLS or
+database performance. The default remains zero added persistence delay. Runtime
+admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
+response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
+the broader faster-AI roadmap remain incomplete.
