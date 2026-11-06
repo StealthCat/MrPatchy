@@ -226,7 +226,8 @@ async function serverSecurity(revision,context){
  root.querySelector('#yara-scan-form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button'),values=new FormData(e.target);button.disabled=true;try{await api('/hosts/'+hostId+'/security/yara','POST',{bundle_id:values.get('bundle_id').trim(),paths:values.get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});toast('YARA scan queued. Review the job log and refresh scan history.');}catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
  const alive=()=>root.isConnected&&currentView(revision,'servers');
  const latest=root.querySelector('#security-latest');
- const first=()=>load().catch(error=>{if(alive()){panelError(latest,'Latest scan coverage and incidents',error,first);}});
+ // A failure renders only while its request still owns the panel, so a stale initial failure never overwrites a newer refresh.
+ const first=()=>{const task=load(),request=ticket;return task.catch(error=>{if(alive()&&request===ticket)panelError(latest,'Latest scan coverage and incidents',error,first);});};
  const panels=[policyTask,first(),renderExecutionScans(root,hostId,alive)];
  for(const [title,render] of [['Evidence copies',renderEvidenceVault],['Evidence archives',renderEvidenceArchives],['Quarantines',renderQuarantines],['Process responses',renderProcessResponses],['Repair preparations',renderRepairPreparations],['Repair stages',renderRepairStages],['Repair publications',renderRepairPublications]])panels.push(isolatedPanel(root,alive,title,render,hostId));
  await Promise.allSettled(panels);
@@ -319,7 +320,7 @@ coreutils"></textarea></label><label class="check"><input type="checkbox" name="
  try{await api('/hosts/'+hostId+'/security/inspections','POST',{packages:values.get('packages').split('\n').map(x=>x.trim()).filter(Boolean),persistence:values.has('persistence'),custom_paths:values.get('custom_paths').split('\n').map(x=>x.trim()).filter(Boolean)});if(current())toast('Inspection queued. Refresh after the job completes.');}
  catch(error){if(current())toast(error.message);}finally{if(current())button.disabled=false;}
  };
- const inspections=()=>load().catch(error=>{if(current())panelError(root.querySelector('#inspection-reports'),'Inspection receipts and startup baseline',error,inspections);});
+ const inspections=()=>{const task=load(),request=ticket;return task.catch(error=>{if(current()&&request===ticket)panelError(root.querySelector('#inspection-reports'),'Inspection receipts and startup baseline',error,inspections);});};
  await Promise.allSettled([inspections(),renderPersistenceMonitoring(root,hostId,current)]);
 }
 
@@ -371,7 +372,7 @@ async function renderPersistenceMonitoring(root,hostId,current){
  container.querySelectorAll('[data-startup-history]').forEach(button=>button.onclick=()=>{modal('Linked startup evidence','<pre id="startup-evidence"></pre><button id="startup-evidence-prev">Previous evidence</button><button id="startup-evidence-next">Next evidence</button>');const revision=modalRevision;let page=0,request=0;const history=async()=>{const token=++request;try{const data=await api(base+'/persistence-incidents/'+button.dataset.startupHistory+'/history?offset='+page);if(!current()||revision!==modalRevision||token!==request)return;$('#startup-evidence').textContent=JSON.stringify(data,null,2);$('#startup-evidence-prev').disabled=page===0;$('#startup-evidence-next').disabled=!data.more;}catch(e){if(current()&&revision===modalRevision)toast(e.message);}};$('#startup-evidence-prev').onclick=()=>{page=Math.max(0,page-20);history();};$('#startup-evidence-next').onclick=()=>{page+=20;history();};history();});
  };
  const refresh=()=>load().catch(e=>{if(current())toast(e.message);});
- const incidentsLoad=()=>load().catch(error=>{if(current())panelError(container,'Startup-change incidents',error,incidentsLoad);});
+ const incidentsLoad=()=>{const task=load(),request=ticket;return task.catch(error=>{if(current()&&request===ticket)panelError(container,'Startup-change incidents',error,incidentsLoad);});};
  await Promise.allSettled([loadPolicy(),incidentsLoad()]);
 }
 

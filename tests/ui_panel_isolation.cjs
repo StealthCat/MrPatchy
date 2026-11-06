@@ -5,9 +5,15 @@ module.exports=async(page)=>{
  const failing={archive:true,monitor:true,policy:true};const log=[];
  let releasePolicy;const policyWait=new Promise(resolve=>releasePolicy=resolve);let holdPolicy=true;
  let releaseMonitor;const monitorWait=new Promise(resolve=>releaseMonitor=resolve);let holdMonitor=false;const incidentRequests=[];
+ // Out-of-order gates: hold the next matching GET, then fail it only after a newer request has succeeded.
+ const gate=()=>{let release,arrived;const wait=new Promise(resolve=>release=resolve),seen=new Promise(resolve=>arrived=resolve);return {wait,seen,release,arrived};};
+ const held={latest:null,inspections:null};const gates=[];
+ const hold=async(route,key,detail)=>{const g=held[key];held[key]=null;g.arrived();await g.wait;return route.fulfill({status:503,json:{detail}});};
  const handler=async route=>{
   const url=new URL(route.request().url());
+  if(url.pathname===prefix.slice(0,-1)&&route.request().method()==='GET'&&held.latest)return hold(route,'latest','Stale latest scan failure');
   if(!url.pathname.startsWith(prefix))return route.fallback();
+  if(url.pathname===prefix+'inspections'&&route.request().method()==='GET'&&held.inspections)return hold(route,'inspections','Stale inspection failure');
   log.push(url.pathname.slice(prefix.length));
   if(url.pathname===prefix+'policy'){
    if(holdPolicy)await policyWait;
@@ -49,6 +55,23 @@ module.exports=async(page)=>{
   failing.archive=false;
   await panel.getByRole('button',{name:'Retry'}).click();
   await page.locator('#server-tab-body').getByText('Evidence archive storage temporarily unavailable').waitFor({state:'detached'});
+  const settle=()=>page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,100)));
+  const staleFailure=async(key,path,tab,refresh,target,fresh,detail)=>{
+   const g=gate();gates.push(g);held[key]=g;
+   await page.goto(new URL('/#servers/'+host.id+'/overview',page.url()).href);
+   await page.goto(new URL('/#servers/'+host.id+'/'+tab,page.url()).href);
+   await g.seen;
+   const succeeded=page.waitForResponse(response=>new URL(response.url()).pathname===path&&response.status()===200);
+   await page.locator(refresh).click();await succeeded;await settle();
+   if(fresh)await page.locator(target).getByText(fresh).first().waitFor();
+   const failed=page.waitForResponse(response=>new URL(response.url()).pathname===path&&response.status()===503);
+   g.release();await failed;await settle();
+   assert.equal(await page.locator(target+' .panel-retry').count(),0,'a stale initial failure must not replace a newer successful '+key+' refresh');
+   assert.equal(await page.locator(target).getByText(detail).count(),0);
+   if(fresh)assert.ok(await page.locator(target).getByText(fresh).count()>=1);
+  };
+  // Security: hold the initial latest-scan request, let Refresh succeed, then fail the held request.
+  await staleFailure('latest',prefix.slice(0,-1),'security','#security-refresh','#security-latest','Latest scan coverage','Stale latest scan failure');
   // File integrity: a held, then failed, monitor policy never blocks incidents or inspection forms,
   // and policy Retry reloads only the policy panel without resetting the incident page.
   holdMonitor=true;
@@ -70,5 +93,7 @@ module.exports=async(page)=>{
   await page.locator('#persistence-monitor-form').waitFor();
   assert.equal(incidentRequests.length,incidentCount,'policy retry must not reload startup incidents');
   assert.equal(await incidents.locator('#startup-prev').isDisabled(),false,'policy retry must keep the incident page');
- }finally{releasePolicy();releaseMonitor();await page.unroute('**/api/**',handler);}
+  // File integrity: the same ownership rule applies to the initial inspection receipts load.
+  await staleFailure('inspections',prefix+'inspections','integrity','#inspection-refresh','#inspection-reports','','Stale inspection failure');
+ }finally{releasePolicy();releaseMonitor();for(const g of gates)g.release();await page.unroute('**/api/**',handler);}
 };
