@@ -14,6 +14,8 @@ MAX_REPORT_BYTES = 1_000_000
 MAX_ELAPSED_SECONDS = 86_400
 MAX_THROUGHPUT = 1_000_000
 MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
+MAX_QUEUE_AGE_SECONDS = 86_400
+LEGACY_QUEUE_AGE_SECONDS = 2
 REPORT_ROUNDING_RADIUS = Decimal('0.0005')
 STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
@@ -98,6 +100,33 @@ def _validate_derived_throughput(runs, elapsed, throughput, label):
             f'{label}.runs / {label}.elapsed_seconds')
 
 
+def _queue_age(report, label):
+    """Return the seeded fixture queue age, which is an input, not a result.
+
+    The configurable producer reports ``queue_age_seconds`` and mirrors it in
+    ``initial_fixture_queue_age_seconds``. Earlier reports carried only the
+    latter, and reports older than that used a fixed two-second seed. Normalize
+    only those documented contracts and refuse any disagreement.
+    """
+    values = {}
+    for key in ('queue_age_seconds', 'initial_fixture_queue_age_seconds'):
+        if key in report:
+            value = _integer(report[key], f'{label}.{key}')
+            if value > MAX_QUEUE_AGE_SECONDS:
+                raise ComparisonError(
+                    f'{label}.{key} must be between 0 and {MAX_QUEUE_AGE_SECONDS}')
+            values[key] = value
+    if len(set(values.values())) > 1:
+        raise ComparisonError(
+            f'{label}.queue_age_seconds disagrees with '
+            f'{label}.initial_fixture_queue_age_seconds')
+    if 'queue_age_seconds' in values:
+        return values['queue_age_seconds'], 'report'
+    if values:
+        return values['initial_fixture_queue_age_seconds'], 'report initial fixture field'
+    return LEGACY_QUEUE_AGE_SECONDS, 'legacy fixed default'
+
+
 def _validate(report, label):
     if not isinstance(report, dict):
         raise ComparisonError(f'{label} report must be a JSON object')
@@ -158,10 +187,12 @@ def _validate(report, label):
     else:
         ssh_delay = 10
         ssh_delay_source = 'legacy fixed default'
+    queue_age, queue_age_source = _queue_age(report, label)
     return {
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
         'ssh_delay_source': ssh_delay_source,
+        'queue_age_seconds': queue_age, 'queue_age_source': queue_age_source,
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
         'output_tokens': output_tokens, 'errors': errors,
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
@@ -189,7 +220,10 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     current = _validate(candidate, 'candidate')
     if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
         raise ComparisonError('candidate must use a distinct execution configuration')
-    controls = ('runs', 'provider_delay_ms', 'ssh_delay_ms', 'provider_calls', 'input_tokens', 'output_tokens')
+    controls = (
+        'runs', 'provider_delay_ms', 'ssh_delay_ms', 'queue_age_seconds',
+        'provider_calls', 'input_tokens', 'output_tokens',
+    )
     for field in controls:
         if base[field] != current[field]:
             raise ComparisonError(f'capability mismatch: {field} differs')
@@ -208,6 +242,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'provider_delay_ms': base['provider_delay_ms'],
             'ssh_delay_ms': base['ssh_delay_ms'],
             'ssh_delay_source': base['ssh_delay_source'],
+            'queue_age_seconds': base['queue_age_seconds'],
+            'queue_age_source': base['queue_age_source'],
             'cost_status': base['cost_status'],
         },
         'candidate': {
@@ -216,6 +252,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'provider_delay_ms': current['provider_delay_ms'],
             'ssh_delay_ms': current['ssh_delay_ms'],
             'ssh_delay_source': current['ssh_delay_source'],
+            'queue_age_seconds': current['queue_age_seconds'],
+            'queue_age_source': current['queue_age_source'],
             'cost_status': current['cost_status'],
         },
         'capability': {

@@ -4352,6 +4352,15 @@ consistency validation remains. This is fixture-only tooling: it changes no
 production provider call, target access, runtime admission or response authority,
 and it does not establish production performance or complete the faster-AI gate.
 
+The seeded fixture queue age is a capability control, not a measured result, and
+the workload fingerprint does not cover it. The comparator therefore requires the
+same queue age in both reports before emitting deltas. It reads `queue_age_seconds`,
+otherwise `initial_fixture_queue_age_seconds`, otherwise the documented legacy fixed
+two-second seed; it refuses malformed or out-of-range values (integer seconds,
+0–86,400) and reports whose two queue-age fields disagree. A configured-queue-age
+pair with matching fingerprints but different seeds is refused rather than reported
+as a queue-age latency delta.
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
