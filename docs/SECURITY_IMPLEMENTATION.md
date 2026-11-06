@@ -2117,6 +2117,17 @@ Inspection baseline: main `8bee5b64`, source v0.16.0, latest merged PR #71.
 No live deployment timing or provider benchmark was available; the following are
 verified code constraints rather than a measured diagnosis of one deployment.
 
+### Matching fixture queue ages
+
+The disposable AI benchmark comparator requires the same seeded queue age
+in both reports before emitting deltas. An explicit seed is bounded to
+0–86,400 seconds. A legacy report uses the historical two-second seed and
+must still satisfy workload-fingerprint and other comparison checks. A
+retained legacy age field must agree with the explicit or historical seed.
+The comparison includes the verified seed and bounds observed queue age
+with room for measured fixture overhead. This does not measure production
+queue latency or complete the faster-AI roadmap.
+
 ### Current constraints and capability contract
 
 - `worker_registry.POOL_CAPACITY['ai']` is fixed at one. The scheduler retains one `ai_task`, and `ai_cycle` runs one process investigation and then one update-scoring batch sequentially. Raising a pool size alone does not enable parallel triage.

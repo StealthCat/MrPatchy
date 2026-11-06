@@ -66,6 +66,47 @@ def test_ssh_delay_mismatch_is_refused():
         compare_ai_benchmarks.compare(report(), candidate)
 
 
+def test_cli_refuses_different_queue_ages_without_emitting_deltas(tmp_path, capsys):
+    baseline = tmp_path / 'serial.json'
+    candidate = tmp_path / 'parallel.json'
+    baseline.write_text(json.dumps(dict(report(), initial_fixture_queue_age_seconds=2)))
+    candidate.write_text(json.dumps(dict(report('parallel', 4),
+        queue_age_seconds=60, initial_fixture_queue_age_seconds=60)))
+    assert compare_ai_benchmarks.main([str(baseline), str(candidate)]) == 2
+    output = capsys.readouterr()
+    assert output.out == ''
+    assert 'queue_age_seconds differs' in output.err
+
+
+def test_legacy_queue_age_matches_explicit_default():
+    baseline = dict(report(), initial_fixture_queue_age_seconds=2)
+    candidate = dict(report('parallel', 4), queue_age_seconds=2)
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['capability']['queue_age_seconds'] == 2
+
+
+def test_maximum_seeded_age_accepts_measured_queue_overhead():
+    baseline = dict(report(), queue_age_seconds=86400, initial_fixture_queue_age_seconds=86400)
+    candidate = dict(report('parallel', 4), queue_age_seconds=86400)
+    for value in (baseline, candidate):
+        value['stages']['queue_age'].update(p50_ms=86400001, p95_ms=86400002)
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['capability']['queue_age_seconds'] == 86400
+
+
+@pytest.mark.parametrize('invalid', [False, '2', None, -1, 86401, 2.5])
+def test_queue_age_refuses_malformed_settings(invalid):
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.queue_age_seconds'):
+        compare_ai_benchmarks.compare(report(), dict(report('parallel', 4), queue_age_seconds=invalid))
+
+
+@pytest.mark.parametrize('explicit', [{}, {'queue_age_seconds': 2}])
+def test_queue_age_refuses_conflicting_legacy_value(explicit):
+    candidate = dict(report('parallel', 4), initial_fixture_queue_age_seconds=60, **explicit)
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='initial_fixture_queue_age_seconds'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
 def test_workload_fingerprint_mismatch_is_refused_even_when_counts_match():
     candidate = report('parallel', 4)
     candidate['workload_fingerprint']['sha256'] = 'b' * 64
