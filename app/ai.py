@@ -183,6 +183,26 @@ def _request(payload,key,timeout=60,reservation=None):
             ai_budget.reconcile(reservation,values)
         response.raise_for_status()
         ai_provider_backoff.succeeded(request_started)
+    except transport.ResponseTooLarge as exception:
+        ai_runs.response_received(exception.response)
+        ai_budget.mark_uncertain(reservation,'Provider returned an oversized response; the full reservation remains counted because usage is unavailable.')
+        if exception.response.status_code>=400:
+            error=http_error(exception.response)
+            if error.transient:error.retry_after=ai_provider_backoff.failed(error)
+            else:ai_provider_backoff.succeeded(request_started)
+            raise error from None
+        ai_provider_backoff.succeeded(request_started)
+        raise AIError('OpenAI returned a response larger than Mr Patchy accepts. No result was accepted; review the provider or HTTPS proxy before retrying.') from None
+    except transport.ResponseDecodeError as exception:
+        ai_runs.response_received(exception.response)
+        ai_budget.mark_uncertain(reservation,'Provider returned an invalid or unsupported content encoding; the full reservation remains counted because usage is unavailable.')
+        if exception.response.status_code>=400:
+            error=http_error(exception.response)
+            if error.transient:error.retry_after=ai_provider_backoff.failed(error)
+            else:ai_provider_backoff.succeeded(request_started)
+            raise error from None
+        ai_provider_backoff.succeeded(request_started)
+        raise AIError('OpenAI returned a response encoding Mr Patchy could not decode safely. No result was accepted; review the provider or HTTPS proxy before retrying.') from None
     except httpx.HTTPStatusError as exception:
         error=http_error(exception.response)
         if error.transient:error.retry_after=ai_provider_backoff.failed(error)
