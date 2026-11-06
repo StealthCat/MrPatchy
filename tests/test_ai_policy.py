@@ -16,6 +16,11 @@ def pause(client,**changes):
     current=client.get(BASE).json()
     return client.put(BASE,json={'paused':True,'expected_revision':current['revision'],'reason':'Pause provider processing for review',**changes})
 
+def configure(client,limit,**changes):
+    current=client.get(BASE).json()
+    return client.put(BASE,json={'paused':current['paused'],'concurrency_limit':limit,
+        'expected_revision':current['revision'],'reason':'Adjust investigation capacity after review',**changes})
+
 def test_persistence_isolation_revision_audit_and_global_precedence(managed):
     assert pause(managed).status_code==200
     with Session() as s:
@@ -27,6 +32,35 @@ def test_persistence_isolation_revision_audit_and_global_precedence(managed):
     assert pause(managed,expected_revision='').status_code==400
     assert pause(managed,paused=False).json()['state']=='globally_disabled'
     with pytest.raises(ai.AIError,match='globally disabled'):ai_policy.require(['one'])
+
+
+def test_per_server_investigation_limit_is_revisioned_validated_and_audited(managed):
+    current=managed.get(BASE).json()
+    assert current['concurrency_limit']==2
+    assert current['concurrency_limit_min']==1
+    assert current['concurrency_limit_max']==4
+    saved=configure(managed,1).json()
+    assert saved['concurrency_limit']==1 and not saved['paused']
+    with Session() as s:
+        assert ai_policy.investigation_limit(s,'one')==1
+        assert ai_policy.investigation_limit(s,'two')==2
+        event=s.scalar(select(Audit).where(Audit.action=='server AI concurrency changed'))
+        assert 'one admin' in event.detail and '1 slot' in event.detail
+    assert configure(managed,3,expected_revision=current['revision']).status_code==400
+    for invalid in (0,5,'2',2.0,True):
+        assert configure(managed,invalid).status_code==422
+
+
+def test_legacy_update_preserves_custom_limit_and_corrupt_value_fails_closed(managed):
+    assert configure(managed,3).status_code==200
+    current=managed.get(BASE).json()
+    saved=managed.put(BASE,json={'paused':True,'expected_revision':current['revision'],
+        'reason':'Pause while retaining the reviewed investigation capacity'}).json()
+    assert saved['paused'] and saved['concurrency_limit']==3
+    with Session() as s:
+        row=s.get(Setting,'server-ai:one')
+        row.value={**row.value,'concurrency_limit':'unbounded'};s.commit()
+        assert ai_policy.status(s,'one')['concurrency_limit']==1
 
 def test_actual_provider_boundary_blocks_queued_shared_and_followup_calls(managed,monkeypatch):
     calls=[];monkeypatch.setattr(ai,'_request',lambda *a,**k:calls.append(1) or {})

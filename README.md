@@ -381,6 +381,8 @@ docker compose up -d --build --scale worker=3
 
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
 
+Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
+
 Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
 
 For a new deployment without existing data, you can still configure MySQL 8+ through `.env` and recreate **both app and workers**:
@@ -398,11 +400,13 @@ The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.
 ## Upgrade
 
 1. Back up the database and all persistent volumes with app/workers stopped.
-2. Pull `main`, review `.env`, then run `docker compose up -d --build`.
+2. Pull `main` and review `.env`. Drain workers first (**Activity → Workers → Drain worker**) or wait for running jobs to finish, then run `docker compose up -d --build`. Compose lets active worker jobs drain for up to `MRPATCHY_WORKER_STOP_GRACE_PERIOD` (default `8100s`, or 2h15m); `docker compose stop -t <seconds> worker` overrides that wait for an explicit stop.
 3. Use **Servers → Manage → Finish / verify installation** to upgrade each managed bridge/collector. Legacy bootstrap targets may require a fresh installer run through a trusted console first.
 4. Regenerate unexecuted release plans after updating helpers; old plans cannot authorize changed runner, bridge or recovery/validation code. Do not update helpers while a release upgrade is running.
 5. Review queued jobs: jobs created before recovery-policy capture cannot inherit an enabled reboot/rollback policy; resubmit them after reviewing the policy.
 6. Reconcile interrupted/recovery-required jobs before resuming those hosts. Review new provenance identities rather than automatically transferring old approvals.
+
+On an existing Google Cloud install, re-run `install-gcp.sh` once so `.env` records the GCP compose files, project and zone; until then, use `./gcp-compose.sh` for upgrades, migrations and TLS changes so the gcloud runtime and IAP connectivity remain active.
 
 Schema initialization is idempotent. MySQL upgrades need ALTER privileges for existing timestamp/package-state migrations.
 
@@ -457,7 +461,9 @@ Google Cloud CLI for both app and worker. See [GCP setup](docs/GCP.md) for attac
 service-account/federation prerequisites and IAP enrollment. Each server's
 **Agent health** tab exposes version/drift checks and opt-in automatic helper
 maintenance; [Agent maintenance](docs/AGENT_MAINTENANCE.md) documents verification,
-retry limits and cases requiring trusted-console recovery.
+retry limits and cases requiring trusted-console recovery. Manual agent upgrades
+require a review confirmation, and the check and upgrade controls stay disabled
+while either request is pending in the current Agent health view.
 
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact
@@ -470,7 +476,9 @@ Pausing blocks new provider calls for that server, including queued security pro
 triage follow-ups and shared update scoring. Other servers and non-AI operations
 continue; historical results remain visible. In-flight requests must finish before a
 state change can save (409 means retry; state unchanged). Resume respects global AI
-settings and quotas. Reasons and state changes are audited.
+settings and quotas. Administrators can also set that server's process-investigation
+occupancy from one to four slots; legacy policies retain the two-slot default, and
+lowering the value does not cancel live work. Reasons and policy changes are audited.
 
 **Server → Security → Export scanner record** downloads bounded scanner receipts,
 incidents, reviews and advisory plans without requiring quarantine. It also works in
@@ -568,10 +576,12 @@ Direct worker/embedded processes use the same variables. Invalid values refuse
 startup. These limits size the real executors. Poll/notification work shares the
 poll pool; process investigations and update scoring share AI slots.
 
-Independent servers can undergo process triage concurrently, and one server may
-use at most two AI slots for different process subjects. Each subject remains
-exclusive under its durable renewable claim; a third same-server investigation
-waits rather than allowing one server to consume the whole pool. Policy pause/resume
+Independent servers can undergo process triage concurrently. Each server has an
+administrator-configurable process-investigation occupancy of one to four AI slots,
+defaulting to two for legacy or absent policy. Each subject remains exclusive under
+its durable renewable claim; additional same-server investigations wait when the
+configured bound is reached. Lowering the bound preserves live leases and blocks new
+admission until occupancy falls below it. Policy pause/resume
 and server lifecycle changes reject live claims, and delayed admission rechecks the
 current lifecycle before starting. Existing hourly/rate/spend admission and
 ownership/evidence checks still apply before calls and acceptance. The coordinator
@@ -579,8 +589,8 @@ schedules update scoring, alternating purposes even with one AI slot. Claims exp
 after 120 seconds without renewal; interrupted attempts retain the existing recovery
 delay and finite retry limits. A lease cannot cancel an already sent request or
 guarantee exactly-once billing. The full model, evidence and conditional
-SSH/follow-up flow remain unchanged. Administrator-configurable per-server occupancy,
-broader cross-purpose fairness, native complete-context collection and complete
+SSH/follow-up flow remain unchanged. Broader cross-purpose fairness,
+provider-specific quotas, native complete-context collection and complete
 multi-controller failover acceptance remain unfinished.
 v1.30.0 adds exact-context contradiction invalidation and linked review for the
 complete exact candidates described below.
@@ -626,7 +636,8 @@ a smooth-rate start.
 
 Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
 without reliable pricing or usage—including timeouts and interrupted workers—keep the
-full ceiling counted. Unsent failures release their reservation. The separate ledger
+full ceiling counted. Unsent failures release their reservation, including a confirmed
+local connection-pool timeout before a provider request is sent. The separate ledger
 is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
 remaining and next-reset values in Settings and AI worker status. The administrator
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
@@ -634,6 +645,19 @@ changes are audited. Changing the reset timezone retains unreleased spend while
 its original admission window is still open, alongside spend in the current local
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
+
+A confirmed local HTTP connection-pool timeout receives a short local retry delay
+without creating or changing the fleet-wide provider backoff. Provider and ambiguous
+network timeouts still apply the shared cooldown and conservative spend accounting.
+
+The shared OpenAI Responses API client validates outgoing JSON against a
+2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
+requests receive a redacted local error without contacting the provider.
+
+Pooled OpenAI Responses API replies are limited to 2,000,000 decoded bytes and
+accept gzip or uncompressed bodies. Oversized or invalid replies produce a
+redacted diagnostic without accepting partial output or retrying automatically.
+A sent request with unavailable usage keeps its conservative spend reservation.
 
 Administrators can inspect retained estimates for the trailing 7, 30 or 90 days in
 AI Settings. History is grouped by the reset time and IANA timezone persisted with
