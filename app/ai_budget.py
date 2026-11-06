@@ -68,10 +68,12 @@ def _window_start(reset_at,name):
         return None
 
 
-def _state(session,cfg,now):
+def _state(session,cfg,now,*,include_reconciliation=False):
     mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
-    groups={key:(Decimal(0),0,None) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
+    groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
+    unreconciled_count=0
+    oldest_reservation=None
     if enabled:
         # At most five result rows, regardless of receipt amounts or unknown statuses.
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
@@ -81,21 +83,27 @@ def _state(session,cfg,now):
         total=_aggregate(session,amount)
         # A row also counts while the window it was admitted under (its own reset_at) is still
         # open, so changing the reset timezone cannot hand back spend from that window.
-        query=select(bucket,total,func.count(),func.min(BudgetEntry.created)).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+        metrics=(func.count(),func.min(BudgetEntry.created)) if include_reconciliation else ()
+        query=select(bucket,total,*metrics).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
-        for key,value,call_count,oldest in session.execute(query):
+        for key,value,*summary in session.execute(query):
             total=Decimal(value or 0);counted+=total
-            if key in groups:groups[key]=(total,call_count,oldest)
+            if key in groups:groups[key]+=total
+            if summary and key in ('sent','uncertain'):
+                call_count,oldest=summary
+                unreconciled_count+=call_count
+                if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
+                    oldest_reservation=oldest
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
-    return enabled,name,start,reset,groups,counted,cap
+    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation)
 
 
 def waiting(session,now,payload=None):
     """Read-only preflight; final atomic reserve still owns spending authority."""
     cfg=config(session)
-    enabled,_name,_start,reset,_groups,counted,cap=_state(session,cfg,now)
+    enabled,_name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,cfg,now)
     if not enabled:return 0
     if counted>=cap:return reset
     if payload is not None:
@@ -114,7 +122,7 @@ def reserve(payload):
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
-            now=time.time();enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
+            now=time.time();enabled,name,start,reset,groups,counted,cap,_reconciliation=_state(session,cfg,now)
             amount=quote['amount_usd']
             if counted+amount>cap:
                 raise AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
@@ -173,17 +181,15 @@ def mark_uncertain(identifier,reason):
 
 def status(session,now=None):
     now=time.time() if now is None else now;cfg=config(session)
-    enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
+    enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
+    unreconciled_count,oldest=reconciliation
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
-    sent,sent_count,sent_oldest=groups['sent']
-    uncertain,uncertain_count,uncertain_oldest=groups['uncertain']
-    oldest=min((t for t in (sent_oldest,uncertain_oldest) if t is not None),default=None)
-    reserved=groups['reserved'][0];settled=groups['settled'][0]
+    uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
-        'uncertain_usd':_money(sent+uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
-        'unreconciled_call_count':sent_count+uncertain_count,'oldest_unreconciled_reservation_at':oldest,
+        'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
+        'unreconciled_call_count':unreconciled_count,'oldest_unreconciled_reservation_at':oldest,
         'next_reset':reset if enabled else None,'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
         'pricing_catalog':ai_pricing.catalog_status(now)}
 
