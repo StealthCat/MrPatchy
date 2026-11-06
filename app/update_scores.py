@@ -75,7 +75,8 @@ def scoring_candidates(s):
         cursor=(packages[-1].available_since,packages[-1].id)
         missing={p.host_id for p in packages if p.host_id not in hosts}
         if missing:
-            hosts.update({h.id:h for h in s.scalars(select(Host).where(Host.id.in_(missing)))})
+            rows=s.execute(select(Host.id,Host.inventory).where(Host.id.in_(missing)))
+            hosts.update({row.id:row for row in rows})
         current=[(p,hosts[p.host_id],identity(hosts[p.host_id],p)) for p in packages if p.host_id in hosts]
         if not current:continue
         scores={r.id:r for r in s.scalars(select(UpdateScore).where(UpdateScore.id.in_([key for _,_,key in current])))}
