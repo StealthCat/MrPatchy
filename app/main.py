@@ -1657,11 +1657,15 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(adm
     return {'ok':True}
 
 @app.get('/api/ai/runs')
-def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(admin_user)):
-    if purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
+def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,state:str='',user=Depends(admin_user)):
+    if (purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker')
+            or state not in ('','running','complete','error','deferred','interrupted')
+            or offset<0 or not 1<=limit<=100):
+        raise HTTPException(400,'Invalid log filter')
     with Session() as s:
         query=select(ai_runs.AIRun)
         if purpose:query=query.where(ai_runs.AIRun.purpose==purpose)
+        if state:query=query.where(ai_runs.AIRun.state==state)
         if host_id:
             host_or_404(s,host_id)
             query=query.where((ai_runs.AIRun.host_id==host_id)|ai_runs.AIRun.id.in_(

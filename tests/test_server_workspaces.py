@@ -70,6 +70,28 @@ def test_ai_filter_recovers_legacy_batch_links_and_keeps_new_membership(admin,se
     assert len(page['items'])==1 and page['more']
 
 
+def test_ai_state_filter_applies_before_pagination_and_preserves_host_scope(admin,servers):
+    with Session() as s:
+        s.add_all([
+            ai_runs.AIRun(id='new-success',host_id='alpha',purpose='triage',state='complete',started=servers+40),
+            ai_runs.AIRun(id='new-other-host',host_id='beta',purpose='triage',state='error',started=servers+30),
+            ai_runs.AIRun(id='new-shared-failure',purpose='triage',state='error',started=servers+20),
+            ai_runs.AIRun(id='old-legacy-failure',purpose='triage',state='error',started=servers+10),
+            ai_runs.AIRun(id='old-other-purpose',host_id='alpha',purpose='worker',state='error',started=servers),
+        ])
+        s.add(ai_runs.AIRunHost(run_id='new-shared-failure',host_id='alpha'))
+        s.add(update_scores.UpdateScore(id='state-legacy-score',host_id='alpha',name='bash',
+            installed='1',candidate='2',run_id='old-legacy-failure'))
+        s.commit()
+    base='/api/ai/runs?host_id=alpha&purpose=triage&limit=1'
+    page=admin.get(base+'&state=error').json()
+    assert [item['id'] for item in page['items']]==['new-shared-failure'] and page['more']
+    next_page=admin.get(base+'&state=error&offset=1').json()
+    assert [item['id'] for item in next_page['items']]==['old-legacy-failure'] and not next_page['more']
+    assert admin.get(base+'&state=deferred').json()=={'items':[],'more':False}
+    assert admin.get(base+'&state=invalid').status_code==400
+
+
 def test_calendar_contains_only_assigned_windows_and_this_hosts_run_states(admin,servers):
     # Fixed date makes recurrence assertions independent of the execution clock.
     start=1780272000;end=start+86400

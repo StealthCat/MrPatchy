@@ -5980,6 +5980,14 @@ integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning r
 required before this increment is delivered.
 
 
+### Retained AI activity state filtering
+
+Administrators can filter fleet and server AI run lists by recorded state as
+well as purpose. The query applies filters before paging and preserves existing
+direct, shared and legacy server associations. Changing a filter starts at the
+first page. Run detail navigation preserves the list context for that scope.
+This diagnostic increment leaves broader faster-AI acceptance open.
+
 ### Retained AI spend history — worker checkpoint #372
 
 This bounded faster-AI increment exposes retained daily accounting windows to
