@@ -121,10 +121,12 @@ def test_decoded_response_body_stops_at_the_configured_limit(provider,monkeypatc
     url,calls,clients,_=provider
     monkeypatch.setattr(transport,'MAX_RESPONSE_BYTES',64,raising=False)
     assert len(send(url,response_size=64).content)==64
+    assert len(send(url,response_size=32,gzip=True).content)==32
+    assert calls[0][0]==calls[1][0]
     with pytest.raises(httpx.RequestError):send(url,response_size=65)
     with pytest.raises(httpx.RequestError):send(url,response_size=65,gzip=True)
     assert send(url).json()=={'ok':True}
-    assert len(calls)==4 and len(clients)==1 and not clients[0][0].cookies
+    assert len(calls)==5 and len(clients)==1 and not clients[0][0].cookies
 
 
 def test_split_gzip_response_is_decoded_without_advertising_unsupported_encodings(monkeypatch):
