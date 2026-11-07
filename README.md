@@ -40,7 +40,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
-| Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
+| Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
 | Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
@@ -312,6 +312,8 @@ The target's durable spool partitions normal observations into batches of at mos
 
 **Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
 
+For manual ClamAV and YARA scans and recurring or execution-triggered scan policies, enter canonical absolute directories such as `/usr/local/bin`. The controller rejects paths with redundant slashes, dot segments, control characters, or excluded filesystem roots such as `/proc` and `/sys` before queuing a scan or saving a policy. Execution-triggered policies also disallow `/` and overlapping directories. The target still checks that each directory can be scanned.
+
 ClamAV scans group already-open file descriptors into local engine processes of at most 32 files / 128 MiB. Each batch has a 120-second timeout inside the four-minute overall scan budget; ambiguous output or engine failure falls back to the existing 30-second single-file path. This batching does not enable or connect to a ClamAV daemon, and descriptor, path and metadata identity checks remain in force.
 
 **Servers → server → Security → Execution-triggered scans** optionally queues bounded
@@ -361,11 +363,11 @@ refused as a whole. See [response-record scope and limits](docs/SECURITY_IMPLEME
 
 ## Accounts, SSO, notifications and keys
 
-**Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring. The fleet Investigations queue summary remains visible to non-admins, while AI budget, spend, provider errors, admission and capacity diagnostics (including the full `/api/investigation-status` response) are administrator-only.
+**Users** gives administrators a dedicated place to create, disable and edit named accounts, assign roles and reset passwords. An administrator can also reset another user's lost authenticator after confirming the administrator's own password and, when enrolled, one-time code; the reset clears that user's MFA enrollment and revokes their sessions. Each user chooses their own password through **Account → Change password**, entering the current password and confirming the new one. **Account** also manages the signed-in user's authenticator MFA and session revocation. Administrators manage infrastructure and trust; operators can preview/queue patches and refresh repositories; viewers inspect monitoring. The fleet Investigations queue summary remains visible to non-admins, while AI budget, spend, provider errors, admission and capacity diagnostics (including the full `/api/investigation-status` response) are administrator-only.
 
 Account and Sign out remain available in the header on mobile. Navigation and action controls reflect the signed-in role; the API independently enforces permissions. Password verification and MFA setup/confirmation share a limit of ten attempts per account in five minutes. A failed verification leaves the current session intact; successful password/MFA changes and session revocation require signing in again.
 
-For OIDC, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`, register `PUBLIC_URL/auth/sso/callback`, then bind the provider's immutable subject to an existing local account. Preserve the exact issuer, including any trailing slash. SSO uses code/PKCE, nonce/state, validated ID tokens and one-time callback state. Configure MFA at your identity provider for SSO logins.
+For OIDC, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`, register `PUBLIC_URL/auth/sso/callback`, then bind the provider's immutable subject to an existing local account. Preserve the exact issuer, including any trailing slash. Administrators can list bindings by bounded subject digest and remove a stale binding through the operations API. Reassigning an existing subject requires confirming its current local username; if the binding changes or is removed before the write, the request fails with HTTP 409. The bundled UI does not yet expose binding list/removal controls. SSO uses code/PKCE, nonce/state, validated ID tokens and one-time callback state. Configure MFA at your identity provider for SSO logins.
 
 SMTP requires verified TLS or STARTTLS, with optional private CA support. SMTP and HTTPS webhooks are alternative delivery channels. Alerts use a durable retrying outbox and acknowledgements; delivery is at least once. The authenticated shell shows a persistent notification bell and the eight most recent permission-filtered events, with unread severity, escaped reasons, same-origin review links and exact-revision read/dismiss controls. The bell links to a deep-linkable notification center with bounded pagination and authoritative unread, dismissed, severity, source and server filters; entries show the current revision's lifecycle and defensively revalidate same-origin subject links. An authenticated same-origin Server-Sent Events stream carries only a bounded durable digest cursor, then the bell, panel and open notification center refresh through the permission-filtered APIs without replacing filters, changing unrelated forms or stealing focus. The stream revalidates session expiry, revocation, enablement, generation and role, allows 32 connections per controller by default (configurable from 1 to 256), and retains 15-second heartbeats, automatic cursor catch-up and the 30-second polling/visibility fallback. Read/dismiss remains per-user UI state: it cannot acknowledge an operational alert, change an incident, approve AI work or authorize remediation. Production Caddy flushing/timeout measurement, slow-client and connection-exhaustion drills, pruned-cursor gap handling, live toasts, multi-controller failover and complete two-browser SQLite/MySQL acceptance remain planned. SSH rotation proves a replacement key works before removing the old target key and records a resumable journal.
 
@@ -380,6 +382,8 @@ docker compose up -d --build --scale worker=3
 ```
 
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
+
+Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
 
 Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
 
@@ -634,7 +638,8 @@ a smooth-rate start.
 
 Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
 without reliable pricing or usage—including timeouts and interrupted workers—keep the
-full ceiling counted. Unsent failures release their reservation. The separate ledger
+full ceiling counted. Unsent failures release their reservation, including a confirmed
+local connection-pool timeout before a provider request is sent. The separate ledger
 is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
 remaining and next-reset values in Settings and AI worker status. The administrator
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
@@ -642,6 +647,19 @@ changes are audited. Changing the reset timezone retains unreleased spend while
 its original admission window is still open, alongside spend in the current local
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
+
+A confirmed local HTTP connection-pool timeout receives a short local retry delay
+without creating or changing the fleet-wide provider backoff. Provider and ambiguous
+network timeouts still apply the shared cooldown and conservative spend accounting.
+
+The shared OpenAI Responses API client validates outgoing JSON against a
+2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
+requests receive a redacted local error without contacting the provider.
+
+Pooled OpenAI Responses API replies are limited to 2,000,000 decoded bytes and
+accept gzip or uncompressed bodies. Oversized or invalid replies produce a
+redacted diagnostic without accepting partial output or retrying automatically.
+A sent request with unavailable usage keeps its conservative spend reservation.
 
 Administrators can inspect retained estimates for the trailing 7, 30 or 90 days in
 AI Settings. History is grouped by the reset time and IANA timezone persisted with
