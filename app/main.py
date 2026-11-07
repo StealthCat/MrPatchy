@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health
+from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_lifecycle
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -523,6 +523,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
         behaviors=list(s.execute(select(Behavior.verdict,Behavior.approved).where(Behavior.host_id==host_id)))
         jobs=dict(s.execute(select(Job.state,func.count()).where(Job.host_id==host_id).group_by(Job.state)).all())
         last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='patch').order_by(Job.created.desc(),Job.id).limit(1))
+        lifecycle=os_lifecycle.evaluate(h.inventory,now,cfg['repo_minutes']*120)
         return {'host':object_dict(h,('inventory','telemetry','baseline')),
                 'system':{k:h.inventory.get(k) for k in ('os','architecture','foreign_architectures','package_manager','machine_id','collected')},
                 'collector':{'collected':h.telemetry.get('collected'), 'hashed_at':h.telemetry.get('hashed_at'),
@@ -531,7 +532,8 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
-                'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+                'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None,
+                'lifecycle':lifecycle}
 
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
