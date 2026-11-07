@@ -171,3 +171,21 @@ def test_patch_route_reads_config_once_per_batch(admin):
     finally: event.remove(engine,'before_cursor_execute',spy)
     assert r.status_code==200
     assert sum('FROM settings' in x for x in seen)<=4  # constant, not one per package
+
+def test_fingerprint_replacement_requires_confirmation_and_is_audited(admin):
+    from app.db import Audit
+    id=host(admin)
+    first=admin.post(f'/api/hosts/{id}/connection/test')
+    assert first.status_code==400 and 'Server → Connection' in first.json()['detail']
+    other='SHA256:'+'b'*43
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':'bad'}).status_code==422
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':FINGERPRINT}).status_code==200
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':FINGERPRINT}).status_code==200
+    rejected=admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':other})
+    assert rejected.status_code==409
+    with Session() as s: assert s.get(Host,id).fingerprint==FINGERPRINT
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':other,'replace_existing':True}).status_code==200
+    with Session() as s:
+        assert s.get(Host,id).fingerprint==other
+        actions=[a.action for a in s.query(Audit).order_by(Audit.id)]
+        assert 'replace SSH host key' in actions and 'pin SSH host key' in actions

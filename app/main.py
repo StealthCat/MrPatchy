@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.37'
+APP_VERSION='1.42.49'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -557,19 +557,26 @@ def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(admin_user)):
 def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
-        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
+        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing. Use Pinned SSH fingerprint under Server → Connection, and take the value from the target\'s trusted console.')
         try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
         except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
-class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+class Fingerprint(BaseModel):
+    fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+    replace_existing:bool=False
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
         if h.deleted_at:raise HTTPException(409,'Deleted server identity is read-only')
-        h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
+        previous=h.fingerprint or ''
+        if previous and previous!=body.fingerprint:
+            if not body.replace_existing:raise HTTPException(409,'A different SSH fingerprint is already pinned. Replace it under Server → Connection after verifying the new key from the target\'s trusted console.')
+            audit(s,'replace SSH host key',h.id+' '+previous+' -> '+body.fingerprint)
+        else:audit(s,'pin SSH host key',h.id+' '+body.fingerprint)
+        h.fingerprint=body.fingerprint; s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
@@ -881,6 +888,9 @@ def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(viewer_user)):
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             query=query.where(Job.host_id==host_id)
+        # MySQL can choose a competing access path and sort retained history despite LIMIT.
+        history_index='ix_jobs_host_history' if host_id else 'ix_jobs_history'
+        query=query.with_hint(Job,f'FORCE INDEX FOR ORDER BY ({history_index})',dialect_name='mysql')
         return [public_job(x) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
 def audit_log(offset:int=0,limit:int=200,user=Depends(admin_user)):
