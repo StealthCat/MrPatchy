@@ -10,7 +10,15 @@ const serverListContext={q:"",state:"all",offset:0};
 let csrf='',hosts=[],selected='',page='overview',toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
 const badge=s=>`<span class="badge ${esc(s)}">${esc(s)}</span>`;
-async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data={},parsed=true;if(text){try{data=JSON.parse(text);}catch{parsed=false;}}if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin(csrf?'Session expired. Sign in again.':'');throw Object.assign(Error(parsed&&data&&typeof data.detail==='string'?data.detail:parsed&&data&&data.detail!==undefined?JSON.stringify(data.detail):`Request failed (HTTP ${r.status}${r.statusText?' '+r.statusText:''})`),{status:r.status});}if(!parsed)throw Error(`Unexpected non-JSON response (HTTP ${r.status})`);return data;}
+function apiErrorMessage(detail){
+ // Never echo rejected input: arrays/objects (FastAPI validation shapes from proxies or older servers) reduce to "field: message".
+ if(typeof detail==='string')return detail.slice(0,300);
+ const label=loc=>Array.isArray(loc)?loc.filter(x=>typeof x==='string'&&x!=='body'&&x!=='query').slice(-1)[0]||'':'';
+ if(Array.isArray(detail)){const parts=detail.slice(0,3).map(x=>{if(!x||typeof x!=='object'||typeof x.msg!=='string')return '';const f=label(x.loc);return (f?f+': ':'')+x.msg.slice(0,120);}).filter(Boolean);return parts.join('; ');}
+ if(detail&&typeof detail==='object'&&typeof detail.msg==='string')return detail.msg.slice(0,200);
+ return '';
+}
+async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data={},parsed=true;if(text){try{data=JSON.parse(text);}catch{parsed=false;}}if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin(csrf?'Session expired. Sign in again.':'');throw Object.assign(Error(apiErrorMessage(parsed&&data?data.detail:undefined)||`Request failed (HTTP ${r.status}${r.statusText?' '+r.statusText:''})`),{status:r.status});}if(!parsed)throw Error(`Unexpected non-JSON response (HTTP ${r.status})`);return data;}
 function toast(message,global=false){
  const target=global?$('#toast'):$('#modal').open?$('#modal-message'):$('#toast');
  target.textContent=message;target.classList.remove('hidden');target.style.display='block';
@@ -437,7 +445,7 @@ const usernameLabel=document.createElement('label');usernameLabel.textContent='U
 const usernameInput=document.createElement('input');usernameInput.name='username';usernameInput.value='admin';usernameInput.autocomplete='username';usernameLabel.append(usernameInput);
 usernameInput.required=true;usernameInput.maxLength=64;$('#login-form [name=password]').closest('label').before(usernameLabel);
 const otpLabel=document.createElement('label');otpLabel.textContent='Authenticator code (if enabled)';
-const otpInput=document.createElement('input');otpInput.name='otp';otpInput.autocomplete='one-time-code';otpInput.inputMode='numeric';otpInput.maxLength=6;otpLabel.append(otpInput);
+const otpInput=document.createElement('input');otpInput.name='otp';otpInput.autocomplete='one-time-code';otpInput.inputMode='numeric';otpInput.maxLength=16;otpLabel.append(otpInput);
 $('#login-form button').before(otpLabel);
 const accountButton=document.createElement('button');accountButton.textContent='Account';$('#logout').before(accountButton);
 $('#header-actions').append(accountButton,$('#logout'));
