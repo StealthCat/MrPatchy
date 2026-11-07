@@ -6119,3 +6119,46 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+### Capability-equivalent AI benchmark comparison — worker checkpoint #526
+
+The disposable AI benchmark now has a separate comparison gate that refuses to
+interpret results unless both reports use the same run count, provider and SSH
+fixture delays, one/two-stage workload shape, provider-call count and token totals.
+Reports with fixture errors, missing or malformed metrics, lost calls/evidence or
+an unchanged execution configuration are rejected before any speed delta is shown.
+Reports from the original fixed-delay harness normalize its documented 10 ms SSH
+fixture explicitly; newer reports retain the configured value and source.
+Input reports are bounded to one megabyte and output has a fixed allowlisted shape.
+
+For valid serial/parallel pairs, the command emits machine-readable elapsed,
+throughput and allowlisted stage p50/p95 deltas. Zero baseline latency produces an
+explicit unavailable percentage instead of division by zero. Each report's cost
+status is preserved; unavailable synthetic cost is never converted to zero or
+described as a provider invoice. Output states that the loopback fixture does not
+establish production performance.
+
+This checkpoint adds no provider call, target access, schema, runtime admission or
+response authority. It does not complete production baseline collection, dashboard
+presentation or the faster-AI end-to-end acceptance milestone. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before delivery.
+
+### AI benchmark timing-consistency gate — worker checkpoint #532
+
+The fixture-report comparison gate now reconciles each report's run count, elapsed
+time and derived throughput before emitting deltas. Because the producer rounds
+elapsed seconds and runs per second independently to three decimal places, the
+check uses the exact half-unit intervals implied by that precision instead of a
+loose percentage tolerance. A report is accepted only when those
+rounding intervals can describe the same underlying execution. This preserves the
+retained v1.22 fixture pair and values produced at either elapsed-time rounding edge,
+while rejecting understated or overstated throughput with a field-specific error.
+
+This bounded follow-up is stacked on #526/#527 and does not edit its frozen branch.
+It adds no provider call, target access, benchmark workload, production runtime,
+schema, admission or response authority. Workload fingerprints, repeated production
+measurements, dashboard presentation and the full faster-AI acceptance milestone
+remain separate and incomplete. Coordinator integration must first preserve #527,
+then remove the prerequisite diff and run every applicable exact-head check before
+delivery.
