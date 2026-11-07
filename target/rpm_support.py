@@ -305,6 +305,13 @@ def discover(inv, root, access):
     return packages
 
 
+def write_reboot_marker(marker=Path('/opt/drpatch/rpm-reboot-required'),boot=Path('/proc/sys/kernel/random/boot_id')):
+    # The marker is later compared with the validated boot id; never persist unvalidated text.
+    value=boot.read_text()[:100].strip()
+    if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value):raise ValueError('Boot identity unavailable')
+    marker.write_text(value)
+
+
 def patch(specs):
     import dnf
     inv=local_inventory()
@@ -349,7 +356,7 @@ def patch(specs):
         base.do_transaction()
     # Conservatively request reboot for changed core runtime/kernel packages, only when policy permits.
     reboot=any(name.rsplit(':',1)[0] in ('kernel','kernel-core','glibc','systemd','linux-firmware') for name in additions)
-    if reboot:Path('/opt/drpatch/rpm-reboot-required').write_text(Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+    if reboot:write_reboot_marker()
     return {'output':'DNF completed verified exact-version upgrades: '+', '.join(specs),'reboot_required':reboot}
 
 
