@@ -6119,3 +6119,23 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+### Bounded exact-known-good provenance reads — worker checkpoint #582
+
+The strict exact-known-good lookup now derives every eligible policy candidate before
+database access and reads active entries, retained origin assessments and isolated
+observations in set-based batches of at most 100 candidates. Candidate ordering and
+the first fully revalidated match are unchanged. With two eligible active candidates,
+including a corrupt first candidate that must fail closed, lookup performs one read
+per provenance table instead of repeating those three reads for each candidate.
+Ineligible evidence performs no registry read.
+
+Every existing eligibility, active-entry, retained AI source, host/model/policy/result,
+canonical contract and observation identity check remains mandatory. Missing, inactive,
+or corrupt state still proceeds through the normal provider path; this optimization
+does not approve behavior, authorize a response, suppress deterministic protection or
+expand data sharing. Focused regression coverage pins query count, candidate order,
+strict fallback and the 100-candidate SQL bound. It does not claim a production speedup
+or complete native-context, MySQL concurrency, provider-invoice, multi-controller or
+remaining faster-triage acceptance. Coordinator integration, exact-head checks and a
+fresh code scan remain required before delivery.
