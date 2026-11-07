@@ -4907,6 +4907,22 @@ Rebuild the controller first to create the ledger table, then matching workers. 
 target-helper/agent update, Docker publication, Git tag or schedule change is included.
 
 
+## Faster AI triage — local connection-pool contention
+
+A confirmed local HTTP pool timeout defers the affected request without creating,
+extending or clearing fleet-wide provider backoff. Advisory plans and scoring use
+the five-second local eligibility delay. Process triage keeps its existing bounded
+per-item retry schedule and has no provider Retry-After floor for this failure.
+Other workers can continue when shared rate, budget, provider and policy controls
+permit. Read timeouts and other ambiguous transport failures keep their existing
+shared backoff and budget treatment.
+
+Issue #605 preserves #589's matching-receipt release of confirmed unsent spend
+reservations. The acceptance checks cover another request proceeding after local contention, a
+concurrent provider floor surviving unchanged and an ambiguous read timeout
+still creating shared backoff. Native exact-head CI and the broader parallel
+triage and multi-controller acceptance remain separate milestones.
+
 ## v1.33.0 — Fleet-wide provider backoff and Retry-After admission
 
 Issue-first reconciliation read merged v1.32.0 main, repository instructions, this
