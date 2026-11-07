@@ -129,3 +129,22 @@ def test_indefinite_policy_wait_records_deferred_run(admin, monkeypatch):
         run=session.scalar(select(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='security_plan'))
         assert job.state=='queued' and job.next_at==0 and job.payload['_ai_deferred'] is True
         assert run.state=='deferred' and run.stage=='deferred' and 'resume' in run.message
+
+
+@pytest.mark.parametrize('action',['release-plan','security-plan','startup-plan'])
+def test_scheduler_skips_ai_plans_while_paused_or_disabled(admin,action):
+    from app import ai_policy
+    with Session() as session:
+        session.add(Host(id='skip-host',name='skip',address='192.0.2.11',fingerprint='',state='online'))
+        session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model'}))
+        job=Job(id='skip-job',host_id='skip-host',action=action,payload={'_ai_deferred':True},next_at=0)
+        session.add(job);session.commit()
+        assert worker.ai_plan_waiting(session,job) is False
+        session.merge(Setting(key='config',value={'ai_enabled':False,'ai_model':'fixture-model'}));session.commit()
+        assert worker.ai_plan_waiting(session,job) is True
+        session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model'}));session.commit()
+        session.merge(Setting(key=ai_policy.PREFIX+'skip-host',value={'paused':True}));session.commit()
+        assert worker.ai_plan_waiting(session,job) is True
+    with Session() as session:
+        patch=Job(id='patch-job',host_id='skip-host',action='patch',payload={},next_at=0)
+        assert worker.ai_plan_waiting(session,patch) is False

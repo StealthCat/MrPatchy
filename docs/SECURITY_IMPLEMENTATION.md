@@ -27,6 +27,19 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+## Dependency vulnerability gate (partial #201)
+
+The CI `static` job runs `pip-audit` (pinned in `requirements-audit.txt`) against the
+hash-locked `requirements.lock` and then `tools/dependency_policy.py`, which fails the
+job for any finding without an active exception. Policy: fix by upgrading the
+dependency where a fixed version exists. If no fix is available, record an entry in
+`docs/dependency-exceptions.json` with `id` (the advisory id or alias), `owner`,
+`reason` and an ISO `expires` date at most 90 days ahead. Expired, malformed or
+unused exceptions also fail, so exceptions cannot linger silently. The gate covers
+Python runtime dependencies only; npm dev tooling, base-image packages and live
+GitHub alert state are not covered, and a successful scan is not evidence of the
+latter. The scan needs network access to the PyPI advisory service.
+
 ## Dependency update coverage (partial #201)
 
 PR #284 configures weekly Dependabot updates for pip, npm, GitHub Actions and
@@ -2151,6 +2164,13 @@ explicitly requested or the entry no longer matches/is no longer valid.
 
 ### Throttling, daily cap and unthrottled operation
 
+The shared Responses API request path validates strict UTF-8 JSON against a
+2,000,000-byte encoded ceiling before shared rate, budget and provider-backoff
+admission. Refused bodies create no provider receipt and expose a fixed local
+diagnostic. Valid bodies send the validated bytes and retain their structured
+evidence for pricing and accounting. This checkpoint covers outbound request
+validation. Production throughput and wider transport acceptance remain open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -2164,7 +2184,7 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
 - In cap mode configure a positive USD amount, an explicit IANA timezone and the next calendar-day reset, including daylight-saving transitions. Changes to amount/timezone/mode are revision-checked and audited; prevent resets, restarts, clock changes or mode toggles from silently granting duplicate budget.
 - Reserve cost atomically before admitting each paid call, accounting for all outstanding reservations across workers/purposes, selected model/tier, bounded input and output/reasoning tokens, supported charges and the potential follow-up stage. Define whether an entire multi-stage run is reserved in advance or deferred between stages; never skip a required stage or accept an incomplete verdict because funds run out.
-- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
+- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts with unknown transmission outcomes and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
@@ -2179,6 +2199,63 @@ Issue reproduction/fixes retain priority over these roadmap milestones. Reconcil
 unfinished related work first and use the existing cycle budget, source/PR versioning
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
+
+### Release definitely unsent spend — worker checkpoint #588
+
+A confirmed local HTTP connection-pool acquisition timeout releases only the
+matching request's reservation and records a redacted reason in the ledger. The
+shared client sends once without following redirects or automatically retrying.
+Other transport timeouts, interrupted workers and lost replies retain conservative
+charges when the provider outcome is unknown. The existing transient backoff still
+applies. This is a partial shared-controls increment. Cross-worker failover and
+end-to-end spend and throughput acceptance remain open.
+
+### Bounded same-server process triage — worker checkpoint #379
+
+This bounded threaded-execution increment permits two independent renewable process-
+triage leases for one server, while the configured fleet-wide AI executor capacity
+remains the outer bound. The subject claim stays exclusive and selection excludes a
+server once its two live leases are occupied, so one noisy server cannot consume an
+arbitrarily large pool. The investigations use independent sessions and run contexts;
+their provider calls can actually overlap instead of only occupying executor slots.
+
+The durable lease also becomes the in-flight fence for per-server AI policy and server
+lifecycle changes. Provider admission briefly serializes with policy updates, rechecks
+pause and lease ownership, then releases that gate before network I/O. Pause/resume is
+rejected while either lease remains live. Disable/delete obtains the triage admission
+gate before server activity locks, rejects a live lease, and a claim delayed behind a
+lifecycle transition re-reads active state before committing. Non-triage AI purposes
+retain their existing exclusive per-server provider gate.
+
+Focused acceptance covers real two-call same-server overlap, refusal of a third and
+fourth slot, status/UI disclosure of the bound, policy-change rejection and lifecycle
+rejection. This does not complete priority/aging across every AI purpose, make the
+per-server bound administrator-configurable, or establish full multi-controller/MySQL
+failover acceptance. Exact-head full CI and coordinator integration remain required.
+
+
+### Configurable per-server process-triage occupancy — worker checkpoint #383
+
+This stacked threaded-execution increment replaces the fixed two-lease server bound
+with an administrator-controlled limit from one through four. Existing server policy
+rows without the field retain two; malformed persisted values fail closed to serial
+admission. The value shares the existing revisioned server AI policy, meaningful
+reason and audit trail, and is visible beside pause state in each server workspace.
+
+Claim admission reads live per-host claim counts and every occupied host's current
+policy under the short distributed triage lock. Lowering a limit never cancels a live
+lease or retracts a request already sent, but later claims remain blocked until the
+count falls below the new value. Raising it cannot exceed the configured fleet-wide
+executor capacity. Subject exclusivity, renewable evidence/configuration fencing,
+global/server pause, lifecycle, shared rate/spend controls and provider policy checks
+remain unchanged. Pause/resume still rejects a live leased investigation.
+
+Focused acceptance covers default/serial/three-slot admission, lowering beneath live
+occupancy, stale and invalid settings, audit/role/CSRF enforcement and responsive UI
+state. This depends on #379 / PR #380 and does not complete cross-purpose priority or
+aging, provider-specific quotas, native complete-context collection, full supported
+multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
+browser, full-suite and coordinator integration checks remain required.
 
 
 ## Portable per-server scanner records
@@ -2633,6 +2710,39 @@ layout. This does not complete milestone 3: the dedicated paginated/filterable
 center and live toasts remain planned. Event producers/retention, authenticated
 SSE with cursor replay/cross-controller delivery, multi-tab synchronization and
 end-to-end SQLite/MySQL/failover acceptance also remain milestones 1, 2 and 4.
+
+Implementation checkpoint (issue #353): the next bounded milestone-3 increment
+adds a dedicated deep-linkable notification center. Its server-side page/count query
+applies the same current-role and per-user dismissal boundaries while supporting
+exact severity, source, server and unread filters. The responsive page renders the
+current revision's source, severity, server, time, lifecycle and escaped reason,
+defensively revalidates same-origin subject links, and keeps exact-revision read and
+dismiss actions separate from acknowledgement, resolution, approval and remediation.
+The bell panel links to the center; filters and pagination use bounded pages without
+exposing raw evidence or credentials. This still does not complete milestone 3:
+live toasts, multi-tab synchronization and server-pushed updates remain planned.
+Producers/retention, authenticated replay across controllers/workers and the complete
+two-browser SQLite/MySQL/failover acceptance remain milestones 1, 2 and 4.
+
+Implementation checkpoint (issue #374): a bounded milestone-2 increment adds an
+authenticated Server-Sent Events invalidation stream. Each connection polls the
+shared durable notification tables, emits only a safe digest cursor, and leaves the
+existing permission-filtered list/count APIs authoritative. New event revisions and
+that user's read/dismiss progress change the cursor; role, account enablement,
+session generation and expiry are rechecked while connected. EventSource supplies
+automatic reconnect and Last-Event-ID, so a stale cursor receives an immediate
+authoritative catch-up signal after reload, sleep or controller reconnect.
+
+The stream has a configurable bounded per-controller connection count (default 32,
+hard maximum 256), one small current invalidation with no per-client queue, a
+15-second heartbeat and a three-second reconnect hint. It disables proxy buffering
+and retains the 30-second polling/visibility fallback. The bell, recent panel and an
+open notification center refresh from the durable APIs; center filters, pagination,
+unrelated dialogs/forms and focus remain in place. Logout or revoked account state
+closes the stream and clears account-scoped client data. This is not completion of
+milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client and
+connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
+two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
@@ -4747,13 +4857,36 @@ eight-thread atomic admission, reset/remaining status, actual reconciliation,
 uncertain transmitted failures, unsent release, combined-mode settings and timezone
 validation. Exact-head SQLite, MySQL, browser and full-suite checks remain mandatory.
 
+The bundled public-price catalog now carries an exact reviewed-at and expires-at
+window. Settings expose its safe version/source/freshness metadata. At the expiry
+boundary, daily-cap and combined-cap admission fails before consuming rate capacity
+or contacting the provider; rate-only and unthrottled operation remain independent
+of Mr Patchy's spend guard. Updating the catalog still requires a reviewed source
+change, and post-call estimates remain advisory rather than provider invoices.
+
 This does not complete the program. Exact durable defer/resume for every manual and
-plan path, pricing-catalog update/expiry controls, provider-invoice reconciliation,
+plan path, automated/signed pricing-catalog updates, provider-invoice reconciliation,
 long-horizon reports and full SQLite/MySQL reset/failover acceptance remain planned.
 APP_VERSION/README/changelog/UI/API synchronize at v1.32.0 with major fixed at 1.
 Rebuild the controller first to create the ledger table, then matching workers. No
 target-helper/agent update, Docker publication, Git tag or schedule change is included.
 
+
+## Faster AI triage — local connection-pool contention
+
+A confirmed local HTTP pool timeout defers the affected request without creating,
+extending or clearing fleet-wide provider backoff. Advisory plans and scoring use
+the five-second local eligibility delay. Process triage keeps its existing bounded
+per-item retry schedule and has no provider Retry-After floor for this failure.
+Other workers can continue when shared rate, budget, provider and policy controls
+permit. Read timeouts and other ambiguous transport failures keep their existing
+shared backoff and budget treatment.
+
+Issue #605 preserves #589's matching-receipt release of confirmed unsent spend
+reservations. The acceptance checks cover another request proceeding after local contention, a
+concurrent provider floor surviving unchanged and an ambiguous read timeout
+still creating shared backoff. Native exact-head CI and the broader parallel
+triage and multi-controller acceptance remain separate milestones.
 
 ## v1.33.0 — Fleet-wide provider backoff and Retry-After admission
 
@@ -4802,6 +4935,19 @@ Rebuild the controller first to create the provider-backoff table, then matching
 workers. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
 
+
+### Successful provider responses — worker checkpoint #609
+
+Successful and non-transient responses check one backoff key without acquiring
+the distributed lock when no reset is eligible. A reset candidate takes the
+same shared lock and checks again in a fresh transaction, preserving a newer
+failure recorded between the initial read and lock acquisition. An already
+clear row does not receive an otherwise unnecessary timestamp write.
+
+Acceptance covers the absent, clear and newer rows, an eligible reset and a
+concurrent failure injected before the locked reread. This increment reduces
+lock acquisitions and writes on these paths. Fleet throughput, recovery and
+complete multi-controller acceptance remain separate milestones.
 
 ## v1.34.0 — Durable update-scoring deferral and exact resume
 
@@ -5818,3 +5964,158 @@ parameterized SSH/RPM test-fixture bases remain build/test inputs, not falsely
 claimed registry digest pins. #292's Actions pins and #302's CodeQL coverage are
 separate deliveries whose history must be preserved during integration. #201
 stays partial/open; no broader deployment/security roadmap completion is claimed.
+
+### Compose capability bounding — partial #201 checkpoint
+
+The complete Compose file now drops all Linux capabilities from `app`, `worker`
+and `caddy` and adds back only what each needs. `app` and `worker` start as root
+only for the entrypoint's `chown` of the data/TLS volumes and the `gosu` drop to
+the unprivileged `mrpatchy` user, so they keep `CHOWN`, `SETUID` and `SETGID`.
+`caddy` keeps `NET_BIND_SERVICE` for ports 80/443 and `DAC_READ_SEARCH` to read
+the owner-only files on the read-only `/tls` mount. `no-new-privileges` is
+unchanged. `tests/test_compose_capabilities.py` pins this exact set.
+
+Limits: read-only root filesystems, PID/memory limits and GCP override services
+remain unfinished under #201; the dependency-vulnerability gate is tracked by the
+separate #369 checkpoint. Acceptance of the new capability set on a real Docker
+host comes from the exact-head CI Compose and HTTPS checks; no local Docker was
+available. No runtime response authority changes.
+
+### Compose process-count bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services each set
+`pids_limit: 1024`. This bounds fork exhaustion while retaining headroom for the
+configured thread pools and subprocess work. Regression coverage requires every
+declared production service to retain a numeric limit between 256 and 4096.
+Custom overrides that legitimately need more than 1024 simultaneous processes in
+one container must raise the limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. It does not
+add memory limits, read-only root filesystems or GCP override-specific limits, and
+it does not establish a live GitHub alert inventory; those #201 items remain open.
+No Docker runtime was available locally, so exact-head CI supplies the image-build,
+Compose/HTTPS startup and custom-binding acceptance.
+
+### Resumable multi-stage release configuration reviews — worker checkpoint #366
+
+Issue #366 implements the next bounded faster-AI increment. Distribution release
+planning now seals each accepted configuration review before another provider call.
+A controlled smooth-rate, daily-spend, provider-backoff or administrator-pause wait
+leaves the job queued at the authoritative eligibility time (or indefinite resume
+state) and leaves the plan non-approvable in `planning` state. Once policy permits
+execution, an exact completed stage is reconstructed without another provider call.
+
+Reuse is deliberately strict. The encrypted checkpoint and its digest must be valid,
+and its versioned identity binds the host, target release, inspected inventory,
+release runner, rewritten sources, simulated package transaction, every relevant
+configuration's verified bytes/metadata/package state, selected model, review-policy
+version, vendor-default bytes and package-news bytes. Any mismatch discards all saved
+stage results and performs current-evidence reviews; a name, package or file hash by
+itself is never sufficient. Completed plans remove the private progress envelope and
+retain the existing digest-bound administrator GO/NO-GO decision, expiry, validation,
+audit, lifecycle and response safeguards.
+
+Focused regression coverage reproduces a wait after one accepted review, verifies the
+job remains queued and the partial plan remains non-approvable, then proves exact
+resume calls only the unfinished stage. A changed completed configuration proves the
+conservative miss path re-runs both stages. This checkpoint does not make a provider
+call interrupted without an accepted structured result safe to replay automatically,
+does not expand release support or response authority, and does not complete the
+remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before this increment is delivered.
+
+
+### Retained AI spend history — worker checkpoint #372
+
+This bounded faster-AI increment exposes retained daily accounting windows to
+administrators instead of limiting Settings to the currently active window. The
+report groups by each ledger entry's persisted reset time and IANA timezone, so a
+later timezone change does not rewrite historical accounting. Settled calls use the
+retained public-price usage estimate; reserved, transmitted, uncertain and unknown
+unreleased states keep their conservative ceilings. Released unsent attempts do not
+count. The report contains only aggregate amounts, counts and window boundaries—no
+model names, keys, prompts, evidence, provider responses or pricing-source URLs.
+
+The administrator API validates a trailing 1–90 day range and performs fixed-precision
+SQL aggregation without materializing individual ledger records. Result groups are
+bounded to four persisted reset/timezone combinations per requested day (at most 360),
+and an explicit truncation flag discloses heavier configuration churn. AI Settings
+offers 7-, 30- and 90-day views with loading, empty, error and truncation states and
+states plainly that local public-price estimates are not provider invoices.
+
+This checkpoint changes no admission, provider-call, pause, response-authorization or
+ledger-retention behavior. Provider-invoice reconciliation, signed/automated pricing
+catalog lifecycle and complete multi-controller failover/reset acceptance remain
+planned. Coordinator integration, exact-head SQLite/MySQL/browser/full-suite checks
+and fresh code scanning are still required before delivery.
+
+### AI pricing catalog lifecycle alerts — worker checkpoint #370
+
+This bounded faster-AI increment warns administrators through the existing durable
+operational outbox and in-app notification history during the final seven days of a
+catalog's reviewed window. The stable subject is deduplicated while unchanged,
+escalates from medium to high and reopens delivery at expiry, and resolves when a
+reviewed catalog refresh moves outside the warning window or enabled daily-cap
+enforcement is removed. Only safe catalog version/status/expiry text is published;
+the event contains no keys, prompts, evidence or provider receipts and links to the
+administrator-only AI settings page. Per-user read/dismiss remains separate from
+operational acknowledgement and neither changes admission nor performs remediation.
+Rate-only, unthrottled, legacy and globally disabled AI modes do not receive this
+spend-guard alert.
+
+Focused acceptance covers the exact warning and expiry boundaries, repeated
+collection, acknowledged-warning escalation, per-user revision visibility,
+resolution and non-cap/disabled modes. This does not automate or sign catalog
+updates, reconcile provider invoices, add provider-derived billing truth or complete
+the remaining multi-controller/reset acceptance. Final delivery still requires the
+coordinator's exact-head full test matrix and fresh code scan.
+
+### Compose memory bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services set `mem_limit` with
+defaults of 2 GiB, 4 GiB and 512 MiB, overridable through
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and `MRPATCHY_CADDY_MEM_LIMIT`.
+A runaway container is OOM-killed and restarted (`restart: unless-stopped`) instead
+of exhausting the host. Regression coverage requires every declared production
+service to keep an overridable default between 256 MiB and 16 GiB. Large fleets with
+heavy concurrent scanning or AI fan-out should raise the worker limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. Read-only
+root filesystems, GCP override hardening and the live alert inventory remain open
+under #201. No Docker runtime was available locally.
+
+### Bounded decoded AI provider responses — worker checkpoint #564
+
+The shared provider transport now advertises only `gzip` (with implicit identity),
+reads raw response bytes and performs its own bounded identity/gzip decoding. It
+accepts at most 2,000,000 decoded bytes. Incremental gzip output is limited to the
+remaining allowance plus one byte before each allocation, including across split
+and concatenated gzip members, so an expansion bomb is refused without first
+materializing its expanded body. A normalized decimal `Content-Length` above the
+ceiling is refused before body consumption without converting attacker-controlled
+digit strings to an integer; missing, malformed, compressed, chunked or dishonest
+lengths remain subject to the decoded-byte ceiling while streaming.
+
+Malformed/truncated gzip and unadvertised or ambiguous content encodings produce a
+fixed redacted transport failure. Successful decoding removes consumed encoding and
+framing headers and records the bounded decoded length. Every underlying response
+is closed on success, overflow or decoding/transport failure. A complete bounded
+body is reconstructed with its status and safe request metadata so existing
+structured parsing, usage receipts and HTTP error handling remain unchanged.
+
+An oversized successful response produces a fixed diagnostic and no partial result.
+The transmitted call keeps its full conservative spend reservation as uncertain
+because reliable usage is unavailable, and it is never automatically retried.
+Oversized and invalid-encoding HTTP failures retain status-based transient handling
+and a valid bounded `Retry-After` floor without persisting response bodies or
+arbitrary headers. Both retain the conservative spend reservation as uncertain when
+usage cannot be recovered. Existing per-request credentials, cookie clearing,
+redirect refusal, timeouts, connection reuse, shutdown/drain, pause/lifecycle,
+admission and response-authorization boundaries remain in force.
+
+This is a finite safe-transport checkpoint, not a claim that upstream memory use,
+provider throughput, connection capacity, model discovery or the broader faster-AI
+program is complete. Coordinator integration with ready pooled-discovery and
+configurable-connection work must preserve this decoded-response ceiling, followed
+by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.

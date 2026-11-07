@@ -6,7 +6,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import host_lifecycle
+from . import ai_pricing,host_lifecycle,notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -111,16 +111,53 @@ def eligible(s,job,window_cache=None):
     if window_cache is not None:window_cache[job.host_id]=result
     return result
 
-def collect_alerts():
+AI_PRICING_CATALOG_WARNING_SECONDS=7*86400
+AI_PRICING_CATALOG_SUBJECT='bundled-public-prices'
+
+def _pricing_catalog_alert(s,cfg,record,now):
+    """Publish safe controller-wide lifecycle state for capped AI pricing."""
+    status=ai_pricing.catalog_status(now)
+    capped=cfg['ai_enabled'] and cfg['ai_control_mode'] in ai_pricing.CAP_MODES
+    warning=capped and status['state']=='fresh' and now>=status['expires_at']-AI_PRICING_CATALOG_WARNING_SECONDS
+    unavailable=capped and status['state'] in ('expired','not_yet_valid')
+    if warning or unavailable:
+        expiry=datetime.datetime.fromtimestamp(status['expires_at'],datetime.timezone.utc).isoformat().replace('+00:00','Z')
+        if warning:
+            severity='medium'
+            message='AI public-price catalog '+status['version']+' expires at '+expiry+'. Review and deploy a verified catalog update before capped AI admission stops.'
+        else:
+            severity='high'
+            message='AI public-price catalog '+status['version']+' is '+status['state'].replace('_',' ')+'. Capped AI admission is blocked until a verified catalog update or controller clock correction is deployed.'
+        record('controller','AI pricing catalog',message,reopen_on_change=True)
+        notifications.publish(s,source='ai-budget',kind='pricing-catalog',subject_type='pricing-catalog',
+            subject_id=AI_PRICING_CATALOG_SUBJECT,subject_revision=status['version']+':'+status['state']+':'+str(status['expires_at']),
+            severity=severity,reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
+        return
+    event=s.scalar(select(notifications.NotificationEvent).where(
+        notifications.NotificationEvent.source=='ai-budget',
+        notifications.NotificationEvent.kind=='pricing-catalog',
+        notifications.NotificationEvent.subject_type=='pricing-catalog',
+        notifications.NotificationEvent.subject_id==AI_PRICING_CATALOG_SUBJECT))
+    if event:
+        notifications.publish(s,source='ai-budget',kind='pricing-catalog',subject_type='pricing-catalog',
+            subject_id=AI_PRICING_CATALOG_SUBJECT,subject_revision=status['version']+':resolved:'+str(status['expires_at']),
+            severity='info',reason='The AI public-price catalog no longer needs administrator attention.',
+            deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+
+def collect_alerts(now=None):
     with Session() as s:
-        now=time.time();cfg=config(s);active=set()
-        def record(host,kind,message):
-            key=hashlib.sha256((host.id+kind).encode()).hexdigest();active.add(key)
+        now=time.time() if now is None else now;cfg=config(s);active=set()
+        def record(host,kind,message,reopen_on_change=False):
+            host_id=host if isinstance(host,str) else host.id
+            key=hashlib.sha256((host_id+kind).encode()).hexdigest();active.add(key)
             alert=s.get(Alert,key)
-            if not alert:s.add(Alert(id=key,host_id=host.id,kind=kind,message=message))
+            if not alert:s.add(Alert(id=key,host_id=host_id,kind=kind,message=message,created=now))
             else:
+                changed=alert.message!=message
                 alert.message=message
-                if alert.state=='resolved':alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
+                if alert.state=='resolved' or (reopen_on_change and changed):
+                    alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
+        _pricing_catalog_alert(s,cfg,record,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine

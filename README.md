@@ -41,7 +41,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, TOTP MFA, session revocation, OIDC SSO with explicit issuer/subject bindings, verified SSH-key rotation |
-| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
+| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
 [Quick start](#quick-start) · [Enrollment](#enroll-a-server-in-three-steps) · [Release upgrades](#distribution-release-upgrades) · [Recovery](#workers-databases-and-backups) · [Documentation](#documentation)
@@ -49,6 +49,8 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Server workspaces
 
 Overview summary cards reflow to the available content width. Decorative imagery stays clear of text and actions, and multi-line link buttons retain a complete border on narrow screens.
+
+The 30-second Fleet Overview and Servers background refresh keeps the current view visible while it fetches, preserves scroll position and keyboard focus, and reuses the existing DOM when the rendered result is unchanged. An open details panel defers that background refresh; manual refresh, navigation and Retry still show their normal loading state.
 
 Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
 
@@ -77,6 +79,40 @@ Caddy aligned with its CI adapter fixture; review the refresh procedure in
 packages install from `requirements.lock` with pip `--require-hashes`; regenerate
 and review the lock and hashes when updating dependencies. APT and GCP CLI packages
 and source-build inputs remain outside these locks.
+
+The production Compose services drop all Linux capabilities and add back only
+`CHOWN`, `SETUID` and `SETGID` for the app/worker entrypoints, or
+`NET_BIND_SERVICE` and `DAC_READ_SEARCH` for Caddy. Custom Compose overrides that
+rely on Docker's default capability set must explicitly add the capabilities they
+need.
+
+Those production `app`, `worker` and `caddy` services also cap the number of
+processes at 1024 to bound fork exhaustion while leaving room for the configured
+thread pools and subprocess work. Custom deployments that legitimately need more
+than 1024 simultaneous processes per container must raise `pids_limit` explicitly;
+this process limit does not make the container root filesystem read-only.
+
+The same services cap memory by default at 2 GiB for `app`, 4 GiB for `worker`
+and 512 MiB for `caddy`. Override those limits with
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and
+`MRPATCHY_CADDY_MEM_LIMIT` when larger fleets or concurrent scan and AI workloads
+need more headroom. Reaching a limit can OOM-kill the container process; the
+production restart policy then starts it again, so size and monitor these limits
+for the deployment rather than treating them as a readiness guarantee.
+
+Production Compose also runs `app`, `worker` and `caddy` with read-only root
+filesystems. The app can write only to its `/data` and `/tls` named volumes and
+private `/tmp` tmpfs, the worker to `/data` and `/tmp`, and Caddy to `/data`,
+`/config` and `/tmp`. Custom overrides or extensions that need another writable
+path must mount an explicit volume or tmpfs there; do not disable the read-only
+root merely to provide transient or application state.
+
+The Compose `worker` service publishes a Docker health status from a liveness file
+on its private `/tmp` tmpfs. The worker refreshes that file only after a successful
+registry heartbeat; a missing timestamp, one more than 60 seconds old, or one
+implausibly in the future fails the health command. The check reports a stalled or
+disconnected worker but does not grant new response authority, prove application
+readiness, or make Docker Compose restart an unhealthy container automatically.
 
 ```bash
 git clone https://github.com/StealthCat/MrPatchy.git
@@ -276,6 +312,8 @@ The target's durable spool partitions normal observations into batches of at mos
 
 **Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
 
+For manual ClamAV and YARA scans and recurring or execution-triggered scan policies, enter canonical absolute directories such as `/usr/local/bin`. The controller rejects paths with redundant slashes, dot segments, control characters, or excluded filesystem roots such as `/proc` and `/sys` before queuing a scan or saving a policy. Execution-triggered policies also disallow `/` and overlapping directories. The target still checks that each directory can be scanned.
+
 ClamAV scans group already-open file descriptors into local engine processes of at most 32 files / 128 MiB. Each batch has a 120-second timeout inside the four-minute overall scan budget; ambiguous output or engine failure falls back to the existing 30-second single-file path. This batching does not enable or connect to a ClamAV daemon, and descriptor, path and metadata identity checks remain in force.
 
 **Servers → server → Security → Execution-triggered scans** optionally queues bounded
@@ -331,7 +369,7 @@ Account and Sign out remain available in the header on mobile. Navigation and ac
 
 For OIDC, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`, register `PUBLIC_URL/auth/sso/callback`, then bind the provider's immutable subject to an existing local account. Preserve the exact issuer, including any trailing slash. SSO uses code/PKCE, nonce/state, validated ID tokens and one-time callback state. Configure MFA at your identity provider for SSO logins.
 
-SMTP requires verified TLS or STARTTLS, with optional private CA support. SMTP and HTTPS webhooks are alternative delivery channels. Alerts use a durable retrying outbox and acknowledgements; delivery is at least once. The authenticated shell shows a persistent notification bell and the eight most recent permission-filtered events, with unread severity, escaped reasons, same-origin review links and exact-revision read/dismiss controls. It polls every 30 seconds and when a hidden tab becomes visible, preserves page and dialog state, and clears account-scoped notification state after sign-out or session expiry. Read/dismiss remains per-user UI state: it cannot acknowledge an operational alert, change an incident, approve AI work or authorize remediation. Producers, retained-history navigation, live server push/replay, cross-controller and multi-tab delivery, toasts and the dedicated filtered notification center remain planned. SSH rotation proves a replacement key works before removing the old target key and records a resumable journal.
+SMTP requires verified TLS or STARTTLS, with optional private CA support. SMTP and HTTPS webhooks are alternative delivery channels. Alerts use a durable retrying outbox and acknowledgements; delivery is at least once. The authenticated shell shows a persistent notification bell and the eight most recent permission-filtered events, with unread severity, escaped reasons, same-origin review links and exact-revision read/dismiss controls. The bell links to a deep-linkable notification center with bounded pagination and authoritative unread, dismissed, severity, source and server filters; entries show the current revision's lifecycle and defensively revalidate same-origin subject links. An authenticated same-origin Server-Sent Events stream carries only a bounded durable digest cursor, then the bell, panel and open notification center refresh through the permission-filtered APIs without replacing filters, changing unrelated forms or stealing focus. The stream revalidates session expiry, revocation, enablement, generation and role, allows 32 connections per controller by default (configurable from 1 to 256), and retains 15-second heartbeats, automatic cursor catch-up and the 30-second polling/visibility fallback. Read/dismiss remains per-user UI state: it cannot acknowledge an operational alert, change an incident, approve AI work or authorize remediation. Production Caddy flushing/timeout measurement, slow-client and connection-exhaustion drills, pruned-cursor gap handling, live toasts, multi-controller failover and complete two-browser SQLite/MySQL acceptance remain planned. SSH rotation proves a replacement key works before removing the old target key and records a resumable journal.
 
 **Account → Operations** loads the selected server's saved maintenance windows. Notification forms load saved metadata without returning credentials. Leave a secret blank to retain it, or select its explicit clear checkbox to remove it. Changing the webhook URL or SMTP host, port, encryption mode or username requires providing or explicitly clearing the secret. Saving the other delivery channel replaces the current channel. **Activity** lets administrators cancel queued operations before execution; a linked release plan is also cancelled and needs replanning. Queued file/process responses and related security work can be cancelled while response holds remain, with linked unstarted records reconciled locally. Cancellation does not undo target work or release prior, unrelated or uncertain holds; running and recovery-required jobs still require the existing review workflow.
 
@@ -344,6 +382,8 @@ docker compose up -d --build --scale worker=3
 ```
 
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
+
+Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
 
 Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
 
@@ -362,11 +402,13 @@ The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.
 ## Upgrade
 
 1. Back up the database and all persistent volumes with app/workers stopped.
-2. Pull `main`, review `.env`, then run `docker compose up -d --build`.
+2. Pull `main` and review `.env`. Drain workers first (**Activity → Workers → Drain worker**) or wait for running jobs to finish, then run `docker compose up -d --build`. Compose lets active worker jobs drain for up to `MRPATCHY_WORKER_STOP_GRACE_PERIOD` (default `8100s`, or 2h15m); `docker compose stop -t <seconds> worker` overrides that wait for an explicit stop.
 3. Use **Servers → Manage → Finish / verify installation** to upgrade each managed bridge/collector. Legacy bootstrap targets may require a fresh installer run through a trusted console first.
 4. Regenerate unexecuted release plans after updating helpers; old plans cannot authorize changed runner, bridge or recovery/validation code. Do not update helpers while a release upgrade is running.
 5. Review queued jobs: jobs created before recovery-policy capture cannot inherit an enabled reboot/rollback policy; resubmit them after reviewing the policy.
 6. Reconcile interrupted/recovery-required jobs before resuming those hosts. Review new provenance identities rather than automatically transferring old approvals.
+
+On an existing Google Cloud install, re-run `install-gcp.sh` once so `.env` records the GCP compose files, project and zone; until then, use `./gcp-compose.sh` for upgrades, migrations and TLS changes so the gcloud runtime and IAP connectivity remain active.
 
 Schema initialization is idempotent. MySQL upgrades need ALTER privileges for existing timestamp/package-state migrations.
 
@@ -384,7 +426,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
+CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. It also runs `pip-audit` against the hash-locked Python runtime requirements and rejects vulnerabilities without an active owner/reason/expiry exception; this needs the PyPI advisory service and does not cover npm tooling, base-image packages or live GitHub alert state. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
 
 Repository, trust and schedule dialog submissions are one-shot while pending. Opening another dialog keeps it intact; an earlier result is shown globally for the same signed-in session and is suppressed after sign-out. Closing a dialog does not cancel the submitted operation.
 
@@ -421,7 +463,9 @@ Google Cloud CLI for both app and worker. See [GCP setup](docs/GCP.md) for attac
 service-account/federation prerequisites and IAP enrollment. Each server's
 **Agent health** tab exposes version/drift checks and opt-in automatic helper
 maintenance; [Agent maintenance](docs/AGENT_MAINTENANCE.md) documents verification,
-retry limits and cases requiring trusted-console recovery.
+retry limits and cases requiring trusted-console recovery. Manual agent upgrades
+require a review confirmation, and the check and upgrade controls stay disabled
+while either request is pending in the current Agent health view.
 
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact
@@ -434,7 +478,9 @@ Pausing blocks new provider calls for that server, including queued security pro
 triage follow-ups and shared update scoring. Other servers and non-AI operations
 continue; historical results remain visible. In-flight requests must finish before a
 state change can save (409 means retry; state unchanged). Resume respects global AI
-settings and quotas. Reasons and state changes are audited.
+settings and quotas. Administrators can also set that server's process-investigation
+occupancy from one to four slots; legacy policies retain the two-slot default, and
+lowering the value does not cancel live work. Reasons and policy changes are audited.
 
 **Server → Security → Export scanner record** downloads bounded scanner receipts,
 incidents, reviews and advisory plans without requiring quarantine. It also works in
@@ -532,16 +578,22 @@ Direct worker/embedded processes use the same variables. Invalid values refuse
 startup. These limits size the real executors. Poll/notification work shares the
 poll pool; process investigations and update scoring share AI slots.
 
-Independent servers can now undergo process triage concurrently. A durable,
-renewable claim permits one process investigation per server across supported
-workers, with atomic existing hourly admission and ownership/evidence checks
-before calls and acceptance. The coordinator schedules update scoring, alternating
-purposes even with one AI slot. Claims expire after 120 seconds without renewal;
-interrupted attempts retain the existing recovery delay and finite retry limits.
-A lease cannot cancel an already sent request or guarantee exactly-once billing.
-The full model, evidence and conditional SSH/follow-up flow remain unchanged.
-Same-server parallel investigations, broader fairness and native complete-context
-collection remain unfinished.
+Independent servers can undergo process triage concurrently. Each server has an
+administrator-configurable process-investigation occupancy of one to four AI slots,
+defaulting to two for legacy or absent policy. Each subject remains exclusive under
+its durable renewable claim; additional same-server investigations wait when the
+configured bound is reached. Lowering the bound preserves live leases and blocks new
+admission until occupancy falls below it. Policy pause/resume
+and server lifecycle changes reject live claims, and delayed admission rechecks the
+current lifecycle before starting. Existing hourly/rate/spend admission and
+ownership/evidence checks still apply before calls and acceptance. The coordinator
+schedules update scoring, alternating purposes even with one AI slot. Claims expire
+after 120 seconds without renewal; interrupted attempts retain the existing recovery
+delay and finite retry limits. A lease cannot cancel an already sent request or
+guarantee exactly-once billing. The full model, evidence and conditional
+SSH/follow-up flow remain unchanged. Broader cross-purpose fairness,
+provider-specific quotas, native complete-context collection and complete
+multi-controller failover acceptance remain unfinished.
 v1.30.0 adds exact-context contradiction invalidation and linked review for the
 complete exact candidates described below.
 
@@ -586,7 +638,8 @@ a smooth-rate start.
 
 Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
 without reliable pricing or usage—including timeouts and interrupted workers—keep the
-full ceiling counted. Unsent failures release their reservation. The separate ledger
+full ceiling counted. Unsent failures release their reservation, including a confirmed
+local connection-pool timeout before a provider request is sent. The separate ledger
 is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
 remaining and next-reset values in Settings and AI worker status. The administrator
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
@@ -595,21 +648,55 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+A confirmed local HTTP connection-pool timeout receives a short local retry delay
+without creating or changing the fleet-wide provider backoff. Provider and ambiguous
+network timeouts still apply the shared cooldown and conservative spend accounting.
+
+The shared OpenAI Responses API client validates outgoing JSON against a
+2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
+requests receive a redacted local error without contacting the provider.
+
+Pooled OpenAI Responses API replies are limited to 2,000,000 decoded bytes and
+accept gzip or uncompressed bodies. Oversized or invalid replies produce a
+redacted diagnostic without accepting partial output or retrying automatically.
+A sent request with unavailable usage keeps its conservative spend reservation.
+
+Administrators can inspect retained estimates for the trailing 7, 30 or 90 days in
+AI Settings. History is grouped by the reset time and IANA timezone persisted with
+each ledger entry, so later timezone changes do not rewrite prior windows. Settled
+calls use their retained usage estimate; reserved, transmitted, uncertain and other
+unreleased calls retain their conservative ceiling, while released unsent attempts
+are excluded. The report contains bounded aggregate windows only, never provider,
+model, credential, prompt, evidence or response details. At most four reset/timezone
+groups per requested day are returned, with an explicit truncation notice if heavier
+configuration churn exceeds that bound. These local public-price estimates are not
+provider invoices.
+
+The bundled public price catalog has an exact reviewed-at and expiry window shown in
+AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
+before consuming smooth-rate capacity or contacting the provider. A reviewed catalog
+update is therefore required before **2026-11-26 00:00 UTC** for capped calls to
+continue. During the final seven days, administrators receive a durable medium-severity
+operational and in-app warning; it escalates and reopens delivery at expiry, then
+resolves after a verified refresh or when applicable cap enforcement is disabled.
+Rate-only, unthrottled, legacy and globally disabled AI modes retain their existing
+controls and do not receive this spend-guard alert.
+
 Daily accounting returns at most five exact-money status totals without loading
 ledger entries as application objects. SQLite preserves the existing nine-place
 Numeric read precision; MySQL sums native DECIMAL values. Eligible ledger scanning
 remains O(N) under the shared admission lock; broader concurrency work remains open.
 
-Exact durable defer/resume for every manual/plan path, pricing-catalog lifecycle
-alerts, invoice reconciliation, long-horizon spend reports and full SQLite/MySQL
-failover/reset acceptance remain required before the shared controls program is
-complete.
+Exact durable defer/resume for every manual/plan path, automated or signed catalog
+updates, invoice reconciliation and full SQLite/MySQL failover/reset acceptance
+remain required before the shared controls program is complete.
 
 ### Shared provider backoff (v1.33.0)
 
 Every current billable provider path checks one durable fleet-wide transient-failure
 floor before budget and rate admission. A valid provider `Retry-After` is retained
-exactly; transient 408/429/5xx responses, connection failures and timeouts without a
+up to 24 hours; longer delays are capped and reported for administrator review.
+Transient 408/429/5xx responses, connection failures and timeouts without a
 valid floor use bounded exponential backoff with full jitter from 30 seconds up to 30
 minutes. The sanitized state is shared across controllers and workers, survives
 restart and is cleared by the next completed/non-transient provider response that
@@ -622,6 +709,13 @@ receipt nor a rate/budget reservation. Process investigations remain durably que
 at the shared eligibility time without consuming another attempt, and manual retry
 cannot bypass it. Settings and AI worker status show consecutive transient failures
 and the next eligible time.
+
+An administrator can review and clear the shared floor with the audited
+`POST /api/ai/provider-backoff/clear` API. Clearing it also releases investigations
+waiting only on that provider deadline, including waits created after a claim.
+Longer local retry delays, attempt limits and other admission controls remain in
+force. An expired provider deadline is immediately eligible; local exponential
+backoff is kept separate and does not itself block a manual retry as a provider wait.
 
 Already concurrent in-flight calls cannot be recalled after another call discovers a
 provider floor. Exact durable queue/resume for every manual plan and connection-test
@@ -664,10 +758,14 @@ creates no call receipt or charge. A transmitted transient failure is not replay
 inside the HTTP request: its existing receipt and spend outcome remain, and the job
 becomes eligible for a later scheduler attempt at the shared provider floor.
 
-Release planning remains excluded because one release plan can make multiple paid
-calls without per-stage persistence; replaying the whole job could duplicate a
-successful earlier stage. Connection tests are interactive rather than durable jobs.
-Those paths, plus complete multi-controller failover acceptance, remain unfinished.
+Release configuration review planning also retains controlled rate, spend, provider-
+backoff and administrator-pause waits. Each accepted stage is sealed before the next
+provider call; an exact match resumes only unfinished stages, while changed host,
+inventory, configuration, model, policy, vendor or package-news evidence discards
+reuse and reviews the current plan again. A call interrupted before an accepted
+structured result is not replayed automatically. Connection tests remain interactive
+rather than durable jobs, and complete provider-invoice and multi-controller failover
+acceptance remain unfinished.
 
 ### Interrupted advisory-plan recovery (v1.35.4)
 
@@ -897,9 +995,18 @@ limits. Provider delay floors also apply to manual Retry. Pending work, retained
 usage receipts and uncertain charges survive; no assessment or approval is inferred
 from a failure. AI pause/resume and lifecycle checks still apply to every call.
 
+The worker checks shared rate, provider backoff and daily budget eligibility before
+claiming a process investigation. In capped modes it also checks that candidate's
+bounded request reservation; unavailable prices or insufficient budget leave the
+item queued without creating a run or consuming an attempt. Deferred rate waits
+reserve staggered wake slots after the durable queue tail. Provider-only waits keep
+their exact deadline, including immediate eligibility after it expires. Every actual
+provider call still passes the final atomic admission checks.
+
 Investigations and AI logs show eligible, review-blocked and paused counts; each
 pending/error item explains its retry state and eligibility. Eligibility is not a
-promised start time: existing hourly limits and the serial worker still apply.
+promised start time: existing hourly limits, shared admission and available worker
+slots still apply.
 Legacy attempts and lost-worker attempts retain their one-hour recovery interval.
 This is process-triage scheduling only, not shared provider-wide rate admission,
 daily spend controls or faster-triage program completion. Other AI purposes retain

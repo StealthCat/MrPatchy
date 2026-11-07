@@ -10,7 +10,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import String, JSON, Double, Integer, select, update, func
+from sqlalchemy import String, JSON, Double, Integer, select, update, func, case
 from sqlalchemy.orm import Mapped, mapped_column, load_only
 from .db import Base, Session, Host, Package, Job, audit
 from .coordination import Lock
@@ -108,6 +108,13 @@ def hosts_for(s, policy):
     query = select(Host).where(Host.enabled==True,Host.deleted_at==0).order_by(Host.name, Host.id)
     if not policy['all_hosts']: query = query.where(Host.id.in_(policy['host_ids']))
     return list(s.scalars(query))
+
+
+def host_count(s, policy):
+    """Number of hosts hosts_for() would return, without loading host rows or their JSON blobs."""
+    query = select(func.count()).select_from(Host).where(Host.enabled==True,Host.deleted_at==0)
+    if not policy['all_hosts']: query = query.where(Host.id.in_(policy['host_ids']))
+    return s.scalar(query) or 0
 
 
 def tick_hosts(s, policy):
@@ -379,22 +386,30 @@ def calendar(s, start, end, host_id=''):
     for row in schedules:
         if not row.policy['enabled']: continue
         if host_id and not (row.policy['all_hosts'] or host_id in row.policy['host_ids']): continue
-        target_count = 1 if host_id else len(hosts_for(s,row.policy))
+        target_count = 1 if host_id else host_count(s,row.policy)
         for due in occurrences(row.policy, max(start-86400, row.updated), end):
             key = row.id+':'+str(int(due))
             events[key] = {'id':key,'schedule_id':row.id,'title':row.policy['name'],'start':due,
                            'end':due+row.policy['window_minutes']*60,'trigger':'regular','states':{},
                            'servers':target_count, 'timezone':row.policy['timezone']}
-    runs = select(PatchRun).where(PatchRun.due >= start-86400, PatchRun.due < end)
+    # Aggregate in SQL: one row per (run slot, effective state) instead of one row and one Job lookup per run,
+    # and no row cap that would silently drop the newest runs (#434). Job state only matters for ACTIVE runs.
+    single = PatchRun.trigger != 'regular'
+    state = case((PatchRun.state.in_(ACTIVE) & Job.state.is_not(None), Job.state), else_=PatchRun.state)
+    run_id = case((single, PatchRun.id), else_='')
+    run_host = case((single, PatchRun.host_id), else_='')
+    runs = (select(PatchRun.schedule_id, PatchRun.trigger, PatchRun.due, func.max(PatchRun.expires), run_id, run_host,
+                   state, func.count())
+            .outerjoin(Job, Job.id == PatchRun.job_id)
+            .where(PatchRun.due >= start-86400, PatchRun.due < end))
     if host_id: runs = runs.where(PatchRun.host_id == host_id)
-    for run in s.scalars(runs.order_by(PatchRun.due).limit(10000)):
-        key = run.schedule_id+':'+str(int(run.due)) if run.trigger == 'regular' else run.id
-        event = events.setdefault(key, {'id':key,'schedule_id':run.schedule_id,'title':names.get(run.schedule_id,'Deleted schedule'),
-                  'start':run.due,'end':run.expires,'trigger':run.trigger,'states':{},'servers':0,'timezone':''})
-        job = s.get(Job,run.job_id) if run.job_id else None
-        state = job.state if job and run.state in ACTIVE else run.state
-        event['states'][state] = event['states'].get(state,0)+1
-        if run.trigger != 'regular': event['host_id'] = run.host_id
+    runs = runs.group_by(PatchRun.schedule_id, PatchRun.trigger, PatchRun.due, run_id, run_host, state)
+    for schedule_id, trigger, due, expires, rid, rhost, run_state, count in s.execute(runs.order_by(PatchRun.due)):
+        key = schedule_id+':'+str(int(due)) if trigger == 'regular' else rid
+        event = events.setdefault(key, {'id':key,'schedule_id':schedule_id,'title':names.get(schedule_id,'Deleted schedule'),
+                  'start':due,'end':expires,'trigger':trigger,'states':{},'servers':0,'timezone':''})
+        event['states'][run_state] = event['states'].get(run_state,0)+count
+        if trigger != 'regular': event['host_id'] = rhost
     for event in events.values():
         event['servers'] = max(event['servers'],sum(event['states'].values()))
     return sorted((event for event in events.values() if event['end'] > start),key=lambda item:item['start'])

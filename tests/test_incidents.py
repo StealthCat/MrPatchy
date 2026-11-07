@@ -170,3 +170,12 @@ def test_case_endpoints_admin_only_and_host_scoped(admin,recorded):
     with Session() as s:s.get(User,'admin').role='operator';s.commit()
     assert admin.get('/api/hosts/a/security/incidents/'+identifier+'/case').status_code==403
     assert admin.post('/api/hosts/a/security/incidents/'+identifier+'/notes',json={'note':'x'}).status_code==403
+
+
+def test_scan_paths_share_target_rules_across_entry_points(admin,recorded):
+    bad=['//tmp','/proc','/proc/1','/run/user','/tmp/a\x00b','/tmp/','/tmp//x','/sys','/var/lib/mrpatchy-quarantine/x']
+    for path in bad:
+        assert admin.put('/api/hosts/a/security/policy',json={'paths':[path],'enabled':True,'interval_hours':1}).status_code==400,path
+        assert admin.post('/api/hosts/a/security',json={'paths':[path]}).status_code==400,path
+        assert admin.post('/api/hosts/a/security/yara',json={'paths':[path],'bundle_id':'b1'}).status_code==400,path
+    assert admin.put('/api/hosts/a/security/policy',json={'paths':['/usr/local/bin','/tmp'],'enabled':True,'interval_hours':1}).status_code==200
