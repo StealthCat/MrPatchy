@@ -6119,3 +6119,31 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+
+### Batched automatic security-plan eligibility — worker checkpoint #592
+
+This bounded faster-AI increment shortens the database work performed while holding
+the distributed automatic security-plan queue lock. After the existing policy,
+pause, quarantine, lifecycle, prior-attempt and YARA filters select at most 100
+incidents, one projected eligibility query joins each bounded incident ID to its
+canonical host identity and uses a correlated `EXISTS` to read queued/running
+security or startup-plan occupancy. Keeping both comparisons in SQL preserves the
+database's host-ID collation. A successful enqueue updates an in-memory set with
+the canonical host ID, so another collating-equal incident remains deferred exactly
+as it was when each loop iteration queried the job table again.
+
+The 12-host SQLite reproduction admits at most the existing ten plans. Current main
+performs ten final host lookups plus ten final pending-job lookups; the candidate
+uses one bounded eligibility read, reducing the fixture from 151 to 132 SELECT
+statements. Focused coverage also retains a pre-existing startup-plan occupant and
+verifies that two eligible incidents on one host still produce only one automatic
+plan. Native MySQL coverage exercises differently cased stored/candidate host IDs,
+an existing collating-equal occupant and within-tick canonical-host deduplication.
+
+This changes no schema, public API, provider call, spend control, plan content,
+response authority or incident ordering. Per-policy pause and quarantine reads that
+occur before candidate selection remain separate work, and this checkpoint does not
+complete smooth shared planning admission, threaded investigations, production
+throughput or failover acceptance. Coordinator integration, exact-head SQLite/MySQL/
+full-suite checks and fresh code-scanning inventory remain required before delivery.
