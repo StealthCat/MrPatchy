@@ -302,10 +302,20 @@ def status(s):
     # Retained malformed markers must match the public API's `is True` contract.
     marker_type=(func.json_type(Job.payload,'$._ai_deferred')=='true' if s.get_bind().dialect.name=='sqlite' else
         func.json_type(func.json_extract(Job.payload,'$._ai_deferred'))=='BOOLEAN')
-    plan_where=(Job.action.in_(('release-plan','security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
+    plan_actions=('release-plan','security-plan','startup-plan')
+    plan_where=(Job.action.in_(plan_actions),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
         marker_type,Job.payload['_ai_deferred'].as_boolean()==True)
-    plan_deferred,plan_next=s.execute(select(func.count(),func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where)).one()
-    plan_ready=s.scalar(select(func.count()).where(*plan_where,Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids())))
+    plan_ready_sql=and_(Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids()))
+    plan_by_action={action:{'deferred':0,'ready':0,'next_at':None} for action in plan_actions}
+    # Canonical labels preserve the existing action predicate under MySQL collations.
+    plan_action=case(*[(Job.action==action,action) for action in plan_actions]).label('plan_action')
+    plan_rows=s.execute(select(plan_action,func.count(),counted(plan_ready_sql),
+        func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where).group_by('plan_action'))
+    for action,deferred,eligible,next_at in plan_rows:
+        plan_by_action[action]={'deferred':deferred,'ready':eligible,'next_at':next_at}
+    plan_deferred=sum(row['deferred'] for row in plan_by_action.values())
+    plan_ready=sum(row['ready'] for row in plan_by_action.values())
+    plan_next=min((row['next_at'] for row in plan_by_action.values() if row['next_at'] is not None),default=None)
     if scoring_next and scoring_next>now:retry=min([value for value in (retry,scoring_next) if value is not None])
     if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
     if provider_backoff['blocked']:
@@ -338,4 +348,5 @@ def status(s):
             'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
             'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
-            'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next}
+            'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next,
+            'plan_deferred_by_action':plan_by_action}
