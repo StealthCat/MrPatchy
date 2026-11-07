@@ -20,6 +20,34 @@ def global_policy(s):
     row=s.get(Setting,GLOBAL_POLICY_KEY)
     return {**DEFAULT_POLICY,**_bools(row.value if row else None)}
 
+GLOBAL_POLICY_LOCK='agent-policy-default'
+GLOBAL_POLICY_LOCK_WAIT=10
+
+class StalePolicy(Exception):
+    """The stored global policy no longer matches the editor's expected value."""
+
+def save_global(value,expected,record=None):
+    """Compare-and-set the global default under a cross-worker lock.
+
+    The read, comparison and write all happen in a session opened after the lock is
+    held, so concurrent saves (including competing first writes with no row yet)
+    serialize and the later stale save is refused instead of silently replacing a
+    newly chosen policy. Returns False if the lock could not be acquired in time."""
+    from .coordination import Lock
+    from .db import Session
+    lock=Lock(GLOBAL_POLICY_LOCK)
+    if not lock.acquire(wait=GLOBAL_POLICY_LOCK_WAIT):return False
+    try:
+        with Session() as s:
+            if expected!=global_policy(s):raise StalePolicy()
+            row=s.get(Setting,GLOBAL_POLICY_KEY)
+            if row:row.value=dict(value)
+            else:s.add(Setting(key=GLOBAL_POLICY_KEY,value=dict(value)))
+            if record:record(s)
+            s.commit()
+        return True
+    finally:lock.release()
+
 def overrides(s,host_id):
     """Explicit per-server values only; legacy rows hold explicit values and stay overrides."""
     row=s.get(Setting,'agent-policy:'+host_id)

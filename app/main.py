@@ -2651,14 +2651,11 @@ def agent_global_policy(user=Depends(admin_user)):
 @app.put('/api/settings/agent-maintenance')
 def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_user)):
     from . import agent_maintenance
-    with Session() as s:
-        if body.expected!=agent_maintenance.global_policy(s):raise HTTPException(409,'Global agent policy changed; refresh before saving')
-        value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
-        row=s.get(Setting,agent_maintenance.GLOBAL_POLICY_KEY)
-        if row:row.value=value
-        else:s.add(Setting(key=agent_maintenance.GLOBAL_POLICY_KEY,value=value))
-        audit(s,'agent global policy updated',json.dumps(value));s.commit()
-        return value
+    value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+    try:saved=agent_maintenance.save_global(value,body.expected,lambda s:audit(s,'agent global policy updated',json.dumps(value)))
+    except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
+    if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
+    return value
 
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):

@@ -244,3 +244,50 @@ def test_global_default_inheritance_overrides_and_reset(admin,enrolled):
         with Session() as s:s.get(User,'admin').role=role;s.commit()
         assert admin.get(g).status_code==403
         assert admin.put(g,json={'expected':{}}).status_code in (403,422)
+
+
+def _race_global_reads(monkeypatch,parties=2):
+    """Hold each global-policy reader at a barrier so unserialized saves would all read the same value."""
+    import threading
+    barrier=threading.Barrier(parties);original=maintenance.global_policy
+    def held(s):
+        value=original(s)
+        try:barrier.wait(timeout=1)
+        except threading.BrokenBarrierError:pass
+        return value
+    monkeypatch.setattr(maintenance,'global_policy',held)
+
+
+@pytest.mark.parametrize('existing',[False,True])
+def test_concurrent_global_policy_saves_refuse_the_stale_edit(admin,monkeypatch,existing):
+    # Regression for the PR #622 review: two admins saving from the same view must not
+    # silently replace each other's choice, including competing first writes with no row.
+    import threading
+    if existing:
+        with Session() as s:s.add(Setting(key=maintenance.GLOBAL_POLICY_KEY,value={'auto_upgrade':False,'auto_repair':False}));s.commit()
+    _race_global_reads(monkeypatch)
+    seen={'auto_upgrade':False,'auto_repair':False}
+    choices=[{'auto_upgrade':True,'auto_repair':False},{'auto_upgrade':False,'auto_repair':True}]
+    codes={}
+    def save(i):codes[i]=admin.put('/api/settings/agent-maintenance',json={**choices[i],'expected':seen}).status_code
+    threads=[threading.Thread(target=save,args=(i,)) for i in range(2)]
+    for t in threads:t.start()
+    for t in threads:t.join(10)
+    assert sorted(codes.values())==[200,409]
+    winner=choices[[i for i,c in codes.items() if c==200][0]]
+    with Session() as s:
+        assert s.get(Setting,maintenance.GLOBAL_POLICY_KEY).value==winner
+        from app.db import Audit
+        assert s.query(Audit).filter_by(action='agent global policy updated').count()==1
+    assert admin.get('/api/settings/agent-maintenance').json()==winner
+
+
+def test_global_policy_save_refuses_when_lock_is_held(admin,monkeypatch):
+    from app.coordination import Lock
+    monkeypatch.setattr(maintenance,'GLOBAL_POLICY_LOCK_WAIT',0)
+    held=Lock(maintenance.GLOBAL_POLICY_LOCK);assert held.acquire(False)
+    try:
+        response=admin.put('/api/settings/agent-maintenance',json={'auto_upgrade':True,'auto_repair':True,'expected':{'auto_upgrade':False,'auto_repair':False}})
+        assert response.status_code==409
+    finally:held.release()
+    with Session() as s:assert s.get(Setting,maintenance.GLOBAL_POLICY_KEY) is None
