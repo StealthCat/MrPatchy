@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.42.50 — 2026-11-06
+
+1. [PR #234](https://github.com/StealthCat/MrPatchy/pull/234): Resolve `scans:<id>` advisory-plan citations against scans included in portable scanner-record exports, and report valid `executions:<id>` and `inspections:<id>` citations as explicitly out of scope instead of missing. Malformed empty-suffix references remain missing so exports do not overstate completeness, and offline integrity verification continues to cover the hashed record. Compatibility: exports gain the additive `scope.out_of_scope_evidence_references` field while retaining format version 1. Material limits: execution and inspection evidence remains outside this export rather than being embedded. Roles, audit history and runtime response authorization are unchanged. This source update does not publish a Docker image. Completes #164.
+
+## 1.42.49 — 2026-11-06
+
+1. [PR #258](https://github.com/StealthCat/MrPatchy/pull/258): Apply shared scan-directory validation to manual ClamAV and YARA requests and to recurring and execution-triggered scan policies. Compatibility: noncanonical paths, control characters and excluded directories now return HTTP 400 before a job is queued or a policy is saved. Execution-triggered policies still disallow root and overlapping directories. Material limits: validation does not check whether a directory exists on the remote host or migrate previously saved policies. Existing authorization and audit controls remain in place. This source update does not publish a Docker image. Completes #158.
+
+## 1.42.48 — 2026-11-06
+
+1. [PR #252](https://github.com/StealthCat/MrPatchy/pull/252): Keep the Server Security and File integrity tabs usable when an independent panel fails. Load independent panels concurrently and show panel-local errors and Retry controls. A delayed failure cannot replace a newer successful refresh. Compatibility: browser requests for independent panels can overlap, while APIs, roles, audit records and runtime response authorization are unchanged. Material limits: retries use the existing backend operations and do not make failed operations idempotent. This source update does not publish a Docker image. Completes #155.
+
 ## 1.42.47 — 2026-11-06
 
 1. [PR #610](https://github.com/StealthCat/MrPatchy/pull/610): Skip the shared AI provider-backoff lock and database writes when a successful or non-transient response has no eligible backoff to clear. Eligible resets still take the existing lock and recheck current state in a fresh transaction, preserving newer failures and their Retry-After floor. Compatibility is unchanged for APIs, schema, settings and response authorization. Already-clear rows retain their timestamps. The improvement removes unnecessary locking and writes on these paths. Fleet throughput and full multi-controller performance remain unverified. This source update does not publish a Docker image. Completes #609.
