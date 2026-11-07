@@ -57,6 +57,28 @@ def test_bad_preflight_never_attempts_patch(admin,monkeypatch,sample,policy):
     assert 'patch' not in calls and 'protected-patch' not in calls
     with Session() as s:assert s.get(Job,'preflight-job').state=='failed'
 
+@pytest.mark.parametrize('inspect',[RuntimeError('Configuration recovery manifest exceeds capture budget'),{'version':0}])
+def test_failed_read_only_inspect_before_protected_patch_is_plain_failure(admin,monkeypatch,inspect):
+    policy={'reboot':False,'rollback':True}
+    with Session() as s:
+        s.add(Host(id='inspect',name='inspect',address='192.0.2.1',fingerprint='test'))
+        s.add(Job(id='inspect-job',host_id='inspect',action='patch',payload={'packages':['demo=2'],'_recovery_policy':policy}));s.commit()
+    calls=[]
+    def call(host,req,**kw):
+        calls.append(req['action'])
+        if req['action']=='health':return health()
+        if req['action']=='patch-inspect':
+            if isinstance(inspect,BaseException):raise inspect
+            return inspect
+        return {}
+    monkeypatch.setattr(worker.ssh,'call',call)
+    monkeypatch.setattr(worker,'save_inventory',lambda *args:None)
+    monkeypatch.setattr(worker,'validate_patch',lambda *args:None)
+    monkeypatch.setattr(operations,'recovery_policy',lambda *args:policy)
+    worker.execute('inspect-job')
+    assert 'protected-patch' not in calls
+    with Session() as s:assert s.get(Job,'inspect-job').state=='failed'
+
 def test_target_recovery_preflight_creates_no_transaction(tmp_path,monkeypatch):
     monkeypatch.setattr(bridge,'ROOT',tmp_path)
     calls=[]

@@ -67,6 +67,19 @@ if not Path('.env').exists():
     with open('.env','x') as f:
         f.write('ADMIN_PASSWORD='+secrets.token_hex(24)+'\nDOMAIN='+parsed.hostname+'\nPUBLIC_URL='+url+'\nHTTPS_PORT='+str(port)+'\n')
     os.chmod('.env',0o600)
+# Plain `docker compose` reads .env from this directory: persist the GCP overrides there
+# so upgrades and migrations that skip ./gcp-compose.sh cannot silently drop the gcloud runtime.
+compose_files='compose.yaml:compose.gcp.yaml'+(':compose.gcp-auth.json' if override or Path('compose.gcp-auth.json').exists() else '')
+wanted={'COMPOSE_FILE':compose_files,'GCP_PROJECT':project,'GCP_ZONE':zone}
+lines=Path('.env').read_text().splitlines()
+seen=set()
+for i,line in enumerate(lines):
+    key=line.split('=',1)[0].strip()
+    if key in wanted and '=' in line:
+        lines[i]=key+'='+wanted[key];seen.add(key)
+lines+=[k+'='+v for k,v in wanted.items() if k not in seen]
+Path('.env').write_text('\n'.join(lines)+'\n')
+os.chmod('.env',0o600)
 Path('.env.gcp').write_text('GCP_PROJECT='+project+'\nGCP_ZONE='+zone+'\n')
 os.chmod('.env.gcp',0o600)
 if override:

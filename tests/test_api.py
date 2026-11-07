@@ -110,8 +110,32 @@ def test_ai_never_automatically_approves(admin,monkeypatch):
         assert h.integrity[0]['path']=='/managed'
         row.verdict='low';s.commit();assert row.approved is False
         rid=row.id
-    assert admin.put('/api/investigations/'+rid,json={'approved':True}).status_code==200
+    listed=admin.get('/api/investigations').json()[0]
+    assert admin.put('/api/investigations/'+rid,json={'approved':True}).status_code==422
+    assert admin.put('/api/investigations/'+rid,json={'approved':True,'expected_revision':listed['revision']}).status_code==200
     assert admin.get('/api/investigations').json()[0]['approved'] is True
+
+def test_approval_and_revoke_reject_a_stale_assessment_revision(admin):
+    import time
+    id=host(admin)
+    with Session() as s:
+        h=s.get(Host,id)
+        worker.ingest(s,h,{'telemetry':{'collected':time.time(),'hashed_at':time.time(),'processes':[{'pid':12,'executable':'/usr/bin/test','uid':'0','sha256':'b'*64,'connections':[]}]}})
+        from sqlalchemy import select
+        rid=s.scalar(select(Behavior)).id
+    seen=admin.get('/api/investigations').json()[0]['revision']
+    with Session() as s:
+        row=s.get(Behavior,rid);row.verdict='high';row.analysis='Triage finished after the page rendered';s.commit()
+    stale=admin.put('/api/investigations/'+rid,json={'approved':True,'expected_revision':seen})
+    assert stale.status_code==409
+    with Session() as s:assert s.get(Behavior,rid).approved is False
+    current=admin.get('/api/investigations').json()[0]['revision']
+    assert current!=seen
+    assert admin.put('/api/investigations/'+rid,json={'approved':True,'expected_revision':current}).status_code==200
+    assert admin.put('/api/investigations/'+rid,json={'approved':False,'expected_revision':current}).status_code==409
+    fresh=admin.get('/api/investigations').json()[0]['revision']
+    assert admin.put('/api/investigations/'+rid,json={'approved':False,'expected_revision':fresh}).status_code==200
+    with Session() as s:assert s.get(Behavior,rid).approved is False
 
 def test_changed_connection_has_new_identity():
     a={'pid':1,'executable':'/bin/a','sha256':'f'*64,'uid':'1000','connections':[{'protocol':'tcp','local':'10.0.0.2','local_port':50000,'remote':'10.0.0.1','remote_port':443,'state':'01'}]}
@@ -147,3 +171,21 @@ def test_patch_route_reads_config_once_per_batch(admin):
     finally: event.remove(engine,'before_cursor_execute',spy)
     assert r.status_code==200
     assert sum('FROM settings' in x for x in seen)<=4  # constant, not one per package
+
+def test_fingerprint_replacement_requires_confirmation_and_is_audited(admin):
+    from app.db import Audit
+    id=host(admin)
+    first=admin.post(f'/api/hosts/{id}/connection/test')
+    assert first.status_code==400 and 'Server → Connection' in first.json()['detail']
+    other='SHA256:'+'b'*43
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':'bad'}).status_code==422
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':FINGERPRINT}).status_code==200
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':FINGERPRINT}).status_code==200
+    rejected=admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':other})
+    assert rejected.status_code==409
+    with Session() as s: assert s.get(Host,id).fingerprint==FINGERPRINT
+    assert admin.put(f'/api/hosts/{id}/fingerprint',json={'fingerprint':other,'replace_existing':True}).status_code==200
+    with Session() as s:
+        assert s.get(Host,id).fingerprint==other
+        actions=[a.action for a in s.query(Audit).order_by(Audit.id)]
+        assert 'replace SSH host key' in actions and 'pin SSH host key' in actions
