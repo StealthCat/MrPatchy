@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.37'
+APP_VERSION='1.42.52'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -191,7 +191,12 @@ class Login(BaseModel):
     password:str=Field(max_length=1024)
     otp:str=Field(default='',max_length=6)
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+# Failures per account by source address, used only to detect guessing spread across addresses (never to block).
+login_account_failures={}
+login_account_next_sweep=0.0
 LOGIN_BUCKET_LIMIT=10000
+LOGIN_SUSPICIOUS_ADDRESSES=5
+LOGIN_ACCOUNT_SWEEP_SECONDS=30
 # Verified when an account is missing or disabled so response time does not reveal which usernames exist.
 DUMMY_PASSWORD_HASH=password_hash('mrpatchy-timing-equaliser','00'*16)
 def audit_login_event(action,username,ip,reason):
@@ -200,6 +205,7 @@ def audit_login_event(action,username,ip,reason):
         audit(s,action,username+' '+ip+' '+reason); s.commit()
 @app.post('/api/login')
 def login(body:Login,request:Request,response:Response):
+    global login_account_next_sweep
     ip=request.client.host; now=time.time()
     # Reserve an attempt before expensive password hashing; remove it only on success.
     bucket=ip+':'+body.username
@@ -210,6 +216,14 @@ def login(body:Login,request:Request,response:Response):
             if not login_attempts[key]: del login_attempts[key]
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
+        # Sweep global detector state periodically, not on every authentication request.
+        # The per-account failure path below still enforces the exact rolling window.
+        if now>=login_account_next_sweep:
+            for key,seen in list(login_account_failures.items()):
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                if not seen: del login_account_failures[key]
+            login_account_next_sweep=now+LOGIN_ACCOUNT_SWEEP_SECONDS
         recent=login_attempts.get(bucket,[])
         # Usernames cannot contain ':', so the address is everything before the last one.
         # A prefix match would also count other IPv6 addresses, e.g. ::1:2 under ::1.
@@ -254,6 +268,22 @@ def login(body:Login,request:Request,response:Response):
         if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
+        suspicious=False
+        with login_lock:
+            # Detect, never block: a hard per-account limit would let an attacker lock out a real administrator.
+            if body.username in login_account_failures or len(login_account_failures)<LOGIN_BUCKET_LIMIT:
+                seen=login_account_failures.setdefault(body.username,{})
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                # Only the most recent distinct sources are needed to recognize
+                # the threshold; never retain an unbounded rotating-IP history.
+                if ip not in seen and len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES:
+                    del seen[min(seen,key=seen.get)]
+                seen[ip]=now
+                scope='suspicious:'+body.username
+                if len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES and scope not in login_throttle_logged:
+                    login_throttle_logged[scope]=now; suspicious=True
+        if suspicious: audit_login_event('login suspicious',body.username,ip,'failures from '+str(LOGIN_SUSPICIOUS_ADDRESSES)+' or more addresses')
         raise HTTPException(401,'Invalid credentials or MFA code')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
@@ -557,19 +587,26 @@ def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(admin_user)):
 def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
-        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
+        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing. Use Pinned SSH fingerprint under Server → Connection, and take the value from the target\'s trusted console.')
         try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
         except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
-class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+class Fingerprint(BaseModel):
+    fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+    replace_existing:bool=False
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
         if h.deleted_at:raise HTTPException(409,'Deleted server identity is read-only')
-        h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
+        previous=h.fingerprint or ''
+        if previous and previous!=body.fingerprint:
+            if not body.replace_existing:raise HTTPException(409,'A different SSH fingerprint is already pinned. Replace it under Server → Connection after verifying the new key from the target\'s trusted console.')
+            audit(s,'replace SSH host key',h.id+' '+previous+' -> '+body.fingerprint)
+        else:audit(s,'pin SSH host key',h.id+' '+body.fingerprint)
+        h.fingerprint=body.fingerprint; s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
@@ -881,6 +918,9 @@ def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(viewer_user)):
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             query=query.where(Job.host_id==host_id)
+        # MySQL can choose a competing access path and sort retained history despite LIMIT.
+        history_index='ix_jobs_host_history' if host_id else 'ix_jobs_history'
+        query=query.with_hint(Job,f'FORCE INDEX FOR ORDER BY ({history_index})',dialect_name='mysql')
         return [public_job(x) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
 def audit_log(offset:int=0,limit:int=200,user=Depends(admin_user)):
@@ -1731,10 +1771,14 @@ def security_status(host_id:str,user=Depends(admin_user)):
         legacy=s.get(Setting,'security-scan:'+host_id)
         return legacy.value if legacy else {'state':'not_scanned','findings':[],'gaps':['No security scan has completed']}
 
+def validate_scan_paths(paths):
+    from .scan_paths import canonical
+    for path in paths:
+        if not canonical(path,allow_root=True):raise ValueError('Invalid scan directory')
+
 @app.post('/api/hosts/{host_id}/security')
 def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id)
@@ -1747,8 +1791,7 @@ class YaraScanInput(SecurityScanInput):
 
 @app.post('/api/hosts/{host_id}/security/yara')
 def yara_scan_queue(host_id:str,body:YaraScanInput,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or path.startswith('//') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'),Session() as s:
         host_or_404(s,host_id)
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan','execution-scan']),Job.state.in_(['queued','running'])).limit(1)):
@@ -2511,8 +2554,7 @@ def security_policy(host_id:str,user=Depends(admin_user)):
 
 @app.put('/api/hosts/{host_id}/security/policy')
 def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096 or '\x00' in path:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
