@@ -2145,6 +2145,12 @@ SELECTs from twelve to four, including candidate and host-scope reads. This is
 partial scoring performance work. Idle candidate hashing, measured production
 throughput and full parallel scoring acceptance remain open.
 
+Worker checkpoint #590 groups the administrator AI status poll's two run-detail
+reads into one statement. It keeps the newest running triage stage and newest
+triage or worker diagnostic in one database snapshot, projecting only the fields
+used by the status response. This reduces a polling round trip. Production
+throughput and the full faster-AI acceptance milestones remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.

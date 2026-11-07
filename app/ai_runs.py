@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_, or_, case
+from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_, or_, case, literal
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -259,6 +259,20 @@ def task_failure(error):
     log.error('AI worker task failed: %s',message)
 
 
+def _status_run_details(s):
+    # Select each newest row before combining them so each branch stays bounded.
+    latest = select(literal('latest').label('kind'), AIRun.id,
+        case((AIRun.state.in_(('error','interrupted')), AIRun.message), else_='').label('detail')).where(
+        AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1).subquery()
+    running = select(literal('running').label('kind'), literal(None).label('id'), AIRun.stage.label('detail')).where(
+        AIRun.purpose=='triage', AIRun.state=='running').order_by(AIRun.started.desc()).limit(1).subquery()
+    rows = s.execute(select(latest).union_all(select(running)))
+    details = {kind:(identifier,detail) for kind,identifier,detail in rows}
+    _,running_stage = details.get('running',(None,None))
+    last_run,last_error = details.get('latest',(None,''))
+    return running_stage,last_run,last_error
+
+
 def status(s):
     from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,ai_provider_backoff,worker_registry
     from .update_scores import UpdateScore
@@ -280,11 +294,10 @@ def status(s):
     paused=pending_count-unpaused_count
     recent_count,recent_min=s.execute(select(func.count(),func.min(Behavior.attempted)).where(Behavior.attempted>now-3600)).one()
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
-    running=s.scalar(select(AIRun).where(AIRun.purpose=='triage',AIRun.state=='running').order_by(AIRun.started.desc()).limit(1))
+    running_stage,last_run,last_error=_status_run_details(s)
     active_count=s.scalar(select(func.count()).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now))
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
-    latest=s.scalar(select(AIRun).where(AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1))
     run_count=s.scalar(select(func.count()).select_from(AIRun).where(AIRun.purpose=='triage',AIRun.started>now-3600))
     used=max(recent_count,run_count)
     oldest_run=s.scalar(select(func.min(AIRun.started)).where(AIRun.purpose=='triage',AIRun.started>now-3600))
@@ -314,7 +327,7 @@ def status(s):
     if not cfg['ai_enabled']: reason='disabled'; message='Automatic AI triage is disabled in Settings.'
     elif not cfg['ai_model'] or not s.get(Setting,'openai_key'): reason='configuration'; message='Save a model ID and API key in Settings.'
     elif not seen or now-seen>90: reason='worker_unavailable'; message='No recent scheduler heartbeat. Check app/worker container logs and DISABLE_SCHEDULER.'
-    elif running: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running.stage
+    elif running_stage is not None: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running_stage
     elif provider_backoff['blocked']:reason='backoff';message='Shared provider backoff is waiting for retry eligibility after a transient failure.'
     elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min([v for v in (recent_min,oldest_run) if v is not None])+3600
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
@@ -334,7 +347,7 @@ def status(s):
             'active':active_count,'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,
             'per_server_limit':ai_policy.DEFAULT_CONCURRENCY,
             'per_server_limit_min':ai_policy.MIN_CONCURRENCY,'per_server_limit_max':ai_policy.MAX_CONCURRENCY,
-            'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
-            'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
+            'recent_attempts':used,'last_error':last_error,
+            'last_run':last_run,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
             'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next}
