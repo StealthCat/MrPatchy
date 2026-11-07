@@ -2,6 +2,7 @@
 import fcntl
 import hashlib
 import threading
+import time
 from sqlalchemy import create_engine,text
 from sqlalchemy.pool import NullPool
 from .db import DATA,URL
@@ -10,19 +11,30 @@ class Lock:
     def __init__(self,name):
         self.name='mrpatchy:'+hashlib.sha256((str(lock_engine.url.database)+':'+name).encode()).hexdigest()[:48]
         self.local=threading.Lock();self.resource=None
-    def acquire(self,blocking=True):
-        if not self.local.acquire(blocking):return False
+    def acquire(self,blocking=True,wait=None):
+        """Acquire the lock; `wait` (seconds) bounds a blocking acquisition."""
+        deadline=None if wait is None else time.monotonic()+max(0,wait)
+        if blocking and deadline is not None:
+            if not self.local.acquire(timeout=max(0,wait)):return False
+        elif not self.local.acquire(blocking):return False
         resource=None
         try:
             if lock_engine.dialect.name in ('mysql','mariadb'):
                 connection=resource=lock_engine.connect()
-                if connection.execute(text('SELECT GET_LOCK(:name,:wait)'),{'name':self.name,'wait':3600 if blocking else 0}).scalar()!=1:
+                if connection.execute(text('SELECT GET_LOCK(:name,:wait)'),{'name':self.name,'wait':(3600 if deadline is None else min(3600,max(0,int(deadline-time.monotonic())))) if blocking else 0}).scalar()!=1:
                     connection.close();self.local.release();return False
                 self.resource=connection
             else:
                 directory=DATA/'locks';directory.mkdir(exist_ok=True)
                 stream=resource=open(directory/self.name.replace(':','-'),'a')
-                try:fcntl.flock(stream,fcntl.LOCK_EX|(0 if blocking else fcntl.LOCK_NB))
+                try:
+                    if blocking and deadline is None:fcntl.flock(stream,fcntl.LOCK_EX)
+                    else:
+                        while True:
+                            try:fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB);break
+                            except BlockingIOError:
+                                if not blocking or time.monotonic()>=deadline:raise
+                                time.sleep(0.02)
                 except BlockingIOError:stream.close();self.local.release();return False
                 self.resource=stream
             return True
