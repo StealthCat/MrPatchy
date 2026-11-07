@@ -180,13 +180,21 @@ def mark_uncertain(identifier,reason):
 def status(session,now=None):
     now=time.time() if now is None else now;cfg=config(session)
     enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
+    # A timezone change can leave a previously admitted window open beyond the
+    # configured reset.  In that case the configured boundary is useful for a
+    # recheck, but it cannot promise that recorded headroom will be available.
+    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
+        else_=BudgetEntry.reservation_usd)
+    overlapping=(enabled and session.scalar(select(BudgetEntry.id).where(
+        BudgetEntry.reset_at>reset,BudgetEntry.created<=now,BudgetEntry.status!='released',amount>0).limit(1)) is not None)
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
         'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
-        'next_reset':reset if enabled else None,'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
+        'next_reset':reset if enabled else None,'next_reset_authoritative':enabled and not overlapping,
+        'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
         'pricing_catalog':ai_pricing.catalog_status(now)}
 
 

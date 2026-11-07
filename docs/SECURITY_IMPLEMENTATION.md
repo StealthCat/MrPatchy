@@ -6119,3 +6119,27 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+### Authoritative shared AI control snapshot — worker checkpoint #546
+
+This bounded faster-AI increment adds an administrator-only read of every currently
+observable global provider-call blocker. It reports disabled or incomplete central AI
+configuration, a shared provider backoff, a smooth-rate wait and a fully consumed
+daily-cap window as separate fixed-code entries. When several finite gates overlap,
+the reported next start is the latest gate time rather than an earlier time at which
+another control would still refuse the call. An indefinite policy/configuration hold
+never claims a future start. A retained budget window that outlives the currently
+configured timezone reset likewise exposes that reset only as a recheck boundary and
+does not claim that headroom will be available then.
+
+The snapshot is read-only and contains no model name, key, prompt, evidence, provider
+body, call/run identifier or ledger record. It performs no provider or target traffic.
+`can_start_now` means only that these global gates are presently open: a call-specific
+conservative price quote, provider policy, finite concurrency, per-server pause and
+lifecycle checks remain authoritative and can still refuse work.
+
+This is an API/control-plane checkpoint, not the complete queue/spend dashboard or
+faster-AI acceptance. UI integration, call-specific preview, provider-invoice truth,
+multi-controller failover/reset acceptance and fresh code-scanning verification remain
+required. Coordinator integration and exact-head SQLite/MySQL/full-suite checks are
+also still required before delivery.

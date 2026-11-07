@@ -965,6 +965,11 @@ def ai_spend_history(days:int=30,user=Depends(admin_user)):
     if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
     with Session() as s:return ai_budget.history(s,days)
 
+@app.get('/api/settings/ai-control-status')
+def ai_control_status(user=Depends(admin_user)):
+    from . import ai_control_status
+    with Session() as s:return ai_control_status.snapshot(s)
+
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
