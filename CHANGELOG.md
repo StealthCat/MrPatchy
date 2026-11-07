@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.43.4 — 2026-11-07
+
+1. [PR #595](https://github.com/StealthCat/MrPatchy/pull/595): Batch AI update-scoring row reads when linking a diagnostic run and persisting complete, superseded, deferred or failed outcomes for the existing five-item scoring batch, while retaining separate transaction boundaries and current package/server evidence rechecks. Compatibility: no schema, API, scoring model, provider, authorization, pause or rate/spend-control behavior changes. Material limits: this reduces ID-filtered score-row reads from twelve to four in the five-item fixture but does not address idle candidate hashing, measured production throughput or broader parallel scoring tracked under #436. Completes #594. This source update does not publish a Docker image.
+
 ## 1.43.3 — 2026-11-07
 
 1. [PR #623](https://github.com/StealthCat/MrPatchy/pull/623): Reduce client-side validation failures to bounded field-labelled messages without reflecting rejected input or validation context, and accept whitespace-grouped six-digit authenticator codes during sign-in, reauthentication and MFA confirmation. Compatibility: ordinary six-digit codes remain unchanged; 7–16-character malformed codes now reach the existing authentication refusal path instead of failing request validation with HTTP 422. Material limits: optional client-side login `pattern` and `maxlength` constraints remain tracked under #419, which stays open. Existing roles, audit history and runtime response authorization remain unchanged. This source update does not publish a Docker image.
