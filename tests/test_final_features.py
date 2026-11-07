@@ -215,3 +215,31 @@ def test_sso_callback_failures_are_logged_and_audited(client,monkeypatch,caplog)
     unassigned_rows=[d for d in details if 'no enabled account binding' in d]
     assert len(unassigned_rows)==1  # repeat of the same reason+subject is rate limited
     assert 'secret-subject-value' not in ' '.join(details)
+
+def test_malformed_bpftrace_line_keeps_sibling_events():
+    from target.agent import decode_bpf_events
+    good=lambda n:json.dumps({'type':'printf','data':'%d\t0\t/bin/x\n'%n}).encode()
+    chunk=good(1)+b'\n{"type":"printf","data":"1\\t0\\t/tmp/\xff"}\n'+b'not json\n'+good(2)+b'\n'
+    rows,pending=decode_bpf_events(b'',chunk)
+    assert pending==b''
+    printf=[r for r in rows if r['type']=='printf']
+    assert len(printf)==3 and printf[1]['data'].endswith('/tmp/\udcff')
+    assert [r for r in rows if r['type']=='malformed']==[{'type':'malformed','count':1}]
+
+def test_sso_pending_states_are_bounded_per_source_and_evict_oldest(monkeypatch):
+    """One unauthenticated source must not lock every user out of SSO (#416)."""
+    import time
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    with Session() as s:
+        for row in s.scalars(select(Setting).where(Setting.key.like('oidc-state:%'))):s.delete(row)
+        s.commit()
+    for i in range(sso.PENDING_PER_SOURCE):sso.admit_state('a%d'%i,'noisy')
+    with pytest.raises(HTTPException) as err:sso.admit_state('extra','noisy')
+    assert err.value.status_code==429
+    sso.admit_state('legit','other')  # unaffected by the noisy source
+    monkeypatch.setattr(sso,'PENDING_GLOBAL',12)
+    for i in range(5):sso.admit_state('g%d'%i,'src%d'%i)
+    with Session() as s:
+        keys=[r.key for r in s.scalars(select(Setting).where(Setting.key.like('oidc-state:%')))]
+    assert len(keys)==12 and 'oidc-state:g4' in keys and 'oidc-state:a0' not in keys
