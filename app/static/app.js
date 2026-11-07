@@ -78,7 +78,7 @@ async function render(){
   if(revision!==renderRevision)return;
   currentUser=me;document.body.dataset.role=me.role;hosts=list;
   $('#application-version').textContent=me.version?'v'+me.version:'SELF-HOSTED';
-  if(!isAdmin()&&['security','settings','repositories','schedules','users','ai-logs'].includes(requested)){
+  if(!isAdmin()&&['files','security','settings','repositories','schedules','users','ai-logs'].includes(requested)){
    requested='overview';history.replaceState(null,'','#overview');
   }
   page=requested;

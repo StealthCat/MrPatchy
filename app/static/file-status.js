@@ -29,7 +29,7 @@ async function serverFileStatus(revision,{root,hostId}){
 
 async function fleetFileStatus(revision,root=$('#content'),view='files'){
  if(!isAdmin()){root.innerHTML=PatchyUI.error('Administrator access required','File evidence uses the existing administrator permissions.');return;}
- root.innerHTML='<h2>File status</h2><label>Server<select aria-label="File status server">'+hosts.map(h=>`<option value="${esc(h.id)}">${esc(h.name)}</option>`).join('')+'</select></label><section class="card file-status-panel"></section>';
+ root.innerHTML='<a class="button" href="#overview">Back to overview</a><h2>File status</h2><label>Server<select aria-label="File status server">'+hosts.map(h=>`<option value="${esc(h.id)}">${esc(h.name)}</option>`).join('')+'</select></label><section class="card file-status-panel"></section>';
  const select=root.querySelector('select'),panel=root.querySelector('section');let selection=0;
  const load=()=>{const turn=++selection;return fileStatusPanel(panel,select.value,()=>currentView(revision,view)&&turn===selection);};
  select.onchange=load;

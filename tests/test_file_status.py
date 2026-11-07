@@ -92,11 +92,12 @@ def test_file_evidence_preserves_admin_boundary(admin,role):
     assert admin.get('/api/hosts/host-one/file-status').status_code==403
 
 
-@pytest.mark.parametrize('cached',[False,True])
-def test_worker_orders_repository_cache_then_provider(client,monkeypatch,cached):
+@pytest.mark.parametrize('cached,mismatch',[(False,False),(True,False),(True,True)])
+def test_worker_orders_repository_cache_then_provider(client,monkeypatch,cached,mismatch):
     setup();snapshot=complete();source=retained()
     source.policy_hash=ai_assessments.digest([ai.investigation_policy()])
     with Session() as s:
+        if mismatch:s.get(Inspection,'vendor-one').report=report('f'*64)
         s.add(Behavior(id='current',host_id='host-one',evidence=snapshot,verdict='pending'))
         s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'gpt-fixture'}))
         s.merge(Setting(key='openai_key',value={'encrypted':seal('private-key')}))
@@ -109,15 +110,15 @@ def test_worker_orders_repository_cache_then_provider(client,monkeypatch,cached)
         events.append('cache');return lookup(*args,**kwargs)
     def provider(evidence,*args):
         events.append('ai')
-        assert evidence['file_assessment']['status']=='verified'
+        assert evidence['file_assessment']['status']==('changed' if mismatch else 'verified')
         return {'risk':'low','explanation':'Behavior reviewed','recommended_checks':'Monitor','requested_checks':[]}
     monkeypatch.setattr(file_status,'repositories',repositories)
     monkeypatch.setattr(known_good,'lookup',cache)
     monkeypatch.setattr(ai,'investigate',provider)
     worker.investigate_one()
     assert events[:2]==['repository','cache']
-    assert ('ai' in events) is (not cached)
+    assert ('ai' in events) is (not cached or mismatch)
     with Session() as s:
         b=s.get(Behavior,'current')
         assert b.verdict=='low' and not b.approved
-        assert b.evidence['file_assessment']['status']=='verified'
+        assert b.evidence['file_assessment']['status']==('changed' if mismatch else 'verified')
