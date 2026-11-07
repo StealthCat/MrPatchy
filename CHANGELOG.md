@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.54 — 2026-11-07
+
+1. [PR #476](https://github.com/StealthCat/MrPatchy/pull/476): Return bounded, field-labelled validation messages without reflecting rejected values, validation context, dynamic dictionary keys or forbidden extra-field names; invalid sign-in payloads now receive the generic `Invalid credentials` detail. Compatibility: HTTP 422 remains unchanged, but its `detail` value changes from a Pydantic error array to a string, and sign-in validation intentionally omits field-specific diagnostics. Material limits: this server-side slice does not add client-side fallback sanitization, normalize spaces in OTP input or add optional login input constraints, so #419 remains open for those items. Existing authorization and runtime response boundaries remain unchanged. This source update does not publish a Docker image.
+
 ## 1.42.53 — 2026-11-07
 
 1. [PR #281](https://github.com/StealthCat/MrPatchy/pull/281): Make the native Debian package fixture independent of restrictive process umasks by assigning explicit package-tree permissions, and harden the HTTPS signed-repository fixture with HTTP/1.1 plus an explicit zero-length authenticated-mirror rejection. Compatibility: this changes test fixtures only; product runtime, APIs, TLS verification, authorization and response behavior are unchanged. Material limits: the Debian failure was reproduced and corrected, but the reported HTTPS EOF failure has not been revalidated on apt 3.0.x with OpenSSL 3.5.x, so #279 remains open for that evidence. This source update does not publish a Docker image.
