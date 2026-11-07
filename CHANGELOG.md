@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.43.2 — 2026-11-07
+
+1. [PR #283](https://github.com/StealthCat/MrPatchy/pull/283): Use one shared processing-tier multiplier table for AI cost estimates and pre-call spend reservations, and remove the unused `ai_runs.event(call=)` argument. Compatibility: verified estimate and reservation outputs, provider calls, accounting, APIs, roles, audit history and runtime response authorization remain unchanged. Material limits: this consolidates only the tier table and dead event flag; the duplicated advisory-plan generator, response failure/latest-record helpers, original-file stub and gpgv validation remain tracked under #189. This source update does not publish a Docker image.
+
+## 1.43.1 — 2026-11-07
+
+1. [PR #484](https://github.com/StealthCat/MrPatchy/pull/484): Build one installed-RPM-version index per host during each AI update-scoring pass instead of rescanning the host's full RPM inventory for every candidate, while preserving byte-for-byte score identities and the existing APT fallback. Compatibility: scoring inputs, completed-score reuse, provider requests, APIs, schema, roles and runtime response authorization are unchanged. Material limits: each candidate is still hashed on every pass and full host rows remain loaded, so #436 stays open for those remaining CPU and memory costs; the recorded performance comparison is a disposable single-sample fixture rather than a fleet throughput guarantee. This source update does not publish a Docker image.
+
+## 1.43.0 — 2026-11-07
+
+1. [PR #488](https://github.com/StealthCat/MrPatchy/pull/488): Add administrator recovery for another user's lost authenticator with administrator reauthentication, MFA-state clearing and session revocation, plus administrator APIs to list and remove SSO bindings. SSO replacement now requires an expected current username, serializes replacement with removal and records bounded subject digests and previous accounts in audit history. Compatibility: `PUT /api/operations/sso-binding` now returns HTTP 409 when an existing binding is changed without a matching `replace_username`; callers that reassign bindings must first read the current binding or remove it. Material limits: the bundled UI exposes MFA reset but does not yet provide SSO binding list/removal controls, self-MFA reset remains under Account, and these recovery operations require an administrator session and reauthentication where applicable. Existing roles and runtime response authorization boundaries remain unchanged. This source update does not publish a Docker image. Completes #418.
+
 ## 1.42.54 — 2026-11-07
 
 1. [PR #476](https://github.com/StealthCat/MrPatchy/pull/476): Return bounded, field-labelled validation messages without reflecting rejected values, validation context, dynamic dictionary keys or forbidden extra-field names; invalid sign-in payloads now receive the generic `Invalid credentials` detail. Compatibility: HTTP 422 remains unchanged, but its `detail` value changes from a Pydantic error array to a string, and sign-in validation intentionally omits field-specific diagnostics. Material limits: this server-side slice does not add client-side fallback sanitization, normalize spaces in OTP input or add optional login input constraints, so #419 remains open for those items. Existing authorization and runtime response boundaries remain unchanged. This source update does not publish a Docker image.

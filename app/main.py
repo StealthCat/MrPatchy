@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import defer, load_only
+from sqlalchemy.exc import IntegrityError, OperationalError
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
@@ -51,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.54'
+APP_VERSION='1.43.2'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1354,6 +1355,19 @@ def revoke_sessions(body:Reauthenticate,user=Depends(self_user)):
         row.generation+=1;audit(s,'revoke sessions',row.username);s.commit()
     return {'ok':True,'sign_in_again':True}
 
+@app.post('/api/users/{username}/mfa/reset')
+def reset_user_mfa(username:str,body:Reauthenticate,user=Depends(admin_user)):
+    # The administrator re-authenticates with their own credentials; the target's factors are cleared and sessions revoked via generation.
+    with login_lock, Session() as s:
+        actor=s.get(User,user['username']);check_password(actor,body)
+        row=s.get(User,username)
+        if row is None:raise HTTPException(404,'User not found')
+        if row.username==actor.username:raise HTTPException(400,'Use Account to manage your own MFA')
+        had=bool(row.otp_secret or row.otp_pending)
+        row.otp_secret='';row.otp_pending='';row.otp_counter=-1;row.generation+=1
+        audit(s,'reset user MFA',actor.username+' → '+row.username+'; MFA was '+('enabled or pending' if had else 'not configured'));s.commit()
+    return {'ok':True,'had_mfa':had}
+
 class WindowInput(BaseModel): windows:list[dict]=Field(default_factory=list,max_length=20)
 @app.put('/api/operations/{host_id}/window')
 def save_window(host_id:str,body:WindowInput,user=Depends(admin_user)):
@@ -1531,13 +1545,59 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
     username:str=Field(min_length=1,max_length=64)
+    replace_username:str|None=Field(default=None,max_length=64)
+def sso_digest(key):return key.removeprefix('oidc:')[:16]
 @app.put('/api/operations/sso-binding')
 def bind_sso(body:SSOBinding,user=Depends(admin_user)):
     if not sso.issuer:raise HTTPException(409,'Configure OIDC deployment variables first')
+    key=sso.binding_key(body.subject)
     with Session() as s:
         if not s.get(User,body.username):raise HTTPException(404,'Create the local account/role first')
-        s.merge(Setting(key=sso.binding_key(body.subject),value={'username':body.username}))
-        audit(s,'bind SSO identity',user['username']+' → '+body.username);s.commit()
+        # Take the binding's write lock before reading it (the no-op UPDATE takes SQLite's write lock; the
+        # locking read takes the row lock and reads the latest commit on MySQL/PostgreSQL) so the replace
+        # confirmation, the write and the audited previous binding are one expected-value step: a concurrent
+        # replace that confirmed the same old binding conflicts instead of silently overwriting it.
+        s.execute(update(Setting).where(Setting.key==key).values(key=key))
+        previous=s.scalar(select(Setting).where(Setting.key==key).with_for_update().execution_options(populate_existing=True))
+        old=previous.value.get('username') if previous else None
+        if body.replace_username:
+            # An explicitly confirmed prior binding must still be the current state, including when the
+            # binding was removed meanwhile: a stale confirmation never recreates or overwrites a binding.
+            if old!=body.replace_username:
+                s.rollback()
+                raise HTTPException(409,'This subject binding changed (now '+('bound to '+old if old is not None else 'unbound')+'). Reload the bindings and retry.')
+        elif old is not None and old!=body.username:
+            s.rollback()
+            raise HTTPException(409,'This subject is already bound to '+old+'. Resend with replace_username set to confirm the replacement.')
+        if previous:previous.value={'username':body.username}
+        else:s.add(Setting(key=key,value={'username':body.username}))
+        audit(s,'bind SSO identity',user['username']+' → '+body.username+'; subject '+sso_digest(key)+'; previous '+(old or 'none'))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject was bound concurrently; reload the bindings and retry.')
+    return {'ok':True,'subject_digest':sso_digest(key)}
+
+@app.get('/api/operations/sso-bindings')
+def list_sso_bindings(user=Depends(admin_user)):
+    with Session() as s:
+        rows=s.scalars(select(Setting).where(Setting.key.like('oidc:%')).order_by(Setting.key)).all()
+        return [{'subject_digest':sso_digest(r.key),'username':r.value.get('username')} for r in rows]
+
+@app.delete('/api/operations/sso-bindings/{digest}')
+def delete_sso_binding(digest:str,user=Depends(admin_user)):
+    if not re.fullmatch(r'[0-9a-f]{16}',digest):raise HTTPException(400,'Invalid subject digest')
+    with Session() as s:
+        # Take the same write/row lock bind_sso() uses before reading, so the read, delete and audited
+        # account are one step serialized with a concurrent replacement of this subject.
+        matching=Setting.key.like('oidc:'+digest+'%')
+        s.execute(update(Setting).where(matching).values(key=Setting.key))
+        rows=s.scalars(select(Setting).where(matching).with_for_update().execution_options(populate_existing=True)).all()
+        if len(rows)!=1:s.rollback();raise HTTPException(404,'SSO binding not found')
+        old=rows[0].value.get('username');s.delete(rows[0])
+        audit(s,'remove SSO binding',user['username']+' removed subject '+digest+' → '+str(old))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject binding changed concurrently; reload the bindings and retry.')
     return {'ok':True}
 
 class SMTPInput(BaseModel):
