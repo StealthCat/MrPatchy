@@ -2135,6 +2135,16 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+### Update-scoring candidate database reads
+
+Candidate discovery reads server IDs and inventory in its existing bounded
+batches. Server telemetry, baselines and other unrelated fields stay out of this
+query. The regression checks the selected columns across multiple batches and
+compares candidate order, APT/RPM evidence and exact score identities with full
+server records. Existing pause and lifecycle filters still govern eligibility.
+This reduces data fetched per scoring pass. Candidate hashing and measured
+production throughput remain open.
+
 ### Parallel execution and latency work
 
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run
