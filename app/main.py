@@ -1528,6 +1528,26 @@ def recovery_policy(host_id:str,body:RecoveryPolicy,user=Depends(admin_user)):
         s.merge(Setting(key='recovery:'+host_id,value=body.model_dump()));audit(s,'set recovery policy',host_id);s.commit()
     return {'ok':True,'capabilities':status}
 
+class ProbeInput(BaseModel): probes:list[dict]
+@app.get('/api/operations/{host_id}/probes')
+def probe_list(host_id:str,user=Depends(viewer_user)):
+    from . import app_probes
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.get(Setting,app_probes.key(host_id))
+        return {'probes':app_probes.load(s,host_id),'reviewed_by':row.value.get('reviewed_by') if row else None}
+@app.put('/api/operations/{host_id}/probes')
+def probe_save(host_id:str,body:ProbeInput,user=Depends(admin_user)):
+    """Reviewed loopback HTTP/TCP probes that gate rollout stages; definitions only, never commands."""
+    from . import app_probes
+    try:probes=app_probes.normalize(body.probes)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with host_change(host_id),Session() as s:
+        host_or_404(s,host_id)
+        s.merge(Setting(key=app_probes.key(host_id),value={'probes':probes,'reviewed_by':user['username']}))
+        audit(s,'set application probes',host_id+' '+', '.join(p['name'] for p in probes)[:500]);s.commit()
+    return {'probes':probes}
+
 class ObservabilityInput(BaseModel): ebpf:bool=False
 @app.put('/api/operations/{host_id}/observability')
 def observability(host_id:str,body:ObservabilityInput,user=Depends(admin_user)):
