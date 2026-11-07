@@ -2144,7 +2144,25 @@ adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence a
 response-authorization behavior are unchanged. Production contention baselines
 and the broader faster-AI acceptance remain open.
 
+### Update-scoring candidate database reads
+
+Candidate discovery reads server IDs and inventory in its existing bounded
+batches. Server telemetry, baselines and other unrelated fields stay out of this
+query. The regression checks the selected columns across multiple batches and
+compares candidate order, APT/RPM evidence and exact score identities with full
+server records. Existing pause and lifecycle filters still govern eligibility.
+This reduces data fetched per scoring pass. Candidate hashing and measured
+production throughput remain open.
+
 ### Parallel execution and latency work
+
+Worker checkpoint #594 batches score-row reads when linking the diagnostic run
+and persisting completed, deferred or failed outcomes for the existing five-item
+scoring batch. The same sessions still recheck current package and server evidence
+before accepting an assessment. A five-item fixture reduces ID-filtered score
+SELECTs from twelve to four, including candidate and host-scope reads. This is
+partial scoring performance work. Idle candidate hashing, measured production
+throughput and full parallel scoring acceptance remain open.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2154,6 +2172,15 @@ and the broader faster-AI acceptance remain open.
 - Reuse lifecycle-managed HTTP clients/connection pools with bounded pool/connect/read deadlines and safe per-request credentials; close them on drain/shutdown. Keep slow provider/SSH operations outside database transactions wherever possible. Measure candidate-query/index and repeated evidence-collection costs before optimizing them.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
+
+### Update-scoring schedule-state reads
+
+The scheduler reads only identity, state and eligibility fields from retained
+update scores while checking exact and deferred candidates. Assessment text and
+other detail fields are loaded by their existing detail and completion paths.
+Regression coverage checks the scheduling queries across batches, including
+durable deferral, stale-state updates and the existing assessment identity.
+Candidate hashing and production throughput validation remain open.
 
 ### Fleet-wide exact-match known-good cache
 
@@ -4944,6 +4971,19 @@ Rebuild the controller first to create the provider-backoff table, then matching
 workers. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
 
+
+### Successful provider responses — worker checkpoint #609
+
+Successful and non-transient responses check one backoff key without acquiring
+the distributed lock when no reset is eligible. A reset candidate takes the
+same shared lock and checks again in a fresh transaction, preserving a newer
+failure recorded between the initial read and lock acquisition. An already
+clear row does not receive an otherwise unnecessary timestamp write.
+
+Acceptance covers the absent, clear and newer rows, an eligible reset and a
+concurrent failure injected before the locked reread. This increment reduces
+lock acquisitions and writes on these paths. Fleet throughput, recovery and
+complete multi-controller acceptance remain separate milestones.
 
 ## v1.34.0 — Durable update-scoring deferral and exact resume
 
