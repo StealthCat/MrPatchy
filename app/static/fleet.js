@@ -128,6 +128,7 @@ async function aiDiagnostics(revision=renderRevision,context=null){
  const key=context?.hostId||'fleet',saved=aiListContext.get(key)||{purpose:'',offset:0};
  const status=context?null:await api('/investigation-status');if(!currentView(revision,context?'servers':'ai-logs')||!root.isConnected)return;
  root.innerHTML=(context?'<p class="help">AI activity linked to this server. Shared scoring batches show the whole batch cost, not a per-server charge. Older runs without a server association remain in fleet AI logs.</p>':heading('Know what Mr Patchy is thinking.','Persistent run stages, provider errors, retries, and worker health.')+triageStatus(status))+`<div class="toolbar"><label>Purpose<select id="ai-log-purpose"><option value="">All logged AI activity</option><option value="triage">Process triage</option><option value="update_scoring">Update importance</option><option value="connection_test">Connection tests</option><option value="release_configuration">Release configuration</option><option value="security_plan">Security response plans</option><option value="worker">Worker failures</option></select></label><p class="help">API keys, raw prompts and provider bodies are excluded.</p></div><p class="help">Costs are estimated in USD from returned token usage and saved public rates. Older activity and calls without usage or known pricing show Unavailable.</p><div class="card" id="ai-log-table"></div><div class="actions"><button id="ai-log-prev">Previous</button><button id="ai-log-next">Next</button></div>`;
+ if(!context&&isAdmin())bindTriageTimingSummary(root,revision);
  let offset=saved.offset,ticket=0;const table=$('#ai-log-table');$('#ai-log-purpose').value=saved.purpose;
  const load=async()=>{const turn=++ticket;aiListContext.set(key,{purpose:$('#ai-log-purpose').value,offset});try{const data=await api('/ai/runs?purpose='+$('#ai-log-purpose').value+'&offset='+offset+(context?'&host_id='+encodeURIComponent(context.hostId):''));if(turn!==ticket||!table.isConnected)return;
  table.innerHTML=data.items.length?`<div class="table-wrap"><table><thead><tr><th>Started</th><th>Purpose / model</th><th>State</th><th>Est. API cost (USD)</th><th>Last diagnostic</th><th></th></tr></thead><tbody>${data.items.map(r=>`<tr><td>${date(r.started)}</td><td>${esc(r.purpose)}<small>${esc(r.model)} · ${r.calls} API calls${r.shared_batch?' · Shared batch':''}</small></td><td>${badge(r.state)}</td><td class="ai-cost-cell">${aiCost(r.cost)}</td><td class="log-message">${esc(r.message)}</td><td><a class="button" data-ai-run="${esc(r.id)}" href="${base}/run/${encodeURIComponent(r.id)}/summary">Inspect run</a></td></tr>`).join('')}</tbody></table></div>`:empty('No AI runs recorded yet',context?'No saved AI runs are linked to this server yet. Older unlinked activity is available in fleet AI logs.':'Check worker status above. Disabled or misconfigured AI does not send requests.');
@@ -136,6 +137,37 @@ async function aiDiagnostics(revision=renderRevision,context=null){
  }catch(e){if(table.isConnected)toast(e.message);}};
  $('#ai-log-purpose').onchange=()=>{offset=0;load();};$('#ai-log-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};$('#ai-log-next').onclick=()=>{offset+=50;load();};await load();
 }
+function bindTriageTimingSummary(root,revision){
+ const panel=document.createElement('section');
+ panel.className='card';
+ panel.setAttribute('aria-labelledby','ai-triage-timing-title');
+ panel.innerHTML='<h2 id="ai-triage-timing-title">Process triage timings</h2><p class="help">Compare elapsed times across recent completed and failed investigations. Stages can overlap. Retained diagnostics may have gaps.</p><button type="button">Load timing summary</button><p class="help" role="status"></p><div class="table-wrap" tabindex="0" role="region" aria-label="Timing percentiles by stage" hidden></div>';
+ root.querySelector('.toolbar').before(panel);
+ const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),table=panel.querySelector('.table-wrap');
+ const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unavailable';
+ const duration=value=>Number.isFinite(value)&&value>=0?value.toLocaleString(undefined,{maximumFractionDigits:3}):'—';
+ button.onclick=async()=>{
+  if(!active()||button.disabled)return;
+  button.disabled=true;status.textContent='Loading timing summary…';
+  try{
+   const data=await api('/ai/triage/timings');
+   if(!active())return;
+   const rows=Object.entries(data.stages).map(([stage,row])=>`<tr><th scope="row">${esc(stage.replaceAll('_',' '))}</th><td>${count(row.samples)}</td><td>${count(row.errors)}</td><td>${duration(row.p50_ms)}</td><td>${duration(row.p95_ms)}</td></tr>`);
+   const hasSamples=Object.values(data.stages).some(row=>row.samples>0);
+   table.innerHTML=hasSamples?`<table><thead><tr><th scope="col">Stage</th><th scope="col">Samples</th><th scope="col">Errors</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr></thead><tbody>${rows.join('')}</tbody></table>`:'';
+   table.hidden=!hasSamples;
+   status.textContent=(hasSamples?'':'No retained timing samples. ')+`${count(data.sampled_runs)} runs sampled. ${count(data.runs_without_samples)} without valid samples. ${count(data.discarded_events)} malformed events discarded.`+(data.events_truncated?` Sample limited to the latest ${count(data.event_limit)} timing events.`:'');
+   button.textContent='Refresh timing summary';
+  }catch{
+   if(!active())return;
+   table.hidden=true;table.innerHTML='';
+   status.textContent='Timing summary is unavailable. You can still inspect individual AI runs.';
+   button.textContent='Retry timing summary';
+  }finally{if(active())button.disabled=false;}
+ };
+}
+
 async function packageHistory(revision=renderRevision,context=null){
  const root=context?.root||$('#content');
  root.innerHTML=(context?'':heading('Every package has a history.','Observed installations, version changes, removals, and package-state changes.'))+`<div class="toolbar">${context?'':`<label>Server<select id="history-host"><option value="">All servers</option>${hosts.map(h=>`<option value="${h.id}">${esc(h.name)}</option>`).join('')}</select></label>`}<label>Package<input id="history-search" placeholder="Filter package names"></label></div><p class="help">Baseline means present when history began, not installed at that time. Dates are observation times; external changes may have happened earlier. Job links show the operation during which a change was observed, including dependencies.</p><div class="card" id="package-history-table"></div><div class="actions"><button id="package-history-prev">Previous</button><button id="package-history-next">Next</button></div>`;

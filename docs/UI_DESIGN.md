@@ -410,6 +410,14 @@ role/scope restrictions and Back/reload routes remain. Actual renders inspected:
 The shared queue/concurrency/rate/spend controls and full AI workspace acceptance
 remain planned under the faster-triage program; timing labels do not complete them.
 
+The #611 fleet AI logs panel adds an administrator-only view of retained
+process-triage timings. The panel loads on request and can retry independently of
+the run list. An accessible, horizontally scrollable table displays samples,
+errors and p50/p95 milliseconds, with missing percentiles shown as a dash. The
+coverage text identifies missing, malformed and truncated samples and explains
+overlapping stages. This surface depends on the #523 summary API. Matched
+production measurements and the broader AI workspace remain separate milestones.
+
 ## Planned live notification center
 
 Implement the [live notification roadmap](SECURITY_IMPLEMENTATION.md#planned-live-in-app-notifications-and-human-attention-alerts) as part of the shared application shell. Keep a persistent Notifications icon with an accessible unread badge, a compact recent panel and a dedicated paginated/filterable notification center. Apply the existing glass/status palette and Mr Patchy artwork while keeping event text readable.

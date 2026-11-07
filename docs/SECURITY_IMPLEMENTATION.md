@@ -2135,6 +2135,12 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
+summary from #523. It reports per-stage sample counts, errors and p50/p95 with
+coverage and truncation, and keeps individual run logs available when the summary
+request fails. The panel is read-only and available to administrators. Matched
+production serial/parallel measurements remain outstanding.
+
 ### Parallel execution and latency work
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
