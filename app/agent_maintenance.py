@@ -11,9 +11,27 @@ TRUST_PATHS=('/usr/local/lib/mrpatchy/bridge.py','/etc/sudoers.d/mrpatchy','/opt
 OPTIONAL='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
 DEFAULT_POLICY={'auto_upgrade':False,'auto_repair':False}
 
-def policy(s,host_id):
+GLOBAL_POLICY_KEY='agent-policy-default'
+
+def _bools(value):
+    return {k:value[k] for k in DEFAULT_POLICY if isinstance(value,dict) and isinstance(value.get(k),bool)}
+
+def global_policy(s):
+    row=s.get(Setting,GLOBAL_POLICY_KEY)
+    return {**DEFAULT_POLICY,**_bools(row.value if row else None)}
+
+def overrides(s,host_id):
+    """Explicit per-server values only; legacy rows hold explicit values and stay overrides."""
     row=s.get(Setting,'agent-policy:'+host_id)
-    return {**DEFAULT_POLICY,**(row.value if row else {})}
+    return _bools(row.value if row else None)
+
+def resolve(s,host_id):
+    """Single effective-settings resolver shared by the API, UI and background execution."""
+    base=global_policy(s);own=overrides(s,host_id)
+    return {**base,**own},{k:('override' if k in own else 'inherited') for k in DEFAULT_POLICY}
+
+def policy(s,host_id):
+    return resolve(s,host_id)[0]
 
 def release_id(host):
     try:return hashlib.sha256(json.dumps(ssh.expected_files(host),sort_keys=True).encode()).hexdigest()
@@ -25,7 +43,8 @@ def public(s,host):
     status['stale']=time.time()-status.get('checked',0)>600
     try:enrolled_outdated=bool(host.baseline) and any(host.baseline.get(p)!=v for p,v in ssh.expected_files(host).items())
     except (OSError,ValueError):enrolled_outdated=None
-    return {'policy':policy(s,host.id),'status':status,'release':release_id(host),'enrolled_outdated':enrolled_outdated}
+    effective,sources=resolve(s,host.id)
+    return {'policy':effective,'sources':sources,'global':global_policy(s),'status':status,'release':release_id(host),'enrolled_outdated':enrolled_outdated}
 
 def assess(host,report):
     current=ssh.expected_files(host);baseline=host.baseline

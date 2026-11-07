@@ -210,3 +210,37 @@ def test_interrupted_rotation_retry_passes_health_gate(admin,enrolled,monkeypatc
     with Session() as s:
         j=s.get(Job,job)
         assert (j.state!='failed')==allowed
+
+
+def test_global_default_inheritance_overrides_and_reset(admin,enrolled):
+    with Session() as s:
+        s.add(Host(id=enrolled.id,name='agent',address='x',fingerprint='pinned',baseline=enrolled.baseline))
+        # Legacy rows contain both keys and remain explicit overrides.
+        s.add(Host(id='legacy',name='legacy',address='y',fingerprint='pinned',baseline={}))
+        s.add(Setting(key='agent-policy:legacy',value={'auto_upgrade':False,'auto_repair':True}));s.commit()
+    g='/api/settings/agent-maintenance';path='/api/hosts/'+enrolled.id+'/security/agent'
+    assert admin.get(g).json()=={'auto_upgrade':False,'auto_repair':False}
+    state=admin.get(path).json()
+    assert state['policy']=={'auto_upgrade':False,'auto_repair':False}
+    assert state['sources']=={'auto_upgrade':'inherited','auto_repair':'inherited'}
+    assert admin.put(g,json={'auto_upgrade':True,'auto_repair':False,'expected':{'auto_upgrade':False,'auto_repair':False}}).status_code==200
+    assert admin.put(g,json={'auto_upgrade':True,'auto_repair':True,'expected':{'auto_upgrade':False,'auto_repair':False}}).status_code==409
+    with Session() as s:
+        assert maintenance.policy(s,enrolled.id)['auto_upgrade'] is True
+        assert maintenance.policy(s,'legacy')=={'auto_upgrade':False,'auto_repair':True}
+    state=admin.get(path).json();assert state['global']['auto_upgrade'] is True
+    # Explicit False overrides a true global default; omitted option still inherits.
+    r=admin.put(path,json={'auto_upgrade':False,'expected':state['policy']});assert r.status_code==200
+    state=admin.get(path).json()
+    assert state['policy']['auto_upgrade'] is False and state['sources']=={'auto_upgrade':'override','auto_repair':'inherited'}
+    # Global edits do not change the override; reset restores inheritance.
+    assert admin.put(g,json={'auto_upgrade':True,'auto_repair':True,'expected':state['global']}).status_code==200
+    state=admin.get(path).json()
+    assert state['policy']=={'auto_upgrade':False,'auto_repair':True}
+    assert admin.put(path,json={'expected':state['policy']}).status_code==200
+    state=admin.get(path).json()
+    assert state['policy']=={'auto_upgrade':True,'auto_repair':True} and set(state['sources'].values())=={'inherited'}
+    for role in ('operator','viewer'):
+        with Session() as s:s.get(User,'admin').role=role;s.commit()
+        assert admin.get(g).status_code==403
+        assert admin.put(g,json={'expected':{}}).status_code in (403,422)
