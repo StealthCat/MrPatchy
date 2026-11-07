@@ -4343,6 +4343,17 @@ retained in PR #81; only all-success checks on the final published commit permit
 merge. No checks or UI assertions are weakened to obtain a pass.
 
 
+### Observed AI benchmark workload fingerprint — worker checkpoint #530
+
+Fixture reports include `workload_fingerprint` with a version and SHA-256 value.
+Compare the full field across matched runs. It covers the actual synthetic model
+requests and SSH evidence requests, including duplicates, and excludes dispatch
+order, the fixture collection timestamp and ordering within the SSH check set.
+A mismatch identifies a workload difference even when token and call counts
+match. Compare delay settings and capability counts separately. Reports expose
+no request contents. Comparator enforcement and production measurements remain
+open.
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
