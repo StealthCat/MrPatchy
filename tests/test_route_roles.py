@@ -177,6 +177,8 @@ EXPECTED_ROLES = {
     ('GET','/api/operations/{host_id}/window'):'admin',
     ('PUT','/api/operations/{host_id}/window'):'admin',
     ('GET','/api/package-history'):'viewer',
+    ('POST','/api/recovery/receipts'):'admin',
+    ('GET','/api/recovery/readiness'):'admin',
     ('GET','/api/schedules'):'admin',
     ('POST','/api/schedules'):'admin',
     ('GET','/api/schedules/calendar'):'admin',
