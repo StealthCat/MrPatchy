@@ -1,9 +1,13 @@
 # Changelog
 
-## 1.44.7 — 2026-11-07
+## 1.44.8 — 2026-11-07
 
 1. [PR #625](https://github.com/StealthCat/MrPatchy/pull/625): Add responsive Mr Patchy browser pages for forbidden access, missing pages, redirects and server failures, with eight themed transparent mascot illustrations. Failed application views and sign-in errors also use the new artwork. Preserve actual status codes, redirect destinations, cookies, Retry-After, security headers, API/download contracts and bodyless 304 responses; generic public messages do not disclose exception details. Pages work without JavaScript or database startup. External proxy-generated failures require that proxy's own handler; reusable static pages are included. No schema, role or runtime response-authorization changes. This source update does not publish a Docker image.
 2. Allow 45 minutes for the complete SQLite/container/HTTPS CI job after a 30-minute run passed all 2,297 Python tests but was cancelled at the end of its final TLS smoke check. All validation steps remain enabled.
+
+## 1.44.7 — 2026-11-07
+
+1. [PR #482](https://github.com/StealthCat/MrPatchy/pull/482): Reject a still-queued evidence copy when its linked `evidence-preserve` job fails before execution, clearing the approval expiry so a fresh preservation can be prepared instead of leaving the copy permanently stuck in `queued`. Compatibility: controller bookkeeping and the retry path change only for failed, unstarted preservation jobs; API shape, database schema, roles and runtime response authorization are unchanged. Material limits: copies that reached `uncertain` or any later state, copies for another host and target-side evidence remain untouched; operators must explicitly prepare and approve a new preservation. This source update does not publish a Docker image.
 
 ## 1.44.6 — 2026-11-07
 
