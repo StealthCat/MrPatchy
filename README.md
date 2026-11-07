@@ -541,7 +541,7 @@ Rebuild/restart the controller and workers to enable reporting. No schema migrat
 or target-helper update is needed: records use the existing settings/audit tables,
 which are already included in offline database migration. Existing job claims,
 per-host/recovery locks, coordinator election and operational approval boundaries
-are preserved. Defaults remain 2 jobs/8 polls/1 AI task. Supported separate-host workers,
+are preserved. Defaults remain 2 jobs/8 polls/4 AI tasks. Supported separate-host workers,
 shared secrets/artifacts/state preflight, expected-node
 inventory, controller/endpoint/GCP health and full deployment acceptance remain
 planned; this view does not complete remote-worker deployment or the unified dashboard.

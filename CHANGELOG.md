@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.44.1 — 2026-11-07
+
+1. [PR #487](https://github.com/StealthCat/MrPatchy/pull/487): Correct the operator recovery documentation with the Python application prerequisites, concrete Compose named-volume discovery and restoration steps, and replace the stale administrator password-reset one-liner with the supported locked, audited helper and its explicit MFA/account-enable options. The README now states the implemented default of four AI worker tasks rather than one. Compatibility: documentation only; application behavior, APIs, schema, roles and runtime response authorization are unchanged. Material limits: these instructions do not automate infrastructure recovery, credential restoration or password-reset authorization, and operators still need trusted host access and separately protected recovery material. Completes #410. This source update does not publish a Docker image.
+
 ## 1.44.0 — 2026-11-07
 
 1. [PR #304](https://github.com/StealthCat/MrPatchy/pull/304): Report distribution-upgrade availability from saved inventory through a shared `os_upgrade` status in the hosts and host-summary APIs, and show an accessible badge beside eligible Debian server names plus a report-only Overview notice. Malformed, stale, offline, disabled and unsupported inventories fail closed without disrupting other fleet responses, including legacy timestamps outside the supported numeric range. Compatibility: the API change is additive; inventory ingestion stores a bounded derived summary and startup backfills existing hosts. No upgrade is contacted or started by detection. Material limits: this slice reports fresh online Debian 11→12 and 12→13 paths only; Ubuntu offer verification, RPM-family detection, remaining server references and fleet notification remain under #96 and #305, which stay open. Existing roles and runtime response authorization remain unchanged. This source update does not publish a Docker image.
