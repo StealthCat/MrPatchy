@@ -15,6 +15,7 @@ from .coordination import Lock
 from .db import Base, Session, config
 
 current=ContextVar('ai_admission_scope',default=None)
+_PACED_MODES=('rate','rate_and_daily')
 
 
 def begin_scope():
@@ -38,16 +39,25 @@ class Admission(Base):
 
 def admit(model):
     """Reserve one provider start or fail before any call receipt/body exists."""
-    from .ai import AIError
     work=current.get()
     if work is not None and work['admitted']:
         return {'mode':'continuation','admitted':True,'next_at':None}
+    with Session() as session:
+        mode=config(session)['ai_control_mode']
+    next_at=None
+    if mode in _PACED_MODES:
+        mode,next_at=_reserve_start(model)
+    if work is not None:work['admitted']=True
+    return {'mode':mode,'admitted':True,'next_at':next_at}
+
+
+def _reserve_start(model):
+    from .ai import AIError
     with Lock('ai-shared-admission'):
         with Session() as session:
+            # Settings may have changed while another caller held the lock.
             settings=config(session);mode=settings['ai_control_mode']
-            if mode not in ('rate','rate_and_daily'):
-                if work is not None:work['admitted']=True
-                return {'mode':mode,'admitted':True,'next_at':None}
+            if mode not in _PACED_MODES:return mode,None
             now=time.time();row=session.get(Admission,'global')
             if row and row.next_at>now:
                 raise AIError('Shared AI rate throttle is waiting for the next start. No provider request was sent.',
@@ -58,8 +68,7 @@ def admit(model):
             row.next_at=now+interval;row.admitted=(row.admitted or 0)+1
             row.updated=now;row.model=str(model)[:100]
             session.commit()
-            if work is not None:work['admitted']=True
-            return {'mode':'rate','admitted':True,'next_at':row.next_at}
+            return 'rate',row.next_at
 
 
 def waiting(session,now):
