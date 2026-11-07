@@ -2,7 +2,7 @@
 import random
 import time
 
-from sqlalchemy import String, Double, Integer, Text
+from sqlalchemy import String, Double, Integer, Text, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -68,10 +68,21 @@ def failed(error,now=None):
 def succeeded(request_started=None,now=None):
     """Clear escalation unless a parallel request recorded a newer failure."""
     now=time.time() if now is None else now
+    clearable = select(ProviderBackoff).where(
+        ProviderBackoff.id == 'global',
+        or_(ProviderBackoff.failures != 0, ProviderBackoff.blocked_until != 0, ProviderBackoff.reason != ''),
+    )
+    if request_started is not None:
+        clearable = clearable.where(ProviderBackoff.updated <= request_started)
+    # Healthy responses need one bounded read. Close the read transaction before
+    # taking the distributed lock so the reset sees any newly committed failure.
+    with Session() as session:
+        if session.scalar(clearable.with_only_columns(ProviderBackoff.id)) is None:
+            return
     with Lock('ai-provider-backoff'):
         with Session() as session:
-            row=session.get(ProviderBackoff,'global')
-            if row and (request_started is None or row.updated<=request_started):
+            row=session.scalar(clearable)
+            if row:
                 row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
                 session.commit()
 

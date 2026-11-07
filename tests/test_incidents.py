@@ -138,3 +138,12 @@ def test_ai_receives_bounded_signature_and_coverage_context(admin,recorded,monke
         plan=incidents.generate(s,row);pid=plan.id;checksum=plan.evidence_digest
         row.evidence={**row.evidence,'scan_context':{**context,'state':'changed'}};s.commit()
     assert admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':checksum}).status_code==409
+
+
+def test_scan_paths_share_target_rules_across_entry_points(admin,recorded):
+    bad=['//tmp','/proc','/proc/1','/run/user','/tmp/a\x00b','/tmp/','/tmp//x','/sys','/var/lib/mrpatchy-quarantine/x']
+    for path in bad:
+        assert admin.put('/api/hosts/a/security/policy',json={'paths':[path],'enabled':True,'interval_hours':1}).status_code==400,path
+        assert admin.post('/api/hosts/a/security',json={'paths':[path]}).status_code==400,path
+        assert admin.post('/api/hosts/a/security/yara',json={'paths':[path],'bundle_id':'b1'}).status_code==400,path
+    assert admin.put('/api/hosts/a/security/policy',json={'paths':['/usr/local/bin','/tmp'],'enabled':True,'interval_hours':1}).status_code==200
