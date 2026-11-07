@@ -1,14 +1,15 @@
 import json
+from contextlib import contextmanager
 import subprocess
 import sys
 import time
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app import ai, ai_admission, ai_provider_backoff, ai_runs
-from app.db import Session, Setting
+from app.db import Session, Setting, engine
 
 
 def configure(mode='unthrottled'):
@@ -100,6 +101,73 @@ def test_older_parallel_success_does_not_clear_a_newer_failure(admin):
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff,'global')
         assert row.failures==0 and row.blocked_until==0
+
+
+@pytest.mark.parametrize('state', ['absent', 'clear', 'newer'])
+def test_healthy_completion_skips_global_lock_and_update(admin, monkeypatch, state):
+    configure()
+    if state != 'absent':
+        with Session() as session:
+            active = state == 'newer'
+            session.add(ai_provider_backoff.ProviderBackoff(
+                id='global', updated=101, failures=int(active),
+                blocked_until=221 if active else 0,
+                reason='Provider Retry-After floor is active.' if active else ''))
+            session.commit()
+
+    locks, updates = [], []
+    original_lock = ai_provider_backoff.Lock
+
+    def record_lock(name):
+        locks.append(name)
+        return original_lock(name)
+
+    def record_sql(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith('update ai_provider_backoff'):
+            updates.append(statement)
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', record_lock)
+    event.listen(engine, 'before_cursor_execute', record_sql)
+    try:
+        for _ in range(3):
+            ai_provider_backoff.succeeded(request_started=100, now=102)
+        # A clear row should be a no-op even for requests newer than the row.
+        if state == 'clear':
+            ai_provider_backoff.succeeded(request_started=102, now=103)
+    finally:
+        event.remove(engine, 'before_cursor_execute', record_sql)
+
+    assert (len(locks), len(updates)) == (0, 0)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        if state == 'absent':
+            assert row is None
+        else:
+            assert row.updated == 101
+            assert row.failures == int(state == 'newer')
+            assert row.blocked_until == (221 if state == 'newer' else 0)
+
+
+def test_eligible_reset_rechecks_after_concurrent_failure(admin, monkeypatch):
+    configure()
+    first = ai.AIError('provider wait', transient=True, retry_after=30)
+    ai_provider_backoff.failed(first, now=100)
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def concurrent_failure(name):
+        with monkeypatch.context() as inner:
+            inner.setattr(ai_provider_backoff, 'Lock', original_lock)
+            later = ai.AIError('provider wait', transient=True, retry_after=120)
+            ai_provider_backoff.failed(later, now=102)
+        with original_lock(name):
+            yield
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', concurrent_failure)
+    ai_provider_backoff.succeeded(request_started=101, now=103)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.failures, row.blocked_until, row.updated) == (2, 222, 102)
 
 
 def test_nontransient_provider_error_does_not_create_global_backoff(admin, monkeypatch):
@@ -206,3 +274,62 @@ def test_clear_releases_provider_policy_wait_after_admission_race(admin,failure_
         assert retry.provider_until<=now+failure_delay+1 and retry.next_at<=now+failure_delay+1
         if failure_delay<120:assert retry.provider_until==0
         assert retry.state=='deferred' and retry.attempts==0
+
+
+def test_local_pool_timeout_keeps_other_provider_work_eligible(admin, monkeypatch):
+    configure()
+
+    def pool_timeout(*args, **kwargs):
+        raise httpx.PoolTimeout('raw transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', pool_timeout)
+    with pytest.raises(ai.AIError) as failed:
+        ai.request(payload(), 'fixture-key')
+    with Session() as session:
+        assert session.get(ai_provider_backoff.ProviderBackoff, 'global') is None
+
+    error = failed.value
+    assert error.transient and error.provider_retry_after == 0
+    assert ai.defer_until(error, now=1000) == 1005
+    assert 'local AI connection pool' in error.diagnostic
+    assert 'raw transport detail' not in error.diagnostic
+
+    monkeypatch.setattr(ai.transport, 'post', lambda *args, **kwargs: success())
+    with ai_runs.track('connection_test', 'fixture-model'):
+        assert ai.request(payload(), 'fixture-key') == {}
+
+
+def test_local_pool_timeout_preserves_a_concurrent_provider_floor(admin, monkeypatch):
+    configure()
+    now = time.time()
+
+    def concurrent_provider_failure(*args, **kwargs):
+        error = ai.AIError('provider wait', transient=True, retry_after=120)
+        ai_provider_backoff.failed(error, now=now)
+        raise httpx.PoolTimeout('local contention')
+
+    monkeypatch.setattr(ai.transport, 'post', concurrent_provider_failure)
+    with pytest.raises(ai.AIError):
+        ai.request(payload(), 'fixture-key')
+
+    with Session() as session:
+        status = ai_provider_backoff.status(session, now=now)
+        assert status['blocked'] and status['failures'] == 1
+        assert status['next_at'] == now + 120
+        assert status['reason'] == 'Provider Retry-After floor is active.'
+
+
+def test_ambiguous_read_timeout_still_creates_shared_backoff(admin, monkeypatch):
+    configure()
+
+    def read_timeout(*args, **kwargs):
+        raise httpx.ReadTimeout('raw transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', read_timeout)
+    with pytest.raises(ai.AIError, match='OpenAI API request timed out') as failed:
+        ai.request(payload(), 'fixture-key')
+    assert failed.value.transient and failed.value.retry_after >= 30
+
+    with Session() as session:
+        status = ai_provider_backoff.status(session)
+        assert status['blocked'] and status['failures'] == 1
