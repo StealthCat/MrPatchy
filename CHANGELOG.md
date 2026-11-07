@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.44.1 — 2026-11-07
+
+1. [PR #487](https://github.com/StealthCat/MrPatchy/pull/487): Correct the operator recovery documentation with the Python application prerequisites, concrete Compose named-volume discovery and restoration steps, and replace the stale administrator password-reset one-liner with the supported locked, audited helper and its explicit MFA/account-enable options. The README now states the implemented default of four AI worker tasks rather than one. Compatibility: documentation only; application behavior, APIs, schema, roles and runtime response authorization are unchanged. Material limits: these instructions do not automate infrastructure recovery, credential restoration or password-reset authorization, and operators still need trusted host access and separately protected recovery material. Completes #410. This source update does not publish a Docker image.
+
+## 1.44.0 — 2026-11-07
+
+1. [PR #304](https://github.com/StealthCat/MrPatchy/pull/304): Report distribution-upgrade availability from saved inventory through a shared `os_upgrade` status in the hosts and host-summary APIs, and show an accessible badge beside eligible Debian server names plus a report-only Overview notice. Malformed, stale, offline, disabled and unsupported inventories fail closed without disrupting other fleet responses, including legacy timestamps outside the supported numeric range. Compatibility: the API change is additive; inventory ingestion stores a bounded derived summary and startup backfills existing hosts. No upgrade is contacted or started by detection. Material limits: this slice reports fresh online Debian 11→12 and 12→13 paths only; Ubuntu offer verification, RPM-family detection, remaining server references and fleet notification remain under #96 and #305, which stay open. Existing roles and runtime response authorization remain unchanged. This source update does not publish a Docker image.
+
+## 1.43.4 — 2026-11-07
+
+1. [PR #595](https://github.com/StealthCat/MrPatchy/pull/595): Batch AI update-scoring row reads when linking a diagnostic run and persisting complete, superseded, deferred or failed outcomes for the existing five-item scoring batch, while retaining separate transaction boundaries and current package/server evidence rechecks. Compatibility: no schema, API, scoring model, provider, authorization, pause or rate/spend-control behavior changes. Material limits: this reduces ID-filtered score-row reads from twelve to four in the five-item fixture but does not address idle candidate hashing, measured production throughput or broader parallel scoring tracked under #436. Completes #594. This source update does not publish a Docker image.
+
+## 1.43.3 — 2026-11-07
+
+1. [PR #623](https://github.com/StealthCat/MrPatchy/pull/623): Reduce client-side validation failures to bounded field-labelled messages without reflecting rejected input or validation context, and accept whitespace-grouped six-digit authenticator codes during sign-in, reauthentication and MFA confirmation. Compatibility: ordinary six-digit codes remain unchanged; 7–16-character malformed codes now reach the existing authentication refusal path instead of failing request validation with HTTP 422. Material limits: optional client-side login `pattern` and `maxlength` constraints remain tracked under #419, which stays open. Existing roles, audit history and runtime response authorization remain unchanged. This source update does not publish a Docker image.
+
 ## 1.43.2 — 2026-11-07
 
 1. [PR #283](https://github.com/StealthCat/MrPatchy/pull/283): Use one shared processing-tier multiplier table for AI cost estimates and pre-call spend reservations, and remove the unused `ai_runs.event(call=)` argument. Compatibility: verified estimate and reservation outputs, provider calls, accounting, APIs, roles, audit history and runtime response authorization remain unchanged. Material limits: this consolidates only the tier table and dead event flag; the duplicated advisory-plan generator, response failure/latest-record helpers, original-file stub and gpgv validation remain tracked under #189. This source update does not publish a Docker image.
