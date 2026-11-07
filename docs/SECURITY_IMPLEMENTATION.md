@@ -2135,6 +2135,15 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+Successful process-triage claims retain a separate monotonic `claim_lock` timing
+sample (#619) in the existing redacted run diagnostics. The sample covers only
+waiting to acquire the distributed `ai-triage` claim lock; aggregate admission
+still includes claim selection and run creation, and queue age remains distinct.
+Refused or empty claims create no run and therefore no fabricated timing. This
+adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence and
+response-authorization behavior are unchanged. Production contention baselines
+and the broader faster-AI acceptance remain open.
+
 ### Parallel execution and latency work
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.

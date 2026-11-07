@@ -724,6 +724,7 @@ def investigate_one(owner=None):
         row=lease.work
         try:
             with ai_runs.track('triage',lease.cfg['ai_model'],row.host_id,row.id,run_id=lease.run_id):
+                ai_runs.timing('claim_lock',lease.claim_lock_wait)
                 lease.check()
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
                 ai_runs.timing('queue_age',time.time()-row.first_seen)
