@@ -312,6 +312,8 @@ The target's durable spool partitions normal observations into batches of at mos
 
 **Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
 
+For manual ClamAV and YARA scans and recurring or execution-triggered scan policies, enter canonical absolute directories such as `/usr/local/bin`. The controller rejects paths with redundant slashes, dot segments, control characters, or excluded filesystem roots such as `/proc` and `/sys` before queuing a scan or saving a policy. Execution-triggered policies also disallow `/` and overlapping directories. The target still checks that each directory can be scanned.
+
 ClamAV scans group already-open file descriptors into local engine processes of at most 32 files / 128 MiB. Each batch has a 120-second timeout inside the four-minute overall scan budget; ambiguous output or engine failure falls back to the existing 30-second single-file path. This batching does not enable or connect to a ClamAV daemon, and descriptor, path and metadata identity checks remain in force.
 
 **Servers → server → Security → Execution-triggered scans** optionally queues bounded

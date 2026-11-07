@@ -50,7 +50,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.48'
+APP_VERSION='1.42.49'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1741,10 +1741,14 @@ def security_status(host_id:str,user=Depends(admin_user)):
         legacy=s.get(Setting,'security-scan:'+host_id)
         return legacy.value if legacy else {'state':'not_scanned','findings':[],'gaps':['No security scan has completed']}
 
+def validate_scan_paths(paths):
+    from .scan_paths import canonical
+    for path in paths:
+        if not canonical(path,allow_root=True):raise ValueError('Invalid scan directory')
+
 @app.post('/api/hosts/{host_id}/security')
 def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id)
@@ -1757,8 +1761,7 @@ class YaraScanInput(SecurityScanInput):
 
 @app.post('/api/hosts/{host_id}/security/yara')
 def yara_scan_queue(host_id:str,body:YaraScanInput,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or path.startswith('//') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'),Session() as s:
         host_or_404(s,host_id)
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan','execution-scan']),Job.state.in_(['queued','running'])).limit(1)):
@@ -2521,8 +2524,7 @@ def security_policy(host_id:str,user=Depends(admin_user)):
 
 @app.put('/api/hosts/{host_id}/security/policy')
 def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096 or '\x00' in path:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))

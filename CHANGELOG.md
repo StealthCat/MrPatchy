@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.49 — 2026-11-06
+
+1. [PR #258](https://github.com/StealthCat/MrPatchy/pull/258): Apply shared scan-directory validation to manual ClamAV and YARA requests and to recurring and execution-triggered scan policies. Compatibility: noncanonical paths, control characters and excluded directories now return HTTP 400 before a job is queued or a policy is saved. Execution-triggered policies still disallow root and overlapping directories. Material limits: validation does not check whether a directory exists on the remote host or migrate previously saved policies. Existing authorization and audit controls remain in place. This source update does not publish a Docker image. Completes #158.
+
 ## 1.42.48 — 2026-11-06
 
 1. [PR #252](https://github.com/StealthCat/MrPatchy/pull/252): Keep the Server Security and File integrity tabs usable when an independent panel fails. Load independent panels concurrently and show panel-local errors and Retry controls. A delayed failure cannot replace a newer successful refresh. Compatibility: browser requests for independent panels can overlap, while APIs, roles, audit records and runtime response authorization are unchanged. Material limits: retries use the existing backend operations and do not make failed operations idempotent. This source update does not publish a Docker image. Completes #155.
