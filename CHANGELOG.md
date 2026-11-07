@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.44.4 — 2026-11-07
+
+1. [PR #474](https://github.com/StealthCat/MrPatchy/pull/474): Keep the security-signature and oversized-tar test fixtures runnable on Python 3.13 and newer by supplying the removed `imghdr` interface only to PGPy's test-only photo-ID probe and by streaming zero bytes for the declared oversized archive member so the application budget check is exercised. Compatibility: production code, runtime dependencies, APIs, schema, roles and runtime response authorization are unchanged. Material limits: CI is still pinned independently of the production image and PGPy remains in the test fixtures, so #445 stays open and the Python 3.15 image bump must not merge until those gaps are resolved. This source update does not publish a Docker image.
+
 ## 1.44.3 — 2026-11-07
 
 1. [PR #567](https://github.com/StealthCat/MrPatchy/pull/567): Fetch only the six retained score fields used to match exact assessments and check deferral eligibility during periodic AI update scoring. Preserve oldest-first selection, stale-deferred cleanup and full assessment details in the existing detail and completion paths. The database schema, API, provider inputs and runtime response authorization are unchanged. Repeated candidate hashing and measured production throughput remain open under #436.
