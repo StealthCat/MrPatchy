@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.43.2 — 2026-11-07
+
+1. [PR #283](https://github.com/StealthCat/MrPatchy/pull/283): Use one shared processing-tier multiplier table for AI cost estimates and pre-call spend reservations, and remove the unused `ai_runs.event(call=)` argument. Compatibility: verified estimate and reservation outputs, provider calls, accounting, APIs, roles, audit history and runtime response authorization remain unchanged. Material limits: this consolidates only the tier table and dead event flag; the duplicated advisory-plan generator, response failure/latest-record helpers, original-file stub and gpgv validation remain tracked under #189. This source update does not publish a Docker image.
+
 ## 1.43.1 — 2026-11-07
 
 1. [PR #484](https://github.com/StealthCat/MrPatchy/pull/484): Build one installed-RPM-version index per host during each AI update-scoring pass instead of rescanning the host's full RPM inventory for every candidate, while preserving byte-for-byte score identities and the existing APT fallback. Compatibility: scoring inputs, completed-score reuse, provider requests, APIs, schema, roles and runtime response authorization are unchanged. Material limits: each candidate is still hashed on every pass and full host rows remain loaded, so #436 stays open for those remaining CPU and memory costs; the recorded performance comparison is a disposable single-sample fixture rather than a fleet throughput guarantee. This source update does not publish a Docker image.
