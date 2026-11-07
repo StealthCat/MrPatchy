@@ -56,7 +56,7 @@ APP_VERSION='1.44.5'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from . import sso
+from . import sso, error_pages
 app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 
@@ -105,6 +105,7 @@ async def guard(request,call_next):
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
+    response=error_pages.decorate(request,response)
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='no-referrer'
