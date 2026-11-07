@@ -514,6 +514,7 @@ def handle(req):
     if action == 'agent-status':return agent_status()
     if action == 'verify':return agent_status()  # legacy alias; never stats or follows unchecked paths
     if action == 'deploy':
+        if sys.version_info<(3,8):raise RuntimeError('Mr Patchy target helpers require Python 3.8 or newer; this host runs Python %d.%d. Install a newer python3 and finish installation again.'%sys.version_info[:2])
         code = base64.b64decode(req['agent'],validate=True)
         if len(code)>1_000_000 or hashlib.sha256(code).hexdigest()!=req['sha256']: raise ValueError('Invalid agent digest')
         compile(code, 'agent.py', 'exec')

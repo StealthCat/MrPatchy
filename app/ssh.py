@@ -213,6 +213,7 @@ set -euo pipefail
 for command in python3 sshd ssh-keygen sudo visudo useradd sha256sum openssl; do
   command -v "$command" >/dev/null || {{ echo "Missing prerequisite: $command. Install python3 openssh-server sudo first."; exit 1; }}
 done
+/usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || {{ echo 'Mr Patchy target helpers require Python 3.8 or newer at /usr/bin/python3 (EL8 ships 3.6 by default). Install a newer python3 first.'; exit 1; }}
 if [ ! -f /var/lib/dpkg/status ]; then
   /usr/bin/python3 -c 'import dnf,rpm' || {{ echo 'RPM targets require Python 3 with python3-dnf and python3-rpm installed first (DNF4 bindings, including on DNF5 systems).'; exit 1; }}
 fi
