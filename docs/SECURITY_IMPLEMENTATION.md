@@ -4936,6 +4936,19 @@ workers. No target-helper/agent update, Docker publication, Git tag or schedule 
 is included.
 
 
+### Successful provider responses — worker checkpoint #609
+
+Successful and non-transient responses check one backoff key without acquiring
+the distributed lock when no reset is eligible. A reset candidate takes the
+same shared lock and checks again in a fresh transaction, preserving a newer
+failure recorded between the initial read and lock acquisition. An already
+clear row does not receive an otherwise unnecessary timestamp write.
+
+Acceptance covers the absent, clear and newer rows, an eligible reset and a
+concurrent failure injected before the locked reread. This increment reduces
+lock acquisitions and writes on these paths. Fleet throughput, recovery and
+complete multi-controller acceptance remain separate milestones.
+
 ## v1.34.0 — Durable update-scoring deferral and exact resume
 
 Issue-first reconciliation read merged v1.33.0 main, repository instructions, this
