@@ -192,13 +192,18 @@ def test_huge_retry_after_is_capped_and_admin_can_clear_it_with_audit(admin, mon
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff, 'global')
         assert cap-5 < row.blocked_until-time.time() <= cap
-        assert 'capped' in ai_provider_backoff.status(session)['reason']
-    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': True}
+        status=ai_provider_backoff.status(session)
+        assert 'capped' in status['reason']
+        assert status['revision'] and status['updated_at']==row.updated
+    body={'expected_revision':status['revision'],'reason':'Reviewed provider status and current quota.',
+          'confirmation':'CLEAR BACKOFF'}
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).json()=={'cleared': True}
     with Session() as session:
         assert not ai_provider_backoff.status(session)['blocked']
         from app.db import Audit
-        assert any(a.action=='clear AI provider backoff' for a in session.scalars(select(Audit)))
-    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': False}
+        record=next(a for a in session.scalars(select(Audit)) if a.action=='clear AI provider backoff')
+        assert 'Reviewed provider status' in record.detail and 'admin' in record.detail
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==409
 
 
 def test_internal_backoff_is_not_stored_as_provider_retry_after(admin, monkeypatch):
@@ -210,7 +215,47 @@ def test_internal_backoff_is_not_stored_as_provider_retry_after(admin, monkeypat
 
 
 def test_clear_provider_backoff_requires_admin(client):
-    assert client.post('/api/ai/provider-backoff/clear').status_code in (401, 403)
+    body={'expected_revision':'a'*64,'reason':'Reviewed current provider status.',
+          'confirmation':'CLEAR BACKOFF'}
+    assert client.post('/api/ai/provider-backoff/clear',json=body).status_code in (401, 403)
+
+
+def test_clear_provider_backoff_requires_csrf(admin):
+    token=admin.headers.pop('X-CSRF-Token')
+    try:
+        body={'expected_revision':'a'*64,'reason':'Reviewed current provider status.',
+              'confirmation':'CLEAR BACKOFF'}
+        assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==403
+    finally:admin.headers['X-CSRF-Token']=token
+
+
+def test_admin_clear_rejects_changed_or_expired_backoff(admin):
+    configure();now=time.time()
+    ai_provider_backoff.failed(ai.AIError('first',transient=True,retry_after=120),now=now)
+    with Session() as session:first=ai_provider_backoff.status(session)
+    ai_provider_backoff.failed(ai.AIError('newer',transient=True,retry_after=240),now=now+1)
+    body={'expected_revision':first['revision'],'reason':'Reviewed the older provider failure.',
+          'confirmation':'CLEAR BACKOFF'}
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==409
+    with Session() as session:
+        current=ai_provider_backoff.status(session)
+        assert current['blocked'] and current['failures']==2 and current['revision']!=first['revision']
+        session.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=now-1;session.commit()
+    body['expected_revision']=current['revision']
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==409
+    with Session() as session:
+        row=session.get(ai_provider_backoff.ProviderBackoff,'global')
+        assert row.failures==2  # an expired reviewed floor is not rewritten by the stale action
+
+
+@pytest.mark.parametrize('body',[
+    {},
+    {'expected_revision':'a'*64,'reason':'too short','confirmation':'CLEAR BACKOFF'},
+    {'expected_revision':'a'*64,'reason':'            ','confirmation':'CLEAR BACKOFF'},
+    {'expected_revision':'a'*64,'reason':'Reviewed current provider status.','confirmation':'CLEAR'},
+])
+def test_admin_clear_requires_review_fields(admin,body):
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==422
 
 
 def test_clear_revokes_provider_only_item_waits_but_keeps_attempts(admin):

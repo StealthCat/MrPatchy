@@ -2257,6 +2257,27 @@ aging, provider-specific quotas, native complete-context collection, full suppor
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
 
+### Reviewed shared provider-backoff reset — worker checkpoint #552
+
+AI Settings exposes an active shared provider Retry-After/transient-failure floor with
+its sanitized reason, consecutive-failure count, recorded time and next eligibility.
+An administrator may clear the reviewed floor with an exact confirmation phrase and
+meaningful audited reason. The request carries an opaque digest of the durable state;
+the controller rechecks it under the provider-backoff lock and preserves a newer or
+already expired floor instead of applying a stale browser action.
+
+Resetting sends no provider or target request. It releases only the shared provider
+floor and provider-only item waits; local retry deadlines, attempt limits, smooth-rate
+and daily-budget admission, pause, lifecycle and concurrency controls stay
+authoritative. Status exposes no provider body, prompt, evidence, credential or raw
+error. No schema or target-helper upgrade is required.
+
+Focused acceptance covers active reset, changed/expired conflicts, required review
+fields, role/CSRF boundaries, audit evidence and responsive Settings behavior. This
+does not diagnose provider availability, reconcile uncertain charges, bypass provider
+limits or complete the broader shared-controls/faster-AI program. Exact-head
+SQLite/MySQL, browser, full-suite and coordinator integration checks remain required.
+
 
 ## Portable per-server scanner records
 

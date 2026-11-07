@@ -1,4 +1,6 @@
 """Durable fleet-wide provider Retry-After and transient failure backoff."""
+import hashlib
+import hmac
 import random
 import time
 
@@ -10,6 +12,10 @@ from .db import Base, Session
 
 
 MAX_PROVIDER_DELAY=86400  # a longer provider Retry-After is capped and flagged for administrator review
+
+
+class ReviewConflict(Exception):
+    """The reviewed provider-backoff state is no longer the active state."""
 
 
 class ProviderBackoff(Base):
@@ -87,13 +93,23 @@ def succeeded(request_started=None,now=None):
                 session.commit()
 
 
-def clear(now=None):
-    """Administrator reset of the shared floor; returns whether a floor was active."""
+def _revision(row):
+    if not row:return ''
+    state='|'.join((float(row.blocked_until or 0).hex(),str(row.failures or 0),
+        float(row.updated or 0).hex(),row.reason or ''))
+    return hashlib.sha256(state.encode()).hexdigest()
+
+
+def clear(now=None,expected_revision=None):
+    """Reset a reviewed shared floor; reject changed/expired administrator reviews."""
     now=time.time() if now is None else now
     with Lock('ai-provider-backoff'):
         with Session() as session:
             row=session.get(ProviderBackoff,'global')
             active=bool(row and row.blocked_until>now)
+            if expected_revision is not None and (not active or
+                    not hmac.compare_digest(expected_revision,_revision(row))):
+                raise ReviewConflict('Provider backoff changed or expired; refresh AI Settings before clearing it.')
             if row:
                 row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
                 session.commit()
@@ -121,4 +137,5 @@ def status(session,now=None):
     now=time.time() if now is None else now;row=session.get(ProviderBackoff,'global')
     blocked=bool(row and row.blocked_until>now)
     return {'blocked':blocked,'next_at':row.blocked_until if blocked else None,
-        'failures':row.failures if row else 0,'reason':row.reason if blocked else ''}
+        'failures':row.failures if row else 0,'reason':row.reason if blocked else '',
+        'updated_at':row.updated if blocked else None,'revision':_revision(row) if blocked else ''}
