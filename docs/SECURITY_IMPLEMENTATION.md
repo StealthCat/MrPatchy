@@ -2164,6 +2164,15 @@ throughput and full parallel scoring acceptance remain open.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
 
+### Update-scoring schedule-state reads
+
+The scheduler reads only identity, state and eligibility fields from retained
+update scores while checking exact and deferred candidates. Assessment text and
+other detail fields are loaded by their existing detail and completion paths.
+Regression coverage checks the scheduling queries across batches, including
+durable deferral, stale-state updates and the existing assessment identity.
+Candidate hashing and production throughput validation remain open.
+
 ### Fleet-wide exact-match known-good cache
 
 Additional user requirement (2026-10-30): once an item has completed triage and is

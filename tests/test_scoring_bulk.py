@@ -109,6 +109,26 @@ def test_complete_current_scores_still_supersede_changed_deferred_history(admin,
         assert sum(r.state=='superseded' and r.next_at==0 for r in rows)==450
 
 
+def test_scoring_candidate_queries_only_load_scheduling_fields(admin):
+    seed(450)
+    score_reads=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):
+        if statement.startswith('SELECT update_scores.'):
+            score_reads.append(statement.partition('\n')[0].strip())
+
+    with Session() as s:
+        event.listen(engine,'before_cursor_execute',observe)
+        try:
+            candidates=list(update_scores.scoring_candidates(s))
+        finally:
+            event.remove(engine,'before_cursor_execute',observe)
+        assert len(score_reads)==6,score_reads
+        fields=('id','host_id','name','state','attempted','next_at')
+        projection='SELECT '+', '.join('update_scores.'+field for field in fields)
+        assert all(statement==projection for statement in score_reads),score_reads[0]
+        assert len(candidates)==450 and all(row.state=='complete' for _,_,_,row,_ in candidates)
+
+
 @pytest.mark.parametrize('count,completed',[(513,505),(1000,0)])
 def test_new_candidates_after_multiple_completed_chunks_keep_oldest_order_and_batch_limit(admin,monkeypatch,count,completed):
     ids=seed(count,completed=completed);sent=capture_assessments(monkeypatch)

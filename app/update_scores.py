@@ -4,7 +4,7 @@ import json
 import math
 import time
 from sqlalchemy import String, Text, Integer, Double, select, func, tuple_, and_, or_
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, load_only, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy
@@ -81,9 +81,11 @@ def scoring_candidates(s):
             if p.host_id in hosts and p.host_id not in indexes:indexes[p.host_id]=version_index(hosts[p.host_id].inventory)
         current=[(p,hosts[p.host_id],identity(hosts[p.host_id],p,indexes[p.host_id])) for p in packages if p.host_id in hosts]
         if not current:continue
-        scores={r.id:r for r in s.scalars(select(UpdateScore).where(UpdateScore.id.in_([key for _,_,key in current])))}
+        score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
+            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,raiseload=True))
+        scores={r.id:r for r in s.scalars(score_state.where(UpdateScore.id.in_([key for _,_,key in current])))}
         scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
-        for row in s.scalars(select(UpdateScore).where(UpdateScore.state=='deferred',
+        for row in s.scalars(score_state.where(UpdateScore.state=='deferred',
                 tuple_(UpdateScore.host_id,UpdateScore.name).in_(scopes))):
             deferred.setdefault((row.host_id,row.name),[]).append(row)
         for package,host,key in current:
