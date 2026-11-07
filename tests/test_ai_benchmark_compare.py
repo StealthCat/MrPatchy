@@ -66,6 +66,44 @@ def test_ssh_delay_mismatch_is_refused():
         compare_ai_benchmarks.compare(report(), candidate)
 
 
+def test_legacy_reports_without_persistence_delay_match_explicit_zero():
+    baseline = report()
+    candidate = report('parallel', 4)
+    candidate['persistence_delay_ms'] = 0
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['baseline']['persistence_delay_ms'] == 0
+    assert result['baseline']['persistence_delay_source'] == 'legacy zero default'
+    assert result['candidate']['persistence_delay_source'] == 'report'
+
+
+def test_matching_persistence_delay_is_accepted():
+    baseline = report()
+    candidate = report('parallel', 4)
+    baseline['persistence_delay_ms'] = candidate['persistence_delay_ms'] = 20
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['capability_equivalent'] is True
+    assert result['candidate']['persistence_delay_ms'] == 20
+
+
+@pytest.mark.parametrize('baseline_delay, candidate_delay', [(0, 20), (None, 20), (20, None)])
+def test_persistence_delay_mismatch_is_refused(baseline_delay, candidate_delay):
+    baseline = report()
+    candidate = report('parallel', 4)
+    for item, delay in ((baseline, baseline_delay), (candidate, candidate_delay)):
+        if delay is not None:
+            item['persistence_delay_ms'] = delay
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='persistence_delay_ms differs'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
+@pytest.mark.parametrize('value', [-1, 1001, True, '20', None, float('nan')])
+def test_malformed_persistence_delay_is_refused(value):
+    candidate = report('parallel', 4)
+    candidate['persistence_delay_ms'] = value
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.persistence_delay_ms'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
 def test_legacy_reports_use_fixed_two_second_queue_age():
     baseline = report()
     candidate = report('parallel', 4)
