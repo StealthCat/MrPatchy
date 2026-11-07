@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, case, or_, not_, text, String, LargeBinary, cast
 from sqlalchemy.orm import defer, load_only
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
@@ -279,6 +279,110 @@ def dashboard(user=Depends(viewer_user)):
             cutoff=now-cfg['deadlines'][priority]*3600
             overdue+=s.scalar(select(func.count()).select_from(Package).where(active,Package.candidate!='',Package.candidate.is_not(None),Package.priority==priority,Package.available_since<cutoff)) or 0
         return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':total,'updates':sum(update_counts.values()),'overdue':overdue,'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+
+FLEET_UPDATE_PRIORITIES=('critical','high','normal','low')
+FLEET_UPDATE_STATUS_FILTERS=('','available','queued','held','ineligible','installable')
+def fleet_repo_state(repo_error,last_repo,cfg,now):
+    """Repository-check freshness using the same rule worker.validate_patch enforces."""
+    if repo_error: return 'failed'
+    if not last_repo: return 'unknown'
+    return 'stale' if now-last_repo>cfg['repo_minutes']*120 else 'current'
+def fleet_installable_state(dpkg_state):
+    """Package state the patch worker accepts; mirrored by the SQL status filter."""
+    value=dpkg_state or ''
+    return value=='installed' or value.endswith(' installed')
+def fleet_queued_keys(s,host_ids):
+    """(host_id, name, candidate) of every package in an open patch job for these hosts."""
+    keys=set()
+    for job_host,payload in s.execute(select(Job.host_id,Job.payload).where(Job.host_id.in_(host_ids),Job.action=='patch',Job.state.in_(('queued','running')))):
+        packages=payload.get('packages') if isinstance(payload,dict) else None
+        for spec in packages if isinstance(packages,list) else ():
+            if isinstance(spec,str) and '=' in spec:
+                name,candidate=spec.split('=',1); keys.add((job_host,name,candidate))
+    return keys
+def fleet_queued_relation(s):
+    """Distinct (host_id, spec) of every package spec in an open patch job, expanded in the database.
+
+    Mirrors fleet_queued_keys() without binding one parameter per package: only JSON-array
+    ``packages`` payloads and their text members count, and specs compare byte-for-byte.
+    """
+    if s.get_bind().dialect.name=='sqlite':
+        sql=("SELECT DISTINCT j.host_id AS host_id, CAST(e.value AS BLOB) AS spec FROM jobs AS j, json_each(j.payload, '$.packages') AS e "
+             "WHERE j.action='patch' AND j.state IN ('queued','running') AND json_type(j.payload, '$.packages')='array' AND e.type='text'")
+    else:
+        sql=("SELECT DISTINCT j.host_id AS host_id, CAST(JSON_UNQUOTE(e.elem) AS BINARY) AS spec FROM jobs AS j, "
+             "JSON_TABLE(j.payload, '$.packages[*]' COLUMNS (elem JSON PATH '$')) AS e "
+             "WHERE j.action='patch' AND j.state IN ('queued','running') AND JSON_TYPE(JSON_EXTRACT(j.payload, '$.packages'))='ARRAY' AND JSON_TYPE(e.elem)='STRING'")
+    return text(sql).columns(host_id=String,spec=LargeBinary).subquery('fleet_queued')
+@app.get('/api/fleet/updates')
+def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:str='active',limit:int=50,offset:int=0,user=Depends(viewer_user)):
+    """Read-only, paged list of every available package candidate.
+
+    The default ``active`` scope uses the same active-server scope and candidate predicate
+    as /api/dashboard so the Overview count equals the unfiltered total. ``inactive`` lists
+    retained candidates on disabled (never deleted) servers separately from active totals.
+    No per-host cap; callers page with offset.
+    """
+    if priority and priority not in FLEET_UPDATE_PRIORITIES: raise HTTPException(400,'Unknown priority')
+    if status not in FLEET_UPDATE_STATUS_FILTERS: raise HTTPException(400,'Unknown status')
+    if scope not in ('active','inactive'): raise HTTPException(400,'Unknown scope')
+    limit=max(1,min(limit,200)); offset=max(0,offset)
+    with Session() as s:
+        cfg=config(s); deadlines=cfg['deadlines']; now=time.time()
+        scope_ids=(host_lifecycle.active_ids() if scope=='active'
+            else select(Host.id).where(Host.enabled==False,Host.deleted_at==0))
+        conditions=[Package.host_id.in_(scope_ids),Package.candidate!='',Package.candidate.is_not(None)]
+        if q: conditions.append(Package.name.contains(q[:200],autoescape=True))
+        if host_id: conditions.append(Package.host_id==host_id)
+        if priority: conditions.append(Package.priority==priority)
+        queued_join=None; queued_page_flag=None
+        if status:
+            # Filters use exactly the row states returned below (held > ineligible > queued > available).
+            installable_state=or_(Package.dpkg_state=='installed',Package.dpkg_state.like('% installed'))
+            if status=='held': conditions.append(Package.held==True)
+            elif status=='ineligible': conditions.append(Package.held==False); conditions.append(not_(installable_state))
+            else:
+                conditions+= [Package.held==False,installable_state]
+                if status in ('queued','available'):
+                    # Database-side membership: a distinct relation outer-joined on exact host and
+                    # "name=candidate" bytes, so cost and bind count never grow with the queue size.
+                    # Names containing '=' never match, as in fleet_queued_keys()'s first-'=' split.
+                    queued_rel=fleet_queued_relation(s)
+                    queued_join=(queued_rel,(queued_rel.c.host_id==Package.host_id)&(queued_rel.c.spec==cast(Package.name+'='+Package.candidate,LargeBinary))&~Package.name.contains('=',autoescape=True))
+                    queued_page_flag=queued_rel.c.host_id.is_not(None).label('queued_on_page')
+                    conditions.append(queued_rel.c.host_id.is_not(None) if status=='queued' else queued_rel.c.host_id.is_(None))
+        count_from=Package if queued_join is None else Package.__table__.outerjoin(*queued_join)
+        total=s.scalar(select(func.count()).select_from(count_from).where(*conditions)) or 0
+        rank=case(*[(Package.priority==name,index) for index,name in enumerate(FLEET_UPDATE_PRIORITIES)],else_=len(FLEET_UPDATE_PRIORITIES))
+        # Bounded projection: only the small Host fields the row needs (never inventory/telemetry/baseline/integrity).
+        page_columns=[Package,Host.name,Host.last_repo,Host.repo_error,Host.state,Host.last_seen]
+        if queued_page_flag is not None: page_columns.append(queued_page_flag)
+        page=select(*page_columns).join(Host,Host.id==Package.host_id)
+        if queued_join is not None: page=page.outerjoin(*queued_join)
+        rows=s.execute(page.where(*conditions)
+            .order_by(rank,Package.name,Host.name,Package.id).limit(limit).offset(offset)).all()
+        # Page-bounded lookups only: open patch jobs and deferred AI priority scoring for these rows.
+        page_hosts={r[0].host_id for r in rows}; page_names={r[0].name for r in rows}; deferred=set()
+        # A queued/available filter must render membership from the same statement that
+        # selected the page. A later job lookup can observe a transition and contradict
+        # the requested filter; unfiltered/installable pages still need live page-bounded state.
+        queued=fleet_queued_keys(s,page_hosts) if page_hosts and queued_page_flag is None else set()
+        if page_hosts:
+            U=update_scores.UpdateScore
+            deferred={tuple(r) for r in s.execute(select(U.host_id,U.name,U.installed,U.candidate).where(U.host_id.in_(page_hosts),U.name.in_(page_names),U.state=='deferred'))}
+        def candidate_status(p,queued_on_page=None):
+            if p.held: return 'held'
+            if not fleet_installable_state(p.dpkg_state): return 'ineligible'
+            if queued_on_page is not None: return 'queued' if queued_on_page else 'available'
+            if (p.host_id,p.name,p.candidate) in queued: return 'queued'
+            return 'available'
+        items=[{'id':p.id,'host_id':p.host_id,'host_name':h_name,'name':p.name,'installed':p.installed,'candidate':p.candidate,
+            'priority':p.priority,'held':bool(p.held),'status':candidate_status(p,membership[0] if membership else None),'dpkg_state':p.dpkg_state,'available_since':p.available_since,
+            'priority_deferred':(p.host_id,p.name,p.installed,p.candidate) in deferred,
+            'due':p.available_since+deadlines.get(p.priority,deadlines['normal'])*3600,
+            'host_active':scope=='active','repo_checked':h_last_repo or 0,'repo_error':h_repo_error or '','repo_state':fleet_repo_state(h_repo_error,h_last_repo,cfg,now),
+            'contact_stale':not(h_state=='online' and now-(h_last_seen or 0)<120)} for p,h_name,h_last_repo,h_repo_error,h_state,h_last_seen,*membership in rows]
+        return {'items':items,'total':total,'offset':offset,'limit':limit,'scope':scope}
 
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,

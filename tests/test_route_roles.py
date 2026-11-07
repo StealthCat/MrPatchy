@@ -22,6 +22,7 @@ EXPECTED_ROLES = {
     ('GET','/api/audit/entries/{entry_id}'):'admin',
     ('GET','/api/audit/export'):'admin',
     ('GET','/api/dashboard'):'viewer',
+    ('GET','/api/fleet/updates'):'viewer',
     ('GET','/api/hosts'):'viewer',
     ('POST','/api/hosts'):'admin',
     ('DELETE','/api/hosts/{host_id}'):'admin',

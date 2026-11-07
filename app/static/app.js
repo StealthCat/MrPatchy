@@ -57,13 +57,14 @@ async function render(){
  const quiet=quietRender;quietRender=false;
  const revision=++renderRevision;
  let requested=location.hash.slice(1)||'overview';
+ requested=requested.split('?')[0];
  if(requested.startsWith('overview/'))requested='overview';
  if(requested.startsWith('ai-logs/'))requested='ai-logs';
  if(requested.startsWith('investigations/'))requested='investigations';
  if(requested.startsWith('activity/'))requested='activity';
  if(requested.startsWith('settings/'))requested='settings';
  if(requested.startsWith('servers/'))requested='servers';
- if(!['security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
+ if(!['security','overview','servers','packages','updates','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
  try{
   const [me,list]=await Promise.all([api('/identity'),api('/hosts')]);
   if(revision!==renderRevision)return;
@@ -78,7 +79,7 @@ async function render(){
   document.title=PatchyUI.pages[page][0]+' · Mr Patchy';
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   if(!quiet)$('#content').innerHTML=PatchyUI.loading();
-  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
+  await ({security:fleetSecurityCoverage,overview,servers,packages,updates:fleetUpdates,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
   flushNavToast(revision);
  }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
@@ -133,14 +134,14 @@ async function overview(revision=renderRevision){
   const quiet=!rows&&!c.unavailable;
   return `<section class="card fleet-reading" data-fleet-spool="${quiet?'ok':'review'}"><h2>Agent event spool</h2><dl class="fleet-review-facts"><div><dt>Critical (≥90%)</dt><dd>${num(c.critical)}</dd></div><div><dt>Warning (≥70%)</dt><dd>${num(c.warning)}</dd></div><div><dt>Stale telemetry</dt><dd>${num(c.stale)}</dd></div><div><dt>No counters reported</dt><dd>${num(c.unavailable)}</dd></div><div><dt>Cumulative lost observations</dt><dd>${num(l.lost_observations)}</dd></div></dl>${rows?`<ul class="fleet-spool-list">${rows}</ul>${spool.more?`<p class="help">${num(spool.more)} more server(s) not listed.</p>`:''}`:`<p class="help">${quiet?'No enabled server reports spool pressure or recorded loss.':'No listed pressure or loss.'}</p>`}<p class="help">From the latest stored telemetry of ${num(c.total)} enabled server(s); not a live probe. Servers without counters are not treated as healthy, and cumulative loss stays visible after recovery. Open a server for queue details.</p></section>`;
  };
- const stat=(label,value,detail,icon,style='')=>`<div class="stat ${style}">${PatchyUI.icon(icon)}<label>${label}</label><strong>${esc(value)}</strong><small>${detail}</small></div>`;
+ const stat=(label,value,detail,icon,style='',href='')=>`<${href?'a href="'+href+'"':'div'} class="stat ${style}">${PatchyUI.icon(icon)}<label>${label}</label><strong>${esc(value)}</strong><small>${detail}</small></${href?'a':'div'}>`;
  const intro=heading(section==='summary'?'A healthier fleet starts here.':section==='attention'?'A closer look at your servers.':'Know what each signal means.',section==='summary'?'Stored signals, clear next steps, and room to investigate.':section==='attention'?'Review contact gaps and stored findings before deciding what to do.':'Expected timing does not prove that a check succeeded.','<button class="primary" data-admin data-action="add">+ Add server</button>');
  const notice='<p class="help fleet-snapshot-note">This page combines stored snapshots, not a live health probe. Disabled servers are excluded from package totals. Contact freshness does not verify individual collectors, Docker readiness or malware protection.</p>';
  const tile=row=>`<article class="fleet-observation"><div class="fleet-observation-title">${PatchyUI.icon('servers')}<h3><a href="${serverLink(row.host.id)}">${esc(row.host.name)}</a></h3>${badge(row.kind)}</div><p class="help">${esc(row.host.address)} · ${esc(row.host.architecture||'Architecture not reported')}</p><strong>${esc(row.label)}</strong><p>${esc(row.reason)}</p><p class="help">Last contact: ${date(row.host.last_seen)}</p><a class="button" href="${serverLink(row.host.id)}">Open server →</a></article>`;
  let content='';
  if(section==='summary'){
-  content=`<div class="stats">${stat('Recent contact',recent,'No stored integrity findings; not readiness','servers','accent')}${stat('Servers to review',attention,'Contact gaps or stored findings','investigations',attention?'warn':'')}${stat('Updates available',d.updates,esc(d.packages.toLocaleString())+' installed package records','packages')}${stat('Past patch deadline',d.overdue,'Based on configured priority deadlines','schedules',d.overdue?'warn':'')}</div>
-   <div class="quick-links" aria-label="Fleet shortcuts"><a href="#overview/attention">${PatchyUI.icon('servers')} Review server attention ${PatchyUI.icon('arrow')}</a><a href="#packages">${PatchyUI.icon('packages')} Review updates</a><a href="#investigations">${PatchyUI.icon('investigations')} Investigate behaviors</a><a href="#schedules" data-admin>${PatchyUI.icon('schedules')} Plan patching</a></div>
+  content=`<div class="stats">${stat('Recent contact',recent,'No stored integrity findings; not readiness','servers','accent')}${stat('Servers to review',attention,'Contact gaps or stored findings','investigations',attention?'warn':'')}${stat('Updates available',d.updates,esc(d.packages.toLocaleString())+' installed package records','packages','','#updates')}${stat('Past patch deadline',d.overdue,'Based on configured priority deadlines','schedules',d.overdue?'warn':'')}</div>
+   <div class="quick-links" aria-label="Fleet shortcuts"><a href="#overview/attention">${PatchyUI.icon('servers')} Review server attention ${PatchyUI.icon('arrow')}</a><a href="#updates">${PatchyUI.icon('packages')} Review updates</a><a href="#investigations">${PatchyUI.icon('investigations')} Investigate behaviors</a><a href="#schedules" data-admin>${PatchyUI.icon('schedules')} Plan patching</a></div>
    <div class="fleet-summary-grid"><section class="card fleet-reading"><div class="card-head"><h2>Review queue</h2><a class="mint" href="#overview/attention">Review servers →</a></div><dl class="fleet-review-facts"><div><dt>Stored integrity findings</dt><dd>${esc(d.integrity_alerts)}</dd></div><div><dt>Behaviors awaiting trust</dt><dd>${esc(d.investigations)}</dd></div><div><dt>Disabled servers</dt><dd>${observations.filter(row=>row.kind==='disabled').length}</dd></div></dl><p class="help">Counts are observations, not confirmed attacks. A vulnerable version or AI opinion alone does not authorize containment.</p><a href="#overview/monitoring" class="mint">Understand collection & coverage →</a></section>
    <section class="hero fleet-guide"><div><div class="eyebrow">MR PATCHY'S NEXT STEP</div><h2>${attention?'Start with the gaps.':'Keep a curious eye.'}</h2><p>${attention?'Open Server attention to review expired contact, unknown timestamps and stored findings.':'A quiet summary is useful, but it cannot certify every collector or endpoint. Review coverage before drawing conclusions.'}</p></div>${PatchyUI.mascot('welcome')}</section></div>
    ${spoolSummary()}
@@ -164,6 +165,37 @@ async function overview(revision=renderRevision){
  $('#fleet-review-reset').onclick=()=>{Object.assign(state,{q:'',filter:'attention',offset:0});search.value='';filter.value='attention';draw();search.focus();};
  bindPager(state,12,'#fleet-review',draw);
  draw();
+}
+const fleetUpdateContext={q:'',host:'',priority:'',status:'',scope:'',offset:0};
+const FLEET_UPDATE_STATUS={available:'Available',held:'Held by target policy',queued:'Queued for installation',ineligible:'Not installable (package state)'};
+const FLEET_REPO_STATE={current:'Repository check current',stale:'Repository check stale',failed:'Repository check failed',unknown:'Repository never checked'};
+async function fleetUpdates(revision=renderRevision){
+ const root=$('#content'),size=50,state=fleetUpdateContext;
+ const params=new URLSearchParams(location.hash.split('?')[1]||'');
+ state.q=params.get('q')||'';state.host=params.get('host')||'';state.priority=params.get('priority')||'';state.status=params.get('status')||'';state.scope=params.get('scope')==='inactive'?'inactive':'';state.offset=Math.max(0,parseInt(params.get('offset')||'0',10)||0);
+ const options=(list,current)=>list.map(([v,l])=>`<option value="${esc(v)}" ${v===current?'selected':''}>${esc(l)}</option>`).join('');
+ root.innerHTML=heading('Available patches.','Every available package update across all active servers. Viewing and filtering never changes a server.')+`<section class="card"><div class="toolbar"><label>Find a package<input type="search" id="fleet-updates-search" value="${esc(state.q)}" placeholder="Package name"></label><label>Server<select id="fleet-updates-host"><option value="">All servers</option>${options(hosts.map(h=>[h.id,h.name]),state.host)}</select></label><label>Priority<select id="fleet-updates-priority">${options([['','Any priority'],['critical','Critical'],['high','High'],['normal','Normal'],['low','Low']],state.priority)}</select></label><label>Status<select id="fleet-updates-status">${options([['','Any status'],['available','Available'],['queued','Queued'],['held','Held'],['ineligible','Not installable'],['installable','Installable (not held)']],state.status)}</select></label><label>Servers<select id="fleet-updates-scope">${options([['','Active servers'],['inactive','Disabled servers (inactive records)']],state.scope)}</select></label><button id="fleet-updates-reset">Reset filters</button></div><p class="help" id="fleet-updates-count" role="status"></p><div id="fleet-updates-table"></div><div class="actions"><button id="fleet-updates-prev">Previous</button><span class="help" id="fleet-updates-page"></span><button id="fleet-updates-next">Next</button></div><p class="help">Counts are stored candidates from the latest central repository checks and can change after a new scan. Open a server to review and approve installation.</p></section>`;
+ let timer,requestNumber=0;
+ const sync=()=>{const q=new URLSearchParams();for(const [k,v] of [['q',state.q],['host',state.host],['priority',state.priority],['status',state.status],['scope',state.scope],['offset',state.offset||'']])if(v)q.set(k,v);history.replaceState(null,'','#updates'+(q.toString()?'?'+q:''));};
+ const load=async()=>{
+  const request=++requestNumber,table=$('#fleet-updates-table');if(!table||request!==requestNumber)return;
+  sync();
+  const query=new URLSearchParams({limit:size,offset:state.offset});for(const [k,v] of [['q',state.q],['host_id',state.host],['priority',state.priority],['status',state.status],['scope',state.scope]])if(v)query.set(k,v);
+  let result;try{result=await api('/fleet/updates?'+query);}catch(error){if(request===requestNumber&&table.isConnected)table.innerHTML=empty('Updates could not be loaded',esc(error.message),'<button id="fleet-updates-retry">Retry</button>'),$('#fleet-updates-retry').onclick=()=>load().catch(e=>toast(e.message));return;}
+  if(request!==requestNumber||!table.isConnected||page!=='updates')return;
+  if(result.total&&!result.items.length&&state.offset){state.offset=Math.max(0,(Math.ceil(result.total/size)-1)*size);return load();}
+  $('#fleet-updates-count').textContent=result.total.toLocaleString()+' matching update'+(result.total===1?'':'s')+(state.scope==='inactive'?' retained on disabled servers; not included in active fleet totals.':'.');
+  $('#fleet-updates-page').textContent=result.total?'Page '+(state.offset/size+1)+' of '+Math.ceil(result.total/size):'No results';
+  $('#fleet-updates-prev').disabled=state.offset===0;$('#fleet-updates-next').disabled=state.offset+size>=result.total;
+  table.innerHTML=result.items.length?`<div class="table-wrap"><table class="package-table"><thead><tr><th>Server</th><th>Package</th><th>Installed</th><th>Candidate</th><th>Priority</th><th>Policy deadline</th><th>State</th></tr></thead><tbody>${result.items.map(r=>`<tr><td><a href="${serverLink(r.host_id,'packages')}">${esc(r.host_name)}</a></td><td>${esc(r.name)}</td><td>${esc(r.installed)}<small>${esc(r.dpkg_state||'')}</small></td><td>${esc(r.candidate)}</td><td>${badge(r.priority)}</td><td>${r.due?date(r.due):'—'}</td><td>${esc(FLEET_UPDATE_STATUS[r.status]||r.status)}${r.priority_deferred?'<small>AI priority scoring deferred</small>':''}${r.host_active?'':'<small>Disabled server · inactive record</small>'}<small>${esc(FLEET_REPO_STATE[r.repo_state]||r.repo_state)}${r.repo_checked?' · checked '+date(r.repo_checked):''}</small>${r.repo_error?'<small>'+esc(r.repo_error)+'</small>':''}${r.contact_stale?'<small>Server contact is stale</small>':''}</td></tr>`).join('')}</tbody></table></div>`:empty('No matching updates',state.q||state.host||state.priority||state.status?'No available update matches these filters.':state.scope==='inactive'?'No disabled server retains an available package update.':'No active server has an available package update.');
+ };
+ const refilter=()=>{state.offset=0;load().catch(e=>toast(e.message));};
+ $('#fleet-updates-search').oninput=e=>{state.q=e.target.value;clearTimeout(timer);timer=setTimeout(refilter,250);};
+ for(const [id,key] of [['host','host'],['priority','priority'],['status','status'],['scope','scope']])$('#fleet-updates-'+id).onchange=e=>{state[key]=e.target.value;refilter();};
+ $('#fleet-updates-reset').onclick=()=>{Object.assign(state,{q:'',host:'',priority:'',status:'',scope:''});for(const id of ['search','host','priority','status','scope'])$('#fleet-updates-'+id).value='';refilter();};
+ $('#fleet-updates-prev').onclick=()=>{state.offset=Math.max(0,state.offset-size);load().catch(e=>toast(e.message));};
+ $('#fleet-updates-next').onclick=()=>{state.offset+=size;load().catch(e=>toast(e.message));};
+ await load();
 }
 function pagedRows(state,rows,size,prefix){
  state.offset=Math.min(state.offset,Math.max(0,Math.ceil(rows.length/size)-1)*size);
