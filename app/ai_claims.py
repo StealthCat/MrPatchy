@@ -38,6 +38,13 @@ class Claim(Base):
     expires: Mapped[float]=mapped_column(Double,index=True)
 
 
+def occupancy(s,host_id,now=None):
+    now=time.time() if now is None else now
+    count,earliest=s.execute(select(func.count(Claim.subject),func.min(Claim.expires)).where(
+        Claim.host_id==host_id,Claim.expires>now)).one()
+    return {'active_lease_count':count,'earliest_lease_expires_at':earliest}
+
+
 class Lost(ai.AIError):
     def __init__(self):
         super().__init__('Investigation ownership, evidence, approval or configuration changed; no stale result was accepted. A sent request may still be billable.')
