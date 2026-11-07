@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.43.0 — 2026-11-07
+
+1. [PR #488](https://github.com/StealthCat/MrPatchy/pull/488): Add administrator recovery for another user's lost authenticator with administrator reauthentication, MFA-state clearing and session revocation, plus administrator APIs to list and remove SSO bindings. SSO replacement now requires an expected current username, serializes replacement with removal and records bounded subject digests and previous accounts in audit history. Compatibility: `PUT /api/operations/sso-binding` now returns HTTP 409 when an existing binding is changed without a matching `replace_username`; callers that reassign bindings must first read the current binding or remove it. Material limits: the bundled UI exposes MFA reset but does not yet provide SSO binding list/removal controls, self-MFA reset remains under Account, and these recovery operations require an administrator session and reauthentication where applicable. Existing roles and runtime response authorization boundaries remain unchanged. This source update does not publish a Docker image. Completes #418.
+
 ## 1.42.54 — 2026-11-07
 
 1. [PR #476](https://github.com/StealthCat/MrPatchy/pull/476): Return bounded, field-labelled validation messages without reflecting rejected values, validation context, dynamic dictionary keys or forbidden extra-field names; invalid sign-in payloads now receive the generic `Invalid credentials` detail. Compatibility: HTTP 422 remains unchanged, but its `detail` value changes from a Pydantic error array to a string, and sign-in validation intentionally omits field-specific diagnostics. Material limits: this server-side slice does not add client-side fallback sanitization, normalize spaces in OTP input or add optional login input constraints, so #419 remains open for those items. Existing authorization and runtime response boundaries remain unchanged. This source update does not publish a Docker image.
