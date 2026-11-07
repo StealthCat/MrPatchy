@@ -150,3 +150,11 @@ def test_receipts_are_immutable_and_malformed_reports_rejected(admin):
         assert s.get(incidents.Inspection,'receipt').report==receipt
         with pytest.raises(ValueError):incidents.record_inspection(s,'one','bad',{**receipt,'packages':'invalid'})
         with pytest.raises(ValueError):incidents.record_inspection(s,'one','bad',{**receipt,'persistence':{'state':'collected','entries':[{}]*257}})
+
+
+def test_security_inspect_uses_shared_rpm_backend_detection(monkeypatch):
+    seen=[]
+    monkeypatch.setattr(bridge,'rpm_backend',lambda:seen.append(1) or True)
+    monkeypatch.setattr(bridge,'bounded',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('stop')))
+    result=agent.security_inspect(['missing'],False)
+    assert seen and result['package_manager']=='rpm'
