@@ -12,7 +12,7 @@ import shlex
 import threading
 import time
 import uuid
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -555,6 +555,15 @@ def host_snapshot(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return {'inventory':h.inventory,'telemetry':h.telemetry,'baseline':h.baseline}
+
+@app.get('/api/hosts/{host_id}/file-status')
+def host_file_status(host_id:str,offset:int=Query(default=0,ge=0),
+                     q:str=Query(default='',max_length=200),
+                     status:str=Query(default='',max_length=40),user=Depends(admin_user)):
+    from . import file_status
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return file_status.page(s,h,offset,q,status)
 
 @app.get('/api/hosts/{host_id}/patching')
 def host_patching(host_id:str,start:float,end:float,user=Depends(viewer_user)):

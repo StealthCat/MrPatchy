@@ -72,7 +72,7 @@ async function render(){
  if(requested.startsWith('activity/'))requested='activity';
  if(requested.startsWith('settings/'))requested='settings';
  if(requested.startsWith('servers/'))requested='servers';
- if(!['security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
+ if(!['files','security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
  try{
   const [me,list]=await Promise.all([api('/identity'),api('/hosts')]);
   if(revision!==renderRevision)return;
@@ -87,7 +87,7 @@ async function render(){
   document.title=PatchyUI.pages[page][0]+' · Mr Patchy';
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   if(!quiet)$('#content').innerHTML=PatchyUI.loading();
-  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
+  await ({files:fleetFileStatus,security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
   flushNavToast(revision);
  }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML='<h1 id="page-title" tabindex="-1">Unable to load this view.</h1>'+PatchyUI.error('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
@@ -128,9 +128,10 @@ async function overview(revision=renderRevision){
  const snapshot=[...hosts],[d,spool]=await Promise.all([api('/dashboard'),api('/spool-health').catch(()=>null)]);if(!currentView(revision,'overview'))return;
  const root=$('#content'),now=Date.now()/1000,observations=snapshot.map(host=>({host,...fleetObservation(host,now)}));
  const requested=location.hash.slice(1)||'overview';
+ if(requested==='overview/files'&&isAdmin()){await fleetFileStatus(revision,$('#content'),'overview');return;}
  const section=requested==='overview/attention'?'attention':requested==='overview/monitoring'?'monitoring':'summary';
  if(!['overview','overview/attention','overview/monitoring'].includes(requested))history.replaceState(null,'','#overview');
- const entries=[['summary','Summary'],['attention','Server attention'],['monitoring','Monitoring']];
+ const entries=[['summary','Summary'],['attention','Server attention'],['monitoring','Monitoring'],...(isAdmin()?[['files','File status']]:[])];
  const labels=Object.fromEntries(entries),link=key=>key==='summary'?'#overview':'#overview/'+key;
  $('#breadcrumb').textContent='Workspace / Overview / '+labels[section];document.title=labels[section]+' · Fleet Overview · Mr Patchy';
  const navigation='<nav class="overview-sections" aria-label="Fleet overview pages">'+PatchyUI.sectionNavigation(entries,section,link,entries.map(item=>item[0]),[])+'</nav>';

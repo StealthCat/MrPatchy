@@ -6146,3 +6146,22 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+## Ordered file assessment and visibility (#626)
+
+The controller checks retained authenticated Debian/RPM artifact manifests against
+recorded SHA-256 values before exact known-good behavior lookup and optional AI.
+Target-supplied file-assessment claims are replaced. A mismatch against the latest
+authenticated artifact bypasses safe-cache reuse. File authenticity does not
+resolve behavior risk; baseline approval remains explicit and no AI opinion
+creates a trusted artifact. Repository evidence uses existing operator-managed
+authenticated vendor bundles; automatic repository artifact retrieval and current
+signing-key revocation checks are not added here.
+
+Administrator File status pages (fleet selector and server workspace) and the
+overview show paginated recorded managed/startup/vendor/process file observations,
+hashes, evidence methods, behavior assessment provenance, freshness, baseline
+comparison and coverage gaps. Multiple hashes at one path remain separate
+observations. Enrollment-only files remain unavailable, not verified. This is
+recorded-scope visibility, not enumeration of every file on disk. Viewing never
+contacts targets, invokes AI, approves a baseline or authorizes response actions.
