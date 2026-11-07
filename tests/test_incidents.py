@@ -140,6 +140,38 @@ def test_ai_receives_bounded_signature_and_coverage_context(admin,recorded,monke
     assert admin.post('/api/hosts/a/security/plans/'+pid+'/approve',json={'evidence_digest':checksum}).status_code==409
 
 
+def test_case_owner_and_notes_are_revisioned_and_do_not_touch_incident(admin,recorded):
+    identifier,_=recorded
+    base='/api/hosts/a/security/incidents/'+identifier
+    with Session() as s:
+        before=s.get(incidents.Incident,identifier);state,updated=before.state,before.updated
+    assert admin.get(base+'/case').json()=={'owner':'','revision':0}
+    reason='Taking the investigation'
+    assert admin.put(base+'/owner',json={'owner':'admin','reason':reason,'expected_revision':1}).status_code==409
+    assert admin.put(base+'/owner',json={'owner':'nobody','reason':reason,'expected_revision':0}).status_code==422
+    assert admin.put(base+'/owner',json={'owner':'admin','reason':'short','expected_revision':0}).status_code==422
+    assert admin.put(base+'/owner',json={'owner':'admin','reason':reason,'expected_revision':0}).json()=={'owner':'admin','revision':1}
+    assert admin.put(base+'/owner',json={'owner':'admin','reason':reason,'expected_revision':1}).status_code==422
+    assert admin.put(base+'/owner',json={'owner':'admin','reason':reason,'expected_revision':0}).status_code==409
+    assert admin.post(base+'/notes',json={'note':'  '}).status_code==422
+    assert admin.post(base+'/notes',json={'note':'Checked the file hash with the owner'}).json()=={'recorded':True}
+    assert admin.put(base+'/owner',json={'owner':'','reason':'Handing back to the queue','expected_revision':1}).json()=={'owner':'','revision':2}
+    kinds=[e['kind'] for e in admin.get(base+'/timeline').json()['items']]
+    assert sorted(k for k in kinds if k!='detection')==['assign','assign','note']
+    with Session() as s:
+        after=s.get(incidents.Incident,identifier)
+        assert (after.state,after.updated)==(state,updated)
+
+
+def test_case_endpoints_admin_only_and_host_scoped(admin,recorded):
+    identifier,_=recorded
+    assert admin.get('/api/hosts/b/security/incidents/'+identifier+'/case').status_code==404
+    assert admin.post('/api/hosts/b/security/incidents/'+identifier+'/notes',json={'note':'x'}).status_code==404
+    with Session() as s:s.get(User,'admin').role='operator';s.commit()
+    assert admin.get('/api/hosts/a/security/incidents/'+identifier+'/case').status_code==403
+    assert admin.post('/api/hosts/a/security/incidents/'+identifier+'/notes',json={'note':'x'}).status_code==403
+
+
 def test_scan_paths_share_target_rules_across_entry_points(admin,recorded):
     bad=['//tmp','/proc','/proc/1','/run/user','/tmp/a\x00b','/tmp/','/tmp//x','/sys','/var/lib/mrpatchy-quarantine/x']
     for path in bad:
