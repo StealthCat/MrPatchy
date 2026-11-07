@@ -98,10 +98,12 @@ def acquire(owner=None):
             # Active claims are globally bounded by worker capacity. Resolve
             # each occupied host's revisioned policy under this admission lock
             # so a settings change and the next claim cannot cross.
-            active_by_host=dict(s.execute(select(Claim.host_id,func.count()).where(
-                Claim.expires>now).group_by(Claim.host_id)).all())
-            saturated_hosts=[host_id for host_id,count in active_by_host.items()
-                if count>=ai_policy.investigation_limit(s,host_id)]
+            live_counts=(select(Claim.host_id,func.count().label('live_count')).where(
+                Claim.expires>now).group_by(Claim.host_id).subquery())
+            occupancy=s.execute(select(live_counts.c.host_id,live_counts.c.live_count,Setting.key,Setting.value)
+                .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
+            saturated_hosts=[host_id for host_id,count,key,policy in occupancy
+                if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
             row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
                 Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
