@@ -9,6 +9,7 @@ from .coordination import Lock
 
 scope=ContextVar('ai_server_scope',default=())
 PREFIX='server-ai:'
+POLICY_READ_BATCH=200
 MIN_CONCURRENCY=1
 DEFAULT_CONCURRENCY=2
 MAX_CONCURRENCY=4
@@ -40,10 +41,18 @@ def status(s,host_id):
 
 def require(host_ids):
     from .ai import AIError
+    keys = sorted({PREFIX + identifier for identifier in host_ids})
+    if not keys:
+        return
     with Session() as s:
-        for identifier in set(host_ids):
-            if status(s,identifier)['paused']:raise AIError('AI integration is paused for this server; no new provider call was sent.',policy_wait=True)
-        if host_ids and not config(s)['ai_enabled']:raise AIError('AI integration is globally disabled; no new provider call was sent.',policy_wait=True)
+        for start in range(0, len(keys), POLICY_READ_BATCH):
+            batch = keys[start:start + POLICY_READ_BATCH]
+            values = s.scalars(select(Setting.value).where(Setting.key.in_(batch)))
+            # Keep corrupt stored policy closed without an unhandled exception.
+            if any(not isinstance(value, dict) or value.get('paused', False) is not False for value in values):
+                raise AIError('AI integration is paused for this server; no new provider call was sent.', policy_wait=True)
+        if not config(s)['ai_enabled']:
+            raise AIError('AI integration is globally disabled; no new provider call was sent.', policy_wait=True)
 
 
 @contextmanager

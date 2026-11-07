@@ -6119,3 +6119,17 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+### Batched outbound AI pause-policy reads — worker checkpoint #573
+
+The existing outbound provider guard reads scoped server pause settings in
+batches of at most 200 distinct keys and checks global AI enablement once.
+A five-server scoring-sized scope uses two SELECTs in the disposable SQLite
+regression, compared with 12 on the previous path. Missing policy rows retain
+the default, any paused or malformed row blocks before global enablement is
+checked, and an empty scope keeps the provider setup path available.
+
+Provider locks, lease ownership checks, shared admission, budget accounting,
+and response authorization continue to apply. This is an admission database
+read improvement. Native integration and end-to-end performance acceptance
+for the faster-AI program remain open.
