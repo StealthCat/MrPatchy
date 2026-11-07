@@ -2145,6 +2145,13 @@ SELECTs from twelve to four, including candidate and host-scope reads. This is
 partial scoring performance work. Idle candidate hashing, measured production
 throughput and full parallel scoring acceptance remain open.
 
+Worker checkpoint #597 adds an ordered purpose/state/start-time index for active
+AI run status and recovery lookups. Startup adds the index to existing databases
+while retaining history and existing indexes. The retained-history fixture uses
+the active-run index instead of filtering completed runs and sorting the result.
+This is a partial database performance increment. Production throughput and
+end-to-end parallel triage acceptance remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.

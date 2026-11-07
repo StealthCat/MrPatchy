@@ -123,6 +123,7 @@ def register_models():
 
 def init():
     register_models()
+    from .ai_runs import ACTIVE_RUN_INDEX
     # Reflection and DDL must share a connection. SQLite PRAGMA reflection can
     # otherwise observe an old per-connection schema after another pooled
     # connection changed it. An actual catalog query refreshes the schema view.
@@ -150,6 +151,7 @@ def init():
         # create_all() never adds indexes to a table that already exists.
         for index in Job.__table__.indexes:
             index.create(connection,checkfirst=True)
+        ACTIVE_RUN_INDEX.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):
