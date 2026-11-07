@@ -22,7 +22,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health
+from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, freezes
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -1322,6 +1322,36 @@ def get_window(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'window:'+host_id)
         return row.value if row else {'windows':[]}
+
+class FreezeInput(BaseModel):
+    model_config={'extra':'forbid'}
+    freezes:list[dict]=Field(default_factory=list,max_length=50)
+    expected_revision:str=Field(default='',pattern=r'^(?:[a-f0-9]{64})?$')
+def freeze_view(s):
+    now=time.time()
+    base={'revision':freezes.revision(s),
+          'precedence':'A change freeze blocks scheduled, manual and urgent patch/repair/release-upgrade dispatch until it ends; maintenance windows and holds apply afterwards.'}
+    try:
+        rows=freezes.load(s);active=freezes.active(s,now);clear_at=freezes.clear_at(s,now)
+    except (ValueError,TypeError,OverflowError):
+        return {**base,'freezes':[],'active':[],'clear_at':None,'blocked':True,'policy_valid':False,
+                'error':'Saved change freeze policy is malformed; dispatch remains blocked until an administrator repairs it.'}
+    return {**base,'freezes':rows,'active':active,'clear_at':clear_at,'blocked':bool(active),'policy_valid':True}
+@app.get('/api/operations/freezes')
+def get_freezes(user=Depends(admin_user)):
+    with Session() as s: return freeze_view(s)
+@app.put('/api/operations/freezes')
+def save_freezes(body:FreezeInput,user=Depends(admin_user)):
+    try: rows=freezes.clean(body.freezes,user['username'])
+    except ValueError as error: raise HTTPException(400,str(error))
+    with worker.Lock('change-freeze-config'),Session() as s:
+        if body.expected_revision!=freezes.revision(s):raise HTTPException(409,'Change freeze policy changed; reload it before editing')
+        old=s.get(Setting,freezes.KEY)
+        before=old.value.get('freezes',[]) if old and isinstance(old.value,dict) else []
+        s.merge(Setting(key=freezes.KEY,value={'freezes':rows}))
+        audit(s,'change freezes',json.dumps({'actor':user['username'],'before':before,'after':rows,'previous_revision':body.expected_revision},sort_keys=True))
+        s.commit()
+        return freeze_view(s)
 
 class NotificationInput(BaseModel):
     enabled:bool=False
