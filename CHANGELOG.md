@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.44.0 — 2026-11-07
+
+1. [PR #304](https://github.com/StealthCat/MrPatchy/pull/304): Report distribution-upgrade availability from saved inventory through a shared `os_upgrade` status in the hosts and host-summary APIs, and show an accessible badge beside eligible Debian server names plus a report-only Overview notice. Malformed, stale, offline, disabled and unsupported inventories fail closed without disrupting other fleet responses, including legacy timestamps outside the supported numeric range. Compatibility: the API change is additive; inventory ingestion stores a bounded derived summary and startup backfills existing hosts. No upgrade is contacted or started by detection. Material limits: this slice reports fresh online Debian 11→12 and 12→13 paths only; Ubuntu offer verification, RPM-family detection, remaining server references and fleet notification remain under #96 and #305, which stay open. Existing roles and runtime response authorization remain unchanged. This source update does not publish a Docker image.
+
 ## 1.43.4 — 2026-11-07
 
 1. [PR #595](https://github.com/StealthCat/MrPatchy/pull/595): Batch AI update-scoring row reads when linking a diagnostic run and persisting complete, superseded, deferred or failed outcomes for the existing five-item scoring batch, while retaining separate transaction boundaries and current package/server evidence rechecks. Compatibility: no schema, API, scoring model, provider, authorization, pause or rate/spend-control behavior changes. Material limits: this reduces ID-filtered score-row reads from twelve to four in the five-item fixture but does not address idle candidate hashing, measured production throughput or broader parallel scoring tracked under #436. Completes #594. This source update does not publish a Docker image.
