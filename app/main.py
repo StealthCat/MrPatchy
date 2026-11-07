@@ -820,6 +820,13 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin
     finally:lock.release()
 
 
+@app.get('/api/ai/known-good/summary')
+def known_good_summary(user=Depends(admin_user)):
+    from . import known_good
+    with Session() as s:
+        return known_good.summary(s)
+
+
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
