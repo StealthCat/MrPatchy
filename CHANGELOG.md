@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.44.3 — 2026-11-07
+
+1. [PR #567](https://github.com/StealthCat/MrPatchy/pull/567): Fetch only the six retained score fields used to match exact assessments and check deferral eligibility during periodic AI update scoring. Preserve oldest-first selection, stale-deferred cleanup and full assessment details in the existing detail and completion paths. The database schema, API, provider inputs and runtime response authorization are unchanged. Repeated candidate hashing and measured production throughput remain open under #436.
+
+## 1.44.2 — 2026-11-07
+
+1. [PR #566](https://github.com/StealthCat/MrPatchy/pull/566): Narrow periodic AI update-score candidate discovery to the server ID and saved inventory actually used for scoring, leaving telemetry, baselines and other unrelated server fields out of the bounded candidate queries while preserving candidate order and exact APT/RPM evidence and score identities. Compatibility: scoring inputs, provider payloads, completed-score reuse, pause/lifecycle eligibility, APIs, schema, roles and runtime response authorization are unchanged. Material limits: every candidate is still hashed on each pass, measured production throughput remains unverified and the remaining CPU work stays tracked under #436, which remains open. This source update does not publish a Docker image.
+
+## 1.44.1 — 2026-11-07
+
+1. [PR #487](https://github.com/StealthCat/MrPatchy/pull/487): Correct the operator recovery documentation with the Python application prerequisites, concrete Compose named-volume discovery and restoration steps, and replace the stale administrator password-reset one-liner with the supported locked, audited helper and its explicit MFA/account-enable options. The README now states the implemented default of four AI worker tasks rather than one. Compatibility: documentation only; application behavior, APIs, schema, roles and runtime response authorization are unchanged. Material limits: these instructions do not automate infrastructure recovery, credential restoration or password-reset authorization, and operators still need trusted host access and separately protected recovery material. Completes #410. This source update does not publish a Docker image.
+
+## 1.44.0 — 2026-11-07
+
+1. [PR #304](https://github.com/StealthCat/MrPatchy/pull/304): Report distribution-upgrade availability from saved inventory through a shared `os_upgrade` status in the hosts and host-summary APIs, and show an accessible badge beside eligible Debian server names plus a report-only Overview notice. Malformed, stale, offline, disabled and unsupported inventories fail closed without disrupting other fleet responses, including legacy timestamps outside the supported numeric range. Compatibility: the API change is additive; inventory ingestion stores a bounded derived summary and startup backfills existing hosts. No upgrade is contacted or started by detection. Material limits: this slice reports fresh online Debian 11→12 and 12→13 paths only; Ubuntu offer verification, RPM-family detection, remaining server references and fleet notification remain under #96 and #305, which stay open. Existing roles and runtime response authorization remain unchanged. This source update does not publish a Docker image.
+
 ## 1.43.4 — 2026-11-07
 
 1. [PR #595](https://github.com/StealthCat/MrPatchy/pull/595): Batch AI update-scoring row reads when linking a diagnostic run and persisting complete, superseded, deferred or failed outcomes for the existing five-item scoring batch, while retaining separate transaction boundaries and current package/server evidence rechecks. Compatibility: no schema, API, scoring model, provider, authorization, pause or rate/spend-control behavior changes. Material limits: this reduces ID-filtered score-row reads from twelve to four in the five-item fixture but does not address idle candidate hashing, measured production throughput or broader parallel scoring tracked under #436. Completes #594. This source update does not publish a Docker image.

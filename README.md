@@ -36,7 +36,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Enrollment | Three-step endpoint → offline preparation → SSH completion; downloadable per-server Bash installer; expiring curl links; independent installation verification |
 | Package management | Installed/held/broken inventory, select-all reviewed batches, explained AI importance scores, expected start times, per-package change history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair and priority policies |
 | Repositories | Central native APT/DNF verification; `.list`, Deb822 `.sources` and RPM `.repo`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
-| Distribution upgrades | Adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
+| Distribution upgrades | Report-only Debian upgrade-availability badges; adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
@@ -219,7 +219,7 @@ After a reviewed staged rollout is queued, its dialog closes and a confirmation 
 
 Enable **AI update importance scores** in Settings alongside AI investigations. Pending updates receive an advisory **0–100** score with an expandable explanation, limitations, model and assessment time. Assessments bind to the exact installed/candidate versions and policy evidence; a changed candidate needs a new assessment. The default separate allowance is 20 batches/hour, with up to five updates per call. Scores use package metadata and repository classification, carry **low confidence**, and do not claim verified CVE/changelog evidence or change your patch schedule/priority.
 
-Update-score eligibility is read in bounded ordered chunks, reducing database work when a fleet already has completed or future-deferred assessments. Run linkage and outcome persistence also load each existing five-item scoring batch together instead of rereading each score row individually. Exact evidence matching, durable deferrals, oldest-first batches, separate persistence phases and existing AI admission/spend limits still apply.
+Update-score eligibility is read in bounded ordered chunks, and candidate discovery loads only the server ID and saved inventory needed for scoring rather than unrelated telemetry or baseline fields. The scheduling pass fetches only the retained score fields needed to match identities and check eligibility. Full assessment explanations and limitations remain available in score details. Run linkage and outcome persistence also load each existing five-item scoring batch together instead of rereading each score row individually. Exact evidence matching, durable deferrals, oldest-first batches, separate persistence phases and existing AI admission/spend limits still apply.
 
 **Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**. File, process, replacement-publication and service-monitoring holds explain the review needed before a start can be estimated; dates remain unknown until a separately authorized release. Recovery, offline targets and unknown dependency completion also explain why a date cannot be given. All times displayed in the table use your browser's timezone.
 
@@ -265,6 +265,8 @@ A host that never returns over SSH cannot be automatically repaired from the cen
 After enrollment completion or server deletion, navigation loads the destination once and shows its success message after that view finishes loading. Failed or superseded navigation drops pending success feedback. Activity uses the loaded account identity for its controls; the server still authorizes each request.
 
 ## Distribution release upgrades
+
+Fresh inventory for an online, enabled Debian 11 or 12 server shows a distribution-upgrade badge beside its name and a notice on its Overview page when the next supported Debian release is available. This status is report-only: detection does not contact the server or start an upgrade. Stale, offline, disabled, unsupported or malformed inventory does not produce an availability badge.
 
 Use **Servers → Manage → Plan distribution upgrade** to prepare a saved release plan. Mr Patchy resolves package changes centrally, compares package-owned configuration with authenticated new vendor defaults, and uses the configured OpenAI API to propose the required edits. Review the diffs, package changes and recovery prerequisites, then choose **GO** or **No-go**.
 
@@ -539,7 +541,7 @@ Rebuild/restart the controller and workers to enable reporting. No schema migrat
 or target-helper update is needed: records use the existing settings/audit tables,
 which are already included in offline database migration. Existing job claims,
 per-host/recovery locks, coordinator election and operational approval boundaries
-are preserved. Defaults remain 2 jobs/8 polls/1 AI task. Supported separate-host workers,
+are preserved. Defaults remain 2 jobs/8 polls/4 AI tasks. Supported separate-host workers,
 shared secrets/artifacts/state preflight, expected-node
 inventory, controller/endpoint/GCP health and full deployment acceptance remain
 planned; this view does not complete remote-worker deployment or the unified dashboard.
