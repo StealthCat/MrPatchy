@@ -23,6 +23,12 @@ def test_viewer_cannot_mutate_or_read_installer(client):
     assert client.get('/api/hosts').status_code==200
     assert client.get('/api/settings').status_code==403
 
+def test_viewer_investigation_status_hides_ai_telemetry(client):
+    login_as(client,'reader','viewer')
+    r=client.get('/api/investigation-status');assert r.status_code==200
+    assert set(r.json())=={'pending','oldest','enabled'}
+    for key in ('budget','admission','provider_backoff','last_error','reported_capacity','worker_seen'): assert key not in r.json()
+
 def test_operator_cannot_deploy_or_change_trust(client):
     login_as(client,'operator','operator')
     assert client.post('/api/hosts/x/actions/deploy').status_code==403
@@ -88,6 +94,21 @@ def test_webhook_retry_and_success(admin,monkeypatch):
     monkeypatch.setattr(operations.httpx,'post',lambda *a,**k:calls.append(k) or SimpleNamespace(raise_for_status=lambda:None))
     operations.deliver_one();operations.deliver_one()
     assert len(calls)==1 and calls[0]['follow_redirects'] is False
+
+def test_delivery_failure_keeps_status_without_secrets(admin,monkeypatch):
+    import httpx,smtplib
+    with Session() as s:
+        s.add(operations.Alert(id='alert',host_id='host',kind='stale',message='test'))
+        s.add(Setting(key='notifications',value={'encrypted':seal('{"enabled":true,"url":"https://example.test/secret-path","token":"tok"}')}));s.commit()
+    request=httpx.Request('POST','https://example.test/secret-path')
+    def fail(*a,**k):
+        return SimpleNamespace(raise_for_status=lambda:(_ for _ in ()).throw(httpx.HTTPStatusError('boom https://example.test/secret-path',request=request,response=httpx.Response(503,request=request))))
+    monkeypatch.setattr(operations.httpx,'post',fail)
+    operations.deliver_one()
+    with Session() as s:
+        error=s.get(operations.Alert,'alert').error
+    assert error=='HTTPStatusError (HTTP 503)' and 'secret' not in error
+    assert operations.delivery_error(smtplib.SMTPAuthenticationError(535,b'bad password hunter2'))=='SMTPAuthenticationError (SMTP 535)'
 
 def test_window_invalid_values_rejected(admin):
     assert admin.put('/api/operations/h/window',json={'windows':[{'days':[8],'start':0,'end':60}]}).status_code==400

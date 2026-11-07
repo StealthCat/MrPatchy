@@ -8,6 +8,10 @@ module.exports=async(page,capture)=>{
       await page.waitForFunction(view=>document.querySelector('[data-nav='+view+']')?.getAttribute('aria-current')==='page',view);
       await page.locator('#page-title').waitFor();
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,view+' overflows at '+width);
+      // Server names are free text up to 120 characters; a long FQDN must wrap inside the heading.
+      await page.locator('#page-title').evaluate(el=>{el.dataset.original=el.textContent;el.textContent='web-production-frontend-01.eu-west.internal.example.com';});
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,view+' long heading overflows at '+width);
+      await page.locator('#page-title').evaluate(el=>{el.textContent=el.dataset.original;});
       assert.equal(await page.locator('#retry-view').count(),0,view+' failed to load');
       if(width===1440&&['servers','packages','investigations','activity'].includes(view))await capture(view);
     }

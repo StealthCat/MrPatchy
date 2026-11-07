@@ -3,7 +3,7 @@ const fs=require('fs');
 const crypto=require('crypto');
 module.exports=async(page,capture)=>{
  const hosts=await page.evaluate(async()=>await(await fetch('/api/hosts')).json());const host=hosts[0];
- const prefix='/api/hosts/'+host.id+'/security',writes=[];let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false,publicationCreated=false,publicationHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
+ const prefix='/api/hosts/'+host.id+'/security',writes=[];let approveGate=null;let incidentState='open',copyState='prepared',responseState='prepared',responseHold=false,watchEnabled=true;let processState='prepared',processHold=false,repairQueued=false,stagingCreated=false,publicationCreated=false,publicationHold=false;let responsePolicy={enabled:false,interval_minutes:15,pause_on_problem:false,revision:''};
  const exportBody='{"record":{"inode":9223372036854775807,"mtime_ns":1793245000123456789}}\n',exportDigest=crypto.createHash('sha256').update(exportBody).digest('hex');
  const exportFilename='mrpatchy-response-12345678-1234-1234-1234-123456789abc.json';
  let exportFailure=false;const serviceChecks=[];let servicesRecovered=false;let serviceWatch={enabled:false,interval_minutes:15,pause_on_problem:false,revision:'',baseline_id:'',units:[],hold:false,last_state:'not_checked'};
@@ -91,7 +91,7 @@ module.exports=async(page,capture)=>{
    if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true,custom_paths:['/srv/myapp/config.json']});return route.fulfill({json:{job_id:'inspection-job'}});}
    return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}},{id:'rpm-vendor-job',created:Date.now()/1000,report:{state:'collected',trust_basis:'controller_authenticated_rpm_artifact',packages:[],persistence:null,vendor_verification:{state:'matches_artifact_bytes',package:'Patchy_test',version:'2:1.0-1',architecture:'x86_64',examined:1,findings:[],gaps:[]},vendor_authentication:{signature_key_ids:['0123456789abcdef']}}}],more:false}});
   }
-  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname===prefix+'/incidents/incident-fixture/plan'){assert.equal(request.postDataJSON().include_related,true);plan.content.evidence_scope={version:1,model:'fixture<script>bad()</script>',snapshot:{items:[],sources:{executions:{examined:0,more:false}},as_of:1000}};}if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve'))plan.state='approved';return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
+  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname===prefix+'/incidents/incident-fixture/plan'){assert.equal(request.postDataJSON().include_related,true);plan.content.evidence_scope={version:1,model:'fixture<script>bad()</script>',snapshot:{items:[],sources:{executions:{examined:0,more:false}},as_of:1000}};}if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve')){if(approveGate)await approveGate;plan.state='approved';}return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
   if(url.pathname.endsWith('/policy'))return route.fulfill({json:{enabled:false,interval_hours:24,paths:['/tmp']}});
   if(url.pathname===prefix)return route.fulfill({json:report});
   if(url.pathname.endsWith('/timeline'))return route.fulfill({json:{items:[{kind:'review',actor:'admin',created:Date.now()/1000,details:{reason:'Fixture reviewed'}}],more:false}});
@@ -112,6 +112,20 @@ module.exports=async(page,capture)=>{
   assert.equal(writes.pop(),prefix+'/policy');
   await page.getByRole('button',{name:'Review approval',exact:true}).click();
   assert.equal(writes.length,0,'Opening review must not approve');
+  let release;approveGate=new Promise(resolve=>release=resolve);
+  await page.getByRole('button',{name:'Approve for manual response',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#approve-security-plan').disabled);
+  await page.locator('#close-modal').click();
+  await page.getByRole('button',{name:'Review incident',exact:true}).first().click();
+  await page.locator('#modal-title').filter({hasText:'Review incident'}).waitFor();
+  release();approveGate=null;
+  await page.locator('#security-incidents .badge').filter({hasText:'approved'}).waitFor();
+  assert.equal(await page.locator('#modal').evaluate(e=>e.open),true,'Late approval must not close a newer dialog');
+  assert.match(await page.locator('#modal-title').textContent(),/Review incident/);
+  await page.locator('#close-modal').click();
+  plan.state='draft';
+  await page.reload();
+  await page.getByRole('button',{name:'Review approval',exact:true}).click();
   await page.getByRole('button',{name:'Approve for manual response',exact:true}).click();
   await page.locator('#security-incidents .badge').filter({hasText:'approved'}).waitFor();
   assert.equal(writes.at(-1),prefix+'/plans/plan-fixture/approve');

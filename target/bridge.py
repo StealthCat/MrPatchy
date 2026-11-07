@@ -32,6 +32,16 @@ RestrictAddressFamilies=AF_UNIX
 [Install]
 WantedBy=multi-user.target
 '''
+APT_KEYRINGS=Path('/etc/apt/keyrings')
+RPM_GPG_DIR=Path('/etc/pki/rpm-gpg')
+def public_dir(path):
+    # The bridge runs under umask 077; key directories must stay traversable by _apt.
+    path=Path(path)
+    if path.is_symlink(): raise ValueError('Refusing symlink destination')
+    path.mkdir(exist_ok=True,mode=0o755)
+    info=path.lstat()
+    if info.st_uid!=os.geteuid(): raise ValueError('Key directory is not owned by the bridge user')
+    if info.st_mode&0o7777!=0o755: path.chmod(0o755)
 def atomic(path, data, mode=0o600):
     path = Path(path)
     if path.is_symlink(): raise ValueError('Refusing symlink destination')
@@ -52,11 +62,8 @@ def atomic(path, data, mode=0o600):
     finally:
         tmp.unlink(missing_ok=True)
 
-import os
 import selectors
 import signal
-import subprocess
-import time
 
 def bounded(args,timeout=900,env=None,limit=16_000_000,allowed_codes=(0,),return_status=False,pass_fds=(),memory_limit=None):
     import resource
@@ -174,7 +181,12 @@ def recovery_hook(operation,identifier):
     if not hook.is_file() or hook.is_symlink() or info.st_uid!=0 or info.st_mode & 0o022 or not info.st_mode & 0o100:
         raise ValueError('Rollback adapter must be a root-owned, non-writable executable')
     if operation not in ('snapshot','rollback','probe') or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',identifier):raise ValueError('Invalid recovery operation')
-    result=json.loads(run([str(hook),operation,identifier],timeout=1800))
+    output,_diagnostics=bounded(
+        [str(hook),operation,identifier],timeout=1800,
+        env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
+    if len(output.encode())>20_000:raise ValueError('Rollback adapter response exceeds 20 KB')
+    try:result=json.loads(output)
+    except json.JSONDecodeError:raise ValueError('Invalid rollback adapter response') from None
     if not isinstance(result,dict):raise ValueError('Invalid rollback adapter response')
     return result
 
@@ -184,7 +196,10 @@ def transaction_path(job):
     return directory/(job+'.json')
 
 
-def boot_id():return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+def boot_id():
+    value=Path('/proc/sys/kernel/random/boot_id').read_text()[:100].strip()
+    if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value):raise ValueError('Boot identity unavailable')
+    return value
 
 
 def schedule_reboot(journal,state,rollback=False):
@@ -478,7 +493,7 @@ def handle(req):
     if action == 'complete-recovery':return complete_recovery(req)
     if action == 'rollback-patch':return rollback_after_reboot(req)
     if action == 'recovery-status':
-        return {'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'rollback_adapter':Path('/etc/mrpatchy/rollback').is_file(),'systemd':Path('/run/systemd/system').exists()}
+        return {'boot_id':boot_id(),'rollback_adapter':Path('/etc/mrpatchy/rollback').is_file(),'systemd':Path('/run/systemd/system').exists()}
     if action == 'authorized-keys':
         keys=req.get('keys')
         if not isinstance(keys,list) or not 1<=len(keys)<=2:raise ValueError('One or two Ed25519 keys required')
@@ -497,15 +512,7 @@ def handle(req):
         return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists() or (rpm_backend() and (ROOT/'rpm-reboot-required').is_file() and (ROOT/'rpm-reboot-required').read_text().strip()==boot_id()),
                 'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
     if action == 'agent-status':return agent_status()
-    if action == 'verify':
-        sys.path.insert(0,'/usr/local/lib/mrpatchy')
-        from agent import MANAGED,digest
-        files={}
-        optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
-        for path in MANAGED+([optional] if Path(optional).exists() else []):
-            info=Path(path).stat()
-            files[path]={'sha256':digest(path),'uid':info.st_uid,'gid':info.st_gid,'mode':info.st_mode & 0o7777}
-        return {'files':files,'active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
+    if action == 'verify':return agent_status()  # legacy alias; never stats or follows unchecked paths
     if action == 'deploy':
         code = base64.b64decode(req['agent'],validate=True)
         if len(code)>1_000_000 or hashlib.sha256(code).hexdigest()!=req['sha256']: raise ValueError('Invalid agent digest')
@@ -587,14 +594,14 @@ def handle(req):
         data = base64.b64decode(req['data'],validate=True)
         if len(data)>2_000_000: raise ValueError('Key too large')
         if rpm_backend():
-            Path('/etc/pki/rpm-gpg').mkdir(exist_ok=True,mode=0o755)
-            destination='/etc/pki/rpm-gpg/'+name
+            public_dir(RPM_GPG_DIR)
+            destination=str(RPM_GPG_DIR/name)
             atomic(destination,data,0o644)
             run(['rpm','--import',destination])
             return {'saved':destination}
-        Path('/etc/apt/keyrings').mkdir(exist_ok=True,mode=0o755)
-        atomic('/etc/apt/keyrings/'+name,data,0o644)
-        return {'saved':'/etc/apt/keyrings/'+name}
+        public_dir(APT_KEYRINGS)
+        atomic(APT_KEYRINGS/name,data,0o644)
+        return {'saved':str(APT_KEYRINGS/name)}
     if action == 'patch':
         if rpm_backend():return rpm_module().patch(req.get('packages',[]))
         packages = req.get('packages',[])

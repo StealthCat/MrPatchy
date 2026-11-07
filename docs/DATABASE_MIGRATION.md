@@ -11,10 +11,16 @@ SQLite destinations are filenames inside `DATA_DIR` (`/data` in Compose). Choose
 1. Update to the same Mr Patchy version on all app/worker hosts and let normal schema initialization finish. Finish running jobs or reconcile interrupted operations; the migration refuses jobs still marked `running`.
 2. Save the destination in Settings. Check the active database and destination details. Back up the database and all persistent identity/SSH/TLS volumes. Preserve the existing `secret.key` and SSH directories.
 3. Stop **all** app and worker replicas, including remote hosts, and any other database writers. An application maintenance lock protects processes using the same shared data directory. It cannot prove that older software, another data directory, external SQL clients or replicas on an unrelated filesystem have stopped. `--confirm-offline` is your explicit assertion that these writers are stopped. Do not expose the destination to other clients during migration.
+   On a Google Cloud (`install-gcp.sh`) deployment, run every `docker compose` command below as `./gcp-compose.sh` unless `.env` still contains the installer's `COMPOSE_FILE` line; otherwise the GCP runtime and IAP connectivity are dropped.
 4. Run the dry run, then the verified migration. Run each command separately and inspect its exit status before continuing:
 
 ```bash
 docker compose stop app worker
+```
+
+The worker drains on SIGTERM and Compose waits up to `stop_grace_period` (8100 s by default, `MRPATCHY_WORKER_STOP_GRACE_PERIOD`) before SIGKILL. Prefer draining first (**Activity → Workers → Drain worker**) or waiting for running jobs; `docker compose stop -t <seconds> worker` overrides the wait.
+
+```bash
 
 docker compose run --rm --no-deps app python -m app.database_migrate \
   --confirm-offline --dry-run
@@ -36,6 +42,10 @@ docker compose up -d app worker
 Sign in and check Settings, users, hosts, package history, schedules and AI logs. Existing sessions, identities, encrypted credentials, queued work, audit/history rows and exact IDs are preserved. The source remains intact. Do not run both copies independently; queued work could be executed twice. If a remote deployment uses copies of the identity volume, distribute the activated encrypted profile with the matching key to every stopped replica before restarting it.
 
 For direct Python installations, run `python -m app.database_migrate` with the same arguments and `DATA_DIR`/deployment environment after stopping your services.
+
+## Progress and failure diagnostics
+
+The command writes readable stage progress to stderr and only the JSON result to stdout. A failure names the stage (for example `destination-connect`, `copy` or `verify-committed`), the source/destination role and table, a sanitized category and exception class with a safe code (MySQL error number, SQLite result name, errno or SQLSTATE), a specific next check, and whether the destination may have been written. Passwords, connection-string secrets, rows, SQL parameters and raw driver messages are never printed. Add `--verbose` to also print the sanitized exception-class chain and bounded stack locations when asking for help. Stages skipped by `--dry-run` are marked as skipped.
 
 ## Validation and failure behavior
 
