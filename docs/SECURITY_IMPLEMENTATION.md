@@ -2258,6 +2258,31 @@ multi-controller failover or the overall faster-AI program. Exact-head SQLite/My
 browser, full-suite and coordinator integration checks remain required.
 
 
+### Durable cross-server process-triage fairness — worker checkpoint #388
+
+Process-triage admission now balances eligible servers by live leased occupancy before
+using another slot on the same server. Ties use a durable monotonically ordered server
+turn. A never-admitted eligible server sorts before one already served, and releasing
+a claim does not erase its turn, so worker or controller restarts cannot reset the
+order and let one deep queue repeatedly win on an older observation timestamp.
+
+The host choice remains inside the existing short distributed triage admission lock.
+Only a successfully committed subject claim records the next turn; refused locks,
+lifecycle changes and ineligible work do not consume one. The scheduler uses bounded
+SQL grouping and ordering rather than materializing the pending queue. A server may
+still fill its configured occupancy when no less-occupied eligible server is waiting.
+Subject exclusivity, per-server and fleet capacity, retry eligibility, pause/lifecycle,
+rate/spend/provider admission, evidence revisions and stale-result fencing remain
+authoritative.
+
+Focused acceptance covers live-occupancy balancing, persisted least-recent turns,
+same-server fallback and failed-admission non-consumption, plus offline database-copy
+retention. This stacked increment depends on #383 and does not complete cross-purpose
+priority/aging, provider-specific quotas, native complete-context collection, complete
+multi-controller failover acceptance or the overall faster-AI program. Exact-head
+SQLite/MySQL/full-suite and coordinator integration checks remain required.
+
+
 ## Portable per-server scanner records
 
 Administrators can use **Security → Export scanner record** without preparing a file
