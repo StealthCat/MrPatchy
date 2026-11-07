@@ -2146,6 +2146,30 @@ separately instead of promising a fixed production speedup.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
 
+### Eligible process-triage backlog telemetry
+
+The administrator investigation status API reports `eligible_unclaimed` and
+`oldest_eligible_unclaimed_observation_at` for active, unpaused servers. The
+population excludes approved, retry-delayed, blocked and live-leased work.
+Expired leases leave otherwise eligible observations visible. The timestamp
+is a Unix timestamp for the oldest observation, or null when none qualify.
+It measures observation age. Provider backoff, shared budgets, worker capacity
+and per-server occupancy can still delay dispatch. Existing counts and
+non-administrator fields are preserved. Production throughput comparisons and
+the broader dashboard acceptance remain open.
+
+### Live process-triage lease telemetry
+
+The administrator investigation status API reports
+`active_lease_expires_at`, the earliest expiry among currently live process
+investigation claims, or null when no claim is live. Expired claims are
+excluded. The AI worker status displays this boundary with the active count so
+an administrator can tell when an unrenewed slot becomes eligible for fenced
+recovery. Expiry does not prove a provider request stopped or was not billed.
+This telemetry is read-only: it does not renew, reconcile, cancel, retry or
+otherwise alter a claim. Full multi-controller failover and production
+recovery acceptance remain open.
+
 ### Fleet-wide exact-match known-good cache
 
 Additional user requirement (2026-10-30): once an item has completed triage and is

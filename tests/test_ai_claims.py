@@ -115,6 +115,35 @@ def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
         for future in running:future.result(15)
 
 
+def test_status_reports_earliest_live_lease_expiry(admin):
+    seed(count=2)
+    first=ai_claims.acquire();second=ai_claims.acquire()
+    assert first and second
+    now=time.time()
+    with Session() as s:
+        s.get(ai_claims.Claim,first.subject).expires=now+45
+        s.get(ai_claims.Claim,second.subject).expires=now+90
+        s.commit()
+
+    status=admin.get('/api/investigation-status').json()
+    assert status['active']==2
+    assert status['active_lease_expires_at']==pytest.approx(now+45)
+
+    with Session() as s:
+        s.get(ai_claims.Claim,first.subject).expires=now-1
+        s.commit()
+    status=admin.get('/api/investigation-status').json()
+    assert status['active']==1
+    assert status['active_lease_expires_at']==pytest.approx(now+90)
+
+    with Session() as s:
+        s.get(ai_claims.Claim,second.subject).expires=now-1
+        s.commit()
+    status=admin.get('/api/investigation-status').json()
+    assert status['active']==0
+    assert status['active_lease_expires_at'] is None
+
+
 def test_lowered_server_limit_preserves_live_leases_and_blocks_later_admission(admin):
     seed(count=4,same_host=True)
     current=admin.get('/api/hosts/host-0/security/ai-policy').json()
