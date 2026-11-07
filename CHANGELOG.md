@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.42.52 — 2026-11-07
+
+1. [PR #268](https://github.com/StealthCat/MrPatchy/pull/268): Detect distributed password guessing when failures against one account arrive from five or more distinct addresses within five minutes, recording one credential-free `login suspicious` audit entry per account and window. Compatibility: authentication responses and admission remain unchanged; detection does not lock accounts or block a legitimate sign-in. Detector state retains at most five recent addresses per tracked account and at most the existing login-bucket account limit, with expiry cleanup. Material limits: this adds audit detection rather than automatic throttling, alert delivery or response action, and new accounts are not tracked while the bounded account table is full. Existing authorization and runtime response boundaries remain unchanged. This source update does not publish a Docker image. Completes #199.
+
 ## 1.42.51 — 2026-11-06
 
 1. [PR #244](https://github.com/StealthCat/MrPatchy/pull/244): Consume completed host-poll and notification futures so failures outside their operation handlers are logged instead of silently discarded, including during worker shutdown. Alert delivery failures now retain a bounded exception class plus an HTTP status or SMTP reply code without storing response text, URLs, credentials or tokens. Compatibility: `alert.error` may become more informative, for example `HTTPStatusError (HTTP 503)`, while APIs and schema remain unchanged. Material limits: these diagnostics do not retry failed delivery or expose remote response bodies. Roles, audit history and runtime response authorization are unchanged. This source update does not publish a Docker image. Completes #169.
