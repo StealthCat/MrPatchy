@@ -116,7 +116,7 @@ def _borrow():
             _condition.notify_all()
 
 
-def post(url, *, headers, json, timeout, encoded_body=None):
+def _send(method, url, *, headers, timeout, json=None, encoded_body=None):
     # Build directly, rather than Client.build_request: never merge a previous
     # response's cookies or any credential-bearing client defaults into a send.
     deadline = httpx.Timeout(timeout, connect=min(timeout, 10), pool=min(timeout, 5))
@@ -126,12 +126,21 @@ def post(url, *, headers, json, timeout, encoded_body=None):
         defaults = {name:client.headers[name] for name in
                     ('accept','connection','user-agent') if name in client.headers}
         defaults['accept-encoding']='gzip'
-        request = httpx.Request('POST', url, headers={**defaults, **headers}, json=json,
-                                content=encoded_body,
-                                extensions={'timeout': deadline.as_dict()})
+        values={'headers':{**defaults, **headers},'extensions':{'timeout':deadline.as_dict()}}
+        if json is not None:values['json']=json
+        if encoded_body is not None:values['content']=encoded_body
+        request = httpx.Request(method, url, **values)
         if encoded_body is not None:request.headers.setdefault('content-type','application/json')
         try:return _bounded(client.send(request,follow_redirects=False,stream=True))
         finally: client.cookies.clear()
+
+
+def get(url, *, headers, timeout):
+    return _send('GET',url,headers=headers,timeout=timeout)
+
+
+def post(url, *, headers, json, timeout, encoded_body=None):
+    return _send('POST',url,headers=headers,json=json,timeout=timeout,encoded_body=encoded_body)
 
 
 def close(*, wait=True):
