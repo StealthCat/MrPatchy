@@ -214,6 +214,7 @@ const assert=require('assert/strict');
     await require('./ui_security_coverage.cjs')(page,capture);
     await require('./ui_security_correlation.cjs')(page,capture);
     await require('./ui_execution_scans.cjs')(page);
+    await require('./ui_panel_isolation.cjs')(page);
     await require('./ui_baseline_history.cjs')(page);
     await require('./ui_host_lifecycle.cjs')(page,capture);
     await require('./ui_spool_health.cjs')(page,capture);
