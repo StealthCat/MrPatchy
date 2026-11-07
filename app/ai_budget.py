@@ -111,12 +111,12 @@ def reserve(payload):
         if config(session)['ai_control_mode'] not in ai_pricing.CAP_MODES:
             return None
 
-    quote=ai_pricing.reservation(payload)
     with Lock('ai-shared-budget'):
         # Read again after waiting: the preflight does not authorize a capped reservation.
         with Session() as session:
             cfg=config(session)
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
+            quote=ai_pricing.reservation(payload)
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
             now=time.time();enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)

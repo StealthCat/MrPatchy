@@ -130,20 +130,30 @@ def test_uncapped_reservation_skips_shared_lock_and_quote(admin, monkeypatch, mo
 def test_capped_reservation_rereads_settings_after_lock(admin, monkeypatch, new_mode, new_cap):
     configure(cap=Decimal('1'))
     lock = ai_budget.Lock
+    quote = ai_pricing.reservation
+    actions = []
 
     @contextmanager
     def change_settings_while_entering(name):
         assert name == 'ai-shared-budget'
         configure(mode=new_mode, cap=new_cap)
         with lock(name):
+            actions.append('lock')
             yield
 
+    def record_quote(request):
+        actions.append('quote')
+        return quote(request)
+
     monkeypatch.setattr(ai_budget, 'Lock', change_settings_while_entering)
+    monkeypatch.setattr(ai_pricing, 'reservation', record_quote)
     if new_mode == 'rate':
         assert ai_budget.reserve(payload('unknown-model')) is None
+        assert actions == ['lock']
     else:
         with pytest.raises(ai.AIError, match='no remaining safe reservation'):
             ai_budget.reserve(payload())
+        assert actions == ['lock', 'quote']
     with Session() as session:
         assert session.query(ai_budget.BudgetEntry).count() == 0
 

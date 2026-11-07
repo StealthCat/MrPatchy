@@ -2174,10 +2174,11 @@ validation. Production throughput and wider transport acceptance remain open.
 The spend-reservation path checks the current budget mode before computing a quote
 or acquiring the shared budget lock (#615). Legacy, rate-only and unthrottled
 requests skip both operations and create no budget entry. Capped requests still
-recheck settings in a fresh session under the lock and atomically count and reserve
-spend. The preflight adds one settings read for capped requests. This checkpoint
-removes one shared lock acquisition per uncapped request. End-to-end throughput
-and broader shared-controls acceptance remain open.
+recheck settings in a fresh session under the lock, then quote and atomically
+reserve spend if the cap still applies. Capped requests add one settings read
+and compute the quote while holding the lock. This checkpoint removes one
+shared lock acquisition per request that begins budget admission uncapped.
+End-to-end throughput and broader shared-controls acceptance remain open.
 
 Provide administrator-controlled modes in Settings with clear effects before save:
 
