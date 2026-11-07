@@ -2210,6 +2210,23 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### SSH evidence delay in the triage benchmark — worker checkpoint #524
+
+`tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
+remains 10 ms. Both simulated delays are included in the JSON report. For a
+matched SSH-heavy serial/parallel comparison, run the same eight investigations
+with the same provider and SSH delays:
+
+```sh
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 1
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 4
+```
+
+Check that both reports retain the same provider call count and one-stage and
+two-stage workload before comparing their stage percentiles and throughput.
+These are loopback and stubbed SSH measurements. Production comparison remains
+open.
+
 ### Bounded same-server process triage — worker checkpoint #379
 
 This bounded threaded-execution increment permits two independent renewable process-
@@ -6024,6 +6041,26 @@ does not expand release support or response authority, and does not complete the
 remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
 integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
 required before this increment is delivered.
+
+
+### Configurable AI benchmark queue age — worker checkpoint #542
+
+This bounded faster-AI measurement increment lets the fixture-only serial/parallel
+benchmark seed observations with a selected synthetic queue age from zero through
+one day. The historical two-second default remains unchanged. The selected age is
+reported in the machine-readable profile and drives the existing queue-age timing,
+so paired runs can exercise fresh and delayed-backlog telemetry without sleeping or
+changing the provider, SSH-evidence, persistence, model, reasoning, evidence or
+one/two-stage workload.
+
+Focused acceptance rejects negative and excessive ages before fixture startup, then
+proves a five-second selection yields two queue-age samples at or beyond the selected
+age while preserving three provider calls and the SSH follow-up for two subjects.
+The queue age remains synthetic: it does not reproduce scheduler contention, pause,
+rate/budget deferral, provider backoff or production load, and it does not establish
+a production speedup. Coordinator integration of prerequisite #525, exact-head
+SQLite/MySQL/full-suite checks and fresh code scanning remain required before this
+increment is delivered.
 
 
 ### Retained AI spend history — worker checkpoint #372
