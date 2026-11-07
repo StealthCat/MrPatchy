@@ -3,7 +3,7 @@ import hashlib
 import json
 import math
 import time
-from sqlalchemy import String, Text, Integer, Double, select, func, tuple_, and_, or_
+from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_
 from sqlalchemy.orm import Mapped, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
@@ -29,6 +29,10 @@ class UpdateScore(Base):
     next_at: Mapped[float]=mapped_column(Double,default=0,server_default='0')
     completed: Mapped[float]=mapped_column(Double,default=0)
     run_id: Mapped[str]=mapped_column(String(36),default='')
+
+
+SCORE_HISTORY_INDEX = Index('ix_update_scores_host_name_state_candidate',
+    UpdateScore.host_id, UpdateScore.name, UpdateScore.state, UpdateScore.candidate)
 
 
 def evidence(host, package, index=None):
