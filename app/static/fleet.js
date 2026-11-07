@@ -60,11 +60,11 @@ function assessmentKnownGood(item){
 
 async function investigationAssessmentPage(revision,context,base){
  const root=context?.root||$('#content'),view=context?'servers':'investigations';
- if(!isAdmin()){root.innerHTML=empty('Administrator access required','Assessment history contains retained evidence.');return;}
+ if(!isAdmin()){root.innerHTML=PatchyUI.error('Administrator access required','Assessment history contains retained evidence.');return;}
  const raw=location.hash.slice((base+'/item/').length).split('/');let id,record;
  try{id=decodeURIComponent(raw[0]||'');record=decodeURIComponent(raw[2]||'');}catch{id='';}
  const back=`<a class="button" href="${base}">← Investigations</a>`;
- if(!id||id.length>64||id.includes('/')||raw[1]!=='history'||record.length>36){root.innerHTML=empty('Invalid assessment link','Return to investigations and select a saved assessment.',back);return;}
+ if(!id||id.length>64||id.includes('/')||raw[1]!=='history'||record.length>36){root.innerHTML=PatchyUI.error('Invalid assessment link','Return to investigations and select a saved assessment.',back);return;}
  const historyBase=base+'/item/'+encodeURIComponent(id)+'/history';
  const scope=context?'&host_id='+encodeURIComponent(context.hostId):'';
  const key=(context?.hostId||'fleet')+':'+id,offset=assessmentOffsets.get(key)||0;
@@ -72,7 +72,7 @@ async function investigationAssessmentPage(revision,context,base){
  try{
   data=await api('/investigations/'+encodeURIComponent(id)+'/history?offset='+offset+scope);
   if(record)item=await api('/investigations/'+encodeURIComponent(id)+'/history/'+encodeURIComponent(record)+'?'+scope.slice(1));
- }catch(error){if(currentView(revision,view)&&root.isConnected)root.innerHTML=empty('Unable to open assessment history',esc(error.message),back+'<button id="retry-assessment-view">Retry</button>');const retry=root.querySelector('#retry-assessment-view');if(retry)retry.onclick=render;return;}
+ }catch(error){if(currentView(revision,view)&&root.isConnected)root.innerHTML=PatchyUI.error('Unable to open assessment history',esc(error.message),back+'<button id="retry-assessment-view">Retry</button>');const retry=root.querySelector('#retry-assessment-view');if(retry)retry.onclick=render;return;}
  if(!currentView(revision,view)||!root.isConnected)return;
  const current=data.current;
  document.title='Assessment history · Mr Patchy';$('#breadcrumb').textContent+=' / Assessment history';
@@ -168,7 +168,7 @@ async function fleetSecurityCoverage(revision){
   const engine=(name,r)=>'<section class="card"><h3>'+name+' · <span class="badge '+esc(r.state)+'">'+esc(labels[r.state]||r.state)+'</span>'+'</h3><p>'+date(r.created)+' · Signatures: '+esc(r.signatures)+(r.overdue?' · Coverage is overdue or absent':'')+'</p><p>'+r.scanned+' files scanned · '+r.findings+' findings in latest receipt</p><details><summary>Scope, gaps and latest attempt</summary><pre>'+esc(JSON.stringify({roots:r.roots,gaps:r.gaps,last_attempt:r.last_attempt,scan_id:r.scan_id},null,2))+'</pre></details></section>';
   root.querySelector('#coverage-results').innerHTML='<p>'+data.summary.servers+' servers on this page · '+data.summary.disabled+' disabled · '+data.summary.open_incidents+' open or acknowledged scanner incidents</p>'+data.items.map(h=>'<article class="card"><div class="card-head"><h2>'+esc(h.name)+'</h2><a class="button" href="'+serverLink(h.id,'security')+'">Review server security</a></div><p>'+badge(h.enabled?'enabled':'disabled')+' · Last contact '+date(h.last_seen)+' · '+h.open_incidents+' open incidents · ClamAV age limit '+h.expected_hours+' hours · YARA age limit 24 hours</p>'+(!h.enabled?'<p class="notice">Management is disabled. These results are historical; collection is suspended.</p>':'')+'<div class="server-grid">'+engine('ClamAV',h.engines.ClamAV)+engine('YARA',h.engines.YARA)+'</div></article>').join('')+(data.items.length?'':'<p>No matching managed servers.</p>');
   root.querySelector('#coverage-prev').disabled=!offset;root.querySelector('#coverage-next').disabled=!data.more;
- }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').textContent=error.message;}};
+ }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').innerHTML=PatchyUI.error('Unable to load coverage',esc(error.message));}};
  root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await load();
 }
 
@@ -176,11 +176,11 @@ async function aiRunPage(revision,context,base,parts){
  const root=context?.root||$('#content'),name=context?'servers':'ai-logs';
  const back=`<a class="button" href="${base}">← AI activity</a>`;
  let id;try{id=decodeURIComponent(parts[0]||'');}catch{id='';}
- if(!id||id.length>128||id.includes('/')){root.innerHTML=empty('Invalid AI run link','Return to AI activity and select a saved run.',back);return;}
+ if(!id||id.length>128||id.includes('/')){root.innerHTML=PatchyUI.error('Invalid AI run link','Return to AI activity and select a saved run.',back);return;}
  const tab=['summary','cost','timeline'].includes(parts[1])?parts[1]:'summary';
  let run;
  try{run=await api('/ai/runs/'+encodeURIComponent(id)+(context?'?host_id='+encodeURIComponent(context.hostId):''));}
- catch(error){if(!currentView(revision,name)||!root.isConnected)return;root.innerHTML=empty('Unable to open AI run',esc(error.message),back+'<button id="retry-ai-run">Retry</button>');const retry=root.querySelector('#retry-ai-run');if(retry)retry.onclick=render;return;}
+ catch(error){if(!currentView(revision,name)||!root.isConnected)return;root.innerHTML=PatchyUI.error('Unable to open AI run',esc(error.message),back+'<button id="retry-ai-run">Retry</button>');const retry=root.querySelector('#retry-ai-run');if(retry)retry.onclick=render;return;}
  if(!currentView(revision,name)||!root.isConnected)return;
  document.title='AI run · '+run.purpose+' · Mr Patchy';$('#breadcrumb').textContent+=' / AI run / '+tab;
  const nav=`<nav class="overview-sections" aria-label="AI run pages">${[['summary','Summary'],['cost','Cost'],['timeline','Timeline']].map(([key,label])=>`<a href="${base}/run/${encodeURIComponent(id)}/${key}" ${key===tab?'class="active" aria-current="page"':''}>${label}</a>`).join('')}</nav>`;
