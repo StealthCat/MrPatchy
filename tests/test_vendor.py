@@ -95,11 +95,16 @@ def test_wrong_key_and_symlink_files_rejected(bundle,tmp_path):
 def test_tar_traversal_duplicate_and_budget():
     with pytest.raises(ValueError):list(vendor.tar_members(tar([('../escape',b'x')])))
     with pytest.raises(ValueError):list(vendor.tar_members(tar([('/absolute',b'x')])))
-    # A bounded header-only hostile fixture exercises rejection before content
-    # reads. Python 3.13+ requires a real fileobj for nonempty addfile entries.
-    info=tarfile.TarInfo('huge');info.size=33*1024*1024
-    hostile=info.tobuf()+b'\0'*1024
-    with pytest.raises(ValueError,match='work limit exceeded'):list(vendor.tar_members(hostile))
+    out=io.BytesIO()
+    with tarfile.open(fileobj=out,mode='w') as archive:
+        info=tarfile.TarInfo('huge');info.size=33*1024*1024
+        class Zeros(io.RawIOBase):
+            def __init__(self):self.left=info.size
+            def readable(self):return True
+            def readinto(self,buffer):
+                count=min(len(buffer),self.left);buffer[:count]=bytes(count);self.left-=count;return count
+        archive.addfile(info,Zeros())
+    with pytest.raises(ValueError):list(vendor.tar_members(out.getvalue()))
 
 
 @pytest.mark.parametrize('content_size',[True,False])
