@@ -10,7 +10,15 @@ const serverListContext={q:"",state:"all",offset:0};
 let csrf='',hosts=[],selected='',page='overview',toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
 const badge=s=>`<span class="badge ${esc(s)}">${esc(s)}</span>`;
-async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data={},parsed=true;if(text){try{data=JSON.parse(text);}catch{parsed=false;}}if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin(csrf?'Session expired. Sign in again.':'');throw Object.assign(Error(parsed&&data&&typeof data.detail==='string'?data.detail:parsed&&data&&data.detail!==undefined?JSON.stringify(data.detail):`Request failed (HTTP ${r.status}${r.statusText?' '+r.statusText:''})`),{status:r.status});}if(!parsed)throw Error(`Unexpected non-JSON response (HTTP ${r.status})`);return data;}
+function apiErrorMessage(detail){
+ // Never echo rejected input: arrays/objects (FastAPI validation shapes from proxies or older servers) reduce to "field: message".
+ if(typeof detail==='string')return detail.slice(0,300);
+ const label=loc=>Array.isArray(loc)?loc.filter(x=>typeof x==='string'&&x!=='body'&&x!=='query').slice(-1)[0]||'':'';
+ if(Array.isArray(detail)){const parts=detail.slice(0,3).map(x=>{if(!x||typeof x!=='object'||typeof x.msg!=='string')return '';const f=label(x.loc);return (f?f+': ':'')+x.msg.slice(0,120);}).filter(Boolean);return parts.join('; ');}
+ if(detail&&typeof detail==='object'&&typeof detail.msg==='string')return detail.msg.slice(0,200);
+ return '';
+}
+async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data={},parsed=true;if(text){try{data=JSON.parse(text);}catch{parsed=false;}}if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin(csrf?'Session expired. Sign in again.':'');throw Object.assign(Error(apiErrorMessage(parsed&&data?data.detail:undefined)||`Request failed (HTTP ${r.status}${r.statusText?' '+r.statusText:''})`),{status:r.status});}if(!parsed)throw Error(`Unexpected non-JSON response (HTTP ${r.status})`);return data;}
 function toast(message,global=false){
  const target=global?$('#toast'):$('#modal').open?$('#modal-message'):$('#toast');
  target.textContent=message;target.classList.remove('hidden');target.style.display='block';
@@ -195,7 +203,7 @@ async function servers(revision=renderRevision){
 }
 function serverDirectoryCard(h){
  const link=serverLink(h.id),id=esc(h.id);
- return `<article class="server-directory-card"><div class="server-card-title">${PatchyUI.icon('servers')}<div><a class="server-name" href="${link}"><strong>${esc(h.name)}</strong></a><small>${esc(PatchyUI.endpoint(h.address,h.port))}</small></div>${badge(h.enabled===false?'disabled':h.state)}</div><dl class="server-card-facts"><div><dt>Architecture</dt><dd>${esc(h.architecture||'Awaiting enrollment')}</dd></div><div><dt>Last contact</dt><dd>${date(h.last_seen)}</dd></div></dl>${h.error?`<p class="notice server-card-error">${esc(h.error)}</p>`:''}<div class="actions"><a class="button primary" href="${link}">Open server →</a><button data-action="inspect" data-id="${id}" ${h.enabled===false?'disabled':''}>${isAdmin()?'Manage':'Inspect'} ↗</button></div>${isAdmin()?`<div class="actions server-card-management"><button class="quiet" data-host-lifecycle="${id}">${h.enabled===false?'Enable':'Disable'} server</button><button class="quiet" data-host-delete="${id}">Delete server</button></div>`:''}</article>`;
+ return `<article class="server-directory-card"><div class="server-card-title">${PatchyUI.icon('servers')}<div><a class="server-name" href="${link}"><strong>${esc(h.name)}</strong>${PatchyUI.upgradeBadge(h)}</a><small>${esc(PatchyUI.endpoint(h.address,h.port))}</small></div>${badge(h.enabled===false?'disabled':h.state)}</div><dl class="server-card-facts"><div><dt>Architecture</dt><dd>${esc(h.architecture||'Awaiting enrollment')}</dd></div><div><dt>Last contact</dt><dd>${date(h.last_seen)}</dd></div></dl>${h.error?`<p class="notice server-card-error">${esc(h.error)}</p>`:''}<div class="actions"><a class="button primary" href="${link}">Open server →</a><button data-action="inspect" data-id="${id}" ${h.enabled===false?'disabled':''}>${isAdmin()?'Manage':'Inspect'} ↗</button></div>${isAdmin()?`<div class="actions server-card-management"><button class="quiet" data-host-lifecycle="${id}">${h.enabled===false?'Enable':'Disable'} server</button><button class="quiet" data-host-delete="${id}">Delete server</button></div>`:''}</article>`;
 }
 async function addServer(){
  modal('Enroll server · Step 1 of 3',`${PatchyUI.enrollment(1)}<p class="help">Enter the endpoint Mr Patchy will reach over SSH.</p><form id="host-form"><div class="form-grid"><label>Display name<input name="name" placeholder="Living-room Pi" required maxlength="120"></label><label>IP address or hostname<input name="address" placeholder="192.168.1.50" required pattern="[A-Za-z0-9:.\\-]+" title="Letters, digits, dots, hyphens and colons only (no underscores or spaces)"></label><label>SSH port<input type="number" name="port" value="22" min="1" max="65535"></label></div><button class="primary">Continue to preparation →</button></form>`);
@@ -437,7 +445,7 @@ const usernameLabel=document.createElement('label');usernameLabel.textContent='U
 const usernameInput=document.createElement('input');usernameInput.name='username';usernameInput.value='admin';usernameInput.autocomplete='username';usernameLabel.append(usernameInput);
 usernameInput.required=true;usernameInput.maxLength=64;$('#login-form [name=password]').closest('label').before(usernameLabel);
 const otpLabel=document.createElement('label');otpLabel.textContent='Authenticator code (if enabled)';
-const otpInput=document.createElement('input');otpInput.name='otp';otpInput.autocomplete='one-time-code';otpInput.inputMode='numeric';otpInput.maxLength=6;otpLabel.append(otpInput);
+const otpInput=document.createElement('input');otpInput.name='otp';otpInput.autocomplete='one-time-code';otpInput.inputMode='numeric';otpInput.maxLength=16;otpLabel.append(otpInput);
 $('#login-form button').before(otpLabel);
 const accountButton=document.createElement('button');accountButton.textContent='Account';$('#logout').before(accountButton);
 $('#header-actions').append(accountButton,$('#logout'));

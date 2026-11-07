@@ -2137,6 +2137,14 @@ separately instead of promising a fixed production speedup.
 
 ### Parallel execution and latency work
 
+Worker checkpoint #594 batches score-row reads when linking the diagnostic run
+and persisting completed, deferred or failed outcomes for the existing five-item
+scoring batch. The same sessions still recheck current package and server evidence
+before accepting an assessment. A five-item fixture reduces ID-filtered score
+SELECTs from twelve to four, including candidate and host-scope reads. This is
+partial scoring performance work. Idle candidate hashing, measured production
+throughput and full parallel scoring acceptance remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.
@@ -4935,6 +4943,19 @@ Rebuild the controller first to create the provider-backoff table, then matching
 workers. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
 
+
+### Successful provider responses — worker checkpoint #609
+
+Successful and non-transient responses check one backoff key without acquiring
+the distributed lock when no reset is eligible. A reset candidate takes the
+same shared lock and checks again in a fresh transaction, preserving a newer
+failure recorded between the initial read and lock acquisition. An already
+clear row does not receive an otherwise unnecessary timestamp write.
+
+Acceptance covers the absent, clear and newer rows, an eligible reset and a
+concurrent failure injected before the locked reread. This increment reduces
+lock acquisitions and writes on these paths. Fleet throughput, recovery and
+complete multi-controller acceptance remain separate milestones.
 
 ## v1.34.0 — Durable update-scoring deferral and exact resume
 
