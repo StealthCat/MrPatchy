@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health
+from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.43.4'
+APP_VERSION='1.44.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -440,18 +440,20 @@ def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(s
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
     with Session() as s:
-        # Read the three small inventory keys in SQL instead of decoding every host's full inventory, telemetry and baseline.
-        # A JSON null stays distinct from a missing key (null is returned as-is, missing falls back to the default).
-        keys=('architecture','os','package_manager'); cols=[]
-        for k in keys:
-            path='$."%s"'%k
-            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*(( path,) if engine.dialect.name=='sqlite' else ()))
-            cols+=[Host.inventory[k].as_string(),kind]
-        rows=s.execute(select(Host,*cols).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
+        keys=('architecture','os','package_manager');cols=[]
+        for key in keys:
+            path='$."%s"'%key
+            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
+            cols+=[Host.inventory[key].as_string(),kind]
+        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+            .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
+            .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
         def meta(value,kind,default):
             if kind is None:return default
             return None if str(kind).lower()=='null' else value
-        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt')} for h,a,ak,o,ok,m,mk in rows]
+        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
+            'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
+            for h,a,ak,o,ok,m,mk,saved in rows]
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
@@ -523,7 +525,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
         behaviors=list(s.execute(select(Behavior.verdict,Behavior.approved).where(Behavior.host_id==host_id)))
         jobs=dict(s.execute(select(Job.state,func.count()).where(Job.host_id==host_id).group_by(Job.state)).all())
         last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='patch').order_by(Job.created.desc(),Job.id).limit(1))
-        return {'host':object_dict(h,('inventory','telemetry','baseline')),
+        return {'host':object_dict(h,('inventory','telemetry','baseline'))|{'os_upgrade':os_upgrade.status(h)},
                 'system':{k:h.inventory.get(k) for k in ('os','architecture','foreign_architectures','package_manager','machine_id','collected')},
                 'collector':{'collected':h.telemetry.get('collected'), 'hashed_at':h.telemetry.get('hashed_at'),
                              'processes':len(h.telemetry.get('processes',[])), 'managed_files':len(h.telemetry.get('managed',{}))},
