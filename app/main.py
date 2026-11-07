@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.44.4'
+APP_VERSION='1.44.5'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1478,13 +1478,49 @@ def cancel_job(job_id:str,user=Depends(admin_user)):
         audit(s,'cancel job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
+def sbom_components(inventory,packages):
+    from urllib.parse import quote
+    values={}
+    for line in (inventory.get('os') or '').splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            key,value=line.split('=',1);values[key.strip()]=value.strip().strip('"').strip("'")
+    rpm=package_backend.is_rpm(inventory)
+    ident=values.get('ID','').lower()
+    namespace=quote(ident,safe='')+'/' if re.fullmatch(r'[a-z0-9][a-z0-9._-]*',ident) else ''
+    distro=ident+'-'+values['VERSION_ID'] if namespace and re.fullmatch(r'[A-Za-z0-9._-]+',values.get('VERSION_ID','')) else ''
+    def component(name,arch,version,epoch=None):
+        qualifiers=[('arch',arch)] if arch else []
+        if epoch and epoch!='0':qualifiers.append(('epoch',epoch))
+        if distro:qualifiers.append(('distro',distro))
+        query=('?'+'&'.join(k+'='+quote(v,safe='') for k,v in qualifiers)) if qualifiers else ''
+        return {'type':'library','name':name,'version':version,'purl':('pkg:rpm/' if rpm else 'pkg:deb/')+namespace+quote(name,safe='')+'@'+quote(version,safe='')+query}
+    if rpm and inventory.get('rpm_packages'):
+        # Every installed version is reported, including older install-only kernels.
+        entries=sorted({(p['name'],p['arch'],p['evr']) for p in inventory['rpm_packages']})
+        result=[]
+        for name,arch,evr in entries:
+            epoch,sep,version=evr.partition(':')
+            if not sep:epoch,version='0',evr
+            result.append(component(name,arch,version,epoch))
+        return result
+    result=[]
+    for p in packages:
+        name,_,arch=p.name.rpartition(':')
+        if not name:name,arch=p.name,''
+        if rpm:
+            epoch,sep,version=p.installed.partition(':')
+            if not sep:epoch,version='0',p.installed
+            result.append(component(name,arch,version,epoch))
+        else:result.append(component(name,arch,p.installed))
+    return result
+
 @app.get('/api/hosts/{host_id}/sbom')
 def sbom(host_id:str,user=Depends(viewer_user)):
-    from urllib.parse import quote
     with Session() as s:
         h=host_or_404(s,host_id)
+        packages=s.scalars(select(Package).where(Package.host_id==host_id).order_by(Package.name)).all()
         return {'bomFormat':'CycloneDX','specVersion':'1.5','version':1,'serialNumber':'urn:uuid:'+str(uuid.uuid4()),
-            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':('pkg:rpm/' if package_backend.is_rpm(h.inventory) else 'pkg:deb/')+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
+            'components':sbom_components(h.inventory or {},packages)}
 
 @app.get('/api/audit/export')
 def export_audit(after:int=0,limit:int=1000,user=Depends(admin_user)):
