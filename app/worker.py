@@ -88,6 +88,8 @@ def save_inventory(s,h,inv):
     if previous!=current or not s.scalar(select(InventoryRevision.id).where(InventoryRevision.host_id==h.id).limit(1)):
         s.add(InventoryRevision(id=uuid.uuid4().hex,host_id=h.id,inventory=inv))
     h.inventory=inv
+    from . import os_upgrade
+    os_upgrade.store(s,h,inv)
     changed=[(item,old[item['name']]) for item in items if item['name'] in old and old[item['name']].candidate]
     newer=package_backend.newer_flags(inv,[(p.candidate,item['installed']) for item,p in changed])
     still_newer={item['name']:flag for (item,_),flag in zip(changed,newer)}
@@ -95,13 +97,14 @@ def save_inventory(s,h,inv):
     for item in items:
         names.add(item['name']); p=old.get(item['name'])
         if not p:
-            p=Package(id=h.id+':'+item['name'],host_id=h.id,**item); s.add(p)
+            p=Package(id=h.id+':'+item['name'],host_id=h.id,repository_priority=item.get('priority','') if item.get('candidate') else '',**item); s.add(p)
             if old: audit(s,'package installed',h.name+' '+item['name']+' '+item['installed'])
         else:
             if p.installed!=item['installed']: audit(s,'package version changed',h.name+' '+p.name+' '+p.installed+' → '+item['installed'])
             p.installed=item['installed']; p.held=item['held']; p.dpkg_state=item['dpkg_state']
             if p.candidate and not still_newer.get(item['name'],False):
-                p.candidate=''; p.available_since=0
+                # The cached repository classification belongs to the cleared candidate.
+                p.candidate=''; p.available_since=0; p.repository_priority=''
     for name,p in old.items():
         if name not in names:
             audit(s,'package removed',h.name+' '+p.name+' '+p.installed); s.delete(p)
@@ -127,6 +130,9 @@ def update_repos(s,h):
         if not item['candidate']: p.available_since=0
         elif not p.candidate or not p.available_since: p.available_since=time.time()
         for key in ['candidate','origin']: setattr(p,key,item[key])
+        # Remember the repository classification even under a manual override so
+        # resetting to auto can restore it (RPM severity is not derivable from origin).
+        p.repository_priority=item['priority']
         if not p.priority_manual: p.priority=item['priority']
     h.last_repo=time.time(); h.repo_error=''; s.commit(); return output
 
@@ -450,7 +456,11 @@ def execute_locked(job_id):
             health=s.get(Setting,'agent-status:'+h.id)
             # File responses perform a mandatory fresh independent check before
             # importing a helper. Let that check recover a stale cached outage.
-            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status',*quarantine.ACTIONS):
+            # A journaled rotation interrupted after writing [old,new] leaves only authorized_keys
+            # drifting from the baseline; let the retry finish it instead of requiring a reinstall.
+            rotation_retry=bool(health and job.action=='rotate-key' and health.value.get('state') in ('blocked','drifted') and ssh.rotation_resumable(h)
+                and health.value.get('issues') and all(i.get('path')=='/opt/drpatch/.ssh/authorized_keys' for i in health.value['issues']))
+            if not resuming and not rotation_retry and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status',*quarantine.ACTIONS):
                 raise ValueError('Agent verification failed; review Agent health before executing remote operations')
             if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
             elif job.action=='release-upgrade':
@@ -593,9 +603,9 @@ def execute_locked(job_id):
                     if any(policy.values()) and existing:
                         raise ValueError('Pre-patch health failed: automatic reboot/rollback requires clean service health; no package changes attempted: '+json.dumps(sorted(existing)))
                     job.payload={**job.payload,'_health_before':health_before};s.commit()
-                protected=job.action=='patch' and any(policy.values())
+                use_protection=job.action=='patch' and any(policy.values())
                 request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
-                if protected:
+                if use_protection:
                     if policy.get('rollback'):
                         original=ssh.call(h,{'action':'patch-inspect'},timeout=120)
                         if original.get('version')!=1 or not original.get('configs'):
@@ -605,6 +615,8 @@ def execute_locked(job_id):
                         job.payload={**job.payload,'_patch_original':original};s.commit()
                         request['original']=original
                     request.update(action='protected-patch',job_id=job.id,policy=policy)
+                    # Failures before this point (read-only inspect, helper check) changed nothing
+                    protected=True
                 tracked_mutation=not protected
                 if tracked_mutation:mutation_stage='sent'
                 result=ssh.call(h,request,timeout=7500 if protected else 3700)
@@ -638,7 +650,7 @@ def execute_locked(job_id):
                 audit(s,'deferred '+job.action,job.host_id+' controlled AI wait')
                 s.commit();return
             uncertain=mutation_outcome_uncertain(mutation_stage,e)
-            job.state='recovery_required' if protected or uncertain else 'failed'
+            job.state='failed' if isinstance(e,releases.Refused) else 'recovery_required' if protected or uncertain else 'failed'
             if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
@@ -790,7 +802,15 @@ def _assess_active_behavior(s,row,cfg,secret):
             from . import known_good
             with Session() as provenance_read:updated=known_good.bind_vendor_provenance(provenance_read,row.host_id,updated,collected)
             if lease:
-                with lease.mutation() as (write,saved):saved.evidence=updated
+                with lease.mutation() as (write,saved):
+                    # The lease ignores the observation-only process identity, so a
+                    # respawn may have refreshed it since this local copy was taken.
+                    # Keep the latest observation; the remote details stay bound to
+                    # the identity they were collected for.
+                    updated=copy.deepcopy(updated)
+                    if 'process_identity' in (saved.evidence or {}):updated['process_identity']=copy.deepcopy(saved.evidence['process_identity'])
+                    else:updated.pop('process_identity',None)
+                    saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
         result=assess(row.evidence)
@@ -804,6 +824,11 @@ def _assess_active_behavior(s,row,cfg,secret):
         if lease:
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
+
+def ai_plan_waiting(s,job):
+    """True for queued AI planning jobs that must wait for AI to be enabled/resumed (no retry time)."""
+    return job.action in ('release-plan','security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,job.host_id)['paused'])
+
 
 def loop(role="embedded"):
     from .worker_registry import Registration
@@ -844,7 +869,18 @@ def _loop(reporter):
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
-            if shutting_down and not active_jobs and not ai_tasks and all(future.done() for future in active_polls.values()) and (notification_task is None or notification_task.done()):break
+            # Finished observation/delivery futures must be consumed even when
+            # this tick satisfies the terminal shutdown condition.
+            for host_id,future in list(active_polls.items()):
+                if future.done() and not getattr(future,'_mp_reaped',False):
+                    future._mp_reaped=True
+                    try: future.result()
+                    except Exception: log.exception('Host poll failed outside its handler')
+            if notification_task is not None and notification_task.done() and not getattr(notification_task,'_mp_reaped',False):
+                notification_task._mp_reaped=True
+                try: notification_task.result()
+                except Exception: log.exception('Notification delivery failed outside its handler')
+            if shutting_down and not active_jobs and not ai_tasks and all(getattr(future,'_mp_reaped',False) for future in active_polls.values()) and (notification_task is None or getattr(notification_task,'_mp_reaped',False)):break
             if shutting_down:time.sleep(.25)
             reporter.stopping=shutting_down
             try:
@@ -890,7 +926,10 @@ def _loop(reporter):
                                 existing=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh',Job.state.in_(['queued','running'])))
                                 # Failure backoff is independent of last successful refresh.
                                 latest=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh').order_by(Job.created.desc()))
-                                if not existing and (not latest or now-latest.created>300): enqueue(s,h.id,'refresh')
+                                if not existing and (not latest or now-latest.created>300):
+                                    # A full per-server queue must not abort the fleet-wide tick.
+                                    try:enqueue(s,h.id,'refresh')
+                                    except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
                         operations.collect_alerts()
                     # Resume observation, never the package transaction, after worker loss.
@@ -903,7 +942,7 @@ def _loop(reporter):
                         if len(active_jobs)>=capacity['jobs']: break
                         if j.host_id in busy_hosts:continue
                         if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
-                        if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
+                        if ai_plan_waiting(s,j):continue
                         scope=response_hold_scope(j)
                         hold_scope=(j.host_id,*scope.values())
                         if hold_scope not in hold_cache:

@@ -189,6 +189,14 @@ def test_ssh_call_marks_errors_after_remote_start(admin, monkeypatch):
     monkeypatch.setattr(ssh, 'read_channel', lambda channel, deadline: (_ for _ in ()).throw(ssh.RemoteFailure('E: held')))
     with pytest.raises(ssh.RemoteFailure, match='SSH patch failed: E: held'):
         ssh.call(h, {'action': 'patch', 'packages': ['demo=2']}, key_file='unused')
+    # A deadline timeout after the command started is not a connection failure.
+    monkeypatch.setattr(ssh, 'read_channel', lambda channel, deadline: (_ for _ in ()).throw(
+        TimeoutError('SSH operation exceeded its total deadline; verify target state before retrying')))
+    with pytest.raises(RuntimeError) as raised:
+        ssh.call(h, {'action': 'patch', 'packages': ['demo=2']}, timeout=3700, key_file='unused')
+    assert 'connection unavailable' not in str(raised.value) and 'Check the saved address' not in str(raised.value)
+    assert '3700 s deadline' in str(raised.value) and 'outcome is unknown' in str(raised.value)
+    assert raised.value.remote_started is True and not ssh.request_unstarted(raised.value)
 
 
 class Finished:
