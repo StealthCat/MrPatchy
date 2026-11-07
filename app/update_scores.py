@@ -10,7 +10,7 @@ from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy
 from .coordination import Lock
 from .security import unseal
-from .package_history import versions
+from .package_history import versions, version_index
 
 class UpdateScore(Base):
     __tablename__='update_scores'
@@ -31,18 +31,18 @@ class UpdateScore(Base):
     run_id: Mapped[str]=mapped_column(String(36),default='')
 
 
-def evidence(host, package):
+def evidence(host, package, index=None):
     # No host addresses, repository credentials, source files or process evidence.
     # Classification is a signal, never a claimed CVE/changelog verification.
-    return {'package':package.name,'installed':versions(host.inventory,package.name,package.installed),
+    return {'package':package.name,'installed':versions(host.inventory,package.name,package.installed,index),
             'candidate':package.candidate,'distribution':{line.split('=',1)[0]:line.split('=',1)[1].strip('"')[:200] for line in str(host.inventory.get('os','')).splitlines() if '=' in line and line.split('=',1)[0] in ('ID','VERSION_ID','PRETTY_NAME')},
             'package_manager':host.inventory.get('package_manager','apt'),'priority_signal':package.priority,'priority_source':'manual override' if package.priority_manual else 'repository classification',
             'held':package.held,'package_state':package.dpkg_state,
             'evidence_limit':'Repository classification and versions only. No candidate changelog, CVE fix status, exploitability or service exposure has been verified.'}
 
 
-def identity(host,package):
-    return hashlib.sha256((host.id+json.dumps(evidence(host,package),sort_keys=True)).encode()).hexdigest()
+def identity(host,package,index=None):
+    return hashlib.sha256((host.id+json.dumps(evidence(host,package,index),sort_keys=True)).encode()).hexdigest()
 
 
 def public(row,enabled=True):
@@ -63,7 +63,7 @@ def scoring_candidates(s):
     interleave them with an open unbuffered result. Keyset paging keeps the
     existing oldest-first order without repeatedly skipping earlier rows.
     """
-    cursor=None;hosts={}
+    cursor=None;hosts={};indexes={}
     while True:
         query=select(Package).where(Package.candidate!='',Package.host_id.not_in(ai_policy.paused_ids()),
             Package.host_id.in_(host_lifecycle.active_ids()))
@@ -76,7 +76,9 @@ def scoring_candidates(s):
         missing={p.host_id for p in packages if p.host_id not in hosts}
         if missing:
             hosts.update({h.id:h for h in s.scalars(select(Host).where(Host.id.in_(missing)))})
-        current=[(p,hosts[p.host_id],identity(hosts[p.host_id],p)) for p in packages if p.host_id in hosts]
+        for p in packages:
+            if p.host_id in hosts and p.host_id not in indexes:indexes[p.host_id]=version_index(hosts[p.host_id].inventory)
+        current=[(p,hosts[p.host_id],identity(hosts[p.host_id],p,indexes[p.host_id])) for p in packages if p.host_id in hosts]
         if not current:continue
         scores={r.id:r for r in s.scalars(select(UpdateScore).where(UpdateScore.id.in_([key for _,_,key in current])))}
         scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
