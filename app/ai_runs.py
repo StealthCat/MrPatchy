@@ -170,14 +170,13 @@ def safe_error(error):
     return 'Internal '+kind+' during AI processing. Check worker/database health; no provider result was accepted.'
 
 
-def event(stage, message, *, state=None, call=False):
+def event(stage, message, *, state=None):
     run_id = active.get()
     if not run_id: return
     with Session() as s:
         row = s.get(AIRun, run_id)
         if not row or row.state!='running': return
         row.stage = stage; row.message = message[:2000]
-        if call: row.calls += 1
         if state: row.state = state; row.finished = time.time()
         s.add(AIEvent(run_id=run_id, stage=stage, message=message[:2000])); s.commit()
     log.info('AI run=%s stage=%s %s', run_id, stage, message[:2000])
