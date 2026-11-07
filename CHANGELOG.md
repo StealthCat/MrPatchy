@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.42.53 — 2026-11-07
+
+1. [PR #281](https://github.com/StealthCat/MrPatchy/pull/281): Make the native Debian package fixture independent of restrictive process umasks by assigning explicit package-tree permissions, and harden the HTTPS signed-repository fixture with HTTP/1.1 plus an explicit zero-length authenticated-mirror rejection. Compatibility: this changes test fixtures only; product runtime, APIs, TLS verification, authorization and response behavior are unchanged. Material limits: the Debian failure was reproduced and corrected, but the reported HTTPS EOF failure has not been revalidated on apt 3.0.x with OpenSSL 3.5.x, so #279 remains open for that evidence. This source update does not publish a Docker image.
+
+## 1.42.52 — 2026-11-07
+
+1. [PR #268](https://github.com/StealthCat/MrPatchy/pull/268): Detect distributed password guessing when failures against one account arrive from five or more distinct addresses within five minutes, recording one credential-free `login suspicious` audit entry per account and window. Compatibility: authentication responses and admission remain unchanged; detection does not lock accounts or block a legitimate sign-in. Detector state retains at most five recent addresses per tracked account and at most the existing login-bucket account limit, with expiry cleanup. Material limits: this adds audit detection rather than automatic throttling, alert delivery or response action, and new accounts are not tracked while the bounded account table is full. Existing authorization and runtime response boundaries remain unchanged. This source update does not publish a Docker image. Completes #199.
+
+## 1.42.51 — 2026-11-06
+
+1. [PR #244](https://github.com/StealthCat/MrPatchy/pull/244): Consume completed host-poll and notification futures so failures outside their operation handlers are logged instead of silently discarded, including during worker shutdown. Alert delivery failures now retain a bounded exception class plus an HTTP status or SMTP reply code without storing response text, URLs, credentials or tokens. Compatibility: `alert.error` may become more informative, for example `HTTPStatusError (HTTP 503)`, while APIs and schema remain unchanged. Material limits: these diagnostics do not retry failed delivery or expose remote response bodies. Roles, audit history and runtime response authorization are unchanged. This source update does not publish a Docker image. Completes #169.
+
+## 1.42.50 — 2026-11-06
+
+1. [PR #234](https://github.com/StealthCat/MrPatchy/pull/234): Resolve `scans:<id>` advisory-plan citations against scans included in portable scanner-record exports, and report valid `executions:<id>` and `inspections:<id>` citations as explicitly out of scope instead of missing. Malformed empty-suffix references remain missing so exports do not overstate completeness, and offline integrity verification continues to cover the hashed record. Compatibility: exports gain the additive `scope.out_of_scope_evidence_references` field while retaining format version 1. Material limits: execution and inspection evidence remains outside this export rather than being embedded. Roles, audit history and runtime response authorization are unchanged. This source update does not publish a Docker image. Completes #164.
+
+## 1.42.49 — 2026-11-06
+
+1. [PR #258](https://github.com/StealthCat/MrPatchy/pull/258): Apply shared scan-directory validation to manual ClamAV and YARA requests and to recurring and execution-triggered scan policies. Compatibility: noncanonical paths, control characters and excluded directories now return HTTP 400 before a job is queued or a policy is saved. Execution-triggered policies still disallow root and overlapping directories. Material limits: validation does not check whether a directory exists on the remote host or migrate previously saved policies. Existing authorization and audit controls remain in place. This source update does not publish a Docker image. Completes #158.
+
+## 1.42.48 — 2026-11-06
+
+1. [PR #252](https://github.com/StealthCat/MrPatchy/pull/252): Keep the Server Security and File integrity tabs usable when an independent panel fails. Load independent panels concurrently and show panel-local errors and Retry controls. A delayed failure cannot replace a newer successful refresh. Compatibility: browser requests for independent panels can overlap, while APIs, roles, audit records and runtime response authorization are unchanged. Material limits: retries use the existing backend operations and do not make failed operations idempotent. This source update does not publish a Docker image. Completes #155.
+
+## 1.42.47 — 2026-11-06
+
+1. [PR #610](https://github.com/StealthCat/MrPatchy/pull/610): Skip the shared AI provider-backoff lock and database writes when a successful or non-transient response has no eligible backoff to clear. Eligible resets still take the existing lock and recheck current state in a fresh transaction, preserving newer failures and their Retry-After floor. Compatibility is unchanged for APIs, schema, settings and response authorization. Already-clear rows retain their timestamps. The improvement removes unnecessary locking and writes on these paths. Fleet throughput and full multi-controller performance remain unverified. This source update does not publish a Docker image. Completes #609.
+
+## 1.42.46 — 2026-11-06
+
+1. [PR #606](https://github.com/StealthCat/MrPatchy/pull/606): Keep confirmed local HTTP connection-pool contention out of the fleet-wide AI provider backoff. The affected advisory or scoring request gets a five-second local delay, process investigations retain their bounded per-item retry schedule, and the matching unsent spend reservation is released. Compatibility: genuine provider failures and ambiguous network timeouts still create shared cooldowns and retain conservative spend; rate admission, evidence, API, schema, settings and response authorization are unchanged. Material limits: this distinguishes only the HTTP client's confirmed pool timeout and does not add automatic provider replay or complete broader AI failover and throughput work. This source update does not publish a Docker image. Completes #605.
+
+## 1.42.45 — 2026-11-06
+
+1. [PR #572](https://github.com/StealthCat/MrPatchy/pull/572): Reject invalid or oversized OpenAI Responses API requests locally with a fixed, redacted diagnostic. The shared request path validates strict UTF-8 JSON against a 2,000,000-byte encoded ceiling before provider backoff, budget or rate admission, then sends the validated bytes. Compatibility: valid requests keep their existing wire format and structured pricing inputs. The response limit, API, schema and runtime response authorization remain unchanged. The ceiling applies to the shared Responses API request body. This source update does not publish a Docker image. Completes #568.
+
+## 1.42.44 — 2026-11-06
+
+1. [PR #565](https://github.com/StealthCat/MrPatchy/pull/565): Cap pooled OpenAI Responses API replies at 2,000,000 decoded bytes with bounded streaming for identity and gzip. Oversized declared bodies are refused before reading, and oversized or invalid replies are closed without accepting partial results. Compatibility: provider POSTs advertise gzip and also accept identity. Unsupported or malformed encodings are rejected. Calls with unavailable usage remain conservatively counted when sent, and requests are never replayed automatically. Schema, API and response authorization are unchanged. The limit applies to pooled Responses API POST replies. This source update does not publish a Docker image. Completes #564.
+
+## 1.42.43 — 2026-11-06
+
+1. [PR #589](https://github.com/StealthCat/MrPatchy/pull/589): Restore daily AI budget capacity when the local HTTP connection pool times out before sending a provider request. Only the matching reservation is released, with a redacted ledger reason. Compatibility: no schema, settings or response-authorization changes. Rate consumption, transient backoff and conservative charges for potentially sent requests still apply. Material limits: earlier uncertain charges are retained, and this change does not add automatic retries or complete broader AI failover and throughput work. Completes #588. This source update does not publish a Docker image.
+
+## 1.42.42 — 2026-11-06
+
+1. [PR #596](https://github.com/StealthCat/MrPatchy/pull/596): Keep MySQL fleet and per-server Activity history on the existing ordered indexes with an order-only hint, avoiding retained-history filesorts for paginated requests while preserving stable newest-first ordering. Compatibility: there is no schema, settings, API, SQLite, authorization, redaction or runtime response-authorization change; existing installations already receive the named indexes through the idempotent startup migration. Material limits: the optimization depends on those existing MySQL indexes, does not add job retention or change other job-query plans, and this source update does not publish a Docker image. Completes #130.
+
+## 1.42.41 — 2026-11-05
+
+1. [PR #251](https://github.com/StealthCat/MrPatchy/pull/251): Add composite indexes for the retained jobs table's host/state, host/action/created, host-history, fleet-history and state/created query shapes, including idempotent startup creation for existing databases, so scheduler admission, queue checks, latest refreshes and Activity history avoid full-table scans and temporary ordering. Compatibility: this is an additive schema change with no API, ordering, recovery or runtime response-authorization change; the first start after upgrade creates the missing indexes and may take time on a large history table. Material limits: indexes consume database storage and add normal write-maintenance cost, and the change does not add job retention or rewrite other queries. This source update does not publish a Docker image. Completes #130.
+
 ## 1.42.40 — 2026-11-05
 
 1. [PR #261](https://github.com/StealthCat/MrPatchy/pull/261): Compute AI investigation-status triage counts, retry minima, recent attempts and deferred-plan summaries with bounded SQL aggregates, and count recent automatic security/startup plans without loading full pending behavior or job rows. Related triage counts now share one database statement so a concurrent insert cannot make the paused count negative, while the status response shape and existing eligibility rules remain unchanged. Compatibility: no API, schema, configuration or runtime response-authorization change. Material limits: the queries still inspect the matching database rows and do not change AI admission, provider calls or retry policy; this source update does not publish a Docker image. Completes #184.

@@ -95,6 +95,21 @@ def test_webhook_retry_and_success(admin,monkeypatch):
     operations.deliver_one();operations.deliver_one()
     assert len(calls)==1 and calls[0]['follow_redirects'] is False
 
+def test_delivery_failure_keeps_status_without_secrets(admin,monkeypatch):
+    import httpx,smtplib
+    with Session() as s:
+        s.add(operations.Alert(id='alert',host_id='host',kind='stale',message='test'))
+        s.add(Setting(key='notifications',value={'encrypted':seal('{"enabled":true,"url":"https://example.test/secret-path","token":"tok"}')}));s.commit()
+    request=httpx.Request('POST','https://example.test/secret-path')
+    def fail(*a,**k):
+        return SimpleNamespace(raise_for_status=lambda:(_ for _ in ()).throw(httpx.HTTPStatusError('boom https://example.test/secret-path',request=request,response=httpx.Response(503,request=request))))
+    monkeypatch.setattr(operations.httpx,'post',fail)
+    operations.deliver_one()
+    with Session() as s:
+        error=s.get(operations.Alert,'alert').error
+    assert error=='HTTPStatusError (HTTP 503)' and 'secret' not in error
+    assert operations.delivery_error(smtplib.SMTPAuthenticationError(535,b'bad password hunter2'))=='SMTPAuthenticationError (SMTP 535)'
+
 def test_window_invalid_values_rejected(admin):
     assert admin.put('/api/operations/h/window',json={'windows':[{'days':[8],'start':0,'end':60}]}).status_code==400
 

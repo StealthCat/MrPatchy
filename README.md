@@ -312,6 +312,8 @@ The target's durable spool partitions normal observations into batches of at mos
 
 **Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
 
+For manual ClamAV and YARA scans and recurring or execution-triggered scan policies, enter canonical absolute directories such as `/usr/local/bin`. The controller rejects paths with redundant slashes, dot segments, control characters, or excluded filesystem roots such as `/proc` and `/sys` before queuing a scan or saving a policy. Execution-triggered policies also disallow `/` and overlapping directories. The target still checks that each directory can be scanned.
+
 ClamAV scans group already-open file descriptors into local engine processes of at most 32 files / 128 MiB. Each batch has a 120-second timeout inside the four-minute overall scan budget; ambiguous output or engine failure falls back to the existing 30-second single-file path. This batching does not enable or connect to a ClamAV daemon, and descriptor, path and metadata identity checks remain in force.
 
 **Servers → server → Security → Execution-triggered scans** optionally queues bounded
@@ -380,6 +382,8 @@ docker compose up -d --build --scale worker=3
 ```
 
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
+
+Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
 
 Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
 
@@ -634,7 +638,8 @@ a smooth-rate start.
 
 Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
 without reliable pricing or usage—including timeouts and interrupted workers—keep the
-full ceiling counted. Unsent failures release their reservation. The separate ledger
+full ceiling counted. Unsent failures release their reservation, including a confirmed
+local connection-pool timeout before a provider request is sent. The separate ledger
 is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
 remaining and next-reset values in Settings and AI worker status. The administrator
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
@@ -642,6 +647,19 @@ changes are audited. Changing the reset timezone retains unreleased spend while
 its original admission window is still open, alongside spend in the current local
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
+
+A confirmed local HTTP connection-pool timeout receives a short local retry delay
+without creating or changing the fleet-wide provider backoff. Provider and ambiguous
+network timeouts still apply the shared cooldown and conservative spend accounting.
+
+The shared OpenAI Responses API client validates outgoing JSON against a
+2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
+requests receive a redacted local error without contacting the provider.
+
+Pooled OpenAI Responses API replies are limited to 2,000,000 decoded bytes and
+accept gzip or uncompressed bodies. Oversized or invalid replies produce a
+redacted diagnostic without accepting partial output or retrying automatically.
+A sent request with unavailable usage keeps its conservative spend reservation.
 
 Administrators can inspect retained estimates for the trailing 7, 30 or 90 days in
 AI Settings. History is grouped by the reset time and IANA timezone persisted with
