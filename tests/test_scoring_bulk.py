@@ -99,6 +99,58 @@ def test_due_deferred_items_across_chunk_boundaries_are_not_starved(admin,monkey
         assert sum(row.state=='deferred' for row in s.scalars(select(update_scores.UpdateScore)))==508
 
 
+@pytest.mark.parametrize('outcome', ['complete', 'superseded', 'deferred', 'error'])
+def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, monkeypatch, outcome):
+    seed(5, completed=0)
+    if outcome in ('complete', 'superseded'):
+        capture_assessments(monkeypatch)
+        if outcome == 'superseded':
+            assess = ai.request
+
+            def replace_candidates(*args, **kwargs):
+                with Session() as session:
+                    for package in session.scalars(select(Package)):
+                        package.candidate = '3'
+                    session.commit()
+                return assess(*args, **kwargs)
+
+            monkeypatch.setattr(ai, 'request', replace_candidates)
+    else:
+        def reject(*args, **kwargs):
+            if outcome == 'deferred':
+                raise ai.AIError('Fixture wait', policy_wait=True, retry_after=600)
+            raise ai.AIError('Fixture provider error')
+
+        monkeypatch.setattr(ai, 'request', reject)
+
+    score_reads = []
+
+    def observe(conn, cursor, statement, parameters, context, executemany):
+        query = statement.lower()
+        if 'from update_scores' in query and 'where update_scores.id ' in query:
+            score_reads.append(query)
+
+    event.listen(engine, 'before_cursor_execute', observe)
+    try:
+        update_scores.run_one()
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe)
+
+    with Session() as session:
+        run = session.scalars(select(ai_runs.AIRun)).one()
+        rows = session.scalars(select(update_scores.UpdateScore)).all()
+        assert run.state == ('complete' if outcome == 'superseded' else outcome)
+        assert len(rows) == 5
+        assert {row.run_id for row in rows} == {run.id}
+        assert {row.state for row in rows} == {outcome}
+        assert {row.score for row in rows} == ({50} if outcome == 'complete' else {None})
+        assert all((row.next_at > time.time()) == (outcome == 'deferred') for row in rows)
+
+    # Candidate identity and persisted host scope are still read separately.
+    assert len(score_reads) == 4
+    assert all('where update_scores.id in (' in query for query in score_reads)
+
+
 def test_equal_age_candidates_keep_id_tiebreak_order_across_chunks(admin,monkeypatch):
     seed(413,completed=405)
     with Session() as s:

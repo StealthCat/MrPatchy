@@ -2137,6 +2137,14 @@ separately instead of promising a fixed production speedup.
 
 ### Parallel execution and latency work
 
+Worker checkpoint #594 batches score-row reads when linking the diagnostic run
+and persisting completed, deferred or failed outcomes for the existing five-item
+scoring batch. The same sessions still recheck current package and server evidence
+before accepting an assessment. A five-item fixture reduces ID-filtered score
+SELECTs from twelve to four, including candidate and host-scope reads. This is
+partial scoring performance work. Idle candidate hashing, measured production
+throughput and full parallel scoring acceptance remain open.
+
 Worker checkpoint #603 adds a server/package/state/candidate index for exact
 score history and deferred scoring lookups. Startup creates it idempotently on
 existing databases and keeps retained scores and existing indexes. A fixture with

@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.43.2'
+APP_VERSION='1.43.4'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -206,7 +206,7 @@ def health(): return {'status':'ok','version':APP_VERSION}
 class Login(BaseModel):
     username:str=Field(default='admin',pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     password:str=Field(max_length=1024)
-    otp:str=Field(default='',max_length=6)
+    otp:str=Field(default='',max_length=16)
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
 # Failures per account by source address, used only to detect guessing spread across addresses (never to block).
 login_account_failures={}
@@ -1304,7 +1304,7 @@ def save_user(body:UserInput,user=Depends(admin_user)):
 
 class Reauthenticate(BaseModel):
     password:str=Field(max_length=1024)
-    otp:str=Field(default='',max_length=6)
+    otp:str=Field(default='',max_length=16)
     new_password:str=Field(default='',max_length=1024)
 
 def reserve_account_attempt(username):
@@ -1328,7 +1328,7 @@ def begin_mfa(body:Reauthenticate,user=Depends(self_user)):
         secret=new_secret();row.otp_pending=seal(secret);s.commit()
         return {'secret':secret,'uri':'otpauth://totp/MrPatchy:'+quote(row.username)+'?secret='+secret+'&issuer=MrPatchy&algorithm=SHA1&digits=6&period=30'}
 
-class OTPInput(BaseModel): otp:str=Field(max_length=6)
+class OTPInput(BaseModel): otp:str=Field(max_length=16)
 @app.post('/api/identity/mfa/confirm')
 def confirm_mfa(body:OTPInput,user=Depends(self_user)):
     with login_lock, Session() as s:
