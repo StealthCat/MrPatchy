@@ -207,10 +207,53 @@ def root_filesystem_health(statvfs=os.statvfs,collected=None):
         reason='unavailable-or-malformed'
     return {**base,'applicability':'unknown','bytes':unknown,'inodes':unknown_inodes,'gaps':[{'signal':'filesystem-capacity','reason':reason}]}
 
-def telemetry_snapshot(hashed_at,hashes,metadata,processes,errors,clock=time.time,statvfs=os.statvfs):
+PRESSURE_FILES={'cpu':'/proc/pressure/cpu','memory':'/proc/pressure/memory'}
+def _pressure_line(text,kind):
+    for line in text.splitlines():
+        parts=line.split()
+        if parts and parts[0]==kind:
+            values={k:float(v) for k,v in (item.split('=',1) for item in parts[1:] if item.partition('=')[0] in ('avg10','avg60','avg300'))}
+            if set(values)!={'avg10','avg60','avg300'} or any(not 0<=v<=100 for v in values.values()):raise ValueError('malformed pressure line')
+            return values
+    raise ValueError('missing pressure line')
+
+def resource_pressure(read=lambda path:Path(path).read_text(),collected=None):
+    """Collect bounded CPU/memory pressure (PSI) and memory availability; absent sources stay unknown."""
+    observed=time.time() if collected is None else collected
+    result={'version':1,'collected':observed,'source':'procfs','scope':{'kind':'host'},'gaps':[]}
+    def failure(error):return 'permission-denied' if isinstance(error,PermissionError) else 'unsupported' if isinstance(error,FileNotFoundError) else 'unavailable-or-malformed'
+    for name,path in PRESSURE_FILES.items():
+        try:
+            text=read(path)
+            if not isinstance(text,str) or len(text)>4096:raise ValueError('invalid pressure data')
+            entry={'state':'collected','unit':'percent-stalled','some':_pressure_line(text,'some')}
+            try:entry['full']=_pressure_line(text,'full')
+            except ValueError:
+                if name!='cpu':raise # only CPU "full" is absent on older kernels
+            result[name]=entry
+        except (OSError,ValueError,TypeError) as error:
+            result[name]={'state':'unknown','unit':'percent-stalled'}
+            result['gaps'].append({'signal':name+'-pressure','reason':failure(error)})
+    try:
+        text=read('/proc/meminfo')
+        if not isinstance(text,str) or len(text)>65536:raise ValueError('invalid meminfo')
+        info={}
+        for line in text.splitlines():
+            key,_,rest=line.partition(':');fields=rest.split()
+            if key in ('MemTotal','MemAvailable') and len(fields)==2 and fields[1]=='kB' and fields[0].isdigit():info[key]=int(fields[0])*1024
+        if set(info)!={'MemTotal','MemAvailable'} or info['MemTotal']<=0 or info['MemTotal']>2**63-1:raise ValueError('missing memory fields')
+        result['memory_capacity']={'state':'collected','unit':'bytes','total':info['MemTotal'],'available':min(info['MemAvailable'],info['MemTotal'])}
+    except (OSError,ValueError,TypeError) as error:
+        result['memory_capacity']={'state':'unknown','unit':'bytes'}
+        result['gaps'].append({'signal':'memory-capacity','reason':failure(error)})
+    states=[result[k]['state'] for k in ('cpu','memory','memory_capacity')]
+    result['applicability']='supported' if all(x=='collected' for x in states) else 'unknown' if not any(x=='collected' for x in states) else 'partial'
+    return result
+
+def telemetry_snapshot(hashed_at,hashes,metadata,processes,errors,clock=time.time,statvfs=os.statvfs,pressure=resource_pressure):
     collected=clock()
     return {'collected':collected,'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,
-            'processes':processes,'errors':errors,'device_health':root_filesystem_health(statvfs,collected)}
+            'processes':processes,'errors':errors,'device_health':root_filesystem_health(statvfs,collected),'resource_pressure':pressure(collected=collected)}
 
 def atomic(path, value):
     path=Path(path)
