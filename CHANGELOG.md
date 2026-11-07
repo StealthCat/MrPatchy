@@ -2,7 +2,7 @@
 
 ## 1.42.47 — 2026-11-06
 
-1. [PR #610](https://github.com/StealthCat/MrPatchy/pull/610): Skip the shared AI provider-backoff lock and database writes when a successful or non-transient response has no eligible backoff to clear. Eligible resets still take the existing lock and recheck current state in a fresh transaction, preserving newer failures and their Retry-After floor. Compatibility is unchanged for APIs, schema, settings and response authorization. Already-clear rows retain their timestamps. The improvement removes unnecessary locking and writes on these paths. Fleet throughput and full multi-controller performance remain unverified. Completes #609.
+1. [PR #610](https://github.com/StealthCat/MrPatchy/pull/610): Skip the shared AI provider-backoff lock and database writes when a successful or non-transient response has no eligible backoff to clear. Eligible resets still take the existing lock and recheck current state in a fresh transaction, preserving newer failures and their Retry-After floor. Compatibility is unchanged for APIs, schema, settings and response authorization. Already-clear rows retain their timestamps. The improvement removes unnecessary locking and writes on these paths. Fleet throughput and full multi-controller performance remain unverified. This source update does not publish a Docker image. Completes #609.
 
 ## 1.42.46 — 2026-11-06
 
