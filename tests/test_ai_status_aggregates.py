@@ -34,6 +34,55 @@ def test_status_counts_without_loading_pending_rows(admin):
     assert not any('FROM behaviors' in q and 'count(' not in q.lower() and 'min(' not in q.lower() for q in statements)
 
 
+@pytest.mark.parametrize('role',['viewer','operator'])
+def test_investigation_status_read_roles_skip_admin_aggregates(admin,role,capsys):
+    from app.identity import User
+
+    now=time.time()
+    with Session() as s:
+        s.merge(Setting(key='config',value={'ai_enabled':True}))
+        s.add_all([
+            Host(id='active',name='Active',address='192.0.2.1',fingerprint=''),
+            Host(id='inactive',name='Inactive',address='192.0.2.2',fingerprint='',enabled=False),
+        ])
+        s.add_all([
+            Behavior(id='pending',host_id='active',first_seen=now-10,evidence={}),
+            Behavior(id='error',host_id='active',first_seen=now-20,verdict='error',evidence={}),
+            Behavior(id='approved',host_id='active',first_seen=now-30,approved=True,evidence={}),
+            Behavior(id='complete',host_id='active',first_seen=now-40,verdict='low',evidence={}),
+            Behavior(id='inactive-pending',host_id='inactive',first_seen=now-50,evidence={}),
+        ])
+        s.commit()
+    statements=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):
+        if statement.lstrip().upper().startswith('SELECT'):
+            statements.append(statement.lower())
+
+    event.listen(engine,'before_cursor_execute',observe)
+    try:
+        response=admin.get('/api/investigation-status')
+        assert response.status_code==200
+        full=response.json()
+        admin_query_count=len(statements)
+        with Session() as s:
+            s.get(User,'admin').role=role
+            s.commit()
+        statements.clear()
+        response=admin.get('/api/investigation-status')
+    finally:
+        event.remove(engine,'before_cursor_execute',observe)
+
+    assert response.status_code==200
+    assert response.json()=={k:full[k] for k in ('pending','oldest','enabled')}
+    assert response.json()=={'pending':2,'oldest':pytest.approx(now-20),'enabled':True}
+    assert len(statements)<admin_query_count
+    assert sum('from behaviors' in sql for sql in statements)==1
+    assert not any(table in sql for sql in statements
+        for table in ('ai_runs','ai_triage_claims','ai_triage_retries','ai_budget_entries','update_scores','jobs'))
+    with capsys.disabled():
+        print(f'Investigation status SELECTs: admin={admin_query_count}, {role}={len(statements)}')
+
+
 def test_status_counts_share_one_snapshot_under_concurrent_insert(admin):
     now=time.time()
     with Session() as s:
