@@ -6119,3 +6119,23 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+
+### Batched AI-status aggregates — worker checkpoint #586
+
+This bounded faster-AI increment reduces the database work performed whenever the
+AI worker dashboard is polled. The rolling triage-run count and oldest run now come
+from one aggregate statement and therefore one database snapshot. Deferred update-
+score count and next eligibility likewise come from one aggregate statement over
+the same scoped package join. The source-main reproduction issued 20 SQL statements
+for an empty status read: four read `ai_runs` and two read the deferred score join.
+The updated path issues 18: three read `ai_runs` and one reads the score join.
+
+Regression coverage rejects a return to separate count/minimum scans and preserves
+the existing pending, paused, ready, retry, provider-backoff, admission and budget
+status semantics. No schema, provider call, evidence, model, concurrency, pause,
+authorization or response behavior changes. This query reduction does not complete
+threaded investigations, fair scheduling, shared accounting across every billable
+path, production throughput acceptance or the remaining SQLite/MySQL failover and
+reset milestones. Coordinator integration, exact-head full-suite/SQLite/MySQL checks
+and fresh code scanning remain required before delivery.
