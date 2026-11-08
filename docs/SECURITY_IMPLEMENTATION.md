@@ -4370,6 +4370,24 @@ retained in PR #81; only all-success checks on the final published commit permit
 merge. No checks or UI assertions are weakened to obtain a pass.
 
 
+### Pooled AI model discovery — worker checkpoint #556
+
+The administrator model picker now sends its non-billable model-list GET through
+the same process-local bounded HTTP pool as provider POSTs. GET and POST each build
+a new request with only allowlisted ordinary client headers plus the current call's
+authorization; neither response cookies nor credentials become client defaults or
+flow to a later request. Model discovery keeps its 20-second timeout, redirect
+refusal, response-size and model-ID validation, controlled diagnostics and single
+attempt. No automatic retry or provider-call admission/accounting change is added.
+
+Focused acceptance uses a loopback HTTP/1.1 provider to prove socket reuse across
+GET/POST traffic, absent GET bodies, changing credentials, discarded cookies and
+bounded shutdown. Existing discovery route/role and redaction coverage remains in
+place. This is a finite safe-transport improvement; it does not establish provider
+availability, guarantee throughput, change AI concurrency or complete the faster-AI
+performance program. No schema, UI, target helper or agent change is required.
+
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
@@ -5939,6 +5957,25 @@ are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
 
+### Configurable bounded AI HTTP connections — worker checkpoint #560
+
+Each controller and worker process now validates a startup-only
+`MRPATCHY_AI_HTTP_CONNECTIONS` ceiling from 1 through 64 (default 16) before
+creating its reusable AI HTTP client. The same ceiling bounds total and keepalive
+connections; invalid configuration refuses worker registration and provider
+transport instead of silently falling back or opening an unbounded pool. Complete
+Compose installation passes the setting to both application and worker processes.
+
+Worker registrations expose the effective process-local ceiling alongside AI task
+capacity. The dashboard labels it as a transport limit rather than available task
+or provider capacity. Existing AI concurrency, shared admission, rate/spend and
+provider backoff, pause/lifecycle checks, per-request credentials, cookie clearing,
+redirect refusal, timeouts, shutdown/drain behavior and single-attempt accounting
+remain unchanged. This configuration does not increase AI task concurrency by
+itself, guarantee sockets are available, establish provider throughput or complete
+the faster-AI performance program.
+
+
 ## Password hashes and secret-key handling
 
 - Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
@@ -6165,6 +6202,59 @@ comparison and coverage gaps. Multiple hashes at one path remain separate
 observations. Enrollment-only files remain unavailable, not verified. This is
 recorded-scope visibility, not enumeration of every file on disk. Viewing never
 contacts targets, invokes AI, approves a baseline or authorizes response actions.
+
+### Configurable observation batch cap — partial #106 checkpoint
+
+This bounded reliability increment lets an administrator set each enrolled server's
+serialized observation-batch cap through a typed controller operation. The bridge
+accepts only integer values from 16 KiB through 1 MiB, writes a versioned root-only
+configuration atomically and restarts the collector. Normal snapshots and eBPF events
+use the same effective cap, and existing spool telemetry reports it. The default stays
+256 KiB. The controller accepts the setting only after the target returns the exact
+requested receipt or verifies the requested cap and an active collector through a
+serialized read-only check after an uncertain reply. A failed restart restores the
+prior configuration or its absence and checks the prior collector running state.
+The controller audits unconfirmed outcomes with the observed target state when
+available, keeps the last confirmed setting, and never replays a lost request.
+Only administrators can change the cap.
+
+Configuration does not change the 48 MB durable capacity, ordered commit-before-ACK
+replay, atomic observation records or explicit oversize/capacity loss accounting. An
+oversized observation is still rejected whole and counted while eligible siblings are
+queued. Unsafe, malformed or out-of-range target configuration fails visibly instead
+of silently widening a transport boundary. The target caches a verified file identity
+so high-rate eBPF intake does not reread the configuration for every event.
+
+This does not complete #106: measured adaptive pressure draining, configurable timed
+flush and graceful-shutdown checkpoints, negotiated compression and decompression
+limits, mixed-version fallback, sustained fairness, small-ARM CPU/memory/latency
+benchmarks and the #107/#108 outage/replay/health acceptance remain open. Coordinator
+integration plus exact-head SQLite/MySQL/native/full-suite checks are still required
+before delivery.
+
+### Capability-equivalent AI benchmark comparison — worker checkpoint #526
+
+The disposable AI benchmark now has a separate comparison gate that refuses to
+interpret results unless both reports use the same run count, provider and SSH
+fixture delays, one/two-stage workload shape, provider-call count and token totals.
+Reports with fixture errors, missing or malformed metrics, lost calls/evidence or
+an unchanged execution configuration are rejected before any speed delta is shown.
+Reports from the original fixed-delay harness normalize its documented 10 ms SSH
+fixture explicitly; newer reports retain the configured value and source.
+Input reports are bounded to one megabyte and output has a fixed allowlisted shape.
+
+For valid serial/parallel pairs, the command emits machine-readable elapsed,
+throughput and allowlisted stage p50/p95 deltas. Zero baseline latency produces an
+explicit unavailable percentage instead of division by zero. Each report's cost
+status is preserved; unavailable synthetic cost is never converted to zero or
+described as a provider invoice. Output states that the loopback fixture does not
+establish production performance.
+
+This checkpoint adds no provider call, target access, schema, runtime admission or
+response authority. It does not complete production baseline collection, dashboard
+presentation or the faster-AI end-to-end acceptance milestone. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before delivery.
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
