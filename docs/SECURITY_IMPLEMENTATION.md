@@ -2237,6 +2237,23 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### SSH evidence delay in the triage benchmark — worker checkpoint #524
+
+`tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
+remains 10 ms. Both simulated delays are included in the JSON report. For a
+matched SSH-heavy serial/parallel comparison, run the same eight investigations
+with the same provider and SSH delays:
+
+```sh
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 1
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 4
+```
+
+Check that both reports retain the same provider call count and one-stage and
+two-stage workload before comparing their stage percentiles and throughput.
+These are loopback and stubbed SSH measurements. Production comparison remains
+open.
+
 ### Bounded same-server process triage — worker checkpoint #379
 
 This bounded threaded-execution increment permits two independent renewable process-
@@ -4387,6 +4404,17 @@ place. This is a finite safe-transport improvement; it does not establish provid
 availability, guarantee throughput, change AI concurrency or complete the faster-AI
 performance program. No schema, UI, target helper or agent change is required.
 
+### Observed AI benchmark workload fingerprint — worker checkpoint #530
+
+Fixture reports include `workload_fingerprint` with a version and SHA-256 value.
+Compare the full field across matched runs. It covers the actual synthetic model
+requests and SSH evidence requests, including duplicates, and excludes dispatch
+order, the fixture collection timestamp and ordering within the SSH check set.
+A mismatch identifies a workload difference even when token and call counts
+match. Compare delay settings and capability counts separately. Reports expose
+no request contents. Comparator enforcement and production measurements remain
+open.
+
 
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
@@ -6255,6 +6283,27 @@ response authority. It does not complete production baseline collection, dashboa
 presentation or the faster-AI end-to-end acceptance milestone. Coordinator
 integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
 required before delivery.
+
+
+
+### AI benchmark timing-consistency gate — worker checkpoint #532
+
+The fixture-report comparison gate now reconciles each report's run count, elapsed
+time and derived throughput before emitting deltas. Because the producer rounds
+elapsed seconds and runs per second independently to three decimal places, the
+check uses the exact half-unit intervals implied by that precision instead of a
+loose percentage tolerance. A report is accepted only when those
+rounding intervals can describe the same underlying execution. This preserves the
+retained v1.22 fixture pair and values produced at either elapsed-time rounding edge,
+while rejecting understated or overstated throughput with a field-specific error.
+
+This bounded follow-up is stacked on #526/#527 and does not edit its frozen branch.
+It adds no provider call, target access, benchmark workload, production runtime,
+schema, admission or response authority. Workload fingerprints, repeated production
+measurements, dashboard presentation and the full faster-AI acceptance milestone
+remain separate and incomplete. Coordinator integration must first preserve #527,
+then remove the prerequisite diff and run every applicable exact-head check before
+delivery.
 
 
 ### Batched AI-status aggregates — worker checkpoint #586
