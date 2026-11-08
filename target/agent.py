@@ -1089,14 +1089,14 @@ def persistence_inventory(deadline,custom_paths=None):
 def security_inspect(packages,persistence=True,custom_paths=None):
     """Local database comparison and metadata-only startup inventory; no remediation."""
     validate_inspection(packages,persistence,custom_paths)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
+    try:from bridge import bounded,rpm_backend
+    except ImportError:from target.bridge import bounded,rpm_backend
     report={'version':1,'started':time.time(),'state':'incomplete','trust_basis':'target_local_package_database',
             'packages':[],'gaps':[],'persistence':None,
             'limitations':['Local package metadata is not an independent trusted vendor baseline.',
                           'Differences may be legitimate configuration changes; they are not malware verdicts.',
                           'No differences does not establish complete file coverage or a clean host.']}
-    rpm=not Path('/var/lib/dpkg/status').exists()
+    rpm=rpm_backend()
     report['package_manager']='rpm' if rpm else 'dpkg'
     deadline=time.monotonic()+180
     def command(args,allowed=(0,)):
