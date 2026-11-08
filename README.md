@@ -999,7 +999,12 @@ historical two-second seed, applies to every synthetic observation and keeps
 report; invalid values are rejected before fixture startup. This control is fixture
 only: it does not reproduce scheduler contention, pause, budget/rate deferral,
 provider backoff or production load, and it is not a production speed or
-parallel-throughput promise.
+parallel-throughput promise. Comparisons also require matching synthetic
+persistence-delay controls: reported `persistence_delay_ms` values must be integers
+from 0 through 1,000, while older reports without the field use the documented
+zero-delay default. The normalized value and whether it came from the report or the
+legacy default are retained in comparison output; mismatched delays are rejected
+before any performance delta is emitted.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical
