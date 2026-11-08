@@ -203,6 +203,7 @@ const assert=require('assert/strict');
     await require('./ui_activity_pages.cjs')(page,capture);
     await require('./ui_response_cancellation.cjs')(page);
     await require('./ui_fleet_overview.cjs')(page,capture);
+    await require('./ui_file_status.cjs')(page,capture);
     await require('./ui_background_refresh.cjs')(page);
     await require('./ui_fleet_spool.cjs')(page,capture);
     await require('./ui_startup_pages.cjs')(page,capture);
