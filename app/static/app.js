@@ -10,7 +10,15 @@ const serverListContext={q:"",state:"all",offset:0};
 let csrf='',hosts=[],selected='',page='overview',toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
 const badge=s=>`<span class="badge ${esc(s)}">${esc(s)}</span>`;
-async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data={},parsed=true;if(text){try{data=JSON.parse(text);}catch{parsed=false;}}if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin(csrf?'Session expired. Sign in again.':'');throw Object.assign(Error(parsed&&data&&typeof data.detail==='string'?data.detail:parsed&&data&&data.detail!==undefined?JSON.stringify(data.detail):`Request failed (HTTP ${r.status}${r.statusText?' '+r.statusText:''})`),{status:r.status});}if(!parsed)throw Error(`Unexpected non-JSON response (HTTP ${r.status})`);return data;}
+function apiErrorMessage(detail){
+ // Never echo rejected input: arrays/objects (FastAPI validation shapes from proxies or older servers) reduce to "field: message".
+ if(typeof detail==='string')return detail.slice(0,300);
+ const label=loc=>Array.isArray(loc)?loc.filter(x=>typeof x==='string'&&x!=='body'&&x!=='query').slice(-1)[0]||'':'';
+ if(Array.isArray(detail)){const parts=detail.slice(0,3).map(x=>{if(!x||typeof x!=='object'||typeof x.msg!=='string')return '';const f=label(x.loc);return (f?f+': ':'')+x.msg.slice(0,120);}).filter(Boolean);return parts.join('; ');}
+ if(detail&&typeof detail==='object'&&typeof detail.msg==='string')return detail.msg.slice(0,200);
+ return '';
+}
+async function api(path,method='GET',body){const session=sessionRevision;const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data={},parsed=true;if(text){try{data=JSON.parse(text);}catch{parsed=false;}}if(session!==sessionRevision&&path!=='/sso')throw Error('Session changed; previous response discarded');if(!r.ok){if(r.status===401)showLogin(csrf?'Session expired. Sign in again.':'');throw Object.assign(Error(apiErrorMessage(parsed&&data?data.detail:undefined)||`Request failed (HTTP ${r.status}${r.statusText?' '+r.statusText:''})`),{status:r.status});}if(!parsed)throw Error(`Unexpected non-JSON response (HTTP ${r.status})`);return data;}
 function toast(message,global=false){
  const target=global?$('#toast'):$('#modal').open?$('#modal-message'):$('#toast');
  target.textContent=message;target.classList.remove('hidden');target.style.display='block';
@@ -28,13 +36,14 @@ function flushNavToast(revision){
  pendingNavToast=null;
  if(pending.session===sessionRevision&&location.hash===pending.hash&&!$('#shell').classList.contains('hidden'))toast(pending.message);
 }
+function loginError(message){$('#login-error').textContent=message;$('#login-error-mascot').hidden=!message;}
 function showLogin(reason=''){
  NotificationShell.reset();
  pendingNavToast=null;sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
  packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
  $('#toast').style.display='none';clearTimeout(toastTimer);
- $('#login-error').textContent=reason;
+ loginError(reason);
  $('#login').classList.remove('hidden');$('#shell').classList.add('hidden');
 }
 function isAdmin(){return currentUser?.role==='admin';}
@@ -63,13 +72,13 @@ async function render(){
  if(requested.startsWith('activity/'))requested='activity';
  if(requested.startsWith('settings/'))requested='settings';
  if(requested.startsWith('servers/'))requested='servers';
- if(!['security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
+ if(!['files','security','overview','servers','packages','repositories','investigations','activity','schedules','settings','history','users','ai-logs','notifications'].includes(requested))requested='overview';
  try{
   const [me,list]=await Promise.all([api('/identity'),api('/hosts')]);
   if(revision!==renderRevision)return;
   currentUser=me;document.body.dataset.role=me.role;hosts=list;
   $('#application-version').textContent=me.version?'v'+me.version:'SELF-HOSTED';
-  if(!isAdmin()&&['security','settings','repositories','schedules','users','ai-logs'].includes(requested)){
+  if(!isAdmin()&&['files','security','settings','repositories','schedules','users','ai-logs'].includes(requested)){
    requested='overview';history.replaceState(null,'','#overview');
   }
   page=requested;
@@ -78,9 +87,9 @@ async function render(){
   document.title=PatchyUI.pages[page][0]+' · Mr Patchy';
   if(!hosts.some(h=>h.id===selected))selected=hosts[0]?.id||'';
   if(!quiet)$('#content').innerHTML=PatchyUI.loading();
-  await ({security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
+  await ({files:fleetFileStatus,security:fleetSecurityCoverage,overview,servers,packages,repositories,investigations,activity,schedules,settings,history:packageHistory,users,'ai-logs':aiDiagnostics,notifications:revision=>NotificationShell.center(revision)}[page])(revision);
   flushNavToast(revision);
- }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML=heading('Unable to load this view.','Your workspace could not be refreshed.')+empty('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
+ }catch(error){if(revision===renderRevision)pendingNavToast=null;if(revision===renderRevision&&!$('#shell').classList.contains('hidden')){$('#content').innerHTML='<h1 id="page-title" tabindex="-1">Unable to load this view.</h1>'+PatchyUI.error('Let’s try that again.',esc(error.message),'<button id="retry-view" class="primary">Retry loading</button>');$('#retry-view').onclick=render;}}
 }
 // Background refresh: keep the old view while fetching, then restore scroll and focus.
 function focusKey(el){
@@ -119,9 +128,10 @@ async function overview(revision=renderRevision){
  const snapshot=[...hosts],[d,spool]=await Promise.all([api('/dashboard'),api('/spool-health').catch(()=>null)]);if(!currentView(revision,'overview'))return;
  const root=$('#content'),now=Date.now()/1000,observations=snapshot.map(host=>({host,...fleetObservation(host,now)}));
  const requested=location.hash.slice(1)||'overview';
+ if(requested==='overview/files'&&isAdmin()){await fleetFileStatus(revision,$('#content'),'overview');return;}
  const section=requested==='overview/attention'?'attention':requested==='overview/monitoring'?'monitoring':'summary';
  if(!['overview','overview/attention','overview/monitoring'].includes(requested))history.replaceState(null,'','#overview');
- const entries=[['summary','Summary'],['attention','Server attention'],['monitoring','Monitoring']];
+ const entries=[['summary','Summary'],['attention','Server attention'],['monitoring','Monitoring'],...(isAdmin()?[['files','File status']]:[])];
  const labels=Object.fromEntries(entries),link=key=>key==='summary'?'#overview':'#overview/'+key;
  $('#breadcrumb').textContent='Workspace / Overview / '+labels[section];document.title=labels[section]+' · Fleet Overview · Mr Patchy';
  const navigation='<nav class="overview-sections" aria-label="Fleet overview pages">'+PatchyUI.sectionNavigation(entries,section,link,entries.map(item=>item[0]),[])+'</nav>';
@@ -195,7 +205,7 @@ async function servers(revision=renderRevision){
 }
 function serverDirectoryCard(h){
  const link=serverLink(h.id),id=esc(h.id);
- return `<article class="server-directory-card"><div class="server-card-title">${PatchyUI.icon('servers')}<div><a class="server-name" href="${link}"><strong>${esc(h.name)}</strong></a><small>${esc(PatchyUI.endpoint(h.address,h.port))}</small></div>${badge(h.enabled===false?'disabled':h.state)}</div><dl class="server-card-facts"><div><dt>Architecture</dt><dd>${esc(h.architecture||'Awaiting enrollment')}</dd></div><div><dt>Last contact</dt><dd>${date(h.last_seen)}</dd></div></dl>${h.error?`<p class="notice server-card-error">${esc(h.error)}</p>`:''}<div class="actions"><a class="button primary" href="${link}">Open server →</a><button data-action="inspect" data-id="${id}" ${h.enabled===false?'disabled':''}>${isAdmin()?'Manage':'Inspect'} ↗</button></div>${isAdmin()?`<div class="actions server-card-management"><button class="quiet" data-host-lifecycle="${id}">${h.enabled===false?'Enable':'Disable'} server</button><button class="quiet" data-host-delete="${id}">Delete server</button></div>`:''}</article>`;
+ return `<article class="server-directory-card"><div class="server-card-title">${PatchyUI.icon('servers')}<div><a class="server-name" href="${link}"><strong>${esc(h.name)}</strong>${PatchyUI.upgradeBadge(h)}</a><small>${esc(PatchyUI.endpoint(h.address,h.port))}</small></div>${badge(h.enabled===false?'disabled':h.state)}</div><dl class="server-card-facts"><div><dt>Architecture</dt><dd>${esc(h.architecture||'Awaiting enrollment')}</dd></div><div><dt>Last contact</dt><dd>${date(h.last_seen)}</dd></div></dl>${h.error?`<p class="notice server-card-error">${esc(h.error)}</p>`:''}<div class="actions"><a class="button primary" href="${link}">Open server →</a><button data-action="inspect" data-id="${id}" ${h.enabled===false?'disabled':''}>${isAdmin()?'Manage':'Inspect'} ↗</button></div>${isAdmin()?`<div class="actions server-card-management"><button class="quiet" data-host-lifecycle="${id}">${h.enabled===false?'Enable':'Disable'} server</button><button class="quiet" data-host-delete="${id}">Delete server</button></div>`:''}</article>`;
 }
 async function addServer(){
  modal('Enroll server · Step 1 of 3',`${PatchyUI.enrollment(1)}<p class="help">Enter the endpoint Mr Patchy will reach over SSH.</p><form id="host-form"><div class="form-grid"><label>Display name<input name="name" placeholder="Living-room Pi" required maxlength="120"></label><label>IP address or hostname<input name="address" placeholder="192.168.1.50" required pattern="[A-Za-z0-9:.\\-]+" title="Letters, digits, dots, hyphens and colons only (no underscores or spaces)"></label><label>SSH port<input type="number" name="port" value="22" min="1" max="65535"></label></div><button class="primary">Continue to preparation →</button></form>`);
@@ -355,17 +365,17 @@ async function operationDetail(revision,context,rawId){
   if(!scope){$('#breadcrumb').textContent='Workspace / Activity / Operation';document.title='Operation '+data.id+' · Mr Patchy';}
   const fact=(name,value)=>'<div><dt>'+name+'</dt><dd>'+esc(value??'Not reported')+'</dd></div>';
   root.innerHTML=(scope?'':heading('Follow an operation.','Stored output and outcome, without replaying work.')+activityNavigation('operations'))+'<a class="button" href="'+back+'">← Back to operations</a><section class="card activity-detail"><div class="history-detail-heading">'+PatchyUI.portrait()+'<h2>Operation detail</h2></div>'+badge(data.state)+'<dl class="server-facts">'+fact('Operation ID',data.id)+fact('Server ID',data.host_id)+fact('Action',data.action)+fact('Created',date(data.created))+(data.ai_deferred?fact('AI eligibility',data.next_at?date(data.next_at):'Waiting for server and global AI resume'):'')+'</dl><p class="help">This is a stored observation, not a live target verification. Missing output is not proof of success. Cancellation and interrupted-operation review remain on the operation list with their existing confirmations.</p><h3>Recorded output</h3><pre tabindex="0" aria-label="Recorded operation output">'+esc(data.output||'No output recorded yet.')+'</pre></section>';
- }catch(error){if(current())root.innerHTML=(scope?'':heading('Unable to load operation.','The record may be unavailable.')+activityNavigation('operations'))+empty('Operation unavailable',esc(error.message),'<a class="button" href="'+back+'">Back to operations</a><button id="operation-detail-retry">Retry operation</button>');const retry=root.querySelector('#operation-detail-retry');if(retry)retry.onclick=render;}
+ }catch(error){if(current())root.innerHTML=(scope?'':heading('Unable to load operation.','The record may be unavailable.')+activityNavigation('operations'))+PatchyUI.error('Operation unavailable',esc(error.message),'<a class="button" href="'+back+'">Back to operations</a><button id="operation-detail-retry">Retry operation</button>');const retry=root.querySelector('#operation-detail-retry');if(retry)retry.onclick=render;}
 }
 async function auditWorkspace(revision){
- const root=$('#content');if(!isAdmin()){root.innerHTML=heading('Audit trail.','Administrator review only.')+empty('Administrator access required','Return to operations for records available to your role.','<a class="button" href="#activity">Operations</a>');return;}
+ const root=$('#content');if(!isAdmin()){root.innerHTML=heading('Audit trail.','Administrator review only.')+PatchyUI.error('Administrator access required','Return to operations for records available to your role.','<a class="button" href="#activity">Operations</a>');return;}
  let id;try{id=decodeURIComponent(location.hash.slice('#activity/audit'.length).replace(/^\//,''));}catch{id='invalid';}
  const current=()=>currentView(revision,'activity')&&root.isConnected;
  root.innerHTML=heading('Every decision leaves a trail.','Historical audit records, separate from execution output.')+activityNavigation('audit')+'<div id="audit-workspace">'+PatchyUI.loading()+'</div>';
  $('#breadcrumb').textContent='Workspace / Activity / Audit trail';document.title='Audit trail · Mr Patchy';
  const panel=root.querySelector('#audit-workspace'),note='<p class="help">Audit entries record reported decisions and events; they do not certify target state. Retention can remove entries. Offset pages may shift as new entries arrive.</p>';
- if(id){try{const data=await api('/audit/entries/'+encodeURIComponent(id));if(!current()||!panel.isConnected)return;if(String(data.id)!==id)throw Error('Audit entry identity differs; reopen the list.');panel.innerHTML='<a class="button" href="#activity/audit">← Back to audit trail</a><section class="card activity-detail"><div class="history-detail-heading">'+PatchyUI.portrait()+'<h2>Audit entry</h2></div>'+note+'<p>'+date(data.created)+' · Record '+esc(data.id)+'</p><h3>'+esc(data.action)+'</h3><pre tabindex="0" aria-label="Audit entry detail">'+esc(data.detail)+'</pre></section>';}catch(error){if(current()&&panel.isConnected){panel.innerHTML=empty('Audit entry unavailable',esc(error.message),'<a class="button" href="#activity/audit">Back to audit trail</a><button id="audit-retry">Retry entry</button>');panel.querySelector('button').onclick=render;}}return;}
- let ticket=0;const load=async(offset)=>{const turn=++ticket;panel.innerHTML=PatchyUI.loading();try{const rows=await api('/audit?offset='+offset+'&limit=50');if(!current()||!panel.isConnected||turn!==ticket)return;activityViewContext.set('audit',offset);panel.innerHTML='<section class="card activity-detail"><h2>Audit trail</h2>'+note+(rows.length?'<div class="table-wrap"><table><thead><tr><th>When</th><th>Action</th><th>Record</th></tr></thead><tbody>'+rows.map(row=>'<tr><td>'+date(row.created)+'</td><td>'+esc(row.action)+'</td><td><a class="button" href="#activity/audit/'+encodeURIComponent(row.id)+'">Open entry '+esc(row.id)+'</a></td></tr>').join('')+'</tbody></table></div>':empty('No audit entries on this page','Try Previous or review the retention settings.'))+'</section>';serverPagination(panel,offset,rows.length===50,load,50);}catch(error){if(current()&&panel.isConnected&&turn===ticket){panel.innerHTML=empty('Audit trail unavailable',esc(error.message),'<button>Retry audit trail</button>');panel.querySelector('button').onclick=()=>load(offset);}}};
+ if(id){try{const data=await api('/audit/entries/'+encodeURIComponent(id));if(!current()||!panel.isConnected)return;if(String(data.id)!==id)throw Error('Audit entry identity differs; reopen the list.');panel.innerHTML='<a class="button" href="#activity/audit">← Back to audit trail</a><section class="card activity-detail"><div class="history-detail-heading">'+PatchyUI.portrait()+'<h2>Audit entry</h2></div>'+note+'<p>'+date(data.created)+' · Record '+esc(data.id)+'</p><h3>'+esc(data.action)+'</h3><pre tabindex="0" aria-label="Audit entry detail">'+esc(data.detail)+'</pre></section>';}catch(error){if(current()&&panel.isConnected){panel.innerHTML=PatchyUI.error('Audit entry unavailable',esc(error.message),'<a class="button" href="#activity/audit">Back to audit trail</a><button id="audit-retry">Retry entry</button>');panel.querySelector('button').onclick=render;}}return;}
+ let ticket=0;const load=async(offset)=>{const turn=++ticket;panel.innerHTML=PatchyUI.loading();try{const rows=await api('/audit?offset='+offset+'&limit=50');if(!current()||!panel.isConnected||turn!==ticket)return;activityViewContext.set('audit',offset);panel.innerHTML='<section class="card activity-detail"><h2>Audit trail</h2>'+note+(rows.length?'<div class="table-wrap"><table><thead><tr><th>When</th><th>Action</th><th>Record</th></tr></thead><tbody>'+rows.map(row=>'<tr><td>'+date(row.created)+'</td><td>'+esc(row.action)+'</td><td><a class="button" href="#activity/audit/'+encodeURIComponent(row.id)+'">Open entry '+esc(row.id)+'</a></td></tr>').join('')+'</tbody></table></div>':empty('No audit entries on this page','Try Previous or review the retention settings.'))+'</section>';serverPagination(panel,offset,rows.length===50,load,50);}catch(error){if(current()&&panel.isConnected&&turn===ticket){panel.innerHTML=PatchyUI.error('Audit trail unavailable',esc(error.message),'<button>Retry audit trail</button>');panel.querySelector('button').onclick=()=>load(offset);}}};
  await load(activityViewContext.get('audit')||0);
 }
 function activityNavigation(current){
@@ -373,7 +383,7 @@ function activityNavigation(current){
 }
 async function workerRegistrations(revision,offset=0){
  const root=$('#content');
- if(!isAdmin()){root.innerHTML=heading('Worker registrations.','Runtime details require administrator access.')+empty('Administrator access required','Return to operations to review work available to your role.','<a class="button" href="#activity">Operations</a>');return;}
+ if(!isAdmin()){root.innerHTML=heading('Worker registrations.','Runtime details require administrator access.')+PatchyUI.error('Administrator access required','Return to operations to review work available to your role.','<a class="button" href="#activity">Operations</a>');return;}
  const data=await api('/operations/workers?offset='+offset);
  if(!currentView(revision,'activity')||!root.isConnected)return;
  $('#breadcrumb').textContent='Workspace / Activity / Workers';document.title='Workers · Mr Patchy';
@@ -422,7 +432,7 @@ async function tlsModal(){
  $('#tls-profile').onchange=draw;draw();
 }
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset,revision=renderRevision;try{if(action==='retry-investigation'){b.disabled=true;try{const result=await api('/investigations/'+id+'/retry','POST');toast(result.detail);if(revision===renderRevision)await render();}finally{if(b.isConnected)b.disabled=false;}return;}if(action==='retriage-investigation')return requestInvestigationRetriage(id);if(action==='revoke-known-good')return requestKnownGoodRevocation(b.dataset.fingerprint,b.dataset.version,b.dataset.linked);if(action==='add')return addServer();if(action==='inspect')return inspect(id);if(action==='refresh'){await api(`/hosts/${id}/actions/refresh`,'POST');toast('Operation queued. See Activity for progress.');return;}if(action==='trust'){const approved=b.dataset.approved!=='true';modal(approved?'Approve known-good behavior':'Revoke behavior approval',`<p>${approved?'Record this exact behavior as reviewed and trusted? Its AI assessment alone is not proof of safety.':'This behavior will no longer be marked as trusted.'}</p><button class="primary" id="confirm-trust">${approved?'Approve behavior':'Revoke approval'}</button>`);const request=modalRequest();$('#confirm-trust').onclick=async event=>{const button=event.currentTarget;if(button.disabled)return;button.disabled=true;try{await api('/investigations/'+id,'PUT',{approved,expected_revision:b.dataset.revision});request.close(approved?'Behavior approval saved':'Behavior approval revoked');if(request.sameSession()&&revision===renderRevision)await render();}catch(error){if(String(error.message).includes('assessment changed')){request.close('The assessment changed. Review the refreshed result before approving.');if(request.sameSession()&&revision===renderRevision)await render();return;}request.error(error);if(request.active())button.disabled=false;}};}}catch(e){toast(e.message);}});
-$('#close-modal').onclick=()=>{modalRevision++;releaseRequest++;$('#modal').close();};$('#modal').addEventListener('cancel',()=>{modalRevision++;releaseRequest++;});$('#refresh-page').onclick=render;$('#logout').onclick=async()=>{const session=sessionRevision;try{await api('/logout','POST');if(session===sessionRevision)showLogin();}catch(e){if(session===sessionRevision)toast(e.message);}};$('#login-form').onsubmit=async e=>{e.preventDefault();try{const d=await api('/login','POST',{password:new FormData(e.target).get('password'),username:new FormData(e.target).get('username')||'admin',otp:new FormData(e.target).get('otp')||''});csrf=d.csrf;e.target.reset();$('#login-error').textContent='';showShell();await render();resumeEnrollment();}catch(e){$('#login-error').textContent=e.message;}};window.addEventListener('hashchange',()=>{modalRevision++;releaseRequest++;$('#modal').close();window.scrollTo(0,0);render();});(async()=>{try{csrf=(await api('/session')).csrf;showShell();await render();resumeEnrollment();}catch{showLogin();}})();
+$('#close-modal').onclick=()=>{modalRevision++;releaseRequest++;$('#modal').close();};$('#modal').addEventListener('cancel',()=>{modalRevision++;releaseRequest++;});$('#refresh-page').onclick=render;$('#logout').onclick=async()=>{const session=sessionRevision;try{await api('/logout','POST');if(session===sessionRevision)showLogin();}catch(e){if(session===sessionRevision)toast(e.message);}};$('#login-form').onsubmit=async e=>{e.preventDefault();try{const d=await api('/login','POST',{password:new FormData(e.target).get('password'),username:new FormData(e.target).get('username')||'admin',otp:new FormData(e.target).get('otp')||''});csrf=d.csrf;e.target.reset();loginError('');showShell();await render();resumeEnrollment();}catch(e){loginError(e.message);}};window.addEventListener('hashchange',()=>{modalRevision++;releaseRequest++;$('#modal').close();window.scrollTo(0,0);render();});(async()=>{try{csrf=(await api('/session')).csrf;showShell();await render();resumeEnrollment();}catch{showLogin();}})();
 
 setInterval(()=>{if(!$('#shell').classList.contains('hidden')&&!$('#modal').open&&!document.activeElement?.closest('#server-list-controls,#fleet-review-controls')&&document.visibilityState==='visible'&&(page==='overview'||(page==='servers'&&(!location.hash.startsWith('#servers/')||location.hash.endsWith('/overview')))))refreshInBackground();},30000);
 
@@ -442,7 +452,7 @@ const usernameLabel=document.createElement('label');usernameLabel.textContent='U
 const usernameInput=document.createElement('input');usernameInput.name='username';usernameInput.value='admin';usernameInput.autocomplete='username';usernameLabel.append(usernameInput);
 usernameInput.required=true;usernameInput.maxLength=64;$('#login-form [name=password]').closest('label').before(usernameLabel);
 const otpLabel=document.createElement('label');otpLabel.textContent='Authenticator code (if enabled)';
-const otpInput=document.createElement('input');otpInput.name='otp';otpInput.autocomplete='one-time-code';otpInput.inputMode='numeric';otpInput.maxLength=6;otpLabel.append(otpInput);
+const otpInput=document.createElement('input');otpInput.name='otp';otpInput.autocomplete='one-time-code';otpInput.inputMode='numeric';otpInput.maxLength=16;otpLabel.append(otpInput);
 $('#login-form button').before(otpLabel);
 const accountButton=document.createElement('button');accountButton.textContent='Account';$('#logout').before(accountButton);
 $('#header-actions').append(accountButton,$('#logout'));
