@@ -1,9 +1,10 @@
 # Mr Patchy licensing
 
-**Free for individual, personal, noncommercial use. Commercial and organizational
-use requires a separate paid license before deployment.**
+**Free for personal, noncommercial use and for nonprofits and local governments
+running their own systems. Commercial use and other organizational use require a
+separate paid license before deployment.**
 
-The full [Mr Patchy Personal and Commercial License v1.0](LICENSE) controls.
+The full [Mr Patchy Personal and Commercial License v1.1](LICENSE) controls.
 The following is a practical summary, not a substitute for those terms.
 
 | Use | License required |
@@ -13,12 +14,17 @@ The following is a practical summary, not a substitute for those terms.
 | Internal company servers, including development and test environments | Paid commercial license |
 | Consulting, freelance work, MSPs, hosted services or client infrastructure | Paid commercial license |
 | Business work on your privately owned laptop | Paid commercial license |
-| Nonprofit, school, government or other organizational deployment | Paid license or a separate written exception |
+| Legally recognized nonprofit running its own systems for its mission | Free nonprofit use |
+| Municipality, county or other local government body running its own systems for public duties | Free local government use |
+| Contractor or MSP using Mr Patchy in its business to serve a nonprofit or local government | Paid commercial license |
+| For-profit school, state or national government body, or other organizational deployment outside the free grant | Paid license or a separate written exception |
 | Reading the public website/documentation or reviewing source | No commercial license needed merely to browse or review |
 
-There is no personal endpoint cap or expiry in the free grant. Modified copies and
-forks keep the same use restrictions. Redistribution to eligible personal users
-must be noncommercial, include the license and notices, and identify changes.
+The free grants have no endpoint cap or expiry. Nonprofit and local government
+use covers internal deployment, copies and modifications. The personal grant
+also allows noncommercial sharing with eligible individuals under the license's
+notice and change-identification requirements. Modified copies and forks remain
+subject to the license.
 
 ## Request a commercial license
 
