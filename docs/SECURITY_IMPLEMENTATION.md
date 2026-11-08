@@ -2135,6 +2135,12 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
+summary from #523. It reports per-stage sample counts, errors and p50/p95 with
+coverage and truncation, and keeps individual run logs available when the summary
+request fails. The panel is read-only and available to administrators. Matched
+production serial/parallel measurements remain outstanding.
+
 ### Update-scoring candidate database reads
 
 Candidate discovery reads server IDs and inventory in its existing bounded
