@@ -981,6 +981,15 @@ before eligibility. Small diagnostic batches flush at run completion (or 32 even
 crashes/database failures can leave gaps. Run timing excludes creation/admission
 and the final timing flush. Existing run-history retention applies to these metrics.
 
+Administrators can query `GET /api/ai/triage/timings` for a bounded aggregate of
+retained process-triage timing events. The endpoint samples at most 100 recently
+completed or failed triage runs and 2,048 timing events, returning per-stage sample
+and error counts plus nearest-rank p50/p95 milliseconds. It reports missing-run
+coverage, discarded malformed events and truncation without returning event text,
+run or host identities, credentials or evidence. Missing samples produce null
+percentiles, stages can overlap, and retained/pruned events are diagnostic history
+rather than matched production performance measurements.
+
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
