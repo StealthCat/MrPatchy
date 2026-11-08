@@ -4387,6 +4387,17 @@ place. This is a finite safe-transport improvement; it does not establish provid
 availability, guarantee throughput, change AI concurrency or complete the faster-AI
 performance program. No schema, UI, target helper or agent change is required.
 
+### Observed AI benchmark workload fingerprint — worker checkpoint #530
+
+Fixture reports include `workload_fingerprint` with a version and SHA-256 value.
+Compare the full field across matched runs. It covers the actual synthetic model
+requests and SSH evidence requests, including duplicates, and excludes dispatch
+order, the fixture collection timestamp and ordering within the SSH check set.
+A mismatch identifies a workload difference even when token and call counts
+match. Compare delay settings and capability counts separately. Reports expose
+no request contents. Comparator enforcement and production measurements remain
+open.
+
 
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
