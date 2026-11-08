@@ -161,3 +161,5 @@ def init():
                         table_name = model.__tablename__
                         column_name = column['name']
                         connection.execute(text(f'ALTER TABLE `{table_name}` MODIFY COLUMN `{column_name}` DOUBLE NOT NULL'))
+        from . import os_upgrade
+        os_upgrade.backfill(connection)
