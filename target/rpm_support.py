@@ -305,9 +305,15 @@ def discover(inv, root, access):
     return packages
 
 
-def write_reboot_marker(marker=Path('/opt/drpatch/rpm-reboot-required'),boot=Path('/proc/sys/kernel/random/boot_id')):
-    # The marker is later compared with the validated boot id; never persist unvalidated text.
+def validated_boot_id(boot=Path('/proc/sys/kernel/random/boot_id')):
     value=boot.read_text()[:100].strip()
+    if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value):raise ValueError('Boot identity unavailable')
+    return value
+
+
+def write_reboot_marker(marker=Path('/opt/drpatch/rpm-reboot-required'),boot=Path('/proc/sys/kernel/random/boot_id'),value=None):
+    # The marker is later compared with the validated boot id; never persist unvalidated text.
+    value=validated_boot_id(boot) if value is None else value
     if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',value):raise ValueError('Boot identity unavailable')
     marker.write_text(value)
 
@@ -353,10 +359,13 @@ def patch(specs):
         for pkg in base.transaction.install_set:
             result,message=base.package_signature_check(pkg)
             if result:raise ValueError('RPM signature verification failed; import the trusted signing key before retrying: '+str(message))
+        # Conservatively request reboot for changed core runtime/kernel packages, only when policy permits.
+        reboot=any(name.rsplit(':',1)[0] in ('kernel','kernel-core','glibc','systemd','linux-firmware') for name in additions)
+        # Validate the boot identity before committing: a malformed read refuses the patch with no
+        # package change instead of failing after a committed transaction (reboot stays fail-closed).
+        boot=validated_boot_id() if reboot else None
         base.do_transaction()
-    # Conservatively request reboot for changed core runtime/kernel packages, only when policy permits.
-    reboot=any(name.rsplit(':',1)[0] in ('kernel','kernel-core','glibc','systemd','linux-firmware') for name in additions)
-    if reboot:write_reboot_marker()
+    if reboot:write_reboot_marker(value=boot)
     return {'output':'DNF completed verified exact-version upgrades: '+', '.join(specs),'reboot_required':reboot}
 
 
