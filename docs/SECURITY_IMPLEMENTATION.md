@@ -2135,7 +2135,25 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+### Update-scoring candidate database reads
+
+Candidate discovery reads server IDs and inventory in its existing bounded
+batches. Server telemetry, baselines and other unrelated fields stay out of this
+query. The regression checks the selected columns across multiple batches and
+compares candidate order, APT/RPM evidence and exact score identities with full
+server records. Existing pause and lifecycle filters still govern eligibility.
+This reduces data fetched per scoring pass. Candidate hashing and measured
+production throughput remain open.
+
 ### Parallel execution and latency work
+
+Worker checkpoint #594 batches score-row reads when linking the diagnostic run
+and persisting completed, deferred or failed outcomes for the existing five-item
+scoring batch. The same sessions still recheck current package and server evidence
+before accepting an assessment. A five-item fixture reduces ID-filtered score
+SELECTs from twelve to four, including candidate and host-scope reads. This is
+partial scoring performance work. Idle candidate hashing, measured production
+throughput and full parallel scoring acceptance remain open.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2145,6 +2163,15 @@ separately instead of promising a fixed production speedup.
 - Reuse lifecycle-managed HTTP clients/connection pools with bounded pool/connect/read deadlines and safe per-request credentials; close them on drain/shutdown. Keep slow provider/SSH operations outside database transactions wherever possible. Measure candidate-query/index and repeated evidence-collection costs before optimizing them.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
+
+### Update-scoring schedule-state reads
+
+The scheduler reads only identity, state and eligibility fields from retained
+update scores while checking exact and deferred candidates. Assessment text and
+other detail fields are loaded by their existing detail and completion paths.
+Regression coverage checks the scheduling queries across batches, including
+durable deferral, stale-state updates and the existing assessment identity.
+Candidate hashing and production throughput validation remain open.
 
 ### Fleet-wide exact-match known-good cache
 
@@ -4872,6 +4899,22 @@ Rebuild the controller first to create the ledger table, then matching workers. 
 target-helper/agent update, Docker publication, Git tag or schedule change is included.
 
 
+## Faster AI triage — local connection-pool contention
+
+A confirmed local HTTP pool timeout defers the affected request without creating,
+extending or clearing fleet-wide provider backoff. Advisory plans and scoring use
+the five-second local eligibility delay. Process triage keeps its existing bounded
+per-item retry schedule and has no provider Retry-After floor for this failure.
+Other workers can continue when shared rate, budget, provider and policy controls
+permit. Read timeouts and other ambiguous transport failures keep their existing
+shared backoff and budget treatment.
+
+Issue #605 preserves #589's matching-receipt release of confirmed unsent spend
+reservations. The acceptance checks cover another request proceeding after local contention, a
+concurrent provider floor surviving unchanged and an ambiguous read timeout
+still creating shared backoff. Native exact-head CI and the broader parallel
+triage and multi-controller acceptance remain separate milestones.
+
 ## v1.33.0 — Fleet-wide provider backoff and Retry-After admission
 
 Issue-first reconciliation read merged v1.32.0 main, repository instructions, this
@@ -4919,6 +4962,19 @@ Rebuild the controller first to create the provider-backoff table, then matching
 workers. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
 
+
+### Successful provider responses — worker checkpoint #609
+
+Successful and non-transient responses check one backoff key without acquiring
+the distributed lock when no reset is eligible. A reset candidate takes the
+same shared lock and checks again in a fresh transaction, preserving a newer
+failure recorded between the initial read and lock acquisition. An already
+clear row does not receive an otherwise unnecessary timestamp write.
+
+Acceptance covers the absent, clear and newer rows, an eligible reset and a
+concurrent failure injected before the locked reread. This increment reduces
+lock acquisitions and writes on these paths. Fleet throughput, recovery and
+complete multi-controller acceptance remain separate milestones.
 
 ## v1.34.0 — Durable update-scoring deferral and exact resume
 
@@ -6090,6 +6146,25 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+## Ordered file assessment and visibility (#626)
+
+The controller checks retained authenticated Debian/RPM artifact manifests against
+recorded SHA-256 values before exact known-good behavior lookup and optional AI.
+Target-supplied file-assessment claims are replaced. A mismatch against the latest
+authenticated artifact bypasses safe-cache reuse. File authenticity does not
+resolve behavior risk; baseline approval remains explicit and no AI opinion
+creates a trusted artifact. Repository evidence uses existing operator-managed
+authenticated vendor bundles; automatic repository artifact retrieval and current
+signing-key revocation checks are not added here.
+
+Administrator File status pages (fleet selector and server workspace) and the
+overview show paginated recorded managed/startup/vendor/process file observations,
+hashes, evidence methods, behavior assessment provenance, freshness, baseline
+comparison and coverage gaps. Multiple hashes at one path remain separate
+observations. Enrollment-only files remain unavailable, not verified. This is
+recorded-scope visibility, not enumeration of every file on disk. Viewing never
+contacts targets, invokes AI, approves a baseline or authorizes response actions.
 
 ### Bounded exact-known-good provenance reads — worker checkpoint #582
 
