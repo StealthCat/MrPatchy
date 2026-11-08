@@ -18,6 +18,11 @@ from types import SimpleNamespace
 import uuid
 import re
 
+# Deployment guard (#425): bridges compile this file before replacing any managed
+# helper. The assignment expression is Python 3.8+ syntax, so even an older
+# forced-command bridge on Python <3.8 rejects the deployment before any write.
+PYTHON_MINIMUM = (_python_minimum := (3, 8))
+
 ROOT = Path('/opt/drpatch')
 SERVICE_PROPERTIES = ('Id','LoadState','ActiveState','SubState','Result','ExecMainCode','ExecMainStatus','MainPID','NRestarts','InvocationID','FragmentPath','UnitFileState')
 SPOOL_BATCH_BYTES = 256*1024
