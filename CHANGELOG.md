@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.49.8 — 2026-11-08
+
+1. [PR #612](https://github.com/StealthCat/MrPatchy/pull/612): Add an administrator-only Process triage timings panel to Fleet AI logs, backed by the bounded summary API delivered in PR #523. The panel lazily loads per-stage sample/error counts and p50/p95 milliseconds, preserves measured zero versus missing values, reports missing, malformed and truncated coverage, retries independently of run history, and discards stale responses after navigation. Compatibility: this is a presentation-only addition with no schema, provider traffic, target access, identity/evidence exposure, scheduling, role, admission, authorization or response-action change; per-server logs and non-administrator views are unchanged. Material limits: retained diagnostics can be incomplete or pruned, stages overlap, and the panel does not establish matched production serial/parallel performance, so #611 remains open. This source update does not publish a Docker image.
+
 ## 1.49.7 — 2026-11-08
 
 1. [PR #523](https://github.com/StealthCat/MrPatchy/pull/523): Add an administrator-only `GET /api/ai/triage/timings` endpoint that summarizes a bounded sample of retained completed or failed process-triage timing events with per-stage sample/error counts and nearest-rank p50/p95 milliseconds. The response discloses missing-run coverage, malformed-event discards and event truncation while omitting event text, run/host identities, credentials and evidence. Compatibility: this is an additive read-only API with no schema migration, provider traffic, scheduling, admission, role, audit, authorization or response-action change. Material limits: the summary samples at most 100 runs and 2,048 events, stages may overlap, retained history can be incomplete or pruned, and it does not provide matched production serial/parallel measurements or the separately tracked dashboard presentation in #611/#612. This source update does not publish a Docker image.

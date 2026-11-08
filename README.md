@@ -990,6 +990,13 @@ run or host identities, credentials or evidence. Missing samples produce null
 percentiles, stages can overlap, and retained/pruned events are diagnostic history
 rather than matched production performance measurements.
 
+Administrators can load the same summary from Fleet AI logs in a dedicated Process
+triage timings panel. The panel distinguishes measured zero from missing percentiles,
+shows sample/error counts and coverage or truncation warnings, and can retry without
+interrupting the individual-run list. It discards stale responses after navigation
+and remains confined to the administrator fleet view; per-server logs and other
+roles are unchanged.
+
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
