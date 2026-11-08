@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.48.0 — 2026-11-08
+
+1. [PR #519](https://github.com/StealthCat/MrPatchy/pull/519): Add an administrator-only, CSRF-protected per-server setting for the serialized agent observation-batch ceiling, accepting strict integer values from 16 KiB through 1 MiB while retaining the 256 KiB default. The root-owned target configuration applies to normal and eBPF observations, is persisted atomically, reports its effective value through existing spool telemetry, rolls back failed collector restarts, and reconciles lost or malformed SSH replies with one serialized read-only status check before saving confirmed state. Compatibility: no database migration is required, existing targets retain 256 KiB until configured, and targets need the existing Finish/verify installation workflow to receive the updated bridge and collector. Material limits: this bounded slice does not deliver adaptive or scheduled flushing, compression, durable-capacity expansion, graceful-shutdown/replay guarantees, or complete issues #106, #107, or #108. This source update does not publish a Docker image.
+
 ## 1.47.1 — 2026-11-08
 
 1. [PR #557](https://github.com/StealthCat/MrPatchy/pull/557): Route administrator model discovery through the existing bounded process-local AI HTTP pool instead of opening a one-off connection. Discovery still performs one non-billable GET with its own credentials, no cookies or body, redirect refusal, a 20-second timeout, the existing 2,000,000-byte and 10,000-model response limits, controlled errors and no automatic retry. Compatibility: API responses, UI, schema, provider POST payloads, billable request admission, roles and runtime response authorization are unchanged. Material limits: connection reuse does not guarantee provider availability or throughput, raise AI task concurrency or complete the broader faster-AI program. This source update does not publish a Docker image.
