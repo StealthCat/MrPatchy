@@ -992,8 +992,14 @@ valid three-decimal rounding is accepted. Comparisons additionally require match
 versioned SHA-256 fingerprints of the observed synthetic provider and SSH workload,
 plus matching seeded fixture queue ages; only the verified fingerprint and bounded
 queue-age controls are retained in comparison output, never raw requests. Reports
-created before workload fingerprinting must be regenerated. This is fixture-report
-validation, not a production speed or parallel-throughput promise.
+created before workload fingerprinting must be regenerated. The benchmark producer's
+optional `--queue-age-seconds` control accepts 0 through 86,400, defaults to the
+historical two-second seed, applies to every synthetic observation and keeps
+`queue_age_seconds` synchronized with `initial_fixture_queue_age_seconds` in the
+report; invalid values are rejected before fixture startup. This control is fixture
+only: it does not reproduce scheduler contention, pause, budget/rate deferral,
+provider backoff or production load, and it is not a production speed or
+parallel-throughput promise.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical
