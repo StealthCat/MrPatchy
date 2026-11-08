@@ -1,6 +1,7 @@
 """Compare fixture-only AI benchmark reports without weakening capability."""
 
 import argparse
+from decimal import Decimal, localcontext
 import json
 import math
 from pathlib import Path
@@ -12,6 +13,7 @@ MAX_REPORT_BYTES = 1_000_000
 MAX_ELAPSED_SECONDS = 86_400
 MAX_THROUGHPUT = 1_000_000
 MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
+REPORT_ROUNDING_RADIUS = Decimal('0.0005')
 STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
     'queue_age', 'receipt_persistence', 'usage_persistence',
@@ -58,6 +60,25 @@ def _summary(report, stage):
     return {'count': count, 'p50_ms': p50, 'p95_ms': p95}
 
 
+def _validate_derived_throughput(runs, elapsed, throughput, label):
+    """Reconcile two independently rounded values without a loose tolerance."""
+    with localcontext() as context:
+        context.prec = 50
+        elapsed = Decimal(str(elapsed))
+        throughput = Decimal(str(throughput))
+        elapsed_low = elapsed - REPORT_ROUNDING_RADIUS
+        elapsed_high = elapsed + REPORT_ROUNDING_RADIUS
+        throughput_low = max(Decimal(0), throughput - REPORT_ROUNDING_RADIUS)
+        throughput_high = throughput + REPORT_ROUNDING_RADIUS
+        derived_low = Decimal(runs) / elapsed_high
+        derived_high = None if elapsed_low <= 0 else Decimal(runs) / elapsed_low
+    if (throughput_high < derived_low or
+            derived_high is not None and throughput_low > derived_high):
+        raise ComparisonError(
+            f'{label}.runs_per_second is inconsistent with '
+            f'{label}.runs / {label}.elapsed_seconds')
+
+
 def _validate(report, label):
     if not isinstance(report, dict):
         raise ComparisonError(f'{label} report must be a JSON object')
@@ -86,6 +107,7 @@ def _validate(report, label):
         raise ComparisonError(f'{label}.cost_status must explain cost availability')
     elapsed = _bounded(report.get('elapsed_seconds'), f'{label}.elapsed_seconds', 0.000001, MAX_ELAPSED_SECONDS)
     throughput = _bounded(report.get('runs_per_second'), f'{label}.runs_per_second', 0.000001, MAX_THROUGHPUT)
+    _validate_derived_throughput(runs, elapsed, throughput, label)
     if not isinstance(report.get('stages'), dict):
         raise ComparisonError(f'{label}.stages must be an object')
     stages = {stage: _summary(report, stage) for stage in STAGES}
