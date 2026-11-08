@@ -43,7 +43,7 @@ async function schedules(revision=renderRevision){
     }
     calendar.innerHTML=html+'</div>';
    }
-  }catch(e){if(request===ticket&&calendar.isConnected){calendar.textContent='Unable to load calendar.';toast(e.message);}}
+  }catch(e){if(request===ticket&&calendar.isConnected){calendar.innerHTML=PatchyUI.error('Unable to load calendar',esc(e.message));toast(e.message);}}
  };
  view.onchange=()=>{scheduleView=view.value;load();};picker.onchange=()=>{if(picker.value){scheduleDate=new Date(picker.value+'T12:00:00');load();}};
  for(const [id,direction] of [['calendar-prev',-1],['calendar-next',1]])$('#'+id).onclick=()=>{if(scheduleView==='month'){scheduleDate.setDate(1);scheduleDate.setMonth(scheduleDate.getMonth()+direction);}else scheduleDate.setDate(scheduleDate.getDate()+direction);picker.value=localDay(scheduleDate);load();};
