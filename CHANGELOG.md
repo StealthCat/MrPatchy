@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.48.6 — 2026-11-08
+
+1. [PR #632](https://github.com/StealthCat/MrPatchy/pull/632): Update the pinned CodeQL analysis action from v3.39.1 to v4.39.3 and reconcile its inline release comment, completing alignment with the initialization action integrated by PR #633. Compatibility: this is a CI-only workflow dependency change with no application runtime, API, schema, configuration, UI, installation, admission or response-authorization impact. Material limits: the change governs repository security-analysis execution only, does not alter the configured security-extended query suite, and cannot prevent transient external bundle-download or GitHub Actions infrastructure failures. This source update does not publish a Docker image.
+
 ## 1.48.5 — 2026-11-08
 
 1. [PR #633](https://github.com/StealthCat/MrPatchy/pull/633): Update the pinned CodeQL initialization action from v3.39.1 to v4.39.3 and reconcile its inline release comment so pull-request security analysis uses the current action major and CodeQL 2.27.4 bundle line. Compatibility: this is a CI-only workflow dependency change with no application runtime, API, schema, configuration, UI, installation, admission or response-authorization impact. Material limits: the separately pinned CodeQL analysis step remains on v3.39.1 until paired PR #632 is integrated, and transient bundle-download failures remain external infrastructure conditions. This source update does not publish a Docker image.
