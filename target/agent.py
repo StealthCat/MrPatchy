@@ -1040,14 +1040,14 @@ def persistence_inventory(deadline,custom_paths=None):
 def security_inspect(packages,persistence=True,custom_paths=None):
     """Local database comparison and metadata-only startup inventory; no remediation."""
     validate_inspection(packages,persistence,custom_paths)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
+    try:from bridge import bounded,rpm_backend
+    except ImportError:from target.bridge import bounded,rpm_backend
     report={'version':1,'started':time.time(),'state':'incomplete','trust_basis':'target_local_package_database',
             'packages':[],'gaps':[],'persistence':None,
             'limitations':['Local package metadata is not an independent trusted vendor baseline.',
                           'Differences may be legitimate configuration changes; they are not malware verdicts.',
                           'No differences does not establish complete file coverage or a clean host.']}
-    rpm=not Path('/var/lib/dpkg/status').exists()
+    rpm=rpm_backend()
     report['package_manager']='rpm' if rpm else 'dpkg'
     deadline=time.monotonic()+180
     def command(args,allowed=(0,)):
@@ -1478,7 +1478,14 @@ def response_status_open(directory,identifier,plan,facts=None):
         review=response_json(directory,'restore-intent.json')
         if review.get('id')!=identifier or review.get('plan')!=plan:raise ValueError('Restoration intent does not bind approved evidence')
     path=Path(plan['file']['path']);mode=stat.S_IMODE(plan['file']['identity']['mode'])
-    with response_parent(path.parent) as (parent,chain):
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        try:parent,chain=stack.enter_context(response_parent(path.parent))
+        except FileNotFoundError:
+            # A removed ancestor (at this single parent open) is a changed parent, not a missing vault record; the held file stays verifiable.
+            facts['parents_match']=False;held=response_present(directory,'held');facts['held_present']=held
+            if held:os.close(response_file(directory,'held',plan,(0o600,mode)));facts['held_verified']=True
+            return result
         facts['parents_match']=chain==plan['ancestors']
         if chain!=plan['ancestors']:return result
         held=response_present(directory,'held');source=response_present(parent,path.name)

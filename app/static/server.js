@@ -1,8 +1,8 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true],['startup','Startup files',true]];
+const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true],['startup','Startup files',true],['files','File status',true]];
 const SERVER_SECTION_GROUPS=[
  {title:'Updates & history',ids:['patching','history','repositories']},
- {title:'Investigations & evidence',ids:['investigations','ai','integrity','startup']},
+ {title:'Investigations & evidence',ids:['investigations','ai','integrity','startup','files']},
  {title:'Server administration',ids:['connection','agent','maintenance']}
 ];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
@@ -24,7 +24,7 @@ async function serverWorkspace(revision){
  selected=id;
  let tab=parts[2]||'overview';if(!SERVER_TABS.some(t=>t[0]===tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const inactive=h.enabled===false||Boolean(h.deleted_at);
- const allowed=inactive?['overview','settings','history','ai','patching','security','startup',...(isAdmin()?['investigations']:[]),...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
+ const allowed=inactive?['overview','settings','history','ai','patching','security','startup','files',...(isAdmin()?['investigations']:[]),...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
  if(!allowed.includes(tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const entry=SERVER_TABS.find(t=>t[0]===tab);
  const tabs=SERVER_TABS.filter(t=>(!t[2]||isAdmin())&&allowed.includes(t[0]));
@@ -36,13 +36,13 @@ async function serverWorkspace(revision){
  root.querySelector('.heading').classList.add('server-workbench-heading');
  $('#server-workspace-select').onchange=event=>{const detail=(tab==='overview'&&['system','patching'].includes(parts[3])||tab==='startup'&&['files','coverage'].includes(parts[3])||tab==='history'&&['inventory','observations'].includes(parts[3]))?'/'+parts[3]:'';location.hash=serverLink(event.target.value,tab+detail);};
  const body=$('#server-tab-body'),context={root:body,hostId:id,host:h};
- if(isAdmin()&&tab!=='startup'){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.textContent=error.message;});}
+ if(isAdmin()&&tab!=='startup'){const panel=$('#server-ai-policy');renderServerAIPolicy(panel,id,Boolean(h.deleted_at)).catch(error=>{if(panel.isConnected)panel.innerHTML=PatchyUI.error('Unable to load server policy',esc(error.message));});}
  if(h.deleted_at&&!hosts.some(item=>item.id===id)){const option=document.createElement('option');option.value=id;option.textContent=h.name+' (deleted)';option.selected=true;$('#server-workspace-select').append(option);}
- if(entry[2]&&!isAdmin()){body.innerHTML=empty('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
+ if(entry[2]&&!isAdmin()){body.innerHTML=PatchyUI.error('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,settings:serverSettings,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity,startup:startupFiles};
+  const views={overview:serverOverview,settings:serverSettings,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity,startup:startupFiles,files:serverFileStatus};
   if(inactive&&tab==='security')await retainedSecurity(revision,context);else await views[tab](revision,context);
- }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=empty('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
+ }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=PatchyUI.error('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
 
 function serverManagementPanel(host){
@@ -88,6 +88,7 @@ async function serverOverview(revision,{root,hostId}){
  const patching=`<section class="card"><h3>Patching status</h3><dl class="overview-job-counts">${fact('Running',jobs.running||0)}${fact('Queued',jobs.queued||0)}${fact('Recovery required',jobs.recovery_required||0)}</dl>${jobs.recovery_required?'<div class="notice" role="alert">Recovery is required. Review the operation outcome before starting more work.</div>':''}<p>Last repository check: ${date(h.last_repo)}</p>${h.repo_error?`<div class="notice">${esc(h.repo_error)}</div>`:''}${last_patch?`<p>Most recently submitted patch: ${badge(last_patch.state)} · ${date(last_patch.created)}</p>`:'<p class="help">No patch operations recorded yet.</p>'}<p class="help">Submission is not verified installation. Review operation outcomes and recovery holds before retrying work.</p><a href="${serverLink(hostId,'patching')}" class="button">View patching timeline →</a></section>`;
  const upgradeNotice=PatchyUI.upgradeLabel(h)?`<div class="notice upgrade-notice" role="status"><strong>${esc(PatchyUI.upgradeLabel(h))}</strong><br>${esc(h.os_upgrade.message)} Detection only reports availability; nothing is started automatically. Use Servers → Manage → Plan distribution upgrade to review it.</div>`:'';
  root.innerHTML=`<nav class="overview-sections" aria-label="Overview pages">${sections.map(([key,label])=>`<a href="${serverLink(hostId,key==='summary'?'overview':'overview/'+key)}" ${key===section?'aria-current="page" class="active"':''}>${label}</a>`).join('')}</nav>${h.error?`<div class="notice">${esc(h.error)}</div>`:''}${upgradeNotice}<div class="server-overview-page" data-overview-section="${section}">${section==='summary'?summary:section==='system'?details:patching}</div>`;
+ if(isAdmin()&&section==='summary'){const panel=document.createElement('section');panel.className='card file-status-panel';root.append(panel);fileStatusPanel(panel,hostId,()=>currentView(revision,'servers')).catch(()=>{});}
  if(sessionStorage.getItem('mrpatchy-enrollment-success:'+currentUser.username)===hostId){
   const notice=document.createElement('div');notice.className='notice';notice.setAttribute('role','status');
   notice.textContent='Installation verified. Review current agent health and monitoring data below.';
@@ -110,10 +111,10 @@ async function serverPatching(revision,context){
    $('#server-period').textContent=start.toLocaleDateString([],{month:'long',year:'numeric'});
    calendar.innerHTML=data.events.length?`<div class="server-timeline">${data.events.map(e=>`<article><time>${date(e.start)}</time><div><h4>${esc(e.title)} ${badge(e.trigger)}</h4><p>Start window ends ${date(e.end)}</p><p class="help">${Object.entries(e.states).map(([state,count])=>esc(state)+': '+count).join(' · ')||'Planned window; no run recorded'}${e.timezone?' · Schedule timezone '+esc(e.timezone):''}</p></div></article>`).join('')}</div>`:empty('No patch windows in this month','Check the assigned schedules below. On-demand work appears in Operations.');
    policies.innerHTML=`<div class="server-grid"><section class="card"><h3>Schedules covering this server</h3>${data.schedules.length?data.schedules.map(p=>`<div class="server-policy"><h4>${esc(p.name)} ${badge(p.enabled?'enabled':'paused')}</h4><p>${esc(scheduleDescription(p))} · ${p.window_minutes} minute start window</p><p class="help">Priorities: ${esc(p.priorities.join(', '))}<br>${['critical','high'].map(level=>esc(level+': '+(p[level].enabled?'after '+p[level].after_minutes+' minutes'+(p[level].bypass_window?' · bypasses maintenance windows':''):'off'))).join('<br>')}</p></div>`).join(''):'<p class="help">No schedule covers this server. Updates require an on-demand installation.</p>'}${isAdmin()?'<a href="#schedules" class="button">Manage fleet schedules</a>':''}</section><section class="card"><h3>Maintenance &amp; recovery policy</h3>${serverWindowText(data.windows)}<p>Automatic reboot: <strong>${data.recovery.reboot?'enabled':'disabled'}</strong><br>Snapshot rollback: <strong>${data.recovery.rollback?'enabled':'disabled'}</strong></p><p class="help">Package holds, repository verification, target health and reviewed approvals still apply.</p>${isAdmin()?`<a href="${serverLink(hostId,'maintenance')}" class="button">Server maintenance settings</a>`:''}</section></div>`;
-  }catch(error){if(turn===ticket&&root.isConnected)calendar.innerHTML=`<p class="notice">${esc(error.message)}</p>`;}
+  }catch(error){if(turn===ticket&&root.isConnected)calendar.innerHTML=PatchyUI.error('Unable to load calendar',esc(error.message));}
  };
  $('#server-period-prev').onclick=()=>{cursor=new Date(cursor.getFullYear(),cursor.getMonth()-1,1);load();};$('#server-period-next').onclick=()=>{cursor=new Date(cursor.getFullYear(),cursor.getMonth()+1,1);load();};$('#server-period-today').onclick=()=>{cursor=new Date();load();};
- const pending=async()=>{try{const rows=await api('/hosts/'+hostId+'/packages?updates=true');if(!root.isConnected)return;forecast.innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>Package</th><th>Candidate</th><th>Priority / deadline</th><th>Expected installation</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.name)}${p.held?'<small>Held by target policy</small>':''}</td><td>${esc(p.candidate)}</td><td>${badge(p.priority)}<small>${date(p.due)}</small></td><td>${installationCell(p.installation)}</td></tr>`).join('')}</tbody></table></div><a href="${serverLink(hostId,'packages')}" class="button">Review &amp; install updates</a>`:'<p class="help">No pending updates in the latest repository results.</p>';}catch(error){if(root.isConnected)forecast.textContent=error.message;}};
+ const pending=async()=>{try{const rows=await api('/hosts/'+hostId+'/packages?updates=true');if(!root.isConnected)return;forecast.innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>Package</th><th>Candidate</th><th>Priority / deadline</th><th>Expected installation</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.name)}${p.held?'<small>Held by target policy</small>':''}</td><td>${esc(p.candidate)}</td><td>${badge(p.priority)}<small>${date(p.due)}</small></td><td>${installationCell(p.installation)}</td></tr>`).join('')}</tbody></table></div><a href="${serverLink(hostId,'packages')}" class="button">Review &amp; install updates</a>`:'<p class="help">No pending updates in the latest repository results.</p>';}catch(error){if(root.isConnected)forecast.innerHTML=PatchyUI.error('Unable to load forecast',esc(error.message));}};
  await Promise.all([load(),pending(),activity(revision,{hostId,root:jobsRoot})]);
 }
 
@@ -130,11 +131,11 @@ async function serverHistory(revision,context){
  root.innerHTML='<nav class="overview-sections" aria-label="History pages">'+PatchyUI.sectionNavigation(entries,kind,key=>link(key),entries.map(x=>x[0]),[])+'</nav><div id="history-workspace"></div>';
  const panel=root.querySelector('#history-workspace');
  if(kind==='packages')return packageHistory(revision,{hostId,root:panel});
- if(!isAdmin()){panel.innerHTML=empty('Administrator access required','Inventory and process snapshot pages are restricted to administrators.');return;}
+ if(!isAdmin()){panel.innerHTML=PatchyUI.error('Administrator access required','Inventory and process snapshot pages are restricted to administrators.');return;}
  const current=()=>currentView(revision,'servers')&&panel.isConnected;
  $('#breadcrumb').textContent+=' / '+(kind==='inventory'?'Inventory revisions':'Process observations');document.title=(kind==='inventory'?'Inventory revisions':'Process observations')+' · '+host.name+' · Mr Patchy';
  const note='<p class="help">Retained snapshots are historical observations, not current state or proof of protection. Retention may remove records while you browse. Offset pages may shift as collection continues.</p>';
- let recordId;try{recordId=decodeURIComponent(parts[4]||'');}catch{panel.innerHTML=empty('Invalid history link','Open a record from its history list.');return;}
+ let recordId;try{recordId=decodeURIComponent(parts[4]||'');}catch{panel.innerHTML=PatchyUI.error('Invalid history link','Open a record from its history list.');return;}
  const key=hostId+':'+kind,state=historyViewContext.get(key)||{offset:0};historyViewContext.set(key,state);
  if(recordId){
   panel.innerHTML=PatchyUI.loading();
@@ -142,7 +143,7 @@ async function serverHistory(revision,context){
    const data=await api('/hosts/'+encodeURIComponent(hostId)+'/history/'+encodeURIComponent(recordId)+'?kind='+kind);if(!current())return;
    if(String(data.id)!==recordId||data.host_id!==hostId)throw Error('History record identity differs; reopen the list.');
    panel.innerHTML='<a class="button" href="'+link(kind)+'">← Back to snapshot list</a><section class="card history-detail"><div class="history-detail-heading">'+PatchyUI.portrait()+'<div><h3>Snapshot detail</h3><p>'+esc(kind==='inventory'?'Inventory revision':'Process observation')+' · '+date(data.created||data.observed)+'</p></div></div>'+note+'<dl class="server-facts"><div><dt>Record ID</dt><dd>'+esc(data.id)+'</dd></div><div><dt>Server ID</dt><dd>'+esc(data.host_id)+'</dd></div></dl><h4>Stored '+(kind==='inventory'?'inventory':'process evidence')+'</h4><pre tabindex="0" aria-label="Stored snapshot data">'+esc(JSON.stringify(kind==='inventory'?data.inventory:data.evidence,null,2))+'</pre></section>';
-  }catch(error){if(current())panel.innerHTML=empty('Unable to load snapshot',esc(error.message),'<a class="button" href="'+link(kind)+'">Back to snapshot list</a><button id="history-detail-retry">Retry snapshot</button>');const retry=panel.querySelector('#history-detail-retry');if(retry)retry.onclick=render;}
+  }catch(error){if(current())panel.innerHTML=PatchyUI.error('Unable to load snapshot',esc(error.message),'<a class="button" href="'+link(kind)+'">Back to snapshot list</a><button id="history-detail-retry">Retry snapshot</button>');const retry=panel.querySelector('#history-detail-retry');if(retry)retry.onclick=render;}
   return;
  }
  panel.innerHTML='<section class="card history-reading"><h3>'+(kind==='inventory'?'Inventory revisions':'Process observations')+'</h3>'+note+(host.enabled===false||host.deleted_at?'<p class="notice">Retained history only; management is inactive.</p>':'')+'<div id="snapshot-list"></div></section>';
@@ -154,7 +155,7 @@ async function serverHistory(revision,context){
    state.offset=offset;
    list.innerHTML=rows.length?'<div class="snapshot-list">'+rows.map(row=>'<article><div><h4>'+date(row.created||row.observed)+'</h4><p class="help">Record '+esc(row.id)+'</p></div><a class="button" href="'+link(kind,String(row.id))+'">Open snapshot →</a></article>').join('')+'</div>':empty('No retained snapshots on this page','Try a previous page or check the collection and retention settings.');
    serverPagination(list,offset,rows.length===20,load,20);
-  }catch(error){if(current()&&request===ticket){list.innerHTML=empty('Unable to load history',esc(error.message),'<button id="snapshot-list-retry">Retry history</button>');list.querySelector('button').onclick=()=>load(offset);}}
+  }catch(error){if(current()&&request===ticket){list.innerHTML=PatchyUI.error('Unable to load history',esc(error.message),'<button id="snapshot-list-retry">Retry history</button>');list.querySelector('button').onclick=()=>load(offset);}}
  };
  await load(state.offset);
 }
@@ -541,7 +542,7 @@ document.addEventListener('click',event=>{
 });
 
 async function deletedServers(revision){
- const root=$('#content');if(!isAdmin()){root.innerHTML=empty('Administrator access required','Deleted server records are retained for administrator review.');return;}
+ const root=$('#content');if(!isAdmin()){root.innerHTML=PatchyUI.error('Administrator access required','Deleted server records are retained for administrator review.');return;}
  const rows=await api('/hosts?deleted=true');if(!currentView(revision,'servers'))return;
  root.innerHTML=heading('Deleted servers','Management and local credentials have been removed. Historical records are retained.','<a class="button" href="#servers">← Managed servers</a>')+'<section class="card">'+(rows.length?'<div class="table-wrap"><table><thead><tr><th>Server</th><th>Deleted</th><th></th></tr></thead><tbody>'+rows.map(host=>'<tr><td>'+esc(host.name)+'<small>'+esc(host.address)+'</small></td><td>'+date(host.deleted_at)+'</td><td><a class="button" href="'+serverLink(host.id)+'">View retained records</a></td></tr>').join('')+'</tbody></table></div>':'<p>No deleted servers.</p>')+'</section>';
 }
@@ -600,7 +601,7 @@ async function renderExecutionScans(root,hostId,current){
   const form=panel.querySelector('form');form.elements.enabled.checked=p.enabled;form.elements.paths.value=p.paths.join('\n');for(const key of ['debounce_seconds','cooldown_minutes','max_per_hour'])form.elements[key].value=p[key];
   form.onsubmit=async event=>{event.preventDefault();const save=form.querySelector('button');save.disabled=true;try{const values=new FormData(form);await api(base,'PUT',{enabled:values.has('enabled'),paths:values.get('paths').split('\n').map(x=>x.trim()).filter(Boolean),debounce_seconds:Number(values.get('debounce_seconds')),cooldown_minutes:Number(values.get('cooldown_minutes')),max_per_hour:Number(values.get('max_per_hour')),reason:values.get('reason'),expected_revision:p.revision});if(current()){toast('Execution scan policy saved');await load();}}catch(error){if(current())toast(error.message);}finally{if(save.isConnected)save.disabled=false;}};
   panel.querySelector('#execution-scan-prev').onclick=()=>{offset=Math.max(0,offset-20);load();};panel.querySelector('#execution-scan-next').onclick=()=>{offset+=20;load();};panel.querySelector('#execution-scan-refresh').onclick=load;
- }catch(error){if(current()&&request===ticket)panel.innerHTML='<h3>Execution-triggered scans</h3><p class="notice">'+esc(error.message)+'</p>';}};
+ }catch(error){if(current()&&request===ticket)panel.innerHTML=PatchyUI.error('Unable to load execution-triggered scans',esc(error.message));}};
  await load();
 }
 
@@ -681,7 +682,7 @@ async function startupFiles(revision,context){
     view.innerHTML=`<div id="startup-file-items">${data.items.map(row=>`<article class="card startup-file"><h3>${esc(row.path)}</h3><p>${esc(row.mechanism_label)} · ${badge(row.change)}</p><p>Origin: not assessed</p><dl class="ai-run-facts"><div><dt>Kind</dt><dd>${esc(row.kind)}</dd></div><div><dt>Owner</dt><dd>UID ${esc(row.uid)} · GID ${esc(row.gid)}</dd></div><div><dt>Mode</dt><dd>${Number(row.mode).toString(8)}</dd></div></dl><p class="help">${row.sha256?'SHA-256':'Symlink target (not followed)'}</p><pre class="ai-run-message">${esc(row.sha256||row.target||'Not recorded')}</pre></article>`).join('')||empty('No matching stored files',data.inspection_id?'Change the search or review Coverage for collection limits.':'No startup metadata receipt is available.')}</div><div class="actions"><button id="startup-file-prev" ${offset?'':'disabled'}>Previous files</button><span>Page ${Math.floor(offset/25)+1}</span><button id="startup-file-next" ${data.more?'':'disabled'}>Next files</button></div>`;
     for(const [id,next] of [['#startup-file-prev',Math.max(0,offset-25)],['#startup-file-next',offset+25]])view.querySelector(id).onclick=()=>{offset=next;load();};
    }
-  }catch(error){if(alive()&&turn===ticket){status.textContent=error.message;view.innerHTML=empty('Unable to load startup inventory','If the receipt or baseline changed, refresh latest inventory to review the new snapshot.');}}
+  }catch(error){if(alive()&&turn===ticket){status.textContent=error.message;view.innerHTML=PatchyUI.error('Unable to load startup inventory','If the receipt or baseline changed, refresh latest inventory to review the new snapshot.');}}
  };
  search.oninput=()=>{q=search.value;offset=0;startupViewContext.set(hostId,{q,offset,digest});clearTimeout(timer);timer=setTimeout(()=>{if(alive())load();},250);};
  root.querySelector('#startup-latest').onclick=()=>{clearTimeout(timer);q=search.value;offset=0;digest='';load();};

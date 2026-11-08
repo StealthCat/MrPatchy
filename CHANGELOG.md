@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.45.1 — 2026-11-07
+
+1. [PR #477](https://github.com/StealthCat/MrPatchy/pull/477): Preserve accurate read-only quarantine evidence status when the original file's parent disappears. A retained vault record now reports `uncertain` / `parent_changed` and still verifies the held file instead of reporting `not_found` / `missing`, including when removal races the parent open. This changes the reported audit state for that case without mutating the target, restoring a file or changing response authorization. This source update does not publish a Docker image.
+
+## 1.45.0 — 2026-11-07
+
+1. [PR #627](https://github.com/StealthCat/MrPatchy/pull/627): Check stored, authenticated Debian/RPM artifact manifests and exact file hashes before consulting the strict known-good cache and using AI for unresolved process behavior. A hash mismatch bypasses cache reuse. Administrators can review recorded file hashes, sources, assessment history, baseline comparison, freshness and coverage gaps from fleet and server File status views. The views use stored evidence, and existing manual baseline approval and response authorization still apply. No schema migration is required. Coverage is limited to recorded observations and retained artifact evidence. Signature verification does not establish safe behavior or current signing-key revocation status. This source update does not publish a Docker image.
+
+## 1.44.9 — 2026-11-07
+
+1. [PR #395](https://github.com/StealthCat/MrPatchy/pull/395): Use the bridge’s shared RPM/Debian backend detection for read-only target security inspection. The package database selection and inspection report format stay the same. This covers only security inspection; other duplicated target helpers remain tracked in issue #190. This source update does not publish a Docker image.
+
+## 1.44.8 — 2026-11-07
+
+1. [PR #625](https://github.com/StealthCat/MrPatchy/pull/625): Add responsive Mr Patchy browser pages for forbidden access, missing pages, redirects and server failures, with eight themed transparent mascot illustrations. Failed application views and sign-in errors also use the new artwork. Preserve actual status codes, redirect destinations, cookies, Retry-After, security headers, API/download contracts and bodyless 304 responses; generic public messages do not disclose exception details. Pages work without JavaScript or database startup. External proxy-generated failures require that proxy's own handler; reusable static pages are included. No schema, role or runtime response-authorization changes. This source update does not publish a Docker image.
+2. Allow 45 minutes for the complete SQLite/container/HTTPS CI job after a 30-minute run passed all 2,297 Python tests but was cancelled at the end of its final TLS smoke check. All validation steps remain enabled.
+
+## 1.44.7 — 2026-11-07
+
+1. [PR #482](https://github.com/StealthCat/MrPatchy/pull/482): Reject a still-queued evidence copy when its linked `evidence-preserve` job fails before execution, clearing the approval expiry so a fresh preservation can be prepared instead of leaving the copy permanently stuck in `queued`. Compatibility: controller bookkeeping and the retry path change only for failed, unstarted preservation jobs; API shape, database schema, roles and runtime response authorization are unchanged. Material limits: copies that reached `uncertain` or any later state, copies for another host and target-side evidence remain untouched; operators must explicitly prepare and approve a new preservation. This source update does not publish a Docker image.
+
+## 1.44.6 — 2026-11-07
+
+1. [PR #470](https://github.com/StealthCat/MrPatchy/pull/470): Preserve structured bridge health results when the collector service is inactive, failed, activating or unknown by accepting documented `systemctl is-active` status codes and reporting `collector_active=false`; pre-patch, rollback and health-comparison callers can now produce their designed diagnostics instead of receiving a bare command error. Compatibility: the bridge health response schema, roles and runtime response authorization are unchanged, but non-active collector states now return a successful structured health response rather than raising. Material limits: command execution, timeout, failed-unit ambiguity checks and all operation fail-closed gates remain enforced; this does not restart or repair an inactive collector. This source update does not publish a Docker image.
+
+## 1.44.5 — 2026-11-07
+
+1. [PR #483](https://github.com/StealthCat/MrPatchy/pull/483): Export every retained RPM package version, including older install-only kernels, and emit Debian/RPM package URLs with validated vendor namespaces and distribution qualifiers, bare component names, and nonzero RPM epochs in the `epoch` qualifier. Compatibility: SBOM component names, RPM version fields and package-URL identities change to the ecosystem form expected by vulnerability scanners; consumers that keyed records by the previous `name:arch` or epoch-in-version representation must reconcile those identifiers. Material limits: vendor/distribution metadata is emitted only when usable `ID` and `VERSION_ID` values are present in the saved OS inventory; the export remains a read-only snapshot and does not establish scanner coverage. Roles, schema and runtime response authorization are unchanged. This source update does not publish a Docker image.
+
+## 1.44.4 — 2026-11-07
+
+1. [PR #474](https://github.com/StealthCat/MrPatchy/pull/474): Keep the security-signature and oversized-tar test fixtures runnable on Python 3.13 and newer by supplying the removed `imghdr` interface only to PGPy's test-only photo-ID probe and by streaming zero bytes for the declared oversized archive member so the application budget check is exercised. Compatibility: production code, runtime dependencies, APIs, schema, roles and runtime response authorization are unchanged. Material limits: CI is still pinned independently of the production image and PGPy remains in the test fixtures, so #445 stays open and the Python 3.15 image bump must not merge until those gaps are resolved. This source update does not publish a Docker image.
+
+## 1.44.3 — 2026-11-07
+
+1. [PR #567](https://github.com/StealthCat/MrPatchy/pull/567): Fetch only the six retained score fields used to match exact assessments and check deferral eligibility during periodic AI update scoring. Preserve oldest-first selection, stale-deferred cleanup and full assessment details in the existing detail and completion paths. The database schema, API, provider inputs and runtime response authorization are unchanged. Repeated candidate hashing and measured production throughput remain open under #436.
+
+## 1.44.2 — 2026-11-07
+
+1. [PR #566](https://github.com/StealthCat/MrPatchy/pull/566): Narrow periodic AI update-score candidate discovery to the server ID and saved inventory actually used for scoring, leaving telemetry, baselines and other unrelated server fields out of the bounded candidate queries while preserving candidate order and exact APT/RPM evidence and score identities. Compatibility: scoring inputs, provider payloads, completed-score reuse, pause/lifecycle eligibility, APIs, schema, roles and runtime response authorization are unchanged. Material limits: every candidate is still hashed on each pass, measured production throughput remains unverified and the remaining CPU work stays tracked under #436, which remains open. This source update does not publish a Docker image.
+
+## 1.44.1 — 2026-11-07
+
+1. [PR #487](https://github.com/StealthCat/MrPatchy/pull/487): Correct the operator recovery documentation with the Python application prerequisites, concrete Compose named-volume discovery and restoration steps, and replace the stale administrator password-reset one-liner with the supported locked, audited helper and its explicit MFA/account-enable options. The README now states the implemented default of four AI worker tasks rather than one. Compatibility: documentation only; application behavior, APIs, schema, roles and runtime response authorization are unchanged. Material limits: these instructions do not automate infrastructure recovery, credential restoration or password-reset authorization, and operators still need trusted host access and separately protected recovery material. Completes #410. This source update does not publish a Docker image.
+
 ## 1.44.0 — 2026-11-07
 
 1. [PR #304](https://github.com/StealthCat/MrPatchy/pull/304): Report distribution-upgrade availability from saved inventory through a shared `os_upgrade` status in the hosts and host-summary APIs, and show an accessible badge beside eligible Debian server names plus a report-only Overview notice. Malformed, stale, offline, disabled and unsupported inventories fail closed without disrupting other fleet responses, including legacy timestamps outside the supported numeric range. Compatibility: the API change is additive; inventory ingestion stores a bounded derived summary and startup backfills existing hosts. No upgrade is contacted or started by detection. Material limits: this slice reports fresh online Debian 11→12 and 12→13 paths only; Ubuntu offer verification, RPM-family detection, remaining server references and fleet notification remain under #96 and #305, which stay open. Existing roles and runtime response authorization remain unchanged. This source update does not publish a Docker image.
