@@ -22,8 +22,8 @@ module.exports=async(page,capture)=>{
   if(url.pathname.endsWith('/persistence-incidents/startup-fixture/plans/startup-plan/approve')){writes.push(url.pathname);startupPlan.state='approved';return route.fulfill({json:{execution:'manual_only'}});}
   if(url.pathname.endsWith('/persistence-incidents'))return route.fulfill({json:{items:[{id:'startup-fixture',state:'open',updated:1,baseline_id:'baseline-fixture',evidence:{changes:[{path:'/etc/cron.d/task',kind:'added'}]},plans:[startupPlan]}],more:false}});
   if(url.pathname.endsWith('/persistence-incidents/startup-fixture/history'))return route.fulfill({json:{detections:[{inspection_id:'inspection-job'}],reviews:[],more:false}});
-  if(url.pathname.endsWith('/baseline')&&request.method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
-  if(url.pathname.endsWith('/baseline')&&request.method()==='POST'){writes.push(url.pathname);assert.equal(request.postDataJSON().expected,'');assert.equal(request.postDataJSON().inspection_id,'inspection-job');return route.fulfill({json:{id:'baseline-fixture'}});}
+  if(url.pathname.endsWith('/baseline')&&request.method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,review_digest:'e'.repeat(64),file_review:{order:['authenticated_repository','known_good_database','ai'],items:[{path:'/etc/cron.d/<script>untrusted</script>',status:'verified',known_good:{status:'miss'},behavior_status:'unresolved'}],note:'Authentic bytes do not approve a baseline.'},latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
+  if(url.pathname.endsWith('/baseline')&&request.method()==='POST'){writes.push(url.pathname);assert.equal(request.postDataJSON().review_digest,'e'.repeat(64));assert.equal(request.postDataJSON().expected,'');assert.equal(request.postDataJSON().inspection_id,'inspection-job');return route.fulfill({json:{id:'baseline-fixture'}});}
   if(url.pathname.endsWith('/comparison'))return route.fulfill({json:{state:'compared',previous_created:Date.now()/1000-3600,note:'Observed changes, not a malware verdict.',changes:[{path:'/etc/cron.d/review-me',kind:'added'}]}});
   if(url.pathname.endsWith('/evidence-copies'))return route.fulfill({json:{items:[{id:'copy-fixture',state:copyState,created:Date.now()/1000,snapshot:{path:'/tmp/security-fixture',sha256:'b'.repeat(64)},snapshot_digest:'e'.repeat(64)}],more:false}});
   if(url.pathname.endsWith('/evidence-copies/copy-fixture/execute')){assert.equal(request.postDataJSON().confirmation,'PRESERVE');assert.equal(request.postDataJSON().snapshot_digest,'e'.repeat(64));copyState='preserved';writes.push(url.pathname);return route.fulfill({json:{job_id:'copy-job'}});}
@@ -363,6 +363,8 @@ module.exports=async(page,capture)=>{
   await page.getByRole('button',{name:'Compare startup inventory',exact:true}).click();
   await page.locator('.inspection-comparison pre').filter({hasText:'/etc/cron.d/review-me'}).waitFor();
   await page.getByRole('button',{name:'Review latest as baseline',exact:true}).click();
+  assert.ok(await page.locator('#modal').textContent().then(text=>text.includes('authenticated_repository')&&text.includes('unresolved')&&text.includes('<script>untrusted</script>')));
+  assert.equal(await page.locator('#modal script').count(),0);
   await page.locator('#startup-baseline-approval textarea').fill('Verified the startup entries against approved configuration.');
   await page.getByRole('button',{name:'Approve startup baseline',exact:true}).click();
   await page.locator('#modal').waitFor({state:'hidden'});

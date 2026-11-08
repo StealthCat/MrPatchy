@@ -2135,7 +2135,25 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+### Update-scoring candidate database reads
+
+Candidate discovery reads server IDs and inventory in its existing bounded
+batches. Server telemetry, baselines and other unrelated fields stay out of this
+query. The regression checks the selected columns across multiple batches and
+compares candidate order, APT/RPM evidence and exact score identities with full
+server records. Existing pause and lifecycle filters still govern eligibility.
+This reduces data fetched per scoring pass. Candidate hashing and measured
+production throughput remain open.
+
 ### Parallel execution and latency work
+
+Worker checkpoint #594 batches score-row reads when linking the diagnostic run
+and persisting completed, deferred or failed outcomes for the existing five-item
+scoring batch. The same sessions still recheck current package and server evidence
+before accepting an assessment. A five-item fixture reduces ID-filtered score
+SELECTs from twelve to four, including candidate and host-scope reads. This is
+partial scoring performance work. Idle candidate hashing, measured production
+throughput and full parallel scoring acceptance remain open.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2145,6 +2163,15 @@ separately instead of promising a fixed production speedup.
 - Reuse lifecycle-managed HTTP clients/connection pools with bounded pool/connect/read deadlines and safe per-request credentials; close them on drain/shutdown. Keep slow provider/SSH operations outside database transactions wherever possible. Measure candidate-query/index and repeated evidence-collection costs before optimizing them.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
+
+### Update-scoring schedule-state reads
+
+The scheduler reads only identity, state and eligibility fields from retained
+update scores while checking exact and deferred candidates. Assessment text and
+other detail fields are loaded by their existing detail and completion paths.
+Regression coverage checks the scheduling queries across batches, including
+durable deferral, stale-state updates and the existing assessment identity.
+Candidate hashing and production throughput validation remain open.
 
 ### Fleet-wide exact-match known-good cache
 
@@ -2164,6 +2191,13 @@ explicitly requested or the entry no longer matches/is no longer valid.
 
 ### Throttling, daily cap and unthrottled operation
 
+The shared Responses API request path validates strict UTF-8 JSON against a
+2,000,000-byte encoded ceiling before shared rate, budget and provider-backoff
+admission. Refused bodies create no provider receipt and expose a fixed local
+diagnostic. Valid bodies send the validated bytes and retain their structured
+evidence for pricing and accounting. This checkpoint covers outbound request
+validation. Production throughput and wider transport acceptance remain open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -2177,7 +2211,7 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
 - In cap mode configure a positive USD amount, an explicit IANA timezone and the next calendar-day reset, including daylight-saving transitions. Changes to amount/timezone/mode are revision-checked and audited; prevent resets, restarts, clock changes or mode toggles from silently granting duplicate budget.
 - Reserve cost atomically before admitting each paid call, accounting for all outstanding reservations across workers/purposes, selected model/tier, bounded input and output/reasoning tokens, supported charges and the potential follow-up stage. Define whether an entire multi-stage run is reserved in advance or deferred between stages; never skip a required stage or accept an incomplete verdict because funds run out.
-- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
+- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts with unknown transmission outcomes and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
@@ -2192,6 +2226,33 @@ Issue reproduction/fixes retain priority over these roadmap milestones. Reconcil
 unfinished related work first and use the existing cycle budget, source/PR versioning
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
+
+### Release definitely unsent spend — worker checkpoint #588
+
+A confirmed local HTTP connection-pool acquisition timeout releases only the
+matching request's reservation and records a redacted reason in the ledger. The
+shared client sends once without following redirects or automatically retrying.
+Other transport timeouts, interrupted workers and lost replies retain conservative
+charges when the provider outcome is unknown. The existing transient backoff still
+applies. This is a partial shared-controls increment. Cross-worker failover and
+end-to-end spend and throughput acceptance remain open.
+
+### SSH evidence delay in the triage benchmark — worker checkpoint #524
+
+`tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
+remains 10 ms. Both simulated delays are included in the JSON report. For a
+matched SSH-heavy serial/parallel comparison, run the same eight investigations
+with the same provider and SSH delays:
+
+```sh
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 1
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 4
+```
+
+Check that both reports retain the same provider call count and one-stage and
+two-stage workload before comparing their stage percentiles and throughput.
+These are loopback and stubbed SSH measurements. Production comparison remains
+open.
 
 ### Bounded same-server process triage — worker checkpoint #379
 
@@ -4326,6 +4387,61 @@ retained in PR #81; only all-success checks on the final published commit permit
 merge. No checks or UI assertions are weakened to obtain a pass.
 
 
+### Pooled AI model discovery — worker checkpoint #556
+
+The administrator model picker now sends its non-billable model-list GET through
+the same process-local bounded HTTP pool as provider POSTs. GET and POST each build
+a new request with only allowlisted ordinary client headers plus the current call's
+authorization; neither response cookies nor credentials become client defaults or
+flow to a later request. Model discovery keeps its 20-second timeout, redirect
+refusal, response-size and model-ID validation, controlled diagnostics and single
+attempt. No automatic retry or provider-call admission/accounting change is added.
+
+Focused acceptance uses a loopback HTTP/1.1 provider to prove socket reuse across
+GET/POST traffic, absent GET bodies, changing credentials, discarded cookies and
+bounded shutdown. Existing discovery route/role and redaction coverage remains in
+place. This is a finite safe-transport improvement; it does not establish provider
+availability, guarantee throughput, change AI concurrency or complete the faster-AI
+performance program. No schema, UI, target helper or agent change is required.
+
+### Observed AI benchmark workload fingerprint — worker checkpoint #530
+
+Fixture reports include `workload_fingerprint` with a version and SHA-256 value.
+Compare the full field across matched runs. It covers the actual synthetic model
+requests and SSH evidence requests, including duplicates, and excludes dispatch
+order, the fixture collection timestamp and ordering within the SSH check set.
+A mismatch identifies a workload difference even when token and call counts
+match. Compare delay settings and capability counts separately. Reports expose
+no request contents. Comparator enforcement and production measurements remain
+open.
+
+
+
+### Workload-bound AI benchmark comparison — worker checkpoint #536
+
+The fixture comparator now requires the observed version-1 workload fingerprint
+from both reports and refuses missing, malformed, unsupported or unequal values
+before emitting performance deltas. Matching call counts, token totals, stage
+sample counts and fixture delays are no longer sufficient to claim capability
+equivalence when the underlying synthetic provider or SSH request multiset differs.
+Accepted comparison output retains only the version and SHA-256 fingerprint for
+audit; it never includes the raw fixture requests. Historical reports that predate
+the fingerprint must be regenerated rather than treated as equivalent without
+evidence. Existing strict JSON, bounded-input, stage/count, cost-status and timing
+consistency validation remains. This is fixture-only tooling: it changes no
+production provider call, target access, runtime admission or response authority,
+and it does not establish production performance or complete the faster-AI gate.
+
+The seeded fixture queue age is a capability control, not a measured result, and
+the workload fingerprint does not cover it. The comparator therefore requires the
+same queue age in both reports before emitting deltas. It reads `queue_age_seconds`,
+otherwise `initial_fixture_queue_age_seconds`, otherwise the documented legacy fixed
+two-second seed; it refuses malformed or out-of-range values (integer seconds,
+0–86,400) and reports whose two queue-age fields disagree. A configured-queue-age
+pair with matching fingerprints but different seeds is refused rather than reported
+as a queue-age latency delta.
+
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
@@ -4855,6 +4971,22 @@ Rebuild the controller first to create the ledger table, then matching workers. 
 target-helper/agent update, Docker publication, Git tag or schedule change is included.
 
 
+## Faster AI triage — local connection-pool contention
+
+A confirmed local HTTP pool timeout defers the affected request without creating,
+extending or clearing fleet-wide provider backoff. Advisory plans and scoring use
+the five-second local eligibility delay. Process triage keeps its existing bounded
+per-item retry schedule and has no provider Retry-After floor for this failure.
+Other workers can continue when shared rate, budget, provider and policy controls
+permit. Read timeouts and other ambiguous transport failures keep their existing
+shared backoff and budget treatment.
+
+Issue #605 preserves #589's matching-receipt release of confirmed unsent spend
+reservations. The acceptance checks cover another request proceeding after local contention, a
+concurrent provider floor surviving unchanged and an ambiguous read timeout
+still creating shared backoff. Native exact-head CI and the broader parallel
+triage and multi-controller acceptance remain separate milestones.
+
 ## v1.33.0 — Fleet-wide provider backoff and Retry-After admission
 
 Issue-first reconciliation read merged v1.32.0 main, repository instructions, this
@@ -4902,6 +5034,19 @@ Rebuild the controller first to create the provider-backoff table, then matching
 workers. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
 
+
+### Successful provider responses — worker checkpoint #609
+
+Successful and non-transient responses check one backoff key without acquiring
+the distributed lock when no reset is eligible. A reset candidate takes the
+same shared lock and checks again in a fresh transaction, preserving a newer
+failure recorded between the initial read and lock acquisition. An already
+clear row does not receive an otherwise unnecessary timestamp write.
+
+Acceptance covers the absent, clear and newer rows, an eligible reset and a
+concurrent failure injected before the locked reread. This increment reduces
+lock acquisitions and writes on these paths. Fleet throughput, recovery and
+complete multi-controller acceptance remain separate milestones.
 
 ## v1.34.0 — Durable update-scoring deferral and exact resume
 
@@ -5866,6 +6011,25 @@ are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
 
+### Configurable bounded AI HTTP connections — worker checkpoint #560
+
+Each controller and worker process now validates a startup-only
+`MRPATCHY_AI_HTTP_CONNECTIONS` ceiling from 1 through 64 (default 16) before
+creating its reusable AI HTTP client. The same ceiling bounds total and keepalive
+connections; invalid configuration refuses worker registration and provider
+transport instead of silently falling back or opening an unbounded pool. Complete
+Compose installation passes the setting to both application and worker processes.
+
+Worker registrations expose the effective process-local ceiling alongside AI task
+capacity. The dashboard labels it as a transport limit rather than available task
+or provider capacity. Existing AI concurrency, shared admission, rate/spend and
+provider backoff, pause/lifecycle checks, per-request credentials, cookie clearing,
+redirect refusal, timeouts, shutdown/drain behavior and single-attempt accounting
+remain unchanged. This configuration does not increase AI task concurrency by
+itself, guarantee sockets are available, establish provider throughput or complete
+the faster-AI performance program.
+
+
 ## Password hashes and secret-key handling
 
 - Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
@@ -5980,6 +6144,25 @@ integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning r
 required before this increment is delivered.
 
 
+### Configurable AI benchmark queue age — worker checkpoint #542
+
+This bounded faster-AI measurement increment lets the fixture-only serial/parallel
+benchmark seed observations with a selected synthetic queue age from zero through
+one day. The historical two-second default remains unchanged. The selected age is
+reported in the machine-readable profile and drives the existing queue-age timing,
+so paired runs can exercise fresh and delayed-backlog telemetry without sleeping or
+changing the provider, SSH-evidence, persistence, model, reasoning, evidence or
+one/two-stage workload.
+
+Focused acceptance rejects negative and excessive ages before fixture startup, then
+proves a five-second selection yields two queue-age samples at or beyond the selected
+age while preserving three provider calls and the SSH follow-up for two subjects.
+The queue age remains synthetic: it does not reproduce scheduler contention, pause,
+rate/budget deferral, provider backoff or production load, and it does not establish
+a production speedup. Coordinator integration of prerequisite #525, exact-head
+SQLite/MySQL/full-suite checks and fresh code scanning remain required before this
+increment is delivered.
+
 ### Retained AI activity state filtering
 
 Administrators can filter fleet and server AI run lists by recorded state as
@@ -6046,3 +6229,131 @@ heavy concurrent scanning or AI fan-out should raise the worker limit explicitly
 This changes no API, schema, role, audit or runtime response authority. Read-only
 root filesystems, GCP override hardening and the live alert inventory remain open
 under #201. No Docker runtime was available locally.
+
+### Bounded decoded AI provider responses — worker checkpoint #564
+
+The shared provider transport now advertises only `gzip` (with implicit identity),
+reads raw response bytes and performs its own bounded identity/gzip decoding. It
+accepts at most 2,000,000 decoded bytes. Incremental gzip output is limited to the
+remaining allowance plus one byte before each allocation, including across split
+and concatenated gzip members, so an expansion bomb is refused without first
+materializing its expanded body. A normalized decimal `Content-Length` above the
+ceiling is refused before body consumption without converting attacker-controlled
+digit strings to an integer; missing, malformed, compressed, chunked or dishonest
+lengths remain subject to the decoded-byte ceiling while streaming.
+
+Malformed/truncated gzip and unadvertised or ambiguous content encodings produce a
+fixed redacted transport failure. Successful decoding removes consumed encoding and
+framing headers and records the bounded decoded length. Every underlying response
+is closed on success, overflow or decoding/transport failure. A complete bounded
+body is reconstructed with its status and safe request metadata so existing
+structured parsing, usage receipts and HTTP error handling remain unchanged.
+
+An oversized successful response produces a fixed diagnostic and no partial result.
+The transmitted call keeps its full conservative spend reservation as uncertain
+because reliable usage is unavailable, and it is never automatically retried.
+Oversized and invalid-encoding HTTP failures retain status-based transient handling
+and a valid bounded `Retry-After` floor without persisting response bodies or
+arbitrary headers. Both retain the conservative spend reservation as uncertain when
+usage cannot be recovered. Existing per-request credentials, cookie clearing,
+redirect refusal, timeouts, connection reuse, shutdown/drain, pause/lifecycle,
+admission and response-authorization boundaries remain in force.
+
+This is a finite safe-transport checkpoint, not a claim that upstream memory use,
+provider throughput, connection capacity, model discovery or the broader faster-AI
+program is complete. Coordinator integration with ready pooled-discovery and
+configurable-connection work must preserve this decoded-response ceiling, followed
+by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+## Ordered file assessment and visibility (#626)
+
+The controller checks retained authenticated Debian/RPM artifact manifests against
+recorded SHA-256 values before exact known-good behavior lookup and optional AI.
+Target-supplied file-assessment claims are replaced. A mismatch against the latest
+authenticated artifact bypasses safe-cache reuse. File authenticity does not
+resolve behavior risk; baseline approval remains explicit and no AI opinion
+creates a trusted artifact. Repository evidence uses existing operator-managed
+authenticated vendor bundles; automatic repository artifact retrieval and current
+signing-key revocation checks are not added here.
+
+Administrator File status pages (fleet selector and server workspace) and the
+overview show paginated recorded managed/startup/vendor/process file observations,
+hashes, evidence methods, behavior assessment provenance, freshness, baseline
+comparison and coverage gaps. Multiple hashes at one path remain separate
+observations. Enrollment-only files remain unavailable, not verified. This is
+recorded-scope visibility, not enumeration of every file on disk. Viewing never
+contacts targets, invokes AI, approves a baseline or authorizes response actions.
+
+### Configurable observation batch cap — partial #106 checkpoint
+
+This bounded reliability increment lets an administrator set each enrolled server's
+serialized observation-batch cap through a typed controller operation. The bridge
+accepts only integer values from 16 KiB through 1 MiB, writes a versioned root-only
+configuration atomically and restarts the collector. Normal snapshots and eBPF events
+use the same effective cap, and existing spool telemetry reports it. The default stays
+256 KiB. The controller accepts the setting only after the target returns the exact
+requested receipt or verifies the requested cap and an active collector through a
+serialized read-only check after an uncertain reply. A failed restart restores the
+prior configuration or its absence and checks the prior collector running state.
+The controller audits unconfirmed outcomes with the observed target state when
+available, keeps the last confirmed setting, and never replays a lost request.
+Only administrators can change the cap.
+
+Configuration does not change the 48 MB durable capacity, ordered commit-before-ACK
+replay, atomic observation records or explicit oversize/capacity loss accounting. An
+oversized observation is still rejected whole and counted while eligible siblings are
+queued. Unsafe, malformed or out-of-range target configuration fails visibly instead
+of silently widening a transport boundary. The target caches a verified file identity
+so high-rate eBPF intake does not reread the configuration for every event.
+
+This does not complete #106: measured adaptive pressure draining, configurable timed
+flush and graceful-shutdown checkpoints, negotiated compression and decompression
+limits, mixed-version fallback, sustained fairness, small-ARM CPU/memory/latency
+benchmarks and the #107/#108 outage/replay/health acceptance remain open. Coordinator
+integration plus exact-head SQLite/MySQL/native/full-suite checks are still required
+before delivery.
+
+### Capability-equivalent AI benchmark comparison — worker checkpoint #526
+
+The disposable AI benchmark now has a separate comparison gate that refuses to
+interpret results unless both reports use the same run count, provider and SSH
+fixture delays, one/two-stage workload shape, provider-call count and token totals.
+Reports with fixture errors, missing or malformed metrics, lost calls/evidence or
+an unchanged execution configuration are rejected before any speed delta is shown.
+Reports from the original fixed-delay harness normalize its documented 10 ms SSH
+fixture explicitly; newer reports retain the configured value and source.
+Input reports are bounded to one megabyte and output has a fixed allowlisted shape.
+
+For valid serial/parallel pairs, the command emits machine-readable elapsed,
+throughput and allowlisted stage p50/p95 deltas. Zero baseline latency produces an
+explicit unavailable percentage instead of division by zero. Each report's cost
+status is preserved; unavailable synthetic cost is never converted to zero or
+described as a provider invoice. Output states that the loopback fixture does not
+establish production performance.
+
+This checkpoint adds no provider call, target access, schema, runtime admission or
+response authority. It does not complete production baseline collection, dashboard
+presentation or the faster-AI end-to-end acceptance milestone. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before delivery.
+
+
+
+### AI benchmark timing-consistency gate — worker checkpoint #532
+
+The fixture-report comparison gate now reconciles each report's run count, elapsed
+time and derived throughput before emitting deltas. Because the producer rounds
+elapsed seconds and runs per second independently to three decimal places, the
+check uses the exact half-unit intervals implied by that precision instead of a
+loose percentage tolerance. A report is accepted only when those
+rounding intervals can describe the same underlying execution. This preserves the
+retained v1.22 fixture pair and values produced at either elapsed-time rounding edge,
+while rejecting understated or overstated throughput with a field-specific error.
+
+This bounded follow-up is stacked on #526/#527 and does not edit its frozen branch.
+It adds no provider call, target access, benchmark workload, production runtime,
+schema, admission or response authority. Workload fingerprints, repeated production
+measurements, dashboard presentation and the full faster-AI acceptance milestone
+remain separate and incomplete. Coordinator integration must first preserve #527,
+then remove the prerequisite diff and run every applicable exact-head check before
+delivery.
