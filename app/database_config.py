@@ -86,28 +86,92 @@ class DatabaseInput(BaseModel):
     sqlite_file: str = Field(default='mrpatchy-migrated.db', pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}\.db$')
 
 
-def stage(body):
-    previous = read_profile('target') or {}
+def _mysql_profile(body, previous):
+    """Validate MySQL input and resolve the password under the unchanged-destination rules."""
     values = body.model_dump(exclude={'clear_password'})
     if any(c in body.username + body.password + body.ca_file for c in '\x00\r\n'):
         raise ValueError('Database credentials and paths cannot contain NUL or line breaks')
+    if not body.host or not body.username: raise ValueError('MySQL host and username are required')
+    if body.password and body.clear_password: raise ValueError('Provide a password or clear it, not both')
+    if not body.password and not body.clear_password:
+        identity = ('backend', 'host', 'port', 'database', 'username', 'tls', 'ca_file')
+        if all(previous.get(k) == values[k] for k in identity):
+            values['password'] = previous.get('password', '')
+        else:
+            raise ValueError('Enter the password (or explicitly select no password) when changing the MySQL destination or TLS settings')
+    if body.ca_file and not body.tls: raise ValueError('Enable verified TLS to use a CA file')
+    if body.ca_file and not Path(body.ca_file).is_absolute(): raise ValueError('CA file must be an absolute path accessible inside the app and worker containers')
+    return values
+
+
+def stage(body):
+    previous = read_profile('target') or {}
+    values = body.model_dump(exclude={'clear_password'})
     if body.backend == 'mysql':
-        if not body.host or not body.username: raise ValueError('MySQL host and username are required')
-        if body.password and body.clear_password: raise ValueError('Provide a password or clear it, not both')
-        if not body.password and not body.clear_password:
-            identity = ('backend', 'host', 'port', 'database', 'username', 'tls', 'ca_file')
-            if all(previous.get(k) == values[k] for k in identity):
-                values['password'] = previous.get('password', '')
-            else:
-                raise ValueError('Enter the password (or explicitly select no password) when changing the MySQL destination or TLS settings')
-        if body.ca_file and not body.tls: raise ValueError('Enable verified TLS to use a CA file')
-        if body.ca_file and not Path(body.ca_file).is_absolute(): raise ValueError('CA file must be an absolute path accessible inside the app and worker containers')
+        values = _mysql_profile(body, previous)
     else:
+        if any(c in body.username + body.password + body.ca_file for c in '\x00\r\n'):
+            raise ValueError('Database credentials and paths cannot contain NUL or line breaks')
         values['password'] = ''
     # Validate URL construction without opening or changing either database.
     profile_url(values)
     write_profile('target', values)
     return public_target(values)
+
+
+TEST_TIMEOUT = 5
+
+
+def test_connection(body):
+    """Read-only, bounded connectivity check using the entered (unsaved) values.
+
+    Never writes settings, creates objects or returns driver text; the result only
+    proves this controller can authenticate and run SELECT 1 against the database.
+    """
+    import time
+    import pymysql
+    if body.backend != 'mysql': raise ValueError('Only MySQL destinations can be tested')
+    values = _mysql_profile(body, read_profile('target') or {})
+    url = make_url(profile_url(values))
+    query = dict(url.query) | {'connect_timeout': str(TEST_TIMEOUT), 'read_timeout': str(TEST_TIMEOUT), 'write_timeout': str(TEST_TIMEOUT)}
+    started = time.monotonic()
+    connection = None
+    try:
+        kwargs = dict(host=url.host, port=url.port, user=url.username, password=url.password or '', database=url.database,
+                      charset='utf8mb4', connect_timeout=TEST_TIMEOUT, read_timeout=TEST_TIMEOUT, write_timeout=TEST_TIMEOUT,
+                      autocommit=False, read_default_file=None)
+        if values['tls']:
+            kwargs.update(ssl_ca=query['ssl_ca'], ssl_verify_cert=True, ssl_verify_identity=True)
+        connection = pymysql.connect(**kwargs)
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    except Exception as error:
+        return {'ok': False, **_classify(error), 'scope': TEST_SCOPE}
+    finally:
+        if connection is not None:
+            try: connection.close()
+            except Exception: pass
+    return {'ok': True, 'category': 'ok', 'elapsed_ms': int((time.monotonic() - started) * 1000), 'scope': TEST_SCOPE,
+            'detail': 'Connected, authenticated and ran a read-only query. This does not prove migration privileges, schema compatibility or HA readiness.'}
+
+
+TEST_SCOPE = 'Result describes connectivity from this controller only, not other workers or HA members.'
+
+
+def _classify(error):
+    code = error.args[0] if getattr(error, 'args', None) and isinstance(error.args[0], int) else None
+    text = str(error).lower()
+    if code in (1045, 1698): return {'category': 'authentication', 'detail': 'Authentication failed. Check the username and password.'}
+    if code == 1049: return {'category': 'database', 'detail': 'The database does not exist. Create it first.'}
+    if code in (1044, 1142, 1227): return {'category': 'access', 'detail': 'The account cannot access this database.'}
+    if isinstance(error, ssl.SSLError) or 'ssl' in text or 'certificate' in text or 'tls' in text:
+        return {'category': 'tls', 'detail': 'TLS verification failed. Check the CA file and that the host name matches the certificate.'}
+    if code in (2003, 2005, 2002, 2006, 2013) or isinstance(error, (OSError, TimeoutError)) or 'timed out' in text:
+        if 'timed out' in text or isinstance(error, TimeoutError):
+            return {'category': 'timeout', 'detail': 'The connection timed out. Check the host, port and firewall.'}
+        return {'category': 'connectivity', 'detail': 'Could not reach the database host. Check the host name, port and network access.'}
+    return {'category': 'error', 'detail': 'The connection test failed. Check the database settings.'}
 
 
 def profile_url(profile):

@@ -219,3 +219,75 @@ def test_sqlite_source_uri_escapes_special_filename_characters(tmp_path):
     source.dispose()
     result=migration.migrate(str(source.url),'sqlite:///'+str(tmp_path/'copy.db'))
     assert all(item['rows']==2 for item in result.values())
+
+
+class FakeCursor:
+    def __init__(self, log): self.log = log
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def execute(self, sql): self.log.append(sql)
+    def fetchone(self): return (1,)
+
+
+class FakeConnection:
+    def __init__(self, log): self.log = log; self.closed = False
+    def cursor(self): return FakeCursor(self.log)
+    def close(self): self.closed = True
+
+
+def patch_connect(monkeypatch, outcome):
+    import pymysql
+    calls = []; log = []; connections = []
+    def connect(**kwargs):
+        calls.append(kwargs)
+        if isinstance(outcome, Exception): raise outcome
+        c = FakeConnection(log); connections.append(c); return c
+    monkeypatch.setattr(pymysql, 'connect', connect)
+    return calls, log, connections
+
+
+def test_connection_success_is_read_only_unsaved_and_closed(admin, isolated_profiles, monkeypatch):
+    calls, log, connections = patch_connect(monkeypatch, None)
+    response = admin.post('/api/settings/database/test', json=mysql_body())
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['ok'] and data['category'] == 'ok' and 'controller' in data['scope']
+    assert 'p@ss' not in response.text
+    assert log == ['SELECT 1'] and connections[0].closed
+    assert calls[0]['connect_timeout'] <= 5 and calls[0]['ssl_verify_identity'] is True
+    assert not (isolated_profiles / 'database-target.json').exists()
+
+
+@pytest.mark.parametrize('error,category', [
+    (__import__('pymysql').err.OperationalError(1045, "Access denied for 'patchy'@'h' (using password: YES)"), 'authentication'),
+    (__import__('pymysql').err.OperationalError(1049, "Unknown database 'patchy'"), 'database'),
+    (__import__('pymysql').err.OperationalError(1044, "Access denied for user to database"), 'access'),
+    (__import__('pymysql').err.OperationalError(2003, "Can't connect to MySQL server on 'db.example.test'"), 'connectivity'),
+    (__import__('pymysql').err.OperationalError(2003, "timed out"), 'timeout'),
+    (__import__('ssl').SSLCertVerificationError('certificate verify failed: p@ss'), 'tls'),
+])
+def test_connection_failures_are_classified_and_redacted(admin, isolated_profiles, monkeypatch, error, category):
+    patch_connect(monkeypatch, error)
+    response = admin.post('/api/settings/database/test', json=mysql_body())
+    assert response.status_code == 200
+    data = response.json()
+    assert not data['ok'] and data['category'] == category
+    assert 'p@ss' not in response.text and 'patchy' not in data['detail'] and 'db.example.test' not in response.text
+
+
+def test_connection_password_rules_and_sqlite_rejected(admin, isolated_profiles, monkeypatch):
+    calls, _, _ = patch_connect(monkeypatch, None)
+    assert admin.post('/api/settings/database/test', json=mysql_body(password='')).status_code == 400
+    assert admin.put('/api/settings/database', json=mysql_body()).status_code == 200
+    before = (isolated_profiles / 'database-target.json').read_text()
+    assert admin.post('/api/settings/database/test', json=mysql_body(password='')).status_code == 200
+    assert calls[-1]['password'] == 'p@ss:/?#&word'
+    assert admin.post('/api/settings/database/test', json=mysql_body(password='', clear_password=True)).status_code == 200
+    assert calls[-1]['password'] == ''
+    assert admin.post('/api/settings/database/test', json=mysql_body(password='x', clear_password=True)).status_code == 400
+    assert admin.post('/api/settings/database/test', json={'backend': 'sqlite'}).status_code == 400
+    assert (isolated_profiles / 'database-target.json').read_text() == before
+
+
+def test_connection_requires_administrator(client):
+    assert client.post('/api/settings/database/test', json=mysql_body()).status_code in (401, 403)

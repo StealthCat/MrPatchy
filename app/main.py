@@ -1153,6 +1153,14 @@ def database_settings_save(body:database_config.DatabaseInput,user=Depends(admin
         s.commit()
     return {'ok':True,'target':result}
 
+@app.post('/api/settings/database/test')
+def database_settings_test(body:database_config.DatabaseInput,user=Depends(admin_user)):
+    try:result=database_config.test_connection(body)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with Session() as s:
+        audit(s,'test database connection',user['username']+' tested MySQL connection: '+result['category']);s.commit()
+    return result
+
 class TLSInput(BaseModel):
     domain:str=Field(default='',max_length=253)
     aliases:list[str]=Field(default_factory=list,max_length=20)

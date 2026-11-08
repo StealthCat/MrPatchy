@@ -200,6 +200,7 @@ EXPECTED_ROLES = {
     ('POST','/api/settings/ai-test'):'admin',
     ('GET','/api/settings/database'):'admin',
     ('PUT','/api/settings/database'):'admin',
+    ('POST','/api/settings/database/test'):'admin',
     ('PUT','/api/settings/history'):'admin',
     ('PUT','/api/settings/patching'):'admin',
     ('GET','/api/sso'):'public',
