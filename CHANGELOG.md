@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.46.3 — 2026-11-07
+
+1. [PR #516](https://github.com/StealthCat/MrPatchy/pull/516): Expand the free-use license to legally recognized nonprofits and local government bodies operating their own systems, including use by their employees and volunteers, while keeping contractors, managed service providers, commercial service use, for-profit schools, and state or national government deployments outside that grant unless separately licensed. Synchronize License v1.1 across the bundled terms, commercial-use guide, contribution summary, in-app license page, container metadata and licensing tests. Compatibility impact is limited to the expanded licensing terms; runtime code, APIs, schema, roles, configuration and response authorization are unchanged, and existing agreements and earlier grants retain their stated treatment. The separately staged companion website rollout remains pending. This source version does not publish a Docker image.
+
 ## 1.46.2 — 2026-11-07
 
 1. [PR #403](https://github.com/StealthCat/MrPatchy/pull/403): Validate the target boot identity before a reboot-requiring RPM transaction begins, then write the reboot marker from that prevalidated value only after DNF commits. A malformed or unavailable boot ID now refuses a reboot-requiring patch before any package change, while patches that do not require a reboot do not read the boot identity. This is a partial resolution of issue #190; the other duplicated or unvalidated target reads remain open. Package selection, API and schema contracts, roles and runtime response authorization are unchanged. This source update does not publish a Docker image.

@@ -14,15 +14,14 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 
 ## License
 
-**Free for individual, personal, noncommercial use. Commercial and organizational
-use requires a separate paid license before deployment.**
+**Free for personal, noncommercial use and for nonprofits and local governments
+running their own systems. Commercial use and other organizational use require a
+separate paid license before deployment.**
 
-See [LICENSE](LICENSE) for the full Mr Patchy Personal and Commercial License v1.0
+See [LICENSE](LICENSE) for the full Mr Patchy Personal and Commercial License v1.1
 and [COMMERCIAL.md](COMMERCIAL.md) for examples and commercial-license requests.
-A personal homelab or private household is free; employer/client systems, paid
-services and organizational deployments require a paid agreement or a separate
-written exception. Pricing and scope are agreed in writing with Robert Cronin
-through the [official project](https://github.com/StealthCat/MrPatchy/issues).
+Pricing and scope are agreed in writing with Robert Cronin through the
+[official project](https://github.com/StealthCat/MrPatchy/issues).
 
 This is source-available software with commercial-use restrictions. Third-party
 licenses and earlier valid license grants remain unchanged. New contributions
