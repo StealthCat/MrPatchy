@@ -113,3 +113,16 @@ def test_installer_warns_when_public_url_is_ignored_for_existing_env(installer):
     assert again.returncode==0 and (root/'.env').read_text()==config
     assert '--public-url ignored' in again.stderr
     assert '--public-url ignored' not in run().stderr
+
+
+def test_installer_persists_gcp_compose_files_for_plain_compose(installer):
+    root,run=installer
+    (root/'.env').write_text('ADMIN_PASSWORD=x\nGCP_ZONE=old\n')
+    result=run()
+    assert result.returncode==0,result.stderr
+    config=dict(line.split('=',1) for line in (root/'.env').read_text().splitlines())
+    assert config['COMPOSE_FILE']=='compose.yaml:compose.gcp.yaml'
+    assert config['GCP_PROJECT']=='test-project' and config['GCP_ZONE']=='us-central1-a'
+    assert config['ADMIN_PASSWORD']=='x'
+    before=(root/'.env').read_text()
+    assert run().returncode==0 and (root/'.env').read_text()==before

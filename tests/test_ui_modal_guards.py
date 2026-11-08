@@ -70,6 +70,38 @@ def test_repository_completion_after_sign_out_is_silent():
     assert result['messages'] == []
 
 
+@pytest.mark.parametrize('obsolete', [False, True])
+@pytest.mark.parametrize('status', [200, 401, 500])
+def test_logout_feedback_belongs_to_the_initiating_session(obsolete, status):
+    start = APP.index("$('#logout').onclick=") + len("$('#logout').onclick=")
+    handler = APP[start:APP.index(";$('#login-form')", start)]
+    # Execute the production API and handler. A background authentication failure
+    # may show the login view before the outstanding logout fetch completes.
+    script = r"""
+let sessionRevision=0,csrf='',release,logins=0;
+const messages=[],requests=[];
+function toast(message){messages.push(message);}
+function showLogin(){sessionRevision++;logins++;messages.length=0;}
+function fetch(url,options){requests.push({url,method:options.method});return new Promise(resolve=>release=resolve);}
+%s
+%s
+const logout=%s;
+(async()=>{
+ const pending=logout();
+ %s
+ release({ok:%s,status:%s,statusText:'Fixture status',json:async()=>({detail:'Fixture logout failure'}),text:async()=>JSON.stringify({detail:'Fixture logout failure'})});
+ await pending;
+ console.log(JSON.stringify({messages,requests,logins}));
+})();
+""" % (_function(APP, 'apiErrorMessage'), 'async ' + _function(APP, 'api'), handler,
+         'showLogin();' if obsolete else '', str(status < 400).lower(), status)
+    result = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True)
+    actual = json.loads(result.stdout)
+    assert actual['requests'] == [{'url': '/api/logout', 'method': 'POST'}]
+    assert actual['messages'] == (['Fixture logout failure'] if status == 500 and not obsolete else [])
+    assert actual['logins'] == int(obsolete or status in (200, 401))
+
+
 def test_related_mutation_handlers_use_the_same_modal_guard():
     for marker in ['#key-form', '#access-form', '#confirm-trust']:
         start = APP.index(marker)

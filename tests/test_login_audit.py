@@ -141,3 +141,116 @@ def test_password_hashing_does_not_hold_the_login_lock(client, monkeypatch):
     login_attempts.clear()
     assert client.post('/api/login', json={'username': 'admin', 'password': PASSWORD}).status_code == 200
     assert held == [False]
+
+
+def test_failures_from_many_addresses_are_flagged_once_without_blocking(client):
+    from fastapi.testclient import TestClient
+    from app import main
+    login_attempts.clear()
+    main.login_account_failures.clear()
+    main.login_throttle_logged.clear()
+    for n in range(8):
+        with TestClient(main.app, client=('203.0.113.' + str(n + 1), 5000)) as other:
+            assert other.post('/api/login', json={'username': 'admin', 'password': 'bad'}).status_code == 401
+    [detail] = entries('login suspicious')  # once per window, however many further addresses fail
+    assert detail.startswith('admin ') and 'bad' not in detail
+    # A legitimate sign-in from an address that did not fail is still accepted.
+    with TestClient(main.app, client=('198.51.100.9', 5000)) as good:
+        assert good.post('/api/login', json={'password': PASSWORD}).status_code == 200
+    assert len(entries('login')) == 1
+
+
+def test_failures_from_one_address_are_not_flagged_as_suspicious(client):
+    from app import main
+    login_attempts.clear()
+    main.login_account_failures.clear()
+    for _ in range(6):
+        client.post('/api/login', json={'username': 'admin', 'password': 'bad'})
+    assert entries('login suspicious') == []
+
+
+def test_detector_state_remains_bounded_under_address_rotation(client):
+    from fastapi.testclient import TestClient
+    from app import main
+    login_attempts.clear()
+    main.login_account_failures.clear()
+    main.login_throttle_logged.clear()
+    for n in range(24):
+        with TestClient(main.app, client=(f'203.0.113.{n + 1}', 5000)) as other:
+            assert other.post('/api/login', json={
+                'username': 'admin', 'password': 'bad',
+            }).status_code == 401
+        assert len(main.login_account_failures['admin']) <= main.LOGIN_SUSPICIOUS_ADDRESSES
+    assert len(main.login_account_failures['admin']) == main.LOGIN_SUSPICIOUS_ADDRESSES
+    assert len(entries('login suspicious')) == 1
+    with TestClient(main.app, client=('198.51.100.9', 5000)) as good:
+        assert good.post('/api/login', json={'password': PASSWORD}).status_code == 200
+
+
+def test_detector_expired_sources_do_not_retrigger_and_other_accounts_are_isolated(client):
+    import time
+    from fastapi.testclient import TestClient
+    from app import main
+    login_attempts.clear()
+    main.login_account_failures.clear()
+    main.login_throttle_logged.clear()
+    old = time.time() - 301
+    main.login_account_failures['admin'] = {
+        f'192.0.2.{n}': old for n in range(1, main.LOGIN_SUSPICIOUS_ADDRESSES)
+    }
+    with TestClient(main.app, client=('203.0.113.80', 5000)) as other:
+        assert other.post('/api/login', json={
+            'username': 'admin', 'password': 'bad',
+        }).status_code == 401
+    assert main.login_account_failures['admin'] == {'203.0.113.80': main.login_account_failures['admin']['203.0.113.80']}
+    assert entries('login suspicious') == []
+    # A second account must not contribute sources to admin's threshold.
+    with TestClient(main.app, client=('203.0.113.81', 5000)) as other:
+        assert other.post('/api/login', json={
+            'username': 'another-user', 'password': 'bad',
+        }).status_code == 401
+    assert set(main.login_account_failures) == {'admin', 'another-user'}
+    assert entries('login suspicious') == []
+
+
+def test_detector_account_cap_does_not_lock_out_valid_authentication(client, monkeypatch):
+    import time
+    from app import main
+    login_attempts.clear()
+    main.login_account_failures.clear()
+    main.login_throttle_logged.clear()
+    monkeypatch.setattr(main, 'LOGIN_BUCKET_LIMIT', 8)
+    now = time.time()
+    main.login_account_failures.update({
+        f'unknown-{n}': {f'198.51.100.{n}': now} for n in range(8)
+    })
+    assert client.post('/api/login', json={'username': 'admin', 'password': 'bad'}).status_code == 401
+    assert len(main.login_account_failures) == 8
+    assert client.post('/api/login', json={'username': 'admin', 'password': PASSWORD}).status_code == 200
+
+
+def test_login_failures_do_not_reveal_which_factor_was_wrong(client):
+    with Session() as s:
+        s.get(User, 'admin').otp_secret = seal(new_secret())
+        s.commit()
+    login_attempts.clear()
+    bad_password = client.post('/api/login', json={'username': 'admin', 'password': 'wrong-guess', 'otp': '000000'})
+    bad_otp = client.post('/api/login', json={'username': 'admin', 'password': PASSWORD, 'otp': '000000'})
+    unknown = client.post('/api/login', json={'username': 'nobody', 'password': 'wrong-guess'})
+    assert {(r.status_code, r.json()['detail']) for r in (bad_password, bad_otp, unknown)} == {(401, 'Invalid credentials or MFA code')}
+    details = entries('login failed')  # the specific reason is kept for the audit log only
+    assert 'bad password' in details[0] and 'bad MFA code' in details[1]
+
+
+def test_step_up_password_check_does_not_reveal_which_factor_was_wrong(client):
+    login = client.post('/api/login', json={'password': PASSWORD})
+    assert login.status_code == 200
+    with Session() as s:
+        s.get(User, 'admin').otp_secret = seal(new_secret())
+        s.commit()
+    login_attempts.clear()
+    headers = {'X-CSRF-Token': login.json()['csrf']}
+    bad_password = client.post('/api/identity/mfa', json={'password': 'wrong-guess', 'otp': '000000'}, headers=headers)
+    bad_otp = client.post('/api/identity/mfa', json={'password': PASSWORD, 'otp': '000000'}, headers=headers)
+    assert bad_password.status_code == bad_otp.status_code == 403
+    assert bad_password.json() == bad_otp.json() == {'detail': 'Invalid credentials or MFA code'}

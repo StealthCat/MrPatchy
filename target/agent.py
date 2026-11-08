@@ -441,7 +441,17 @@ def decode_bpf_events(pending,chunk):
     """Frame pipe reads without losing buffered events or splitting UTF-8 characters."""
     lines=(pending+chunk).split(b'\n')
     if any(len(line)>65536 for line in lines):raise ValueError('Oversized bpftrace event')
-    return [json.loads(line) for line in lines[:-1] if line],lines[-1]
+    events=[];bad=0
+    for line in lines[:-1]:
+        if not line:continue
+        try:
+            # surrogateescape matches os.readlink(), so non-UTF-8 paths still compare equal.
+            event=json.loads(line.decode('utf-8','surrogateescape'))
+        except ValueError:bad+=1;continue
+        if isinstance(event,dict):events.append(event)
+        else:bad+=1
+    if bad:events.append({'type':'malformed','count':bad})
+    return events,lines[-1]
 
 EBPF_HASH_CACHE_LIMIT=4096
 
@@ -524,9 +534,15 @@ def ebpf_loop():
                     if not chunk:ended=True;break
                     events,pending=decode_bpf_events(pending,chunk)
                     for event in events:
+                        if event.get('type')=='malformed':
+                            record_ebpf_diagnostic(instance,('Skipped %d malformed bpftrace line(s)'%event['count']).encode());continue
                         if event.get('type')!='printf':continue
-                        event_process=ebpf_process(event['data'],cache=hash_cache)
-                        spool([event_process],time.time())
+                        try:
+                            event_process=ebpf_process(event['data'],cache=hash_cache)
+                            spool([event_process],time.time())
+                        except Exception as error:
+                            # One bad record must not discard its siblings or restart the collector.
+                            record_ebpf_diagnostic(instance,('Skipped bpftrace event: '+type(error).__name__).encode());continue
                         with EBPF_DIAGNOSTIC_LOCK:
                             # The first delivered event proves this run recovered; earlier
                             # warnings become history, later ones remain current.
@@ -1024,14 +1040,14 @@ def persistence_inventory(deadline,custom_paths=None):
 def security_inspect(packages,persistence=True,custom_paths=None):
     """Local database comparison and metadata-only startup inventory; no remediation."""
     validate_inspection(packages,persistence,custom_paths)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
+    try:from bridge import bounded,rpm_backend
+    except ImportError:from target.bridge import bounded,rpm_backend
     report={'version':1,'started':time.time(),'state':'incomplete','trust_basis':'target_local_package_database',
             'packages':[],'gaps':[],'persistence':None,
             'limitations':['Local package metadata is not an independent trusted vendor baseline.',
                           'Differences may be legitimate configuration changes; they are not malware verdicts.',
                           'No differences does not establish complete file coverage or a clean host.']}
-    rpm=not Path('/var/lib/dpkg/status').exists()
+    rpm=rpm_backend()
     report['package_manager']='rpm' if rpm else 'dpkg'
     deadline=time.monotonic()+180
     def command(args,allowed=(0,)):
