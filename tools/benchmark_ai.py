@@ -40,14 +40,20 @@ def main():
     parser.add_argument('--runs', type=int, default=8)
     parser.add_argument('--concurrency', type=int, default=1)
     parser.add_argument('--provider-delay-ms', type=int, default=20)
+    parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
                         help='simulated latency of a follow-up SSH evidence request (default: 10)')
+    parser.add_argument('--queue-age-seconds', type=int, default=2,
+                        help='synthetic age of queued observations without a real wait (default: 2)')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
     if not 1<=args.concurrency<=8:parser.error('--concurrency must be between 1 and 8')
     if not 1<=args.provider_delay_ms<=1000:parser.error('--provider-delay-ms must be between 1 and 1000')
+    if not 0<=args.persistence_delay_ms<=1000:parser.error('--persistence-delay-ms must be between 0 and 1000')
     if not 0 <= args.ssh_delay_ms <= 1000:
         parser.error('--ssh-delay-ms must be between 0 and 1000')
+    if not 0 <= args.queue_age_seconds <= 86400:
+        parser.error('--queue-age-seconds must be between 0 and 86400')
     begin=ContextVar('benchmark_begin');two_stage=ContextVar('benchmark_two_stage',default=False)
     # Set before importing runtime modules; never inherit a deployment database.
     with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory:
@@ -88,7 +94,9 @@ def main():
         def wrap_stage(name,fn):
             def wrapped(*a,**kw):
                 started=time.perf_counter()
-                try:return fn(*a,**kw)
+                try:
+                    if args.persistence_delay_ms:time.sleep(args.persistence_delay_ms/1000)
+                    return fn(*a,**kw)
                 finally:samples[name].append((time.perf_counter()-started)*1000)
             return wrapped
         for name in ('request_started','record_usage'):
@@ -112,7 +120,7 @@ def main():
             with Session() as s:
                 s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model','ai_hourly_limit':100}))
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
-                first_seen=time.time()-2
+                first_seen=time.time()-args.queue_age_seconds
                 for index in range(args.runs):
                     host_id='fixture-host-'+str(index)
                     s.add(Host(id=host_id,name='Fixture only',address='192.0.2.1',fingerprint=''))
@@ -130,6 +138,8 @@ def main():
             elapsed=time.perf_counter()-started
             with Session() as s:
                 rows=list(s.query(Behavior));assert len(rows)==args.runs and all(row.verdict=='low' and not row.approved for row in rows), [(r.verdict,r.analysis) for r in rows]
+                completed_subjects=sum(row.verdict=='low' for row in rows)
+                approved_subjects=sum(bool(row.approved) for row in rows)
                 assert sum(r.calls for r in s.query(ai_runs.AIRun))==len(requests)==args.runs+args.runs//2
                 costs=[ai_runs.cost_summary(r,ai_runs.call_receipts(s,[r.id])[r.id]) for r in s.query(ai_runs.AIRun)]
             persisted_timings={}
@@ -141,13 +151,14 @@ def main():
             def summary(values):
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
-            print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'runs':args.runs,'provider_calls':len(requests),
+            print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
                 'connections':len(connections),'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
-                'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'cost_status':'unavailable: synthetic model/usage, no paid API calls',
-                'errors':0,'initial_fixture_queue_age_seconds':2,'notes':'Loopback provider and SSH delays are synthetic. Each subject has an independent server. Admission includes lock/query/run creation; run includes persistence.'},indent=2))
+                'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'completed_subjects':completed_subjects,'approved_subjects':approved_subjects,
+                'errors':0,'cost_status':'unavailable: synthetic model/usage, no paid API calls','initial_fixture_queue_age_seconds':args.queue_age_seconds,
+                'notes':'Loopback provider, SSH delay, queue age and the optional receipt/usage persistence delay are synthetic; no production/TLS/database speed claim. Each subject has an independent server. Admission includes lock/query/run creation; run includes persistence.'},indent=2))
         finally:
             if hasattr(ai,'transport'):ai.transport.close()
             server.shutdown();server.server_close();thread.join();engine.dispose()

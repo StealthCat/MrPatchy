@@ -4416,6 +4416,32 @@ no request contents. Comparator enforcement and production measurements remain
 open.
 
 
+
+### Workload-bound AI benchmark comparison — worker checkpoint #536
+
+The fixture comparator now requires the observed version-1 workload fingerprint
+from both reports and refuses missing, malformed, unsupported or unequal values
+before emitting performance deltas. Matching call counts, token totals, stage
+sample counts and fixture delays are no longer sufficient to claim capability
+equivalence when the underlying synthetic provider or SSH request multiset differs.
+Accepted comparison output retains only the version and SHA-256 fingerprint for
+audit; it never includes the raw fixture requests. Historical reports that predate
+the fingerprint must be regenerated rather than treated as equivalent without
+evidence. Existing strict JSON, bounded-input, stage/count, cost-status and timing
+consistency validation remains. This is fixture-only tooling: it changes no
+production provider call, target access, runtime admission or response authority,
+and it does not establish production performance or complete the faster-AI gate.
+
+The seeded fixture queue age is a capability control, not a measured result, and
+the workload fingerprint does not cover it. The comparator therefore requires the
+same queue age in both reports before emitting deltas. It reads `queue_age_seconds`,
+otherwise `initial_fixture_queue_age_seconds`, otherwise the documented legacy fixed
+two-second seed; it refuses malformed or out-of-range values (integer seconds,
+0–86,400) and reports whose two queue-age fields disagree. A configured-queue-age
+pair with matching fingerprints but different seeds is refused rather than reported
+as a queue-age latency delta.
+
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
@@ -6118,6 +6144,26 @@ integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning r
 required before this increment is delivered.
 
 
+### Configurable AI benchmark queue age — worker checkpoint #542
+
+This bounded faster-AI measurement increment lets the fixture-only serial/parallel
+benchmark seed observations with a selected synthetic queue age from zero through
+one day. The historical two-second default remains unchanged. The selected age is
+reported in the machine-readable profile and drives the existing queue-age timing,
+so paired runs can exercise fresh and delayed-backlog telemetry without sleeping or
+changing the provider, SSH-evidence, persistence, model, reasoning, evidence or
+one/two-stage workload.
+
+Focused acceptance rejects negative and excessive ages before fixture startup, then
+proves a five-second selection yields two queue-age samples at or beyond the selected
+age while preserving three provider calls and the SSH follow-up for two subjects.
+The queue age remains synthetic: it does not reproduce scheduler contention, pause,
+rate/budget deferral, provider backoff or production load, and it does not establish
+a production speedup. Coordinator integration of prerequisite #525, exact-head
+SQLite/MySQL/full-suite checks and fresh code scanning remain required before this
+increment is delivered.
+
+
 ### Retained AI spend history — worker checkpoint #372
 
 This bounded faster-AI increment exposes retained daily accounting windows to
@@ -6304,6 +6350,33 @@ measurements, dashboard presentation and the full faster-AI acceptance milestone
 remain separate and incomplete. Coordinator integration must first preserve #527,
 then remove the prerequisite diff and run every applicable exact-head check before
 delivery.
+
+
+### Configurable AI benchmark persistence latency — worker checkpoint #613
+
+The disposable serial/parallel triage benchmark now accepts a bounded
+`--persistence-delay-ms` input. The synthetic delay is applied independently to
+billable request-receipt creation and usage reconciliation, and both operations keep
+their separate measured stages. Machine-readable output records the configured delay,
+completed and approved subject counts, provider calls and token totals so comparisons
+can reject a workload or result mismatch instead of reporting an invalid speedup.
+
+Focused coverage rejects values outside 0–1000 milliseconds and runs the same four
+subjects serially and with two workers. Both executions complete four low-risk,
+non-approved subjects, make six provider calls, account for 600 input and 120 output
+tokens, and record the configured delay in all six receipt and usage measurements.
+The reproducible 12-subject comparison in
+`docs/benchmarks/ai-persistence-delay.json` used a 5 ms loopback provider, a 20 ms
+synthetic receipt/usage persistence delay and the existing 10 ms SSH fixture. It
+measured 8.647 subjects/second serially and 19.497 with four workers (2.255x), with
+identical provider calls, tokens, completed subjects and zero errors.
+
+This fixture isolates controlled accounting-persistence pressure; it does not emulate
+database lock, network or failover behavior and does not establish production, TLS or
+database performance. The default remains zero added persistence delay. Runtime
+admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
+response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
+the broader faster-AI roadmap remain incomplete.
 
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
