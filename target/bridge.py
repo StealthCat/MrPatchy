@@ -509,8 +509,9 @@ def handle(req):
         failed,diagnostics=bounded(['systemctl','--failed','--no-legend','--plain','--no-pager'],timeout=15,
                                    env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'},limit=1_000_000)
         if diagnostics.strip():raise RuntimeError('Unable to obtain an unambiguous failed-unit health snapshot')
+        active_out,_active_err,active_code=bounded(['systemctl','is-active','mrpatchy-agent'],timeout=15,limit=32000,allowed_codes=(0,1,2,3,4),return_status=True)
         return {'failed_units':failed.strip(),'reboot_required':Path('/var/run/reboot-required').exists() or (rpm_backend() and (ROOT/'rpm-reboot-required').is_file() and (ROOT/'rpm-reboot-required').read_text().strip()==boot_id()),
-                'collector_active':run(['systemctl','is-active','mrpatchy-agent'],timeout=15).strip()=='active'}
+                'collector_active':active_code==0 and active_out.strip()=='active'}
     if action == 'agent-status':return agent_status()
     if action == 'verify':return agent_status()  # legacy alias; never stats or follows unchecked paths
     if action == 'deploy':
