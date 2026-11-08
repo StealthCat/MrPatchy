@@ -25,8 +25,54 @@ PYTHON_MINIMUM = (_python_minimum := (3, 8))
 
 ROOT = Path('/opt/drpatch')
 SERVICE_PROPERTIES = ('Id','LoadState','ActiveState','SubState','Result','ExecMainCode','ExecMainStatus','MainPID','NRestarts','InvocationID','FragmentPath','UnitFileState')
-SPOOL_BATCH_BYTES = 256*1024
+DEFAULT_SPOOL_BATCH_BYTES = 256*1024
+MIN_SPOOL_BATCH_BYTES = 16*1024
+MAX_SPOOL_BATCH_BYTES = 1024*1024
 SPOOL_CAPACITY_BYTES = 48_000_000
+SPOOL_CONFIG_CACHE = {'identity':object(),'batch_limit_bytes':DEFAULT_SPOOL_BATCH_BYTES}
+SPOOL_CONFIG_LOCK = threading.Lock()
+
+def read_spool_config(path, info):
+    """Return verified configuration bytes and cap from a bounded file read."""
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077 or info.st_size > 1024):
+        raise ValueError('Unsafe agent spool configuration')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        data = os.read(fd, 1025)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    expected = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    opened = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    finished = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    if len(data) > 1024 or expected != opened or opened != finished:
+        raise ValueError('Agent spool configuration changed while reading')
+    try:
+        config = json.loads(data)
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError('Invalid agent spool configuration') from None
+    if (not isinstance(config, dict) or set(config) != {'version', 'batch_limit_bytes'}
+            or type(config['version']) is not int or config['version'] != 1):
+        raise ValueError('Invalid agent spool configuration')
+    value = config['batch_limit_bytes']
+    if type(value) is not int or not MIN_SPOOL_BATCH_BYTES <= value <= MAX_SPOOL_BATCH_BYTES:
+        raise ValueError('Invalid agent spool batch limit')
+    return data, value
+
+def spool_batch_limit():
+    """Read the root-owned, bridge-written batch cap without per-event file reads."""
+    path=ROOT/'spool.json'
+    try:info=path.lstat();identity=(str(path),info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+    except FileNotFoundError:identity=(str(path),None)
+    with SPOOL_CONFIG_LOCK:
+        if SPOOL_CONFIG_CACHE['identity']==identity:return SPOOL_CONFIG_CACHE['batch_limit_bytes']
+        if identity[1] is None:value=DEFAULT_SPOOL_BATCH_BYTES
+        else:
+            _, value = read_spool_config(path, info)
+        SPOOL_CONFIG_CACHE.update(identity=identity,batch_limit_bytes=value)
+        return value
 
 def response_service_units(units):
     if (not isinstance(units,list) or not 1<=len(units)<=16 or
@@ -267,20 +313,22 @@ def spool_drop(db,reason,batches,observations):
     spool_counter(db,'dropped_'+reason+'_batches',batches)
     spool_counter(db,'dropped_'+reason+'_observations',observations)
 
-def spool_payloads(processes):
+def spool_payloads(processes,batch_limit_bytes=None):
     """Split one observation snapshot without splitting or silently losing records."""
     if not isinstance(processes,list):raise ValueError('Invalid spool process batch')
+    batch_limit_bytes=spool_batch_limit() if batch_limit_bytes is None else batch_limit_bytes
+    if type(batch_limit_bytes) is not int or not MIN_SPOOL_BATCH_BYTES<=batch_limit_bytes<=MAX_SPOOL_BATCH_BYTES:raise ValueError('Invalid agent spool batch limit')
     prefix='{"processes":[';suffix=']}'
     batches=[];current=[];size=len(prefix.encode())+len(suffix.encode())
     oversize=0
     for process in processes:
         encoded=json.dumps(process,separators=(',',':'))
         encoded_size=len(encoded.encode())
-        if len(prefix.encode())+encoded_size+len(suffix.encode())>SPOOL_BATCH_BYTES:
+        if len(prefix.encode())+encoded_size+len(suffix.encode())>batch_limit_bytes:
             oversize+=1
             continue
         separator=1 if current else 0
-        if current and size+separator+encoded_size>SPOOL_BATCH_BYTES:
+        if current and size+separator+encoded_size>batch_limit_bytes:
             batches.append(prefix+','.join(current)+suffix);current=[];size=len(prefix.encode())+len(suffix.encode());separator=0
         current.append(encoded);size+=separator+encoded_size
     if current or not processes:batches.append(prefix+','.join(current)+suffix)
@@ -304,6 +352,7 @@ def spool(processes, observed):
                        [('queued_bytes',size),('queued_count',count)])
 
 def pending_events():
+    batch_limit_bytes=spool_batch_limit()
     with spool_db() as db:
         rows=db.execute('SELECT id,observed,payload FROM events ORDER BY rowid LIMIT 8').fetchall()
         counters=dict(db.execute('SELECT name,value FROM counters').fetchall())
@@ -312,7 +361,7 @@ def pending_events():
     dropped=counters.get('dropped',0)
     return {'events':[{'id':r[0],'observed':r[1],**json.loads(r[2])} for r in rows],
             'spool':{'pending':count,'queued_bytes':queued_bytes,'capacity_bytes':SPOOL_CAPACITY_BYTES,
-                     'batch_limit_bytes':SPOOL_BATCH_BYTES,'dropped':dropped,
+                     'batch_limit_bytes':batch_limit_bytes,'dropped':dropped,
                      'dropped_observations':counters.get('dropped_oversize_observations',0)+counters.get('dropped_capacity_observations',0),
                      'drop_reasons':{'oversize':{'batches':oversize_batches,'observations':counters.get('dropped_oversize_observations',0)},
                                      'capacity':{'batches':capacity_batches,'observations':counters.get('dropped_capacity_observations',0)},

@@ -6213,3 +6213,56 @@ comparison and coverage gaps. Multiple hashes at one path remain separate
 observations. Enrollment-only files remain unavailable, not verified. This is
 recorded-scope visibility, not enumeration of every file on disk. Viewing never
 contacts targets, invokes AI, approves a baseline or authorizes response actions.
+
+### Configurable observation batch cap — partial #106 checkpoint
+
+This bounded reliability increment lets an administrator set each enrolled server's
+serialized observation-batch cap through a typed controller operation. The bridge
+accepts only integer values from 16 KiB through 1 MiB, writes a versioned root-only
+configuration atomically and restarts the collector. Normal snapshots and eBPF events
+use the same effective cap, and existing spool telemetry reports it. The default stays
+256 KiB. The controller accepts the setting only after the target returns the exact
+requested receipt or verifies the requested cap and an active collector through a
+serialized read-only check after an uncertain reply. A failed restart restores the
+prior configuration or its absence and checks the prior collector running state.
+The controller audits unconfirmed outcomes with the observed target state when
+available, keeps the last confirmed setting, and never replays a lost request.
+Only administrators can change the cap.
+
+Configuration does not change the 48 MB durable capacity, ordered commit-before-ACK
+replay, atomic observation records or explicit oversize/capacity loss accounting. An
+oversized observation is still rejected whole and counted while eligible siblings are
+queued. Unsafe, malformed or out-of-range target configuration fails visibly instead
+of silently widening a transport boundary. The target caches a verified file identity
+so high-rate eBPF intake does not reread the configuration for every event.
+
+This does not complete #106: measured adaptive pressure draining, configurable timed
+flush and graceful-shutdown checkpoints, negotiated compression and decompression
+limits, mixed-version fallback, sustained fairness, small-ARM CPU/memory/latency
+benchmarks and the #107/#108 outage/replay/health acceptance remain open. Coordinator
+integration plus exact-head SQLite/MySQL/native/full-suite checks are still required
+before delivery.
+
+### Capability-equivalent AI benchmark comparison — worker checkpoint #526
+
+The disposable AI benchmark now has a separate comparison gate that refuses to
+interpret results unless both reports use the same run count, provider and SSH
+fixture delays, one/two-stage workload shape, provider-call count and token totals.
+Reports with fixture errors, missing or malformed metrics, lost calls/evidence or
+an unchanged execution configuration are rejected before any speed delta is shown.
+Reports from the original fixed-delay harness normalize its documented 10 ms SSH
+fixture explicitly; newer reports retain the configured value and source.
+Input reports are bounded to one megabyte and output has a fixed allowlisted shape.
+
+For valid serial/parallel pairs, the command emits machine-readable elapsed,
+throughput and allowlisted stage p50/p95 deltas. Zero baseline latency produces an
+explicit unavailable percentage instead of division by zero. Each report's cost
+status is preserved; unavailable synthetic cost is never converted to zero or
+described as a provider invoice. Output states that the loopback fixture does not
+establish production performance.
+
+This checkpoint adds no provider call, target access, schema, runtime admission or
+response authority. It does not complete production baseline collection, dashboard
+presentation or the faster-AI end-to-end acceptance milestone. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before delivery.
