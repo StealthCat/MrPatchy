@@ -6232,6 +6232,30 @@ benchmarks and the #107/#108 outage/replay/health acceptance remain open. Coordi
 integration plus exact-head SQLite/MySQL/native/full-suite checks are still required
 before delivery.
 
+### Capability-equivalent AI benchmark comparison — worker checkpoint #526
+
+The disposable AI benchmark now has a separate comparison gate that refuses to
+interpret results unless both reports use the same run count, provider and SSH
+fixture delays, one/two-stage workload shape, provider-call count and token totals.
+Reports with fixture errors, missing or malformed metrics, lost calls/evidence or
+an unchanged execution configuration are rejected before any speed delta is shown.
+Reports from the original fixed-delay harness normalize its documented 10 ms SSH
+fixture explicitly; newer reports retain the configured value and source.
+Input reports are bounded to one megabyte and output has a fixed allowlisted shape.
+
+For valid serial/parallel pairs, the command emits machine-readable elapsed,
+throughput and allowlisted stage p50/p95 deltas. Zero baseline latency produces an
+explicit unavailable percentage instead of division by zero. Each report's cost
+status is preserved; unavailable synthetic cost is never converted to zero or
+described as a provider invoice. Output states that the loopback fixture does not
+establish production performance.
+
+This checkpoint adds no provider call, target access, schema, runtime admission or
+response authority. It does not complete production baseline collection, dashboard
+presentation or the faster-AI end-to-end acceptance milestone. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before delivery.
+
 ### Batched outbound AI pause-policy reads — worker checkpoint #573
 
 The existing outbound provider guard reads scoped server pause settings in
