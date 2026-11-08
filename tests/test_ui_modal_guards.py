@@ -84,6 +84,7 @@ function toast(message){messages.push(message);}
 function showLogin(){sessionRevision++;logins++;messages.length=0;}
 function fetch(url,options){requests.push({url,method:options.method});return new Promise(resolve=>release=resolve);}
 %s
+%s
 const logout=%s;
 (async()=>{
  const pending=logout();
@@ -92,7 +93,7 @@ const logout=%s;
  await pending;
  console.log(JSON.stringify({messages,requests,logins}));
 })();
-""" % ('async ' + _function(APP, 'api'), handler,
+""" % (_function(APP, 'apiErrorMessage'), 'async ' + _function(APP, 'api'), handler,
          'showLogin();' if obsolete else '', str(status < 400).lower(), status)
     result = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True)
     actual = json.loads(result.stdout)

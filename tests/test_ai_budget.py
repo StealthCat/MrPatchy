@@ -2,9 +2,10 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import threading
 
+import httpx
 import pytest
 
-from app import ai, ai_admission, ai_budget, ai_pricing, notifications, operations
+from app import ai, ai_admission, ai_budget, ai_pricing, ai_provider_backoff, notifications, operations
 from app.db import Session, Setting
 
 
@@ -202,6 +203,77 @@ def test_unsent_failure_releases_reservation(admin, monkeypatch):
     with Session() as session:
         assert ai_budget.status(session)['counted_usd']=='0'
         assert session.get(ai_budget.BudgetEntry, identifier).status=='released'
+
+
+@pytest.mark.parametrize('status,retry_after,transient',[(200,None,False),(503,'90',True)])
+def test_oversized_response_retains_charge_and_preserves_status_backoff(admin,monkeypatch,status,retry_after,transient):
+    configure(cap=Decimal('1'))
+    sent=[]
+    headers={'x-private':'secret-provider-value'}
+    if retry_after:headers['retry-after']=retry_after
+    response=httpx.Response(status,headers=headers,content=b'',request=httpx.Request('POST',ai.URL))
+    def oversized(*args,**kwargs):
+        sent.append(1);raise ai.transport.ResponseTooLarge(response)
+    monkeypatch.setattr(ai.transport,'post',oversized)
+    with pytest.raises(ai.AIError) as raised:ai.request(payload(),'fixture-key')
+    assert len(sent)==1 and raised.value.transient is transient
+    assert 'secret-provider-value' not in raised.value.diagnostic
+    with Session() as session:
+        row=session.query(ai_budget.BudgetEntry).one()
+        assert row.status=='uncertain' and 'oversized response' in row.reason
+        assert ai_budget.status(session)['uncertain_usd']!='0'
+        backoff=ai_provider_backoff.status(session)
+        assert backoff['blocked'] is transient
+
+
+@pytest.mark.parametrize('status,retry_after,transient',[(200,None,False),(503,'75',True)])
+def test_invalid_response_encoding_retains_charge_and_preserves_status_backoff(admin,monkeypatch,status,retry_after,transient):
+    configure(cap=Decimal('1'))
+    headers={'x-private':'secret-provider-value'}
+    if retry_after:headers['retry-after']=retry_after
+    response=httpx.Response(status,headers=headers,content=b'',request=httpx.Request('POST',ai.URL))
+    monkeypatch.setattr(ai.transport,'post',lambda *args,**kwargs:(_ for _ in ()).throw(ai.transport.ResponseDecodeError(response)))
+    with pytest.raises(ai.AIError) as raised:ai.request(payload(),'fixture-key')
+    assert raised.value.transient is transient
+    assert 'secret-provider-value' not in raised.value.diagnostic
+    with Session() as session:
+        row=session.query(ai_budget.BudgetEntry).one()
+        assert row.status=='uncertain' and 'content encoding' in row.reason
+        assert ai_budget.status(session)['uncertain_usd']!='0'
+        backoff=ai_provider_backoff.status(session)
+        assert backoff['blocked'] is transient
+
+
+@pytest.mark.parametrize('failure', [httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError])
+def test_transport_failures_with_uncertain_outcomes_remain_counted(admin, monkeypatch, failure):
+    configure(cap=Decimal('1'))
+    monkeypatch.setattr(ai_pricing.time, 'time', lambda: 1793404800.0)
+
+    def fail(*args, **kwargs):
+        raise failure('fixture transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', fail)
+    with pytest.raises(ai.AIError) as error:
+        ai.request(payload(), 'fixture-key')
+    assert 'fixture transport detail' not in str(error.value)
+    with Session() as session:
+        assert session.query(ai_budget.BudgetEntry).one().status == 'uncertain'
+        assert Decimal(ai_budget.status(session)['uncertain_usd']) == ai_pricing.reservation(payload())['amount_usd']
+
+
+@pytest.mark.parametrize('call_id', ['', 'call-one'])
+def test_pool_timeout_release_requires_matching_sent_call(admin, monkeypatch, call_id):
+    configure(cap=Decimal('1'))
+    monkeypatch.setattr(ai_pricing.time, 'time', lambda: 1793404800.0)
+    identifier = ai_budget.reserve(payload())
+    ai_budget.mark_sent(identifier, call_id)
+    ai_budget.release_unsent(identifier, 'Wrong receipt.', pool_timeout_call_id='call-two')
+    ai_budget.release_unsent(identifier, 'No receipt was supplied.')
+    with Session() as session:
+        assert session.get(ai_budget.BudgetEntry, identifier).status == 'sent'
+    ai_budget.release_unsent(identifier, 'Pool timeout.', pool_timeout_call_id=call_id)
+    with Session() as session:
+        assert session.get(ai_budget.BudgetEntry, identifier).status == 'released'
 
 
 def test_settings_expose_combined_cap_and_validate_timezone(admin):
