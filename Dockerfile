@@ -9,7 +9,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 FROM runtime-base
-LABEL org.opencontainers.image.licenses="LicenseRef-MrPatchy-Personal-Commercial-1.0"
+LABEL org.opencontainers.image.licenses="LicenseRef-MrPatchy-Personal-Commercial-1.1"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DATA_DIR=/data TLS_DIR=/tls
 ENV PATH="/opt/venv/bin:$PATH"
 COPY --from=dependencies /opt/venv /opt/venv

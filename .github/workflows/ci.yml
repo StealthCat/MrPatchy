@@ -86,7 +86,9 @@ jobs:
 
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The full SQLite suite can take 28 minutes; leave time for the Docker/TLS
+    # smoke checks that follow instead of cancelling a successful test run.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7

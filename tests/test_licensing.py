@@ -17,7 +17,7 @@ def test_local_license_page_matches_distributed_license():
 def test_container_distributes_project_terms():
     dockerfile = (ROOT / 'Dockerfile').read_text()
     assert 'COPY LICENSE COMMERCIAL.md ./' in dockerfile
-    assert 'org.opencontainers.image.licenses="LicenseRef-MrPatchy-Personal-Commercial-1.0"' in dockerfile
+    assert 'org.opencontainers.image.licenses="LicenseRef-MrPatchy-Personal-Commercial-1.1"' in dockerfile
     ignored = (ROOT / '.dockerignore').read_text().splitlines()
     assert 'LICENSE' not in ignored
     assert 'COMMERCIAL.md' not in ignored

@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.47.1 — 2026-11-08
+
+1. [PR #557](https://github.com/StealthCat/MrPatchy/pull/557): Route administrator model discovery through the existing bounded process-local AI HTTP pool instead of opening a one-off connection. Discovery still performs one non-billable GET with its own credentials, no cookies or body, redirect refusal, a 20-second timeout, the existing 2,000,000-byte and 10,000-model response limits, controlled errors and no automatic retry. Compatibility: API responses, UI, schema, provider POST payloads, billable request admission, roles and runtime response authorization are unchanged. Material limits: connection reuse does not guarantee provider availability or throughput, raise AI task concurrency or complete the broader faster-AI program. This source update does not publish a Docker image.
+
+## 1.47.0 — 2026-11-08
+
+1. [PR #561](https://github.com/StealthCat/MrPatchy/pull/561): Add the optional startup-only `MRPATCHY_AI_HTTP_CONNECTIONS` setting (integer 1–64, default 16) to bound each controller or worker process's reusable AI provider HTTP connections, applying the same limit to total and keepalive capacity. Complete Compose deployments pass the setting to both app and worker services, and worker registration, API and Activity → Workers display the effective `ai_http_capacity` as a transport ceiling. Invalid values fail closed before provider-client creation or worker registration. Compatibility: the default remains 16, no database or target migration is required, and existing task concurrency, shared admission, provider limits, pause/lifecycle checks and runtime response authorization are unchanged. Material limits: increasing the setting does not raise task concurrency, override provider limits, guarantee sockets or throughput, or complete the broader faster-AI program. This source update does not publish a Docker image.
+
+## 1.46.3 — 2026-11-07
+
+1. [PR #516](https://github.com/StealthCat/MrPatchy/pull/516): Expand the free-use license to legally recognized nonprofits and local government bodies operating their own systems, including use by their employees and volunteers, while keeping contractors, managed service providers, commercial service use, for-profit schools, and state or national government deployments outside that grant unless separately licensed. Synchronize License v1.1 across the bundled terms, commercial-use guide, contribution summary, in-app license page, container metadata and licensing tests. Compatibility impact is limited to the expanded licensing terms; runtime code, APIs, schema, roles, configuration and response authorization are unchanged, and existing agreements and earlier grants retain their stated treatment. The separately staged companion website rollout remains pending. This source version does not publish a Docker image.
+
+## 1.46.2 — 2026-11-07
+
+1. [PR #403](https://github.com/StealthCat/MrPatchy/pull/403): Validate the target boot identity before a reboot-requiring RPM transaction begins, then write the reboot marker from that prevalidated value only after DNF commits. A malformed or unavailable boot ID now refuses a reboot-requiring patch before any package change, while patches that do not require a reboot do not read the boot identity. This is a partial resolution of issue #190; the other duplicated or unvalidated target reads remain open. Package selection, API and schema contracts, roles and runtime response authorization are unchanged. This source update does not publish a Docker image.
+
+## 1.46.1 — 2026-11-07
+
+1. [PR #480](https://github.com/StealthCat/MrPatchy/pull/480): Require target `/usr/bin/python3` 3.8 or newer before enrollment or helper deployment. The installer and current bridge reject older interpreters with a clear message, while deployments through bridges installed before this release use the existing compile-before-write step to refuse the new helper payload before replacing any managed file; the controller translates that refusal into the same actionable requirement. Python 3.8-or-newer targets are unchanged. Hosts such as EL8 with the default Python 3.6 must install a supported interpreter before finishing enrollment. This update does not install or upgrade Python, add legacy EL8 runtime support, alter forced-command or response authorization boundaries, or publish a Docker image.
+
+## 1.46.0 — 2026-11-07
+
+1. [PR #628](https://github.com/StealthCat/MrPatchy/pull/628): Complete ordered file-provenance review for startup baselines and explicitly requested startup advisory plans. Baseline review now checks retained authenticated artifact hashes before conservative strict known-good eligibility, keeps metadata-only or mismatched files unresolved, and displays the assessment before manual approval. Browser approvals bind the displayed provenance digest so a changed review must be refreshed. Startup AI receives bounded, digest-bound assessments for current and approved inventories, and provenance changes invalidate in-flight results. Existing API clients may omit the additive review digest and retain the inventory-bound approval contract. No schema or target-collector migration is required. Coverage remains limited to retained operator-managed artifacts and recorded inventories; authenticated bytes do not establish safe behavior, approve a baseline, or authorize response actions. This source update does not publish a Docker image.
+
+## 1.45.1 — 2026-11-07
+
+1. [PR #477](https://github.com/StealthCat/MrPatchy/pull/477): Preserve accurate read-only quarantine evidence status when the original file's parent disappears. A retained vault record now reports `uncertain` / `parent_changed` and still verifies the held file instead of reporting `not_found` / `missing`, including when removal races the parent open. This changes the reported audit state for that case without mutating the target, restoring a file or changing response authorization. This source update does not publish a Docker image.
+
+## 1.45.0 — 2026-11-07
+
+1. [PR #627](https://github.com/StealthCat/MrPatchy/pull/627): Check stored, authenticated Debian/RPM artifact manifests and exact file hashes before consulting the strict known-good cache and using AI for unresolved process behavior. A hash mismatch bypasses cache reuse. Administrators can review recorded file hashes, sources, assessment history, baseline comparison, freshness and coverage gaps from fleet and server File status views. The views use stored evidence, and existing manual baseline approval and response authorization still apply. No schema migration is required. Coverage is limited to recorded observations and retained artifact evidence. Signature verification does not establish safe behavior or current signing-key revocation status. This source update does not publish a Docker image.
+
+## 1.44.9 — 2026-11-07
+
+1. [PR #395](https://github.com/StealthCat/MrPatchy/pull/395): Use the bridge’s shared RPM/Debian backend detection for read-only target security inspection. The package database selection and inspection report format stay the same. This covers only security inspection; other duplicated target helpers remain tracked in issue #190. This source update does not publish a Docker image.
+
+## 1.44.8 — 2026-11-07
+
+1. [PR #625](https://github.com/StealthCat/MrPatchy/pull/625): Add responsive Mr Patchy browser pages for forbidden access, missing pages, redirects and server failures, with eight themed transparent mascot illustrations. Failed application views and sign-in errors also use the new artwork. Preserve actual status codes, redirect destinations, cookies, Retry-After, security headers, API/download contracts and bodyless 304 responses; generic public messages do not disclose exception details. Pages work without JavaScript or database startup. External proxy-generated failures require that proxy's own handler; reusable static pages are included. No schema, role or runtime response-authorization changes. This source update does not publish a Docker image.
+2. Allow 45 minutes for the complete SQLite/container/HTTPS CI job after a 30-minute run passed all 2,297 Python tests but was cancelled at the end of its final TLS smoke check. All validation steps remain enabled.
+
+## 1.44.7 — 2026-11-07
+
+1. [PR #482](https://github.com/StealthCat/MrPatchy/pull/482): Reject a still-queued evidence copy when its linked `evidence-preserve` job fails before execution, clearing the approval expiry so a fresh preservation can be prepared instead of leaving the copy permanently stuck in `queued`. Compatibility: controller bookkeeping and the retry path change only for failed, unstarted preservation jobs; API shape, database schema, roles and runtime response authorization are unchanged. Material limits: copies that reached `uncertain` or any later state, copies for another host and target-side evidence remain untouched; operators must explicitly prepare and approve a new preservation. This source update does not publish a Docker image.
+
+## 1.44.6 — 2026-11-07
+
+1. [PR #470](https://github.com/StealthCat/MrPatchy/pull/470): Preserve structured bridge health results when the collector service is inactive, failed, activating or unknown by accepting documented `systemctl is-active` status codes and reporting `collector_active=false`; pre-patch, rollback and health-comparison callers can now produce their designed diagnostics instead of receiving a bare command error. Compatibility: the bridge health response schema, roles and runtime response authorization are unchanged, but non-active collector states now return a successful structured health response rather than raising. Material limits: command execution, timeout, failed-unit ambiguity checks and all operation fail-closed gates remain enforced; this does not restart or repair an inactive collector. This source update does not publish a Docker image.
+
+## 1.44.5 — 2026-11-07
+
+1. [PR #483](https://github.com/StealthCat/MrPatchy/pull/483): Export every retained RPM package version, including older install-only kernels, and emit Debian/RPM package URLs with validated vendor namespaces and distribution qualifiers, bare component names, and nonzero RPM epochs in the `epoch` qualifier. Compatibility: SBOM component names, RPM version fields and package-URL identities change to the ecosystem form expected by vulnerability scanners; consumers that keyed records by the previous `name:arch` or epoch-in-version representation must reconcile those identifiers. Material limits: vendor/distribution metadata is emitted only when usable `ID` and `VERSION_ID` values are present in the saved OS inventory; the export remains a read-only snapshot and does not establish scanner coverage. Roles, schema and runtime response authorization are unchanged. This source update does not publish a Docker image.
+
 ## 1.44.4 — 2026-11-07
 
 1. [PR #474](https://github.com/StealthCat/MrPatchy/pull/474): Keep the security-signature and oversized-tar test fixtures runnable on Python 3.13 and newer by supplying the removed `imghdr` interface only to PGPy's test-only photo-ID probe and by streaming zero bytes for the declared oversized archive member so the application budget check is exercised. Compatibility: production code, runtime dependencies, APIs, schema, roles and runtime response authorization are unchanged. Material limits: CI is still pinned independently of the production image and PGPy remains in the test fixtures, so #445 stays open and the Python 3.15 image bump must not merge until those gaps are resolved. This source update does not publish a Docker image.

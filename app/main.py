@@ -12,7 +12,7 @@ import shlex
 import threading
 import time
 import uuid
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,11 +52,11 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.44.4'
+APP_VERSION='1.47.1'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from . import sso
+from . import sso, error_pages
 app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 
@@ -105,6 +105,7 @@ async def guard(request,call_next):
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
+    response=error_pages.decorate(request,response)
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='no-referrer'
@@ -554,6 +555,15 @@ def host_snapshot(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return {'inventory':h.inventory,'telemetry':h.telemetry,'baseline':h.baseline}
+
+@app.get('/api/hosts/{host_id}/file-status')
+def host_file_status(host_id:str,offset:int=Query(default=0,ge=0),
+                     q:str=Query(default='',max_length=200),
+                     status:str=Query(default='',max_length=40),user=Depends(admin_user)):
+    from . import file_status
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return file_status.page(s,h,offset,q,status)
 
 @app.get('/api/hosts/{host_id}/patching')
 def host_patching(host_id:str,start:float,end:float,user=Depends(viewer_user)):
@@ -1478,13 +1488,49 @@ def cancel_job(job_id:str,user=Depends(admin_user)):
         audit(s,'cancel job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
+def sbom_components(inventory,packages):
+    from urllib.parse import quote
+    values={}
+    for line in (inventory.get('os') or '').splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            key,value=line.split('=',1);values[key.strip()]=value.strip().strip('"').strip("'")
+    rpm=package_backend.is_rpm(inventory)
+    ident=values.get('ID','').lower()
+    namespace=quote(ident,safe='')+'/' if re.fullmatch(r'[a-z0-9][a-z0-9._-]*',ident) else ''
+    distro=ident+'-'+values['VERSION_ID'] if namespace and re.fullmatch(r'[A-Za-z0-9._-]+',values.get('VERSION_ID','')) else ''
+    def component(name,arch,version,epoch=None):
+        qualifiers=[('arch',arch)] if arch else []
+        if epoch and epoch!='0':qualifiers.append(('epoch',epoch))
+        if distro:qualifiers.append(('distro',distro))
+        query=('?'+'&'.join(k+'='+quote(v,safe='') for k,v in qualifiers)) if qualifiers else ''
+        return {'type':'library','name':name,'version':version,'purl':('pkg:rpm/' if rpm else 'pkg:deb/')+namespace+quote(name,safe='')+'@'+quote(version,safe='')+query}
+    if rpm and inventory.get('rpm_packages'):
+        # Every installed version is reported, including older install-only kernels.
+        entries=sorted({(p['name'],p['arch'],p['evr']) for p in inventory['rpm_packages']})
+        result=[]
+        for name,arch,evr in entries:
+            epoch,sep,version=evr.partition(':')
+            if not sep:epoch,version='0',evr
+            result.append(component(name,arch,version,epoch))
+        return result
+    result=[]
+    for p in packages:
+        name,_,arch=p.name.rpartition(':')
+        if not name:name,arch=p.name,''
+        if rpm:
+            epoch,sep,version=p.installed.partition(':')
+            if not sep:epoch,version='0',p.installed
+            result.append(component(name,arch,version,epoch))
+        else:result.append(component(name,arch,p.installed))
+    return result
+
 @app.get('/api/hosts/{host_id}/sbom')
 def sbom(host_id:str,user=Depends(viewer_user)):
-    from urllib.parse import quote
     with Session() as s:
         h=host_or_404(s,host_id)
+        packages=s.scalars(select(Package).where(Package.host_id==host_id).order_by(Package.name)).all()
         return {'bomFormat':'CycloneDX','specVersion':'1.5','version':1,'serialNumber':'urn:uuid:'+str(uuid.uuid4()),
-            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':('pkg:rpm/' if package_backend.is_rpm(h.inventory) else 'pkg:deb/')+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
+            'components':sbom_components(h.inventory or {},packages)}
 
 @app.get('/api/audit/export')
 def export_audit(after:int=0,limit:int=1000,user=Depends(admin_user)):
@@ -2775,6 +2821,7 @@ def agent_action(host_id:str,action:str,user=Depends(admin_user)):
 
 
 class PersistenceApproval(BaseModel):
+    review_digest:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
     inspection_id:str=Field(max_length=36)
     evidence_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
     expected:str=Field(default='',max_length=36)
@@ -2785,14 +2832,14 @@ def get_persistence_baseline(host_id:str,user=Depends(admin_user)):
     from . import persistence
     with Session() as s:
         host_or_404(s,host_id)
-        return persistence.status(s,host_id)
+        return persistence.review(s,host_id)
 
 @app.post('/api/hosts/{host_id}/security/baseline')
 def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(admin_user)):
     from . import persistence
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
-        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'])
+        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'],body.review_digest)
         except ValueError as error:raise HTTPException(409,str(error)) from None
         s.commit()
         return {'id':identifier}

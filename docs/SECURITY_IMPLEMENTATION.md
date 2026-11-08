@@ -4370,6 +4370,24 @@ retained in PR #81; only all-success checks on the final published commit permit
 merge. No checks or UI assertions are weakened to obtain a pass.
 
 
+### Pooled AI model discovery — worker checkpoint #556
+
+The administrator model picker now sends its non-billable model-list GET through
+the same process-local bounded HTTP pool as provider POSTs. GET and POST each build
+a new request with only allowlisted ordinary client headers plus the current call's
+authorization; neither response cookies nor credentials become client defaults or
+flow to a later request. Model discovery keeps its 20-second timeout, redirect
+refusal, response-size and model-ID validation, controlled diagnostics and single
+attempt. No automatic retry or provider-call admission/accounting change is added.
+
+Focused acceptance uses a loopback HTTP/1.1 provider to prove socket reuse across
+GET/POST traffic, absent GET bodies, changing credentials, discarded cookies and
+bounded shutdown. Existing discovery route/role and redaction coverage remains in
+place. This is a finite safe-transport improvement; it does not establish provider
+availability, guarantee throughput, change AI concurrency or complete the faster-AI
+performance program. No schema, UI, target helper or agent change is required.
+
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
@@ -5939,6 +5957,25 @@ are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
 
+### Configurable bounded AI HTTP connections — worker checkpoint #560
+
+Each controller and worker process now validates a startup-only
+`MRPATCHY_AI_HTTP_CONNECTIONS` ceiling from 1 through 64 (default 16) before
+creating its reusable AI HTTP client. The same ceiling bounds total and keepalive
+connections; invalid configuration refuses worker registration and provider
+transport instead of silently falling back or opening an unbounded pool. Complete
+Compose installation passes the setting to both application and worker processes.
+
+Worker registrations expose the effective process-local ceiling alongside AI task
+capacity. The dashboard labels it as a transport limit rather than available task
+or provider capacity. Existing AI concurrency, shared admission, rate/spend and
+provider backoff, pause/lifecycle checks, per-request credentials, cookie clearing,
+redirect refusal, timeouts, shutdown/drain behavior and single-attempt accounting
+remain unchanged. This configuration does not increase AI task concurrency by
+itself, guarantee sockets are available, establish provider throughput or complete
+the faster-AI performance program.
+
+
 ## Password hashes and secret-key handling
 
 - Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
@@ -6146,3 +6183,22 @@ provider throughput, connection capacity, model discovery or the broader faster-
 program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+## Ordered file assessment and visibility (#626)
+
+The controller checks retained authenticated Debian/RPM artifact manifests against
+recorded SHA-256 values before exact known-good behavior lookup and optional AI.
+Target-supplied file-assessment claims are replaced. A mismatch against the latest
+authenticated artifact bypasses safe-cache reuse. File authenticity does not
+resolve behavior risk; baseline approval remains explicit and no AI opinion
+creates a trusted artifact. Repository evidence uses existing operator-managed
+authenticated vendor bundles; automatic repository artifact retrieval and current
+signing-key revocation checks are not added here.
+
+Administrator File status pages (fleet selector and server workspace) and the
+overview show paginated recorded managed/startup/vendor/process file observations,
+hashes, evidence methods, behavior assessment provenance, freshness, baseline
+comparison and coverage gaps. Multiple hashes at one path remain separate
+observations. Enrollment-only files remain unavailable, not verified. This is
+recorded-scope visibility, not enumeration of every file on disk. Viewing never
+contacts targets, invokes AI, approves a baseline or authorizes response actions.
