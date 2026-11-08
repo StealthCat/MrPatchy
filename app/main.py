@@ -12,7 +12,7 @@ import shlex
 import threading
 import time
 import uuid
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.44.9'
+APP_VERSION='1.46.2'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -555,6 +555,15 @@ def host_snapshot(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return {'inventory':h.inventory,'telemetry':h.telemetry,'baseline':h.baseline}
+
+@app.get('/api/hosts/{host_id}/file-status')
+def host_file_status(host_id:str,offset:int=Query(default=0,ge=0),
+                     q:str=Query(default='',max_length=200),
+                     status:str=Query(default='',max_length=40),user=Depends(admin_user)):
+    from . import file_status
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return file_status.page(s,h,offset,q,status)
 
 @app.get('/api/hosts/{host_id}/patching')
 def host_patching(host_id:str,start:float,end:float,user=Depends(viewer_user)):
@@ -2812,6 +2821,7 @@ def agent_action(host_id:str,action:str,user=Depends(admin_user)):
 
 
 class PersistenceApproval(BaseModel):
+    review_digest:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
     inspection_id:str=Field(max_length=36)
     evidence_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
     expected:str=Field(default='',max_length=36)
@@ -2822,14 +2832,14 @@ def get_persistence_baseline(host_id:str,user=Depends(admin_user)):
     from . import persistence
     with Session() as s:
         host_or_404(s,host_id)
-        return persistence.status(s,host_id)
+        return persistence.review(s,host_id)
 
 @app.post('/api/hosts/{host_id}/security/baseline')
 def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(admin_user)):
     from . import persistence
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
-        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'])
+        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'],body.review_digest)
         except ValueError as error:raise HTTPException(409,str(error)) from None
         s.commit()
         return {'id':identifier}
