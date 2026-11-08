@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.46.0 — 2026-11-07
+
+1. [PR #628](https://github.com/StealthCat/MrPatchy/pull/628): Complete ordered file-provenance review for startup baselines and explicitly requested startup advisory plans. Baseline review now checks retained authenticated artifact hashes before conservative strict known-good eligibility, keeps metadata-only or mismatched files unresolved, and displays the assessment before manual approval. Browser approvals bind the displayed provenance digest so a changed review must be refreshed. Startup AI receives bounded, digest-bound assessments for current and approved inventories, and provenance changes invalidate in-flight results. Existing API clients may omit the additive review digest and retain the inventory-bound approval contract. No schema or target-collector migration is required. Coverage remains limited to retained operator-managed artifacts and recorded inventories; authenticated bytes do not establish safe behavior, approve a baseline, or authorize response actions. This source update does not publish a Docker image.
+
+## 1.45.1 — 2026-11-07
+
+1. [PR #477](https://github.com/StealthCat/MrPatchy/pull/477): Preserve accurate read-only quarantine evidence status when the original file's parent disappears. A retained vault record now reports `uncertain` / `parent_changed` and still verifies the held file instead of reporting `not_found` / `missing`, including when removal races the parent open. This changes the reported audit state for that case without mutating the target, restoring a file or changing response authorization. This source update does not publish a Docker image.
+
 ## 1.45.0 — 2026-11-07
 
 1. [PR #627](https://github.com/StealthCat/MrPatchy/pull/627): Check stored, authenticated Debian/RPM artifact manifests and exact file hashes before consulting the strict known-good cache and using AI for unresolved process behavior. A hash mismatch bypasses cache reuse. Administrators can review recorded file hashes, sources, assessment history, baseline comparison, freshness and coverage gaps from fleet and server File status views. The views use stored evidence, and existing manual baseline approval and response authorization still apply. No schema migration is required. Coverage is limited to recorded observations and retained artifact evidence. Signature verification does not establish safe behavior or current signing-key revocation status. This source update does not publish a Docker image.
