@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.46.2 — 2026-11-07
+
+1. [PR #403](https://github.com/StealthCat/MrPatchy/pull/403): Validate the target boot identity before a reboot-requiring RPM transaction begins, then write the reboot marker from that prevalidated value only after DNF commits. A malformed or unavailable boot ID now refuses a reboot-requiring patch before any package change, while patches that do not require a reboot do not read the boot identity. This is a partial resolution of issue #190; the other duplicated or unvalidated target reads remain open. Package selection, API and schema contracts, roles and runtime response authorization are unchanged. This source update does not publish a Docker image.
+
 ## 1.46.1 — 2026-11-07
 
 1. [PR #480](https://github.com/StealthCat/MrPatchy/pull/480): Require target `/usr/bin/python3` 3.8 or newer before enrollment or helper deployment. The installer and current bridge reject older interpreters with a clear message, while deployments through bridges installed before this release use the existing compile-before-write step to refuse the new helper payload before replacing any managed file; the controller translates that refusal into the same actionable requirement. Python 3.8-or-newer targets are unchanged. Hosts such as EL8 with the default Python 3.6 must install a supported interpreter before finishing enrollment. This update does not install or upgrade Python, add legacy EL8 runtime support, alter forced-command or response authorization boundaries, or publish a Docker image.
