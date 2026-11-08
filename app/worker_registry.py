@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from .coordination import Lock
 from .db import Session,Setting,audit
+from . import ai_transport
 
 log=logging.getLogger(__name__)
 PREFIX='worker-registry:'
@@ -87,7 +88,7 @@ class Registration:
         self.role=role;self.boot=uuid.uuid4().hex;self.started=time.time();self.monotonic=time.monotonic();self.last=0
         self.deployment=os.getenv('MRPATCHY_DEPLOYMENT_TYPE','process')
         if self.deployment not in ('docker','process'):raise ValueError('Unsupported reported deployment type')
-        self.version=source_version();self.capacity=capacities();self.draining=False;self.control_revision=0;self.last_state=None;self.lock=Lock('worker-identity:'+self.id)
+        self.version=source_version();self.capacity=capacities();self.ai_http_capacity=ai_transport.connection_limit();self.draining=False;self.control_revision=0;self.last_state=None;self.lock=Lock('worker-identity:'+self.id)
     def __enter__(self):
         if not self.lock.acquire(False):raise ValueError('Worker identity is already in use; choose a unique MRPATCHY_WORKER_ID')
         try:self.write('reporting',False,[],0,False,True)
@@ -104,7 +105,7 @@ class Registration:
                'started':self.started,'heartbeat':time.time(),'uptime_seconds':max(0,time.monotonic()-self.monotonic),
                'state':state,'coordinator':bool(coordinator),'active_jobs':list(jobs)[:16],
                'active_polls':polls,'pending_polls':pending_polls,'notification_active':bool(notification_active),'ai_active':bool(ai_active),'active_ai_tasks':int(ai_active),'job_capacity':self.capacity['jobs'],'poll_capacity':self.capacity['polls'],'ai_capacity':self.capacity['ai'],
-               'control_revision':self.control_revision,
+               'ai_http_capacity':self.ai_http_capacity,'control_revision':self.control_revision,
                'readiness':'not_assessed'}
         with Session() as s:
             s.merge(Setting(key=record_key(self.id),value=value))
@@ -155,9 +156,9 @@ def page(offset=0,now=None):
         items=[]
         for row in rows[:50]:
             data=row.value if isinstance(row.value,dict) else {}
-            fields=('id','boot_id','role','deployment_type','version','started','heartbeat','uptime_seconds','coordinator','active_jobs','active_polls','pending_polls','notification_active','ai_active','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','control_revision')
+            fields=('id','boot_id','role','deployment_type','version','started','heartbeat','uptime_seconds','coordinator','active_jobs','active_polls','pending_polls','notification_active','ai_active','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','ai_http_capacity','control_revision')
             item={k:data.get(k) for k in fields}
-            for key in ('started','heartbeat','uptime_seconds','active_polls','pending_polls','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','control_revision'):
+            for key in ('started','heartbeat','uptime_seconds','active_polls','pending_polls','active_ai_tasks','job_capacity','poll_capacity','ai_capacity','ai_http_capacity','control_revision'):
                 value=item[key]
                 if not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<0:item[key]=None
             item['id']=data.get('id') if isinstance(data.get('id'),str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',data['id']) else row.key[len(PREFIX):]

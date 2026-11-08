@@ -62,7 +62,7 @@ function renderAISettings(data,revision,container){
    if(!result.windows.length){historyResults.innerHTML=clipped+'<p class="help" role="status">No retained billable AI calls were recorded in this period.</p>';return;}
    const rows=result.windows.map(row=>`<tr><td>${row.window_start?date(row.window_start):'Unknown start'}<small>Resets ${date(row.reset_at)} · ${esc(row.timezone)}</small></td><td>${esc(row.call_count)}</td><td>$${esc(row.settled_usd)}</td><td>$${esc(row.reserved_usd)}</td><td>$${esc(row.sent_usd)}</td><td>$${esc(row.uncertain_usd)}</td><td>$${esc(row.other_usd)}</td><td><strong>$${esc(row.counted_usd)}</strong></td></tr>`).join('');
    historyResults.innerHTML=clipped+`<div class="table-wrap"><table><caption>Retained AI spend accounting windows</caption><thead><tr><th>Budget window</th><th>Calls</th><th>Settled estimate</th><th>Reserved</th><th>Sent</th><th>Uncertain</th><th>Other</th><th>Counted</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  }catch(error){if(alive()&&ticket===historyGeneration){historyResults.innerHTML='<p class="help" role="status"></p>';historyResults.firstElementChild.textContent='Retained spend history could not be loaded. '+error.message;}}
+  }catch(error){if(alive()&&ticket===historyGeneration){historyResults.innerHTML=PatchyUI.error('Retained spend history could not be loaded',esc(error.message));}}
   finally{if(alive()&&ticket===historyGeneration)historyDays.disabled=false;}
  };
  historyDays.onchange=loadHistory;
@@ -154,5 +154,5 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
    }catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=error.message;}
    finally{if(button.isConnected)button.disabled=false;}
   };
- }catch(error){if(currentView(revision,'settings')&&container.isConnected)container.textContent='Could not load database settings: '+error.message;}
+ }catch(error){if(currentView(revision,'settings')&&container.isConnected)container.innerHTML=PatchyUI.error('Could not load database settings',esc(error.message));}
 }

@@ -507,7 +507,18 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 .assessment-policy code, .assessment-summary code, .assessment-artifact { overflow-wrap:anywhere; }
 .known-good-fingerprint { overflow-wrap:anywhere;word-break:break-all; }
+.upgrade-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 12px; line-height: 18px; background: #274a40; color: #a8efd3; border: 1px solid #b5cdd91f; vertical-align: middle; }
 .fleet-spool-list { margin:12px 0;padding-left:20px;overflow-wrap:anywhere; }
 .badge.ok,.badge.warning{background:#274a40;color:#a8efd3}
 .badge.warning{background:#4c402a;color:var(--amber)}
 .badge.unavailable{color:var(--muted);background:#a7bdc714}
+
+/* Shared error artwork retains its proportions on narrow screens. */
+.error-state .empty-mascot { width: 150px; height: auto; max-height: none; object-fit: contain; }
+.error-state>div { min-width: 0; overflow-wrap: anywhere; }
+#login-error-mascot { display: block; width: 90px; height: auto; margin: 16px auto 8px; }
+#login-error-mascot[hidden] { display: none; }
+@media (max-width: 600px) { .error-state .empty-mascot { width: 120px; height: auto; } }
+
+.file-status-hash{overflow-wrap:anywhere;word-break:break-all}
+.file-status-panel td{vertical-align:top}
