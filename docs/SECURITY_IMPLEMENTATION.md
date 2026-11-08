@@ -4370,6 +4370,24 @@ retained in PR #81; only all-success checks on the final published commit permit
 merge. No checks or UI assertions are weakened to obtain a pass.
 
 
+### Pooled AI model discovery — worker checkpoint #556
+
+The administrator model picker now sends its non-billable model-list GET through
+the same process-local bounded HTTP pool as provider POSTs. GET and POST each build
+a new request with only allowlisted ordinary client headers plus the current call's
+authorization; neither response cookies nor credentials become client defaults or
+flow to a later request. Model discovery keeps its 20-second timeout, redirect
+refusal, response-size and model-ID validation, controlled diagnostics and single
+attempt. No automatic retry or provider-call admission/accounting change is added.
+
+Focused acceptance uses a loopback HTTP/1.1 provider to prove socket reuse across
+GET/POST traffic, absent GET bodies, changing credentials, discarded cookies and
+bounded shutdown. Existing discovery route/role and redaction coverage remains in
+place. This is a finite safe-transport improvement; it does not establish provider
+availability, guarantee throughput, change AI concurrency or complete the faster-AI
+performance program. No schema, UI, target helper or agent change is required.
+
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
@@ -5938,6 +5956,25 @@ This preserves the owner's corrected bebc0c9 handoff; legacy candidate versions
 are superseded by coordinator #222's final version/PR-linked changelog. All 13
 exact-head checks are required before merge and verified issue closure. Deploy
 the agent update through the existing reviewed maintenance workflow; no tags.
+
+### Configurable bounded AI HTTP connections — worker checkpoint #560
+
+Each controller and worker process now validates a startup-only
+`MRPATCHY_AI_HTTP_CONNECTIONS` ceiling from 1 through 64 (default 16) before
+creating its reusable AI HTTP client. The same ceiling bounds total and keepalive
+connections; invalid configuration refuses worker registration and provider
+transport instead of silently falling back or opening an unbounded pool. Complete
+Compose installation passes the setting to both application and worker processes.
+
+Worker registrations expose the effective process-local ceiling alongside AI task
+capacity. The dashboard labels it as a transport limit rather than available task
+or provider capacity. Existing AI concurrency, shared admission, rate/spend and
+provider backoff, pause/lifecycle checks, per-request credentials, cookie clearing,
+redirect refusal, timeouts, shutdown/drain behavior and single-attempt accounting
+remain unchanged. This configuration does not increase AI task concurrency by
+itself, guarantee sockets are available, establish provider throughput or complete
+the faster-AI performance program.
+
 
 ## Password hashes and secret-key handling
 
