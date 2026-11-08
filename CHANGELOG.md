@@ -1,8 +1,16 @@
 # Changelog
 
+## 1.45.1 — 2026-11-07
+
+1. [PR #477](https://github.com/StealthCat/MrPatchy/pull/477): Preserve accurate read-only quarantine evidence status when the original file's parent disappears. A retained vault record now reports `uncertain` / `parent_changed` and still verifies the held file instead of reporting `not_found` / `missing`, including when removal races the parent open. This changes the reported audit state for that case without mutating the target, restoring a file or changing response authorization. This source update does not publish a Docker image.
+
+## 1.45.0 — 2026-11-07
+
+1. [PR #627](https://github.com/StealthCat/MrPatchy/pull/627): Check stored, authenticated Debian/RPM artifact manifests and exact file hashes before consulting the strict known-good cache and using AI for unresolved process behavior. A hash mismatch bypasses cache reuse. Administrators can review recorded file hashes, sources, assessment history, baseline comparison, freshness and coverage gaps from fleet and server File status views. The views use stored evidence, and existing manual baseline approval and response authorization still apply. No schema migration is required. Coverage is limited to recorded observations and retained artifact evidence. Signature verification does not establish safe behavior or current signing-key revocation status. This source update does not publish a Docker image.
+
 ## 1.44.9 — 2026-11-07
 
-1. [PR #480](https://github.com/StealthCat/MrPatchy/pull/480): Require Python 3.8 or newer at `/usr/bin/python3` before target enrollment or bridge deployment can replace helper files. Older targets, including EL8 with its default Python 3.6, now get an explicit prerequisite error. Install a suitable interpreter and, on RPM targets, its DNF4 and RPM bindings before enrolling or redeploying. The installer leaves prerequisite installation and interpreter selection to the operator. Existing authorization gates still apply. This source update does not publish a Docker image.
+1. [PR #395](https://github.com/StealthCat/MrPatchy/pull/395): Use the bridge’s shared RPM/Debian backend detection for read-only target security inspection. The package database selection and inspection report format stay the same. This covers only security inspection; other duplicated target helpers remain tracked in issue #190. This source update does not publish a Docker image.
 
 ## 1.44.8 — 2026-11-07
 

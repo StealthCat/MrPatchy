@@ -134,6 +134,7 @@ EXPECTED_ROLES = {
     ('POST','/api/hosts/{host_id}/security/vendor-inspections'):'admin',
     ('POST','/api/hosts/{host_id}/security/yara'):'admin',
     ('GET','/api/hosts/{host_id}/snapshot'):'admin',
+    ('GET','/api/hosts/{host_id}/file-status'):'admin',
     ('GET','/api/spool-health'):'viewer',
     ('GET','/api/hosts/{host_id}/spool-health'):'viewer',
     ('GET','/api/hosts/{host_id}/summary'):'viewer',
