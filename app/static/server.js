@@ -1,8 +1,8 @@
 'use strict';
-const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true],['startup','Startup files',true]];
+const SERVER_TABS=[['overview','Overview'],['settings','Settings',true],['connection','Connection',true],['agent','Agent health',true],['packages','Packages'],['patching','Patching timeline'],['investigations','Investigations'],['ai','AI activity',true],['history','History'],['repositories','Repositories',true],['maintenance','Maintenance',true],['security','Security',true],['integrity','File integrity',true],['startup','Startup files',true],['files','File status',true]];
 const SERVER_SECTION_GROUPS=[
  {title:'Updates & history',ids:['patching','history','repositories']},
- {title:'Investigations & evidence',ids:['investigations','ai','integrity','startup']},
+ {title:'Investigations & evidence',ids:['investigations','ai','integrity','startup','files']},
  {title:'Server administration',ids:['connection','agent','maintenance']}
 ];
 const serverLink=(id,tab='overview')=>'#servers/'+encodeURIComponent(id)+'/'+tab;
@@ -24,7 +24,7 @@ async function serverWorkspace(revision){
  selected=id;
  let tab=parts[2]||'overview';if(!SERVER_TABS.some(t=>t[0]===tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const inactive=h.enabled===false||Boolean(h.deleted_at);
- const allowed=inactive?['overview','settings','history','ai','patching','security','startup',...(isAdmin()?['investigations']:[]),...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
+ const allowed=inactive?['overview','settings','history','ai','patching','security','startup','files',...(isAdmin()?['investigations']:[]),...(!h.deleted_at?['connection']:[])]:SERVER_TABS.map(t=>t[0]);
  if(!allowed.includes(tab)){tab='overview';history.replaceState(null,'',serverLink(id));}
  const entry=SERVER_TABS.find(t=>t[0]===tab);
  const tabs=SERVER_TABS.filter(t=>(!t[2]||isAdmin())&&allowed.includes(t[0]));
@@ -40,7 +40,7 @@ async function serverWorkspace(revision){
  if(h.deleted_at&&!hosts.some(item=>item.id===id)){const option=document.createElement('option');option.value=id;option.textContent=h.name+' (deleted)';option.selected=true;$('#server-workspace-select').append(option);}
  if(entry[2]&&!isAdmin()){body.innerHTML=PatchyUI.error('Administrator access required','Your role can view the monitoring tabs for this server.',`<a class="button" href="${serverLink(id)}">Server overview</a>`);return;}
  try{
-  const views={overview:serverOverview,settings:serverSettings,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity,startup:startupFiles};
+  const views={overview:serverOverview,settings:serverSettings,connection:serverConnection,agent:serverAgent,packages,patching:serverPatching,investigations,ai:aiDiagnostics,history:serverHistory,repositories,maintenance:serverMaintenance,security:serverSecurity,integrity:serverIntegrity,startup:startupFiles,files:serverFileStatus};
   if(inactive&&tab==='security')await retainedSecurity(revision,context);else await views[tab](revision,context);
  }catch(error){if(currentView(revision,'servers')&&body.isConnected){body.innerHTML=PatchyUI.error('Unable to load this server tab',esc(error.message),'<button id="retry-server-tab">Retry</button>');$('#retry-server-tab').onclick=render;}}
 }
@@ -85,6 +85,7 @@ async function serverOverview(revision,{root,hostId}){
  const patching=`<section class="card"><h3>Patching status</h3><dl class="overview-job-counts">${fact('Running',jobs.running||0)}${fact('Queued',jobs.queued||0)}${fact('Recovery required',jobs.recovery_required||0)}</dl>${jobs.recovery_required?'<div class="notice" role="alert">Recovery is required. Review the operation outcome before starting more work.</div>':''}<p>Last repository check: ${date(h.last_repo)}</p>${h.repo_error?`<div class="notice">${esc(h.repo_error)}</div>`:''}${last_patch?`<p>Most recently submitted patch: ${badge(last_patch.state)} · ${date(last_patch.created)}</p>`:'<p class="help">No patch operations recorded yet.</p>'}<p class="help">Submission is not verified installation. Review operation outcomes and recovery holds before retrying work.</p><a href="${serverLink(hostId,'patching')}" class="button">View patching timeline →</a></section>`;
  const upgradeNotice=PatchyUI.upgradeLabel(h)?`<div class="notice upgrade-notice" role="status"><strong>${esc(PatchyUI.upgradeLabel(h))}</strong><br>${esc(h.os_upgrade.message)} Detection only reports availability; nothing is started automatically. Use Servers → Manage → Plan distribution upgrade to review it.</div>`:'';
  root.innerHTML=`<nav class="overview-sections" aria-label="Overview pages">${sections.map(([key,label])=>`<a href="${serverLink(hostId,key==='summary'?'overview':'overview/'+key)}" ${key===section?'aria-current="page" class="active"':''}>${label}</a>`).join('')}</nav>${h.error?`<div class="notice">${esc(h.error)}</div>`:''}${upgradeNotice}<div class="server-overview-page" data-overview-section="${section}">${section==='summary'?summary:section==='system'?details:patching}</div>`;
+ if(isAdmin()&&section==='summary'){const panel=document.createElement('section');panel.className='card file-status-panel';root.append(panel);fileStatusPanel(panel,hostId,()=>currentView(revision,'servers')).catch(()=>{});}
  if(sessionStorage.getItem('mrpatchy-enrollment-success:'+currentUser.username)===hostId){
   const notice=document.createElement('div');notice.className='notice';notice.setAttribute('role','status');
   notice.textContent='Installation verified. Review current agent health and monitoring data below.';
