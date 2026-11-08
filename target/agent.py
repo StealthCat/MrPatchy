@@ -1478,7 +1478,14 @@ def response_status_open(directory,identifier,plan,facts=None):
         review=response_json(directory,'restore-intent.json')
         if review.get('id')!=identifier or review.get('plan')!=plan:raise ValueError('Restoration intent does not bind approved evidence')
     path=Path(plan['file']['path']);mode=stat.S_IMODE(plan['file']['identity']['mode'])
-    with response_parent(path.parent) as (parent,chain):
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        try:parent,chain=stack.enter_context(response_parent(path.parent))
+        except FileNotFoundError:
+            # A removed ancestor (at this single parent open) is a changed parent, not a missing vault record; the held file stays verifiable.
+            facts['parents_match']=False;held=response_present(directory,'held');facts['held_present']=held
+            if held:os.close(response_file(directory,'held',plan,(0o600,mode)));facts['held_verified']=True
+            return result
         facts['parents_match']=chain==plan['ancestors']
         if chain!=plan['ancestors']:return result
         held=response_present(directory,'held');source=response_present(parent,path.name)
