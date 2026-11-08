@@ -519,3 +519,6 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 #login-error-mascot { display: block; width: 90px; height: auto; margin: 16px auto 8px; }
 #login-error-mascot[hidden] { display: none; }
 @media (max-width: 600px) { .error-state .empty-mascot { width: 120px; height: auto; } }
+
+.file-status-hash{overflow-wrap:anywhere;word-break:break-all}
+.file-status-panel td{vertical-align:top}
