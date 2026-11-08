@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.44.9 — 2026-11-07
+
+1. [PR #395](https://github.com/StealthCat/MrPatchy/pull/395): Use the bridge’s shared RPM/Debian backend detection for read-only target security inspection. The package database selection and inspection report format stay the same. This covers only security inspection; other duplicated target helpers remain tracked in issue #190. This source update does not publish a Docker image.
+
 ## 1.44.8 — 2026-11-07
 
 1. [PR #625](https://github.com/StealthCat/MrPatchy/pull/625): Add responsive Mr Patchy browser pages for forbidden access, missing pages, redirects and server failures, with eight themed transparent mascot illustrations. Failed application views and sign-in errors also use the new artwork. Preserve actual status codes, redirect destinations, cookies, Retry-After, security headers, API/download contracts and bodyless 304 responses; generic public messages do not disclose exception details. Pages work without JavaScript or database startup. External proxy-generated failures require that proxy's own handler; reusable static pages are included. No schema, role or runtime response-authorization changes. This source update does not publish a Docker image.
