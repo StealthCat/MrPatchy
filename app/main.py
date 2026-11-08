@@ -12,17 +12,19 @@ import shlex
 import threading
 import time
 import uuid
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import defer, load_only
+from sqlalchemy.exc import IntegrityError, OperationalError
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health
+from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -50,11 +52,11 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.42.36'
+APP_VERSION='1.48.1'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from . import sso
+from . import sso, error_pages
 app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 
@@ -75,6 +77,21 @@ async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1
 async def queue_full(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=429)
 @app.exception_handler(ValueError)
 async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request,exc):
+    # Never echo `input` or `ctx` (they can contain passwords); return short field-labelled messages.
+    if request.url.path=='/api/login': return JSONResponse({'detail':'Invalid credentials'},status_code=422)
+    # `loc` can hold caller-chosen dict keys or forbidden extra field names, so only the first
+    # declared-looking field label is shown; dynamic/unknown locations get a generic message.
+    parts=[]
+    for err in exc.errors()[:5]:
+        if err.get('type')=='extra_forbidden':parts.append('Unexpected field');continue
+        loc=[x for x in err.get('loc',()) if x not in ('body','query','path','header','cookie')]
+        label=loc[0] if loc and isinstance(loc[0],str) and _VALIDATION_LABEL.fullmatch(loc[0]) else ''
+        msg=str(err.get('msg',''))[:200]
+        parts.append((label+': ' if label else '')+msg)
+    return JSONResponse({'detail':('; '.join(parts) or 'Invalid request')[:1000]},status_code=422)
+_VALIDATION_LABEL=re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 static=Path(__file__).parent/'static'
 app.mount('/static',StaticFiles(directory=static),name='static')
 
@@ -88,6 +105,7 @@ async def guard(request,call_next):
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
+    response=error_pages.decorate(request,response)
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='no-referrer'
@@ -189,9 +207,14 @@ def health(): return {'status':'ok','version':APP_VERSION}
 class Login(BaseModel):
     username:str=Field(default='admin',pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     password:str=Field(max_length=1024)
-    otp:str=Field(default='',max_length=6)
+    otp:str=Field(default='',max_length=16)
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+# Failures per account by source address, used only to detect guessing spread across addresses (never to block).
+login_account_failures={}
+login_account_next_sweep=0.0
 LOGIN_BUCKET_LIMIT=10000
+LOGIN_SUSPICIOUS_ADDRESSES=5
+LOGIN_ACCOUNT_SWEEP_SECONDS=30
 # Verified when an account is missing or disabled so response time does not reveal which usernames exist.
 DUMMY_PASSWORD_HASH=password_hash('mrpatchy-timing-equaliser','00'*16)
 def audit_login_event(action,username,ip,reason):
@@ -200,6 +223,7 @@ def audit_login_event(action,username,ip,reason):
         audit(s,action,username+' '+ip+' '+reason); s.commit()
 @app.post('/api/login')
 def login(body:Login,request:Request,response:Response):
+    global login_account_next_sweep
     ip=request.client.host; now=time.time()
     # Reserve an attempt before expensive password hashing; remove it only on success.
     bucket=ip+':'+body.username
@@ -210,6 +234,14 @@ def login(body:Login,request:Request,response:Response):
             if not login_attempts[key]: del login_attempts[key]
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
+        # Sweep global detector state periodically, not on every authentication request.
+        # The per-account failure path below still enforces the exact rolling window.
+        if now>=login_account_next_sweep:
+            for key,seen in list(login_account_failures.items()):
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                if not seen: del login_account_failures[key]
+            login_account_next_sweep=now+LOGIN_ACCOUNT_SWEEP_SECONDS
         recent=login_attempts.get(bucket,[])
         # Usernames cannot contain ':', so the address is everything before the last one.
         # A prefix match would also count other IPv6 addresses, e.g. ::1:2 under ::1.
@@ -254,6 +286,22 @@ def login(body:Login,request:Request,response:Response):
         if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
+        suspicious=False
+        with login_lock:
+            # Detect, never block: a hard per-account limit would let an attacker lock out a real administrator.
+            if body.username in login_account_failures or len(login_account_failures)<LOGIN_BUCKET_LIMIT:
+                seen=login_account_failures.setdefault(body.username,{})
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                # Only the most recent distinct sources are needed to recognize
+                # the threshold; never retain an unbounded rotating-IP history.
+                if ip not in seen and len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES:
+                    del seen[min(seen,key=seen.get)]
+                seen[ip]=now
+                scope='suspicious:'+body.username
+                if len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES and scope not in login_throttle_logged:
+                    login_throttle_logged[scope]=now; suspicious=True
+        if suspicious: audit_login_event('login suspicious',body.username,ip,'failures from '+str(LOGIN_SUSPICIOUS_ADDRESSES)+' or more addresses')
         raise HTTPException(401,'Invalid credentials or MFA code')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
@@ -393,18 +441,20 @@ def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(s
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
     with Session() as s:
-        # Read the three small inventory keys in SQL instead of decoding every host's full inventory, telemetry and baseline.
-        # A JSON null stays distinct from a missing key (null is returned as-is, missing falls back to the default).
-        keys=('architecture','os','package_manager'); cols=[]
-        for k in keys:
-            path='$."%s"'%k
-            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*(( path,) if engine.dialect.name=='sqlite' else ()))
-            cols+=[Host.inventory[k].as_string(),kind]
-        rows=s.execute(select(Host,*cols).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
+        keys=('architecture','os','package_manager');cols=[]
+        for key in keys:
+            path='$."%s"'%key
+            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
+            cols+=[Host.inventory[key].as_string(),kind]
+        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+            .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
+            .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
         def meta(value,kind,default):
             if kind is None:return default
             return None if str(kind).lower()=='null' else value
-        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt')} for h,a,ak,o,ok,m,mk in rows]
+        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
+            'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
+            for h,a,ak,o,ok,m,mk,saved in rows]
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
@@ -438,6 +488,7 @@ def delete_host(host_id:str,body:HostDeletionInput,user=Depends(admin_user)):
 
 class ServerAIInput(BaseModel):
     paused:bool
+    concurrency_limit:int|None=Field(default=None,strict=True,ge=1,le=4)
     expected_revision:str=Field(default='',max_length=36)
     reason:str=Field(min_length=10,max_length=4000)
 
@@ -451,14 +502,20 @@ def server_ai_policy(host_id:str,user=Depends(admin_user)):
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
     from . import ai_policy,ai_claims
     with worker.Lock('ai-policy-change:'+host_id):
-        with Session() as s:
-            if s.scalar(select(ai_claims.Claim.subject).where(ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
-                raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
-        lock=worker.Lock('ai-provider:'+host_id)
-        if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
-        try:
-            with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,body.expected_revision,body.reason,user['username'])
-        finally:lock.release()
+        with worker.Lock('ai-triage'):
+            with Session() as s:
+                host_or_404(s,host_id);current=ai_policy.status(s,host_id)
+                pause_change=body.paused!=current['paused']
+                if pause_change and s.scalar(select(ai_claims.Claim.subject).where(
+                    ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
+                    raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
+            lock=worker.Lock('ai-provider:'+host_id) if pause_change else None
+            if lock and not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
+            try:
+                with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,
+                    body.expected_revision,body.reason,user['username'],body.concurrency_limit)
+            finally:
+                if lock:lock.release()
 
 @app.get('/api/hosts/{host_id}/summary')
 def host_summary(host_id:str,user=Depends(viewer_user)):
@@ -469,7 +526,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
         behaviors=list(s.execute(select(Behavior.verdict,Behavior.approved).where(Behavior.host_id==host_id)))
         jobs=dict(s.execute(select(Job.state,func.count()).where(Job.host_id==host_id).group_by(Job.state)).all())
         last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='patch').order_by(Job.created.desc(),Job.id).limit(1))
-        return {'host':object_dict(h,('inventory','telemetry','baseline')),
+        return {'host':object_dict(h,('inventory','telemetry','baseline'))|{'os_upgrade':os_upgrade.status(h)},
                 'system':{k:h.inventory.get(k) for k in ('os','architecture','foreign_architectures','package_manager','machine_id','collected')},
                 'collector':{'collected':h.telemetry.get('collected'), 'hashed_at':h.telemetry.get('hashed_at'),
                              'processes':len(h.telemetry.get('processes',[])), 'managed_files':len(h.telemetry.get('managed',{}))},
@@ -498,6 +555,15 @@ def host_snapshot(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return {'inventory':h.inventory,'telemetry':h.telemetry,'baseline':h.baseline}
+
+@app.get('/api/hosts/{host_id}/file-status')
+def host_file_status(host_id:str,offset:int=Query(default=0,ge=0),
+                     q:str=Query(default='',max_length=200),
+                     status:str=Query(default='',max_length=40),user=Depends(admin_user)):
+    from . import file_status
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return file_status.page(s,h,offset,q,status)
 
 @app.get('/api/hosts/{host_id}/patching')
 def host_patching(host_id:str,start:float,end:float,user=Depends(viewer_user)):
@@ -550,19 +616,26 @@ def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(admin_user)):
 def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
-        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
+        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing. Use Pinned SSH fingerprint under Server → Connection, and take the value from the target\'s trusted console.')
         try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
         except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
-class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+class Fingerprint(BaseModel):
+    fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+    replace_existing:bool=False
 @app.put('/api/hosts/{host_id}/fingerprint')
 def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
         if h.deleted_at:raise HTTPException(409,'Deleted server identity is read-only')
-        h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
+        previous=h.fingerprint or ''
+        if previous and previous!=body.fingerprint:
+            if not body.replace_existing:raise HTTPException(409,'A different SSH fingerprint is already pinned. Replace it under Server → Connection after verifying the new key from the target\'s trusted console.')
+            audit(s,'replace SSH host key',h.id+' '+previous+' -> '+body.fingerprint)
+        else:audit(s,'pin SSH host key',h.id+' '+body.fingerprint)
+        h.fingerprint=body.fingerprint; s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
 def installer(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
@@ -874,6 +947,9 @@ def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(viewer_user)):
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             query=query.where(Job.host_id==host_id)
+        # MySQL can choose a competing access path and sort retained history despite LIMIT.
+        history_index='ix_jobs_host_history' if host_id else 'ix_jobs_history'
+        query=query.with_hint(Job,f'FORCE INDEX FOR ORDER BY ({history_index})',dialect_name='mysql')
         return [public_job(x) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
 def audit_log(offset:int=0,limit:int=200,user=Depends(admin_user)):
@@ -1240,7 +1316,7 @@ def save_user(body:UserInput,user=Depends(admin_user)):
 
 class Reauthenticate(BaseModel):
     password:str=Field(max_length=1024)
-    otp:str=Field(default='',max_length=6)
+    otp:str=Field(default='',max_length=16)
     new_password:str=Field(default='',max_length=1024)
 
 def reserve_account_attempt(username):
@@ -1264,7 +1340,7 @@ def begin_mfa(body:Reauthenticate,user=Depends(self_user)):
         secret=new_secret();row.otp_pending=seal(secret);s.commit()
         return {'secret':secret,'uri':'otpauth://totp/MrPatchy:'+quote(row.username)+'?secret='+secret+'&issuer=MrPatchy&algorithm=SHA1&digits=6&period=30'}
 
-class OTPInput(BaseModel): otp:str=Field(max_length=6)
+class OTPInput(BaseModel): otp:str=Field(max_length=16)
 @app.post('/api/identity/mfa/confirm')
 def confirm_mfa(body:OTPInput,user=Depends(self_user)):
     with login_lock, Session() as s:
@@ -1290,6 +1366,19 @@ def revoke_sessions(body:Reauthenticate,user=Depends(self_user)):
         row=s.get(User,user['username']);check_password(row,body)
         row.generation+=1;audit(s,'revoke sessions',row.username);s.commit()
     return {'ok':True,'sign_in_again':True}
+
+@app.post('/api/users/{username}/mfa/reset')
+def reset_user_mfa(username:str,body:Reauthenticate,user=Depends(admin_user)):
+    # The administrator re-authenticates with their own credentials; the target's factors are cleared and sessions revoked via generation.
+    with login_lock, Session() as s:
+        actor=s.get(User,user['username']);check_password(actor,body)
+        row=s.get(User,username)
+        if row is None:raise HTTPException(404,'User not found')
+        if row.username==actor.username:raise HTTPException(400,'Use Account to manage your own MFA')
+        had=bool(row.otp_secret or row.otp_pending)
+        row.otp_secret='';row.otp_pending='';row.otp_counter=-1;row.generation+=1
+        audit(s,'reset user MFA',actor.username+' → '+row.username+'; MFA was '+('enabled or pending' if had else 'not configured'));s.commit()
+    return {'ok':True,'had_mfa':had}
 
 class WindowInput(BaseModel): windows:list[dict]=Field(default_factory=list,max_length=20)
 @app.put('/api/operations/{host_id}/window')
@@ -1399,13 +1488,49 @@ def cancel_job(job_id:str,user=Depends(admin_user)):
         audit(s,'cancel job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
+def sbom_components(inventory,packages):
+    from urllib.parse import quote
+    values={}
+    for line in (inventory.get('os') or '').splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            key,value=line.split('=',1);values[key.strip()]=value.strip().strip('"').strip("'")
+    rpm=package_backend.is_rpm(inventory)
+    ident=values.get('ID','').lower()
+    namespace=quote(ident,safe='')+'/' if re.fullmatch(r'[a-z0-9][a-z0-9._-]*',ident) else ''
+    distro=ident+'-'+values['VERSION_ID'] if namespace and re.fullmatch(r'[A-Za-z0-9._-]+',values.get('VERSION_ID','')) else ''
+    def component(name,arch,version,epoch=None):
+        qualifiers=[('arch',arch)] if arch else []
+        if epoch and epoch!='0':qualifiers.append(('epoch',epoch))
+        if distro:qualifiers.append(('distro',distro))
+        query=('?'+'&'.join(k+'='+quote(v,safe='') for k,v in qualifiers)) if qualifiers else ''
+        return {'type':'library','name':name,'version':version,'purl':('pkg:rpm/' if rpm else 'pkg:deb/')+namespace+quote(name,safe='')+'@'+quote(version,safe='')+query}
+    if rpm and inventory.get('rpm_packages'):
+        # Every installed version is reported, including older install-only kernels.
+        entries=sorted({(p['name'],p['arch'],p['evr']) for p in inventory['rpm_packages']})
+        result=[]
+        for name,arch,evr in entries:
+            epoch,sep,version=evr.partition(':')
+            if not sep:epoch,version='0',evr
+            result.append(component(name,arch,version,epoch))
+        return result
+    result=[]
+    for p in packages:
+        name,_,arch=p.name.rpartition(':')
+        if not name:name,arch=p.name,''
+        if rpm:
+            epoch,sep,version=p.installed.partition(':')
+            if not sep:epoch,version='0',p.installed
+            result.append(component(name,arch,version,epoch))
+        else:result.append(component(name,arch,p.installed))
+    return result
+
 @app.get('/api/hosts/{host_id}/sbom')
 def sbom(host_id:str,user=Depends(viewer_user)):
-    from urllib.parse import quote
     with Session() as s:
         h=host_or_404(s,host_id)
+        packages=s.scalars(select(Package).where(Package.host_id==host_id).order_by(Package.name)).all()
         return {'bomFormat':'CycloneDX','specVersion':'1.5','version':1,'serialNumber':'urn:uuid:'+str(uuid.uuid4()),
-            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':('pkg:rpm/' if package_backend.is_rpm(h.inventory) else 'pkg:deb/')+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
+            'components':sbom_components(h.inventory or {},packages)}
 
 @app.get('/api/audit/export')
 def export_audit(after:int=0,limit:int=1000,user=Depends(admin_user)):
@@ -1468,13 +1593,59 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
     username:str=Field(min_length=1,max_length=64)
+    replace_username:str|None=Field(default=None,max_length=64)
+def sso_digest(key):return key.removeprefix('oidc:')[:16]
 @app.put('/api/operations/sso-binding')
 def bind_sso(body:SSOBinding,user=Depends(admin_user)):
     if not sso.issuer:raise HTTPException(409,'Configure OIDC deployment variables first')
+    key=sso.binding_key(body.subject)
     with Session() as s:
         if not s.get(User,body.username):raise HTTPException(404,'Create the local account/role first')
-        s.merge(Setting(key=sso.binding_key(body.subject),value={'username':body.username}))
-        audit(s,'bind SSO identity',user['username']+' → '+body.username);s.commit()
+        # Take the binding's write lock before reading it (the no-op UPDATE takes SQLite's write lock; the
+        # locking read takes the row lock and reads the latest commit on MySQL/PostgreSQL) so the replace
+        # confirmation, the write and the audited previous binding are one expected-value step: a concurrent
+        # replace that confirmed the same old binding conflicts instead of silently overwriting it.
+        s.execute(update(Setting).where(Setting.key==key).values(key=key))
+        previous=s.scalar(select(Setting).where(Setting.key==key).with_for_update().execution_options(populate_existing=True))
+        old=previous.value.get('username') if previous else None
+        if body.replace_username:
+            # An explicitly confirmed prior binding must still be the current state, including when the
+            # binding was removed meanwhile: a stale confirmation never recreates or overwrites a binding.
+            if old!=body.replace_username:
+                s.rollback()
+                raise HTTPException(409,'This subject binding changed (now '+('bound to '+old if old is not None else 'unbound')+'). Reload the bindings and retry.')
+        elif old is not None and old!=body.username:
+            s.rollback()
+            raise HTTPException(409,'This subject is already bound to '+old+'. Resend with replace_username set to confirm the replacement.')
+        if previous:previous.value={'username':body.username}
+        else:s.add(Setting(key=key,value={'username':body.username}))
+        audit(s,'bind SSO identity',user['username']+' → '+body.username+'; subject '+sso_digest(key)+'; previous '+(old or 'none'))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject was bound concurrently; reload the bindings and retry.')
+    return {'ok':True,'subject_digest':sso_digest(key)}
+
+@app.get('/api/operations/sso-bindings')
+def list_sso_bindings(user=Depends(admin_user)):
+    with Session() as s:
+        rows=s.scalars(select(Setting).where(Setting.key.like('oidc:%')).order_by(Setting.key)).all()
+        return [{'subject_digest':sso_digest(r.key),'username':r.value.get('username')} for r in rows]
+
+@app.delete('/api/operations/sso-bindings/{digest}')
+def delete_sso_binding(digest:str,user=Depends(admin_user)):
+    if not re.fullmatch(r'[0-9a-f]{16}',digest):raise HTTPException(400,'Invalid subject digest')
+    with Session() as s:
+        # Take the same write/row lock bind_sso() uses before reading, so the read, delete and audited
+        # account are one step serialized with a concurrent replacement of this subject.
+        matching=Setting.key.like('oidc:'+digest+'%')
+        s.execute(update(Setting).where(matching).values(key=Setting.key))
+        rows=s.scalars(select(Setting).where(matching).with_for_update().execution_options(populate_existing=True)).all()
+        if len(rows)!=1:s.rollback();raise HTTPException(404,'SSO binding not found')
+        old=rows[0].value.get('username');s.delete(rows[0])
+        audit(s,'remove SSO binding',user['username']+' removed subject '+digest+' → '+str(old))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject binding changed concurrently; reload the bindings and retry.')
     return {'ok':True}
 
 class SMTPInput(BaseModel):
@@ -1523,6 +1694,50 @@ def observability(host_id:str,body:ObservabilityInput,user=Depends(admin_user)):
         h.baseline=baseline
         audit(s,'configure eBPF',host_id+' '+str(body.ebpf));s.commit()
     return result
+
+class SpoolBatchInput(BaseModel):
+    batch_limit_bytes:int=Field(ge=16*1024,le=1024*1024,strict=True)
+
+@app.put('/api/operations/{host_id}/spool')
+def configure_spool(host_id:str,body:SpoolBatchInput,user=Depends(admin_user)):
+    limit = body.batch_limit_bytes
+    expected = {'configured': True, 'version': 1, 'batch_limit_bytes': limit}
+    with host_change(host_id),Session() as s:
+        h = host_or_404(s, host_id)
+        rejected = False
+        try:
+            result = ssh.call(h, {'action': 'spool-config', 'batch_limit_bytes': limit}, lifecycle_blocking=False)
+        except Exception as error:
+            if ssh.request_unstarted(error):
+                raise
+            rejected = isinstance(error, ssh.RemoteFailure)
+            result = None
+        detail = f'{host_id} batch_limit_bytes={limit}'
+        if (result != expected or result['configured'] is not True
+                or type(result['version']) is not int or type(result['batch_limit_bytes']) is not int):
+            # The bridge lock serializes this observation with the original request.
+            # A lost receipt must never cause a second configuration mutation.
+            try:
+                observed = ssh.call(h, {'action': 'spool-config-status'}, timeout=10, lifecycle_blocking=False)
+            except Exception:
+                observed = None
+            if (isinstance(observed, dict) and type(observed.get('version')) is int and observed['version'] == 1
+                    and type(observed.get('batch_limit_bytes')) is int
+                    and 16*1024 <= observed['batch_limit_bytes'] <= 1024*1024
+                    and type(observed.get('active')) is bool):
+                detail += f" observed_batch_limit_bytes={observed['batch_limit_bytes']} active={observed['active']}"
+            else:
+                observed = None
+                detail += ' target state unverified'
+            if rejected or observed is None or not observed['active'] or observed['batch_limit_bytes'] != limit:
+                audit(s, 'configure agent spool failed', detail)
+                s.commit()
+                raise HTTPException(502, 'Target did not confirm the requested spool configuration. Check collector state before retrying.')
+            detail += ' verified by readback'
+        s.merge(Setting(key='spool:'+host_id, value={'version': 1, 'batch_limit_bytes': limit}))
+        audit(s, 'configure agent spool', detail)
+        s.commit()
+    return expected
 
 class ReconcileInput(BaseModel):
     verified_target_state:bool=False
@@ -1724,10 +1939,14 @@ def security_status(host_id:str,user=Depends(admin_user)):
         legacy=s.get(Setting,'security-scan:'+host_id)
         return legacy.value if legacy else {'state':'not_scanned','findings':[],'gaps':['No security scan has completed']}
 
+def validate_scan_paths(paths):
+    from .scan_paths import canonical
+    for path in paths:
+        if not canonical(path,allow_root=True):raise ValueError('Invalid scan directory')
+
 @app.post('/api/hosts/{host_id}/security')
 def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id)
@@ -1740,8 +1959,7 @@ class YaraScanInput(SecurityScanInput):
 
 @app.post('/api/hosts/{host_id}/security/yara')
 def yara_scan_queue(host_id:str,body:YaraScanInput,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or path.startswith('//') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'),Session() as s:
         host_or_404(s,host_id)
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan','execution-scan']),Job.state.in_(['queued','running'])).limit(1)):
@@ -2504,8 +2722,7 @@ def security_policy(host_id:str,user=Depends(admin_user)):
 
 @app.put('/api/hosts/{host_id}/security/policy')
 def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_user)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096 or '\x00' in path:raise ValueError('Invalid scan directory')
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
@@ -2648,6 +2865,7 @@ def agent_action(host_id:str,action:str,user=Depends(admin_user)):
 
 
 class PersistenceApproval(BaseModel):
+    review_digest:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
     inspection_id:str=Field(max_length=36)
     evidence_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
     expected:str=Field(default='',max_length=36)
@@ -2658,14 +2876,14 @@ def get_persistence_baseline(host_id:str,user=Depends(admin_user)):
     from . import persistence
     with Session() as s:
         host_or_404(s,host_id)
-        return persistence.status(s,host_id)
+        return persistence.review(s,host_id)
 
 @app.post('/api/hosts/{host_id}/security/baseline')
 def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(admin_user)):
     from . import persistence
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
-        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'])
+        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'],body.review_digest)
         except ValueError as error:raise HTTPException(409,str(error)) from None
         s.commit()
         return {'id':identifier}
