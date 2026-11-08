@@ -62,6 +62,23 @@ def test_reuses_socket_but_not_credentials_cookies_or_redirects(provider):
     assert send(url).status_code==200 and len(clients)==2
 
 
+@pytest.mark.parametrize('value',[1,64])
+def test_configured_connection_limit_is_applied_to_new_pool(provider,monkeypatch,value):
+    url,_,clients,_=provider
+    transport.close();monkeypatch.setenv('MRPATCHY_AI_HTTP_CONNECTIONS',str(value))
+    assert send(url).status_code==200
+    limits=clients[-1][1]['limits']
+    assert limits.max_connections==limits.max_keepalive_connections==value
+
+
+@pytest.mark.parametrize('value',['0','65','-1','1.5','nan',' 4','4 '])
+def test_invalid_connection_limit_refuses_transport_before_client(monkeypatch,value):
+    transport.close();monkeypatch.setenv('MRPATCHY_AI_HTTP_CONNECTIONS',value)
+    monkeypatch.setattr(transport.httpx,'Client',lambda **kwargs:pytest.fail('invalid configuration must not create a client'))
+    with pytest.raises(ValueError,match='MRPATCHY_AI_HTTP_CONNECTIONS'):
+        send('https://example.invalid')
+
+
 def test_parallel_requests_isolate_auth_and_shutdown_waits_for_inflight(provider):
     url,calls,clients,release=provider;release.clear()
     with ThreadPoolExecutor(max_workers=5) as executor:

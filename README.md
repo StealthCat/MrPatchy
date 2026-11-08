@@ -581,9 +581,13 @@ semantics. This is a local/shared-state foundation, not remote maintenance accep
 Set startup-only `MRPATCHY_JOB_CONCURRENCY` (1–8, default 2),
 `MRPATCHY_POLL_CONCURRENCY` (1–32, default 8) and `MRPATCHY_AI_CONCURRENCY`
 (1–8, default 4; set 1 for serial operation) in `.env`, then recreate the worker.
-Direct worker/embedded processes use the same variables. Invalid values refuse
-startup. These limits size the real executors. Poll/notification work shares the
-poll pool; process investigations and update scoring share AI slots.
+Set `MRPATCHY_AI_HTTP_CONNECTIONS` (1–64, default 16) and recreate both the app
+and workers to size each process's reusable AI provider HTTP pool. Activity →
+Workers reports this transport ceiling separately from AI task capacity. Direct
+worker/embedded processes use the same variables. Invalid values refuse startup.
+The executor limits size the real worker pools; the HTTP setting does not raise
+task concurrency, override provider limits or guarantee throughput. Poll/notification
+work shares the poll pool; process investigations and update scoring share AI slots.
 
 Independent servers can undergo process triage concurrently. Each server has an
 administrator-configurable process-investigation occupancy of one to four AI slots,
