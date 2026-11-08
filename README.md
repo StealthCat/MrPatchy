@@ -985,7 +985,12 @@ and the final timing flush. Existing run-history retention applies to these metr
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
-reuse is validated; this is not a production speed or parallel-throughput promise.
+reuse is validated. Benchmark comparisons also verify that independently rounded
+run counts, elapsed time and throughput can describe the same execution before
+reporting deltas; inconsistent baseline or candidate reports are rejected while
+valid three-decimal rounding and the retained historical fixture remain accepted.
+This is fixture-report validation, not a production speed or parallel-throughput
+promise.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical

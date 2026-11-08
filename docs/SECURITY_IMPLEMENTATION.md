@@ -6283,3 +6283,24 @@ response authority. It does not complete production baseline collection, dashboa
 presentation or the faster-AI end-to-end acceptance milestone. Coordinator
 integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
 required before delivery.
+
+
+
+### AI benchmark timing-consistency gate — worker checkpoint #532
+
+The fixture-report comparison gate now reconciles each report's run count, elapsed
+time and derived throughput before emitting deltas. Because the producer rounds
+elapsed seconds and runs per second independently to three decimal places, the
+check uses the exact half-unit intervals implied by that precision instead of a
+loose percentage tolerance. A report is accepted only when those
+rounding intervals can describe the same underlying execution. This preserves the
+retained v1.22 fixture pair and values produced at either elapsed-time rounding edge,
+while rejecting understated or overstated throughput with a field-specific error.
+
+This bounded follow-up is stacked on #526/#527 and does not edit its frozen branch.
+It adds no provider call, target access, benchmark workload, production runtime,
+schema, admission or response authority. Workload fingerprints, repeated production
+measurements, dashboard presentation and the full faster-AI acceptance milestone
+remain separate and incomplete. Coordinator integration must first preserve #527,
+then remove the prerequisite diff and run every applicable exact-head check before
+delivery.
