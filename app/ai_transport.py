@@ -5,17 +5,28 @@ its own receipt. Shutdown waits for admitted sends; drain only closes an idle po
 """
 from contextlib import contextmanager
 import atexit
+import os
+import re
 import threading
 import zlib
 import httpx
 
-MAX_CONNECTIONS = 16
+DEFAULT_CONNECTIONS = 16
+MAX_CONNECTIONS = 64
+CONNECTIONS_ENV = 'MRPATCHY_AI_HTTP_CONNECTIONS'
 MAX_RESPONSE_BYTES = 2_000_000
 READ_CHUNK_BYTES = 64 * 1024
 _condition = threading.Condition()
 _client = None
 _active = 0
 _closing = False
+
+
+def connection_limit():
+    value=os.getenv(CONNECTIONS_ENV,str(DEFAULT_CONNECTIONS))
+    if not re.fullmatch(r'[0-9]{1,2}',value) or not 1<=int(value)<=MAX_CONNECTIONS:
+        raise ValueError(CONNECTIONS_ENV+' must be an integer from 1 to '+str(MAX_CONNECTIONS))
+    return int(value)
 
 
 def _safe_snapshot(response):
@@ -104,8 +115,9 @@ def _borrow():
     with _condition:
         _condition.wait_for(lambda: not _closing)
         if _client is None:
-            _client = httpx.Client(limits=httpx.Limits(max_connections=MAX_CONNECTIONS,
-                max_keepalive_connections=MAX_CONNECTIONS, keepalive_expiry=30), follow_redirects=False)
+            limit=connection_limit()
+            _client = httpx.Client(limits=httpx.Limits(max_connections=limit,
+                max_keepalive_connections=limit, keepalive_expiry=30), follow_redirects=False)
         client = _client
         _active += 1
         _condition.notify_all()
