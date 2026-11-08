@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.48.5 — 2026-11-08
+
+1. [PR #633](https://github.com/StealthCat/MrPatchy/pull/633): Update the pinned CodeQL initialization action from v3.39.1 to v4.39.3 and reconcile its inline release comment so pull-request security analysis uses the current action major and CodeQL 2.27.4 bundle line. Compatibility: this is a CI-only workflow dependency change with no application runtime, API, schema, configuration, UI, installation, admission or response-authorization impact. Material limits: the separately pinned CodeQL analysis step remains on v3.39.1 until paired PR #632 is integrated, and transient bundle-download failures remain external infrastructure conditions. This source update does not publish a Docker image.
+
 ## 1.48.4 — 2026-11-08
 
 1. [PR #525](https://github.com/StealthCat/MrPatchy/pull/525): Add a bounded `--ssh-delay-ms` option to the disposable AI triage benchmark, preserving the historical 10 ms default while recording both synthetic provider and SSH delays in JSON and testing that the selected delay retains the expected one-stage/two-stage workload, provider calls and evidence follow-up. Compatibility: this adds an optional benchmark-only CLI input and additive JSON field with no application runtime, external provider, live target, API, schema, configuration, UI, admission or response-authorization change. Material limits: results remain loopback fixture measurements, do not establish production throughput or TLS latency, and do not complete the broader faster-triage acceptance program. This source update does not publish a Docker image.
