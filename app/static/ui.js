@@ -18,13 +18,14 @@ window.PatchyUI=(()=>{
  };
  const pages={security:['Security coverage','A clearer view of every check.'],users:['Users','Good company. Clear permissions.'],history:['Package history','Every patch leaves a footprint.'],'ai-logs':['AI run logs','A closer look at the work.'],notifications:['Notifications','Mr Patchy kept a note.'],overview:['Overview','Your fleet, in good paws.'],servers:['Server fleet','A home for every machine.'],packages:['Package inventory','Every package. Every patch.'],repositories:['Repository sources','Good updates start at the source.'],investigations:['AI investigations','A curious raccoon. A closer look.'],schedules:['Patch schedules','A little planning goes a long way.'],activity:['Activity & audit','Follow every footprint.'],settings:['Workspace settings','Make yourself at home.']};
  const icon=name=>`<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.shield}</svg>`;
- const mascot=(pose='welcome',className='',alt='')=>`<img class="mascot ${className}" src="/static/mascot/mr-patchy-${pose==='working'?'working':'welcome'}.png" alt="${alt}" width="${pose==='working'?1536:1218}" height="${pose==='working'?1024:1292}" decoding="async">`;
+ const mascot=(pose='welcome',className='',alt='')=>`<img class="mascot ${className}" src="/static/mascot/mr-patchy-${pose==='working'?'working':pose==='error'?'error':'welcome'}.${pose==='error'?'webp':'png'}" alt="${alt}" width="${pose==='working'?1536:1218}" height="${pose==='working'?1024:1292}" decoding="async">`;
  const portrait=()=>`<span class="mascot-portrait" aria-hidden="true">${mascot()}</span>`;
  function heading(page,title,sub,button=''){
   const meta=pages[page]||pages.overview;
   return `<section class="heading ${page==='overview'?'heading-overview':''}" aria-labelledby="page-title"><div class="heading-copy"><div class="eyebrow">${icon(page)} ${meta[0]}</div><h1 id="page-title" tabindex="-1">${title}</h1><p>${sub}</p>${button?`<div class="heading-actions">${button}</div>`:''}</div><div class="heading-mascot" aria-hidden="true">${mascot(page==='overview'?'working':'welcome')}<span class="mascot-caption">${meta[1]}</span></div></section>`;
  }
  const empty=(title,text,action='')=>`<div class="empty">${mascot('welcome','empty-mascot')}<div><span class="eyebrow">MR PATCHY'S WORKBENCH</span><h3>${title}</h3><p>${text}</p>${action}</div></div>`;
+ const error=(title,text,action='')=>`<div class="empty error-state" role="alert">${mascot('error','empty-mascot')}<div><span class="eyebrow">MR PATCHY HIT A SNAG</span><h3>${title}</h3><p>${text}</p>${action}</div></div>`;
  const loading=()=>`<div class="loading-state" role="status">${portrait()}<div><strong>Mr Patchy is checking in…</strong><p>Gathering your workspace.</p></div><span class="loading-dots" aria-hidden="true">•••</span></div>`;
  const enrollment=step=>`<ol class="enrollment-steps" aria-label="Enrollment progress">${['Server details','Prepare target','Connect & verify'].map((label,index)=>`<li class="${index+1===step?'current':index+1<step?'done':''}" ${index+1===step?'aria-current="step"':''}><span>${index+1<step?'✓':index+1}</span>${label}</li>`).join('')}</ol>`;
  // Shared route-link navigation, using native disclosure rather than a simulated ARIA menu.
@@ -45,5 +46,5 @@ window.PatchyUI=(()=>{
  const endpoint=(address,port)=>{const a=String(address??'');return (a.includes(':')&&!a.startsWith('[')?'['+a+']':a)+(port===undefined||port===null||port===''?'':':'+port);};
  function upgradeLabel(h){const u=h&&h.os_upgrade;return u&&u.status==='available'?`Distribution upgrade available: ${u.distribution} ${u.from_version} to ${u.to_version}`:'';}
  function upgradeBadge(h){const label=upgradeLabel(h);return label?` <span class="upgrade-badge" role="img" aria-label="${esc(label)}" title="${esc(label)}">⬆</span>`:'';}
- return {esc,icon,mascot,portrait,heading,empty,loading,enrollment,pages,sectionNavigation,endpoint,upgradeBadge,upgradeLabel};
+ return {esc,icon,mascot,portrait,heading,empty,error,loading,enrollment,pages,sectionNavigation,endpoint,upgradeBadge,upgradeLabel};
 })();

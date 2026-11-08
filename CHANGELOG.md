@@ -1,8 +1,13 @@
 # Changelog
 
+## 1.44.9 — 2026-11-07
+
+1. [PR #480](https://github.com/StealthCat/MrPatchy/pull/480): Require Python 3.8 or newer at `/usr/bin/python3` before target enrollment or bridge deployment can replace helper files. Older targets, including EL8 with its default Python 3.6, now get an explicit prerequisite error. Install a suitable interpreter and, on RPM targets, its DNF4 and RPM bindings before enrolling or redeploying. The installer leaves prerequisite installation and interpreter selection to the operator. Existing authorization gates still apply. This source update does not publish a Docker image.
+
 ## 1.44.8 — 2026-11-07
 
-1. [PR #480](https://github.com/StealthCat/MrPatchy/pull/480): Refuse target enrollment and bridge deployment when `/usr/bin/python3` is older than 3.8, reporting the required version before replacing helper files, and document the target runtime minimum for RPM hosts. Compatibility: Python 3.8 and newer targets are unchanged; hosts using older interpreters, including the default Python 3.6 on EL8, must install a newer `/usr/bin/python3` before finishing enrollment or deploying updated helpers. Material limits: Mr Patchy does not install or select the replacement interpreter, offline enrollment still does not download prerequisites, and target writes, roles and runtime response authorization remain unchanged. This source update does not publish a Docker image.
+1. [PR #625](https://github.com/StealthCat/MrPatchy/pull/625): Add responsive Mr Patchy browser pages for forbidden access, missing pages, redirects and server failures, with eight themed transparent mascot illustrations. Failed application views and sign-in errors also use the new artwork. Preserve actual status codes, redirect destinations, cookies, Retry-After, security headers, API/download contracts and bodyless 304 responses; generic public messages do not disclose exception details. Pages work without JavaScript or database startup. External proxy-generated failures require that proxy's own handler; reusable static pages are included. No schema, role or runtime response-authorization changes. This source update does not publish a Docker image.
+2. Allow 45 minutes for the complete SQLite/container/HTTPS CI job after a 30-minute run passed all 2,297 Python tests but was cancelled at the end of its final TLS smoke check. All validation steps remain enabled.
 
 ## 1.44.7 — 2026-11-07
 
