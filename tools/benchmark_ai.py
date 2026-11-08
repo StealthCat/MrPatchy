@@ -1,5 +1,6 @@
 """Disposable serial/parallel triage fixture; no external provider or SSH target."""
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -15,6 +16,23 @@ from contextvars import ContextVar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def workload_fingerprint(provider_requests, ssh_requests):
+    """Hash the observed synthetic requests independently of dispatch order."""
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+    provider = []
+    for request in provider_requests:
+        evidence = json.loads(request['input'])
+        if 'investigation' in evidence:
+            evidence['investigation'].pop('collected', None)
+        provider.append(canonical({**request, 'input': evidence}))
+
+    ssh = [canonical({**request, 'checks': sorted(request['checks'])}) for request in ssh_requests]
+    workload = {'version': 1, 'provider': sorted(provider), 'ssh': sorted(ssh)}
+    return {'version': workload['version'], 'sha256': hashlib.sha256(canonical(workload).encode()).hexdigest()}
 
 
 def main():
@@ -40,7 +58,7 @@ def main():
         from app.db import init, Session, Host, Setting, Behavior, engine
         from app.security import seal
         init()
-        requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
+        requests = []; ssh_requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
 
         class Provider(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -79,6 +97,8 @@ def main():
         def ssh_fixture(*a, **kw):
             started=time.perf_counter(); time.sleep(args.ssh_delay_ms / 1000)
             samples['ssh_evidence'].append((time.perf_counter()-started)*1000)
+            _, request = a
+            ssh_requests.append(request)
             return {'identity_verified':True,'sha256':'a'*64,'executable':{'path':'/fixture/artifact','verified':True}}
         worker.ssh.call = ssh_fixture
         original_assess = worker._assess_behavior
@@ -123,6 +143,7 @@ def main():
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
             print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'runs':args.runs,'provider_calls':len(requests),
                 'connections':len(connections),'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
+                'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
                 'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'cost_status':'unavailable: synthetic model/usage, no paid API calls',

@@ -97,7 +97,13 @@ def test_tar_traversal_duplicate_and_budget():
     with pytest.raises(ValueError):list(vendor.tar_members(tar([('/absolute',b'x')])))
     out=io.BytesIO()
     with tarfile.open(fileobj=out,mode='w') as archive:
-        info=tarfile.TarInfo('huge');info.size=33*1024*1024;archive.addfile(info)
+        info=tarfile.TarInfo('huge');info.size=33*1024*1024
+        class Zeros(io.RawIOBase):
+            def __init__(self):self.left=info.size
+            def readable(self):return True
+            def readinto(self,buffer):
+                count=min(len(buffer),self.left);buffer[:count]=bytes(count);self.left-=count;return count
+        archive.addfile(info,Zeros())
     with pytest.raises(ValueError):list(vendor.tar_members(out.getvalue()))
 
 
