@@ -4416,6 +4416,32 @@ no request contents. Comparator enforcement and production measurements remain
 open.
 
 
+
+### Workload-bound AI benchmark comparison — worker checkpoint #536
+
+The fixture comparator now requires the observed version-1 workload fingerprint
+from both reports and refuses missing, malformed, unsupported or unequal values
+before emitting performance deltas. Matching call counts, token totals, stage
+sample counts and fixture delays are no longer sufficient to claim capability
+equivalence when the underlying synthetic provider or SSH request multiset differs.
+Accepted comparison output retains only the version and SHA-256 fingerprint for
+audit; it never includes the raw fixture requests. Historical reports that predate
+the fingerprint must be regenerated rather than treated as equivalent without
+evidence. Existing strict JSON, bounded-input, stage/count, cost-status and timing
+consistency validation remains. This is fixture-only tooling: it changes no
+production provider call, target access, runtime admission or response authority,
+and it does not establish production performance or complete the faster-AI gate.
+
+The seeded fixture queue age is a capability control, not a measured result, and
+the workload fingerprint does not cover it. The comparator therefore requires the
+same queue age in both reports before emitting deltas. It reads `queue_age_seconds`,
+otherwise `initial_fixture_queue_age_seconds`, otherwise the documented legacy fixed
+two-second seed; it refuses malformed or out-of-range values (integer seconds,
+0–86,400) and reports whose two queue-age fields disagree. A configured-queue-age
+pair with matching fingerprints but different seeds is refused rather than reported
+as a queue-age latency delta.
+
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
@@ -6116,6 +6142,26 @@ does not expand release support or response authority, and does not complete the
 remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
 integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
 required before this increment is delivered.
+
+
+### Configurable AI benchmark queue age — worker checkpoint #542
+
+This bounded faster-AI measurement increment lets the fixture-only serial/parallel
+benchmark seed observations with a selected synthetic queue age from zero through
+one day. The historical two-second default remains unchanged. The selected age is
+reported in the machine-readable profile and drives the existing queue-age timing,
+so paired runs can exercise fresh and delayed-backlog telemetry without sleeping or
+changing the provider, SSH-evidence, persistence, model, reasoning, evidence or
+one/two-stage workload.
+
+Focused acceptance rejects negative and excessive ages before fixture startup, then
+proves a five-second selection yields two queue-age samples at or beyond the selected
+age while preserving three provider calls and the SSH follow-up for two subjects.
+The queue age remains synthetic: it does not reproduce scheduler contention, pause,
+rate/budget deferral, provider backoff or production load, and it does not establish
+a production speedup. Coordinator integration of prerequisite #525, exact-head
+SQLite/MySQL/full-suite checks and fresh code scanning remain required before this
+increment is delivered.
 
 
 ### Retained AI spend history — worker checkpoint #372
