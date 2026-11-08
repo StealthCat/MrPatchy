@@ -474,6 +474,16 @@ retry limits and cases requiring trusted-console recovery. Manual agent upgrades
 require a review confirmation, and the check and upgrade controls stay disabled
 while either request is pending in the current Agent health view.
 
+Administrators can manage the automatic agent-upgrade and repair defaults through
+`GET/PUT /api/settings/agent-maintenance`. Both defaults remain off until explicitly
+enabled. A server inherits each global value unless its agent policy stores an
+explicit `true` or `false` override; sending `null` or omitting that field from the
+per-server update restores inheritance. Agent-health responses identify the global
+values and whether each effective value is inherited or overridden. Global saves
+use the supplied expected values and return HTTP 409 when another save wins or the
+coordination lock cannot be obtained, rather than replacing a newer policy. The
+Settings and per-server inheritance controls are not yet exposed in the web UI.
+
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact
 hash matches, path-only matches and changed bytes are labeled separately. Searches
@@ -975,7 +985,32 @@ and the final timing flush. Existing run-history retention applies to these metr
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
-reuse is validated; this is not a production speed or parallel-throughput promise.
+reuse is validated. Benchmark comparisons also verify that independently rounded
+run counts, elapsed time and throughput can describe the same execution before
+reporting deltas; inconsistent baseline or candidate reports are rejected while
+valid three-decimal rounding is accepted. Comparisons additionally require matching
+versioned SHA-256 fingerprints of the observed synthetic provider and SSH workload,
+plus matching seeded fixture queue ages; only the verified fingerprint and bounded
+queue-age controls are retained in comparison output, never raw requests. Reports
+created before workload fingerprinting must be regenerated. The benchmark producer's
+optional `--queue-age-seconds` control accepts 0 through 86,400, defaults to the
+historical two-second seed, applies to every synthetic observation and keeps
+`queue_age_seconds` synchronized with `initial_fixture_queue_age_seconds` in the
+report; invalid values are rejected before fixture startup. This control is fixture
+only: it does not reproduce scheduler contention, pause, budget/rate deferral,
+provider backoff or production load, and it is not a production speed or
+parallel-throughput promise. Comparisons also require matching synthetic
+persistence-delay controls: reported `persistence_delay_ms` values must be integers
+from 0 through 1,000, while older reports without the field use the documented
+zero-delay default. The normalized value and whether it came from the report or the
+legacy default are retained in comparison output; mismatched delays are rejected
+before any performance delta is emitted. The benchmark producer's optional
+`--persistence-delay-ms` control accepts 0 through 1,000 and defaults to zero. It
+adds the selected synthetic delay around both receipt creation and usage
+reconciliation while retaining their separate timing stages, and reports the
+configured delay plus completed and approved subject counts so serial and parallel
+fixtures can prove result equivalence. This fixture does not emulate database lock
+contention, network latency, failover or production/TLS/database performance.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical
