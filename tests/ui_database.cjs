@@ -17,6 +17,26 @@ module.exports=async(page,capture)=>{
  assert.equal(await page.locator('#database-form [name=password]').inputValue(),'');
  assert.match(await page.locator('#database-settings').textContent(),/Active: SQLite/);
  await capture('database-settings');
+ // Test connection: button is separate from Save, reports an aria-live result and discards stale results on edit.
+ let tested=0;
+ const testHandler=route=>{tested++;route.fulfill({json:{ok:true,elapsed_ms:12,detail:'Connected and ran a read-only query.',scope:'Checked from this controller only.'}});};
+ await page.route('**/api/settings/database/test',testHandler);
+ try{
+  const testButton=page.getByRole('button',{name:'Test connection',exact:true});
+  await testButton.click();
+  await page.locator('#database-test-result').filter({hasText:'Success (12 ms)'}).waitFor();
+  assert.equal(await page.locator('#database-test-result').getAttribute('aria-live'),'polite');
+  assert.equal(tested,1);
+  await page.locator('#database-form [name=host]').fill('other.example.test');
+  assert.equal(await page.locator('#database-test-result').textContent(),'');
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  await testButton.click();
+  await page.locator('#database-test-result').filter({hasText:'Success'}).waitFor();
+  await capture('database-settings-test-mobile');
+  await page.setViewportSize({width:1440,height:1000});
+  await page.locator('#database-form [name=host]').fill('mysql.example.test');
+ }finally{await page.unroute('**/api/settings/database/test',testHandler);}
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
  await page.setViewportSize({width:1440,height:1000});
