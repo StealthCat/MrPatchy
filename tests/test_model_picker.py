@@ -12,7 +12,7 @@ def test_discovery_uses_saved_key_returns_dynamic_sorted_unique_models(admin, mo
     def get(url,**kwargs):
         assert url==ai.MODELS_URL and kwargs['headers']=={'Authorization':'Bearer fixture-key'}
         return httpx.Response(200,json={'data':[{'id':x} for x in ['new-model','ft:private:model','new-model','embedding-model']]},request=httpx.Request('GET',url))
-    monkeypatch.setattr(ai.httpx,'get',get)
+    monkeypatch.setattr(ai.transport,'get',get)
     result=admin.get('/api/settings/ai-models')
     assert result.status_code==200
     assert result.json()=={'models':['embedding-model','ft:private:model','new-model'],'selected':'gone-model','selected_available':False}
@@ -22,14 +22,14 @@ def test_discovery_uses_saved_key_returns_dynamic_sorted_unique_models(admin, mo
 def test_discovery_requires_key_and_keeps_errors_redacted(admin,monkeypatch):
     assert admin.get('/api/settings/ai-models').status_code==400
     with Session() as s:s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}));s.commit()
-    monkeypatch.setattr(ai.httpx,'get',lambda *a,**k:httpx.Response(403,json={'error':{'message':'fixture-key sensitive data'}},headers={'x-request-id':'req_models'},request=httpx.Request('GET',ai.MODELS_URL)))
+    monkeypatch.setattr(ai.transport,'get',lambda *a,**k:httpx.Response(403,json={'error':{'message':'fixture-key sensitive data'}},headers={'x-request-id':'req_models'},request=httpx.Request('GET',ai.MODELS_URL)))
     response=admin.get('/api/settings/ai-models')
     assert response.status_code==502 and 'req_models' in response.text and 'fixture-key' not in response.text
 
 
 @pytest.mark.parametrize('data',[{}, {'data':{}},{'data':[{}]},{'data':[{'id':'bad <script>'}]},{'data':[None]}])
 def test_invalid_model_lists_do_not_reach_ui(data,monkeypatch):
-    monkeypatch.setattr(ai.httpx,'get',lambda *a,**k:httpx.Response(200,json=data,request=httpx.Request('GET',ai.MODELS_URL)))
+    monkeypatch.setattr(ai.transport,'get',lambda *a,**k:httpx.Response(200,json=data,request=httpx.Request('GET',ai.MODELS_URL)))
     with pytest.raises(ai.AIError,match='invalid model list'):ai.list_models('fixture-key')
 
 
