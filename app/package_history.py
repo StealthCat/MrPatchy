@@ -24,9 +24,17 @@ class PackageEvent(Base):
     actor: Mapped[str]=mapped_column(String(120),default='')
 
 
-def versions(inv, name, fallback):
+def version_index(inv):
+    """Map RPM ``name:arch`` to its sorted installed EVRs in one inventory scan."""
+    index={}
     if inv.get('package_manager')=='rpm':
-        values=sorted({p['evr'] for p in inv.get('rpm_packages',[]) if p['name']+':'+p['arch']==name})
+        for p in inv.get('rpm_packages',[]):index.setdefault(p['name']+':'+p['arch'],set()).add(p['evr'])
+    return {name:sorted(values) for name,values in index.items()}
+
+
+def versions(inv, name, fallback, index=None):
+    if inv.get('package_manager')=='rpm':
+        values=index.get(name) if index is not None else sorted({p['evr'] for p in inv.get('rpm_packages',[]) if p['name']+':'+p['arch']==name})
         if values:return values
     return [fallback] if fallback else []
 

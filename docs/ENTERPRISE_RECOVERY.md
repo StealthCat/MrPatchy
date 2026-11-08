@@ -65,7 +65,7 @@ Enabling BPF explicitly relaxes the collector's service sandbox to permit kernel
 
 ## Complete encrypted off-host recovery
 
-scripts/recovery.py uses restic for encrypted, content-verified off-host storage. It supports SFTP, S3, HTTPS REST and other listed restic remote backends. Install restic and, for MySQL, MariaDB client tools. Provision repository credentials through standard restic environment/password-file mechanisms; initialize the repository with restic init first.
+scripts/recovery.py uses restic for encrypted, content-verified off-host storage. It supports SFTP, S3, HTTPS REST and other listed restic remote backends. Install restic and, for MySQL, MariaDB client tools. The script also imports `sqlalchemy` at start-up, and `cryptography` whenever an active database profile exists, so run it from a Python environment that has the application requirements (for example `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, then use `.venv/bin/python scripts/recovery.py ...`); a stock `/usr/bin/python3` fails with `ModuleNotFoundError: No module named 'sqlalchemy'`. Provision repository credentials through standard restic environment/password-file mechanisms; initialize the repository with restic init first.
 
 Stop **all** web and worker replicas before taking a coordinated backup. Backups contain:
 - SQLite snapshot or consistent MySQL dump, including routines/events/triggers;
@@ -108,6 +108,8 @@ still apply after restart.
 
 For remote MySQL connections set MYSQL_SSL_CA; verification is mandatory. Store the restic password separately from the repository and test recovery credentials.
 
+Compose stores state in named volumes: `<project>_app-data`, `<project>_tls-config`, `<project>_caddy-data` and `<project>_caddy-config` (`<project>` is the Compose project name, by default the deployment directory name). Locate each host path with `docker volume inspect <project>_app-data --format '{{ .Mountpoint }}'`; they live under `/var/lib/docker/volumes/<name>/_data`, which is readable only by root, so run the script with `sudo` (using the venv interpreter). The `/volumes/...` paths below are placeholders for those mountpoints.
+
 ```bash
 export RESTIC_REPOSITORY='sftp:backup-host:/srv/backups/mrpatchy'
 export RESTIC_PASSWORD_FILE='/secure/restic-password'
@@ -123,7 +125,9 @@ python scripts/recovery.py activate --app-stopped --bundle /empty/recovery-stagi
   --caddy-data /empty/caddy-data --caddy-config /empty/caddy-config
 ```
 
-Backup opens an existing SQLite source read-only and checks integrity plus core application tables. Restore repeats those checks; activation validates bundle files/directories before destination mutation. Restore verifies restic content and SQLite integrity; activation refuses nonempty volume destinations and nonempty MySQL databases. When run as root it sets app/TLS ownership to UID 10001 (override with --uid). Recreate containers on the restored volumes, verify login, host-key pinning, TLS and a disposable target before resuming patching. DNS, firewall, Compose/.env secrets, restic credentials and MySQL server provisioning must be recovered through your infrastructure procedures.
+Backup refuses to run while any app or worker replica still holds the shared lock on `<data>/database-maintenance.lock`, so `--app-stopped` is verified rather than trusted. After each backup it runs a plain `restic check` (repository structure and index); `python scripts/recovery.py check` performs the full `restic check --read-data`, which downloads every pack. Schedule that full check periodically (for example weekly or monthly) and apply a retention policy yourself with `restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --prune`; the script never deletes snapshots.
+
+Backup opens an existing SQLite source read-only and checks integrity plus core application tables. Restore repeats those checks; activation validates bundle files/directories before destination mutation. Restore verifies restic content and SQLite integrity; activation refuses nonempty volume destinations and nonempty MySQL databases. When run as root it sets app/TLS ownership to UID 10001 (override with --uid). To recreate the deployment, create fresh named volumes (`docker volume create <project>_app-data`, and likewise for the TLS and Caddy volumes) or reuse empty ones, point `--data`, `--tls`, `--caddy-data` and `--caddy-config` at their mountpoints for `activate`, restore `.env`/`compose.yaml`, then run `docker compose up -d` with the same project name. Verify login, host-key pinning, TLS and a disposable target before resuming patching. DNS, firewall, Compose/.env secrets, restic credentials and MySQL server provisioning must be recovered through your infrastructure procedures.
 
 ## Validation boundaries
 
