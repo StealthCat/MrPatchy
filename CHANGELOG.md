@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.48.4 — 2026-11-08
+
+1. [PR #525](https://github.com/StealthCat/MrPatchy/pull/525): Add a bounded `--ssh-delay-ms` option to the disposable AI triage benchmark, preserving the historical 10 ms default while recording both synthetic provider and SSH delays in JSON and testing that the selected delay retains the expected one-stage/two-stage workload, provider calls and evidence follow-up. Compatibility: this adds an optional benchmark-only CLI input and additive JSON field with no application runtime, external provider, live target, API, schema, configuration, UI, admission or response-authorization change. Material limits: results remain loopback fixture measurements, do not establish production throughput or TLS latency, and do not complete the broader faster-triage acceptance program. This source update does not publish a Docker image.
+
 ## 1.48.3 — 2026-11-08
 
 1. [PR #531](https://github.com/StealthCat/MrPatchy/pull/531): Add a versioned deterministic SHA-256 workload fingerprint to disposable AI benchmark reports, computed from the observed multiset of complete synthetic provider requests and allowlisted SSH evidence requests while retaining duplicates, model, policy, schema, limits and evidence. Canonicalization ignores dispatch order, the synthetic follow-up collection timestamp and ordering within set-valued SSH checks, and reports expose only the fingerprint version and digest rather than raw requests. Compatibility: this is an additive benchmark JSON field with no application runtime, live provider or target call, API, schema, configuration, UI, admission or response-authorization change. Material limits: the digest establishes fixture-workload identity only; enforcing it during comparison remains a downstream increment, and this does not supply production measurements or complete faster-AI acceptance. This source update does not publish a Docker image.
