@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.49.7 — 2026-11-08
+
+1. [PR #523](https://github.com/StealthCat/MrPatchy/pull/523): Add an administrator-only `GET /api/ai/triage/timings` endpoint that summarizes a bounded sample of retained completed or failed process-triage timing events with per-stage sample/error counts and nearest-rank p50/p95 milliseconds. The response discloses missing-run coverage, malformed-event discards and event truncation while omitting event text, run/host identities, credentials and evidence. Compatibility: this is an additive read-only API with no schema migration, provider traffic, scheduling, admission, role, audit, authorization or response-action change. Material limits: the summary samples at most 100 runs and 2,048 events, stages may overlap, retained history can be incomplete or pruned, and it does not provide matched production serial/parallel measurements or the separately tracked dashboard presentation in #611/#612. This source update does not publish a Docker image.
+
 ## 1.49.6 — 2026-11-08
 
 1. [PR #493](https://github.com/StealthCat/MrPatchy/pull/493): Add a regression guard requiring the GCP Compose override to extend only base services and inherit, rather than replace, production capability, privilege, identity, namespace, read-only-root, temporary-filesystem, process and memory hardening. The guard also pins writable Google Cloud CLI state to the persistent `/data/gcloud` location. Compatibility: this is test-only and does not alter existing Compose output, application behavior, deployment settings, API, schema, role, audit, authorization or response handling. Material limits: the regression verifies the repository configuration structure but does not inspect a live deployment or complete the remaining GitHub security-alert inventory tracked by #201, which stays open. This source update does not publish a Docker image.
