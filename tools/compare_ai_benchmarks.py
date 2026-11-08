@@ -56,8 +56,7 @@ def _summary(report, stage, queue_age):
     if not isinstance(value, dict):
         raise ComparisonError(f'stages.{stage} must be an object')
     count = _integer(value.get('count'), f'stages.{stage}.count')
-    # Observed queue age is the seeded fixture age plus measured wait, so its
-    # bound includes the (already validated) seed.
+    # Observed queue age includes the seed and time spent in the fixture.
     max_ms = MAX_STAGE_MS + queue_age * 1000 if stage == 'queue_age' else MAX_STAGE_MS
     p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, max_ms)
     p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, max_ms)
@@ -191,10 +190,22 @@ def _validate(report, label):
     else:
         ssh_delay = 10
         ssh_delay_source = 'legacy fixed default'
+    # Reports created before the optional synthetic receipt/usage persistence
+    # delay carried no field and ran with no added delay. Treat only that
+    # documented legacy contract as zero; bound any reported value.
+    persistence_delay_source = 'report'
+    if 'persistence_delay_ms' in report:
+        persistence_delay = _bounded(
+            report['persistence_delay_ms'], f'{label}.persistence_delay_ms', 0, 1000)
+    else:
+        persistence_delay = 0
+        persistence_delay_source = 'legacy zero default'
     return {
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
         'ssh_delay_source': ssh_delay_source,
+        'persistence_delay_ms': persistence_delay,
+        'persistence_delay_source': persistence_delay_source,
         'queue_age_seconds': queue_age, 'queue_age_source': queue_age_source,
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
         'output_tokens': output_tokens, 'errors': errors,
@@ -224,7 +235,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
         raise ComparisonError('candidate must use a distinct execution configuration')
     controls = (
-        'runs', 'provider_delay_ms', 'ssh_delay_ms', 'queue_age_seconds',
+        'runs', 'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
+        'queue_age_seconds',
         'provider_calls', 'input_tokens', 'output_tokens',
     )
     for field in controls:
@@ -245,6 +257,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'provider_delay_ms': base['provider_delay_ms'],
             'ssh_delay_ms': base['ssh_delay_ms'],
             'ssh_delay_source': base['ssh_delay_source'],
+            'persistence_delay_ms': base['persistence_delay_ms'],
+            'persistence_delay_source': base['persistence_delay_source'],
             'queue_age_seconds': base['queue_age_seconds'],
             'queue_age_source': base['queue_age_source'],
             'cost_status': base['cost_status'],
@@ -255,6 +269,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'provider_delay_ms': current['provider_delay_ms'],
             'ssh_delay_ms': current['ssh_delay_ms'],
             'ssh_delay_source': current['ssh_delay_source'],
+            'persistence_delay_ms': current['persistence_delay_ms'],
+            'persistence_delay_source': current['persistence_delay_source'],
             'queue_age_seconds': current['queue_age_seconds'],
             'queue_age_source': current['queue_age_source'],
             'cost_status': current['cost_status'],
