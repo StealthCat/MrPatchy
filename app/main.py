@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.48.2'
+APP_VERSION='1.49.1'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2833,6 +2833,12 @@ def persistence_comparison(host_id:str,inspection_id:str,user=Depends(admin_user
 
 
 class AgentPolicyInput(BaseModel):
+    # None (or omitted) means "use the global default"; False/True are explicit overrides.
+    auto_upgrade:bool|None=None
+    auto_repair:bool|None=None
+    expected:dict
+
+class AgentGlobalPolicyInput(BaseModel):
     auto_upgrade:bool=False
     auto_repair:bool=False
     expected:dict
@@ -2842,6 +2848,20 @@ def agent_state(host_id:str,user=Depends(admin_user)):
     from . import agent_maintenance
     with Session() as s:return agent_maintenance.public(s,host_or_404(s,host_id))
 
+@app.get('/api/settings/agent-maintenance')
+def agent_global_policy(user=Depends(admin_user)):
+    from . import agent_maintenance
+    with Session() as s:return agent_maintenance.global_policy(s)
+
+@app.put('/api/settings/agent-maintenance')
+def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_user)):
+    from . import agent_maintenance
+    value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+    try:saved=agent_maintenance.save_global(value,body.expected,lambda s:audit(s,'agent global policy updated',json.dumps(value)))
+    except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
+    if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
+    return value
+
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
     from . import agent_maintenance
@@ -2849,12 +2869,12 @@ def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
         with Session() as s:
             host_or_404(s,host_id)
             if body.expected!=agent_maintenance.policy(s,host_id):raise HTTPException(409,'Agent policy changed; refresh before saving')
-            value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+            value={k:v for k,v in (('auto_upgrade',body.auto_upgrade),('auto_repair',body.auto_repair)) if v is not None}
             row=s.get(Setting,'agent-policy:'+host_id)
             if row:row.value=value
             else:s.add(Setting(key='agent-policy:'+host_id,value=value))
-            audit(s,'agent policy updated',host_id+' '+json.dumps(value));s.commit()
-            return value
+            audit(s,'agent policy updated',host_id+' overrides '+json.dumps(value));s.commit()
+            return agent_maintenance.public(s,host_or_404(s,host_id))['policy']
 
 @app.post('/api/hosts/{host_id}/security/agent/{action}')
 def agent_action(host_id:str,action:str,user=Depends(admin_user)):
