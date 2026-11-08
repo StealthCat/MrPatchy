@@ -84,6 +84,23 @@ def test_durable_deferral_restart_manual_floor_receipts_and_success(admin,monkey
         assert len(list(s.scalars(select(ai_runs.AICall))))==2
 
 
+def test_local_pool_timeout_keeps_triage_in_its_bounded_retry_schedule(admin, monkeypatch):
+    setup()
+
+    def pool_timeout(*args, **kwargs):
+        raise httpx.PoolTimeout('local contention')
+
+    monkeypatch.setattr(ai.transport, 'post', pool_timeout)
+    worker.investigate_one()
+
+    with Session() as session:
+        retry = session.get(ai_retry.TriageRetry, 'subject')
+        assert retry.state == 'deferred' and retry.attempts == 1
+        assert retry.next_at > time.time() and retry.provider_until == 0
+        assert session.get(ai_provider_backoff.ProviderBackoff, 'global') is None
+        assert session.get(Behavior, 'subject').approved is False
+
+
 def test_configuration_block_does_not_starve_other_work_and_key_change_recovers(admin,monkeypatch):
     setup();calls=[]
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:calls.append(1) or response(429,'insufficient_quota'))
