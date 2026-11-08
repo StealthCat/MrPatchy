@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.46.1 — 2026-11-07
+
+1. [PR #480](https://github.com/StealthCat/MrPatchy/pull/480): Require target `/usr/bin/python3` 3.8 or newer before enrollment or helper deployment. The installer and current bridge reject older interpreters with a clear message, while deployments through bridges installed before this release use the existing compile-before-write step to refuse the new helper payload before replacing any managed file; the controller translates that refusal into the same actionable requirement. Python 3.8-or-newer targets are unchanged. Hosts such as EL8 with the default Python 3.6 must install a supported interpreter before finishing enrollment. This update does not install or upgrade Python, add legacy EL8 runtime support, alter forced-command or response authorization boundaries, or publish a Docker image.
+
 ## 1.46.0 — 2026-11-07
 
 1. [PR #628](https://github.com/StealthCat/MrPatchy/pull/628): Complete ordered file-provenance review for startup baselines and explicitly requested startup advisory plans. Baseline review now checks retained authenticated artifact hashes before conservative strict known-good eligibility, keeps metadata-only or mismatched files unresolved, and displays the assessment before manual approval. Browser approvals bind the displayed provenance digest so a changed review must be refreshed. Startup AI receives bounded, digest-bound assessments for current and approved inventories, and provenance changes invalidate in-flight results. Existing API clients may omit the additive review digest and retain the inventory-bound approval contract. No schema or target-collector migration is required. Coverage remains limited to retained operator-managed artifacts and recorded inventories; authenticated bytes do not establish safe behavior, approve a baseline, or authorize response actions. This source update does not publish a Docker image.
