@@ -1004,7 +1004,13 @@ persistence-delay controls: reported `persistence_delay_ms` values must be integ
 from 0 through 1,000, while older reports without the field use the documented
 zero-delay default. The normalized value and whether it came from the report or the
 legacy default are retained in comparison output; mismatched delays are rejected
-before any performance delta is emitted.
+before any performance delta is emitted. The benchmark producer's optional
+`--persistence-delay-ms` control accepts 0 through 1,000 and defaults to zero. It
+adds the selected synthetic delay around both receipt creation and usage
+reconciliation while retaining their separate timing stages, and reports the
+configured delay plus completed and approved subject counts so serial and parallel
+fixtures can prove result equivalence. This fixture does not emulate database lock
+contention, network latency, failover or production/TLS/database performance.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical
