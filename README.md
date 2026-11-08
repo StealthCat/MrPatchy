@@ -474,6 +474,16 @@ retry limits and cases requiring trusted-console recovery. Manual agent upgrades
 require a review confirmation, and the check and upgrade controls stay disabled
 while either request is pending in the current Agent health view.
 
+Administrators can manage the automatic agent-upgrade and repair defaults through
+`GET/PUT /api/settings/agent-maintenance`. Both defaults remain off until explicitly
+enabled. A server inherits each global value unless its agent policy stores an
+explicit `true` or `false` override; sending `null` or omitting that field from the
+per-server update restores inheritance. Agent-health responses identify the global
+values and whether each effective value is inherited or overridden. Global saves
+use the supplied expected values and return HTTP 409 when another save wins or the
+coordination lock cannot be obtained, rather than replacing a newer policy. The
+Settings and per-server inheritance controls are not yet exposed in the web UI.
+
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact
 hash matches, path-only matches and changed bytes are labeled separately. Searches
@@ -975,7 +985,12 @@ and the final timing flush. Existing run-history retention applies to these metr
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
-reuse is validated; this is not a production speed or parallel-throughput promise.
+reuse is validated. Benchmark comparisons also verify that independently rounded
+run counts, elapsed time and throughput can describe the same execution before
+reporting deltas; inconsistent baseline or candidate reports are rejected while
+valid three-decimal rounding and the retained historical fixture remain accepted.
+This is fixture-report validation, not a production speed or parallel-throughput
+promise.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical
