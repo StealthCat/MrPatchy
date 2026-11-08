@@ -4,8 +4,12 @@ import fcntl
 import json
 import os
 import ssl
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
+from threading import BoundedSemaphore
+import time
 
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field, ConfigDict
@@ -120,6 +124,19 @@ def stage(body):
 
 
 TEST_TIMEOUT = 5
+_TEST_SLOTS = BoundedSemaphore(2)
+TEST_SCOPE = 'Result describes connectivity from this controller only, not other workers or HA members.'
+_TEST_DETAILS = {
+    'ok': 'Connected, authenticated and ran a read-only query. This does not prove migration privileges, schema compatibility or HA readiness.',
+    'busy': 'Other connection tests are in progress on this controller. Try again shortly.',
+    'timeout': 'The connection test timed out. Check the host, port and firewall.',
+    'authentication': 'Authentication failed. Check the username and password.',
+    'database': 'The database does not exist. Create it first.',
+    'access': 'The account cannot access this database.',
+    'tls': 'TLS verification failed. Check the CA file and that the host name matches the certificate.',
+    'connectivity': 'Could not reach the database host. Check the host name, port and network access.',
+    'error': 'The connection test failed. Check the database settings.',
+}
 
 
 def test_connection(body):
@@ -128,50 +145,42 @@ def test_connection(body):
     Never writes settings, creates objects or returns driver text; the result only
     proves this controller can authenticate and run SELECT 1 against the database.
     """
-    import time
-    import pymysql
     if body.backend != 'mysql': raise ValueError('Only MySQL destinations can be tested')
     values = _mysql_profile(body, read_profile('target') or {})
     url = make_url(profile_url(values))
-    query = dict(url.query) | {'connect_timeout': str(TEST_TIMEOUT), 'read_timeout': str(TEST_TIMEOUT), 'write_timeout': str(TEST_TIMEOUT)}
+    kwargs = dict(host=url.host, port=url.port, user=url.username, password=url.password or '', database=url.database,
+                  charset='utf8mb4', connect_timeout=TEST_TIMEOUT, read_timeout=TEST_TIMEOUT, write_timeout=TEST_TIMEOUT,
+                  autocommit=False, read_default_file=None)
+    if values['tls']:
+        kwargs.update(ssl_ca=url.query['ssl_ca'], ssl_verify_cert=True, ssl_verify_identity=True)
     started = time.monotonic()
-    connection = None
+    category = 'busy'
+    if _TEST_SLOTS.acquire(blocking=False):
+        try:
+            category = _run_mysql_probe(kwargs)
+        finally:
+            _TEST_SLOTS.release()
+    result = {'ok': category == 'ok', 'category': category, 'scope': TEST_SCOPE, 'detail': _TEST_DETAILS[category]}
+    if result['ok']:
+        result['elapsed_ms'] = int((time.monotonic() - started) * 1000)
+    return result
+
+
+def _run_mysql_probe(kwargs):
+    # Killing and reaping the child stops DNS and network activity before the slot is released.
+    # Pass credentials through stdin, and accept only a fixed category from the child.
     try:
-        kwargs = dict(host=url.host, port=url.port, user=url.username, password=url.password or '', database=url.database,
-                      charset='utf8mb4', connect_timeout=TEST_TIMEOUT, read_timeout=TEST_TIMEOUT, write_timeout=TEST_TIMEOUT,
-                      autocommit=False, read_default_file=None)
-        if values['tls']:
-            kwargs.update(ssl_ca=query['ssl_ca'], ssl_verify_cert=True, ssl_verify_identity=True)
-        connection = pymysql.connect(**kwargs)
-        with connection.cursor() as cursor:
-            cursor.execute('SELECT 1')
-            cursor.fetchone()
-    except Exception as error:
-        return {'ok': False, **_classify(error), 'scope': TEST_SCOPE}
-    finally:
-        if connection is not None:
-            try: connection.close()
-            except Exception: pass
-    return {'ok': True, 'category': 'ok', 'elapsed_ms': int((time.monotonic() - started) * 1000), 'scope': TEST_SCOPE,
-            'detail': 'Connected, authenticated and ran a read-only query. This does not prove migration privileges, schema compatibility or HA readiness.'}
-
-
-TEST_SCOPE = 'Result describes connectivity from this controller only, not other workers or HA members.'
-
-
-def _classify(error):
-    code = error.args[0] if getattr(error, 'args', None) and isinstance(error.args[0], int) else None
-    text = str(error).lower()
-    if code in (1045, 1698): return {'category': 'authentication', 'detail': 'Authentication failed. Check the username and password.'}
-    if code == 1049: return {'category': 'database', 'detail': 'The database does not exist. Create it first.'}
-    if code in (1044, 1142, 1227): return {'category': 'access', 'detail': 'The account cannot access this database.'}
-    if isinstance(error, ssl.SSLError) or 'ssl' in text or 'certificate' in text or 'tls' in text:
-        return {'category': 'tls', 'detail': 'TLS verification failed. Check the CA file and that the host name matches the certificate.'}
-    if code in (2003, 2005, 2002, 2006, 2013) or isinstance(error, (OSError, TimeoutError)) or 'timed out' in text:
-        if 'timed out' in text or isinstance(error, TimeoutError):
-            return {'category': 'timeout', 'detail': 'The connection timed out. Check the host, port and firewall.'}
-        return {'category': 'connectivity', 'detail': 'Could not reach the database host. Check the host name, port and network access.'}
-    return {'category': 'error', 'detail': 'The connection test failed. Check the database settings.'}
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name('database_probe.py'))],
+            input=json.dumps(kwargs).encode(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=TEST_TIMEOUT, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 'timeout'
+    except OSError:
+        return 'error'
+    category = result.stdout.decode('ascii', errors='replace').strip()
+    return category if result.returncode == 0 and category in _TEST_DETAILS else 'error'
 
 
 def profile_url(profile):

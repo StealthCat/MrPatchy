@@ -1,15 +1,19 @@
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from threading import Event
 
 import pytest
 from sqlalchemy import Boolean, Double, Integer, JSON, Numeric, create_engine, select
 from sqlalchemy.engine import make_url
 
-from app import database_config as settings, database_migrate as migration
+from app import database_config as settings, database_migrate as migration, database_probe
 from app.db import DATA, Base
 from app.security import seal, unseal
 
@@ -243,6 +247,7 @@ def patch_connect(monkeypatch, outcome):
         if isinstance(outcome, Exception): raise outcome
         c = FakeConnection(log); connections.append(c); return c
     monkeypatch.setattr(pymysql, 'connect', connect)
+    monkeypatch.setattr(settings, '_run_mysql_probe', database_probe.probe)
     return calls, log, connections
 
 
@@ -291,3 +296,79 @@ def test_connection_password_rules_and_sqlite_rejected(admin, isolated_profiles,
 
 def test_connection_requires_administrator(client):
     assert client.post('/api/settings/database/test', json=mysql_body()).status_code in (401, 403)
+
+
+def test_connection_probe_deadline_cancels_fragmented_handshake(monkeypatch, isolated_profiles):
+    monkeypatch.setattr(settings, 'TEST_TIMEOUT', 2)
+    delay = settings.TEST_TIMEOUT * 0.65
+
+    def slow_server(listener):
+        with listener.accept()[0] as peer:
+            # Each read takes less than the driver timeout, but together they exceed the deadline.
+            error_packet = b'\xff\x15\x04#28000Synthetic authentication refusal'
+            time.sleep(delay)
+            try:
+                peer.sendall(len(error_packet).to_bytes(3, 'little') + b'\x00')
+                peer.settimeout(delay)
+                return peer.recv(1) == b''
+            except ConnectionResetError:
+                return True
+            except TimeoutError:
+                peer.sendall(error_packet)
+                return False
+
+    with socket.create_server(('127.0.0.1', 0)) as listener, ThreadPoolExecutor(1) as pool:
+        listener.settimeout(5)
+        server = pool.submit(slow_server, listener)
+        result = settings.test_connection(settings.DatabaseInput(**mysql_body(
+            host='127.0.0.1', port=listener.getsockname()[1], tls=False,
+        )))
+        assert result['category'] == 'timeout'
+        assert server.result(timeout=5), 'Timed-out probe left the connection open'
+
+
+def test_connection_probe_bounds_concurrency_and_releases_slots(monkeypatch, isolated_profiles):
+    started, release = Event(), Event()
+
+    def run_probe(kwargs):
+        started.set()
+        assert release.wait(timeout=5)
+        return 'timeout'
+
+    monkeypatch.setattr(settings, '_TEST_SLOTS', settings.BoundedSemaphore(1))
+    monkeypatch.setattr(settings, '_run_mysql_probe', run_probe)
+    body = settings.DatabaseInput(**mysql_body(tls=False))
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(settings.test_connection, body)
+        try:
+            assert started.wait(timeout=5)
+            assert settings.test_connection(body)['category'] == 'busy'
+        finally:
+            release.set()
+        assert first.result(timeout=5)['category'] == 'timeout'
+    assert settings.test_connection(body)['category'] == 'timeout'
+
+
+def test_probe_subprocess_never_puts_secrets_in_command_or_response(monkeypatch):
+    def run(command, *, input, stdout, stderr, timeout, check):
+        assert all('fixture-secret' not in arg for arg in command)
+        assert json.loads(input)['password'] == 'fixture-secret'
+        assert stderr == subprocess.DEVNULL
+        return subprocess.CompletedProcess(command, 0, b'raw driver error: fixture-secret')
+
+    monkeypatch.setattr(settings.subprocess, 'run', run)
+    assert settings._run_mysql_probe({'password': 'fixture-secret'}) == 'error'
+
+
+@pytest.mark.skipif(not os.getenv('TEST_DATABASE_URL', '').startswith('mysql'), reason='MySQL service required')
+def test_connection_probe_with_live_mysql(admin, isolated_profiles):
+    url = make_url(os.environ['TEST_DATABASE_URL'])
+    body = mysql_body(host=url.host, port=url.port or 3306, database=url.database,
+                      username=url.username, password=url.password, tls=False)
+    before = settings.runtime_url()
+    success = admin.post('/api/settings/database/test', json=body)
+    assert success.status_code == 200 and success.json()['category'] == 'ok'
+    failure = admin.post('/api/settings/database/test', json={**body, 'password': 'deliberately-wrong'})
+    assert failure.status_code == 200 and failure.json()['category'] == 'authentication'
+    assert settings.runtime_url() == before
+    assert not (isolated_profiles / 'database-target.json').exists()
