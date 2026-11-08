@@ -2237,6 +2237,23 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### SSH evidence delay in the triage benchmark — worker checkpoint #524
+
+`tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
+remains 10 ms. Both simulated delays are included in the JSON report. For a
+matched SSH-heavy serial/parallel comparison, run the same eight investigations
+with the same provider and SSH delays:
+
+```sh
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 1
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 4
+```
+
+Check that both reports retain the same provider call count and one-stage and
+two-stage workload before comparing their stage percentiles and throughput.
+These are loopback and stubbed SSH measurements. Production comparison remains
+open.
+
 ### Bounded same-server process triage — worker checkpoint #379
 
 This bounded threaded-execution increment permits two independent renewable process-
@@ -4386,6 +4403,17 @@ bounded shutdown. Existing discovery route/role and redaction coverage remains i
 place. This is a finite safe-transport improvement; it does not establish provider
 availability, guarantee throughput, change AI concurrency or complete the faster-AI
 performance program. No schema, UI, target helper or agent change is required.
+
+### Observed AI benchmark workload fingerprint — worker checkpoint #530
+
+Fixture reports include `workload_fingerprint` with a version and SHA-256 value.
+Compare the full field across matched runs. It covers the actual synthetic model
+requests and SSH evidence requests, including duplicates, and excludes dispatch
+order, the fixture collection timestamp and ordering within the SSH check set.
+A mismatch identifies a workload difference even when token and call counts
+match. Compare delay settings and capability counts separately. Reports expose
+no request contents. Comparator enforcement and production measurements remain
+open.
 
 
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity

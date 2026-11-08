@@ -1,5 +1,6 @@
 """Disposable serial/parallel triage fixture; no external provider or SSH target."""
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -17,17 +18,38 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+def workload_fingerprint(provider_requests, ssh_requests):
+    """Hash the observed synthetic requests independently of dispatch order."""
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+    provider = []
+    for request in provider_requests:
+        evidence = json.loads(request['input'])
+        if 'investigation' in evidence:
+            evidence['investigation'].pop('collected', None)
+        provider.append(canonical({**request, 'input': evidence}))
+
+    ssh = [canonical({**request, 'checks': sorted(request['checks'])}) for request in ssh_requests]
+    workload = {'version': 1, 'provider': sorted(provider), 'ssh': sorted(ssh)}
+    return {'version': workload['version'], 'sha256': hashlib.sha256(canonical(workload).encode()).hexdigest()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runs', type=int, default=8)
     parser.add_argument('--concurrency', type=int, default=1)
     parser.add_argument('--provider-delay-ms', type=int, default=20)
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
+    parser.add_argument('--ssh-delay-ms', type=int, default=10,
+                        help='simulated latency of a follow-up SSH evidence request (default: 10)')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
     if not 1<=args.concurrency<=8:parser.error('--concurrency must be between 1 and 8')
     if not 1<=args.provider_delay_ms<=1000:parser.error('--provider-delay-ms must be between 1 and 1000')
     if not 0<=args.persistence_delay_ms<=1000:parser.error('--persistence-delay-ms must be between 0 and 1000')
+    if not 0 <= args.ssh_delay_ms <= 1000:
+        parser.error('--ssh-delay-ms must be between 0 and 1000')
     begin=ContextVar('benchmark_begin');two_stage=ContextVar('benchmark_two_stage',default=False)
     # Set before importing runtime modules; never inherit a deployment database.
     with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory:
@@ -38,7 +60,7 @@ def main():
         from app.db import init, Session, Host, Setting, Behavior, engine
         from app.security import seal
         init()
-        requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
+        requests = []; ssh_requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
 
         class Provider(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -77,8 +99,10 @@ def main():
             stage='receipt_persistence' if name=='request_started' else 'usage_persistence'
             setattr(ai_runs,name,wrap_stage(stage,getattr(ai_runs,name)))
         def ssh_fixture(*a, **kw):
-            started=time.perf_counter(); time.sleep(.01)
+            started=time.perf_counter(); time.sleep(args.ssh_delay_ms / 1000)
             samples['ssh_evidence'].append((time.perf_counter()-started)*1000)
+            _, request = a
+            ssh_requests.append(request)
             return {'identity_verified':True,'sha256':'a'*64,'executable':{'path':'/fixture/artifact','verified':True}}
         worker.ssh.call = ssh_fixture
         original_assess = worker._assess_behavior
@@ -123,13 +147,14 @@ def main():
             def summary(values):
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
-            print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'runs':args.runs,'provider_calls':len(requests),
+            print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'runs':args.runs,'provider_calls':len(requests),
                 'connections':len(connections),'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
+                'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
                 'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'completed_subjects':completed_subjects,'approved_subjects':approved_subjects,
                 'errors':0,'cost_status':'unavailable: synthetic model/usage, no paid API calls','initial_fixture_queue_age_seconds':2,
-                'notes':'Loopback configurable provider, optional synthetic receipt/usage persistence delay and 10ms SSH fixtures; no production/TLS/database speed claim. Each subject has an independent server. Admission includes lock/query/run creation; run includes persistence.'},indent=2))
+                'notes':'Loopback provider and SSH delays and the optional receipt/usage persistence delay are synthetic; no production/TLS/database speed claim. Each subject has an independent server. Admission includes lock/query/run creation; run includes persistence.'},indent=2))
         finally:
             if hasattr(ai,'transport'):ai.transport.close()
             server.shutdown();server.server_close();thread.join();engine.dispose()
