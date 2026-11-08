@@ -2,6 +2,7 @@
 """Encrypted off-host app/TLS/DB recovery through restic. Run with all app/workers stopped."""
 import argparse
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -161,6 +162,15 @@ def active_database_url(data):
 
 def backup(data,tls,caddy_data,caddy_config):
     remote()
+    # Every live app and worker holds a shared lock on this file, so an exclusive
+    # lock proves the deployment is offline instead of trusting --app-stopped (#409).
+    descriptor=os.open(Path(data)/'database-maintenance.lock',os.O_RDWR|os.O_CREAT,0o600)
+    try:
+        try:fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except OSError:raise ValueError('Stop all app and worker replicas before backup: the maintenance lock is held') from None
+        backup_locked(data,tls,caddy_data,caddy_config)
+    finally:os.close(descriptor)
+def backup_locked(data,tls,caddy_data,caddy_config):
     with tempfile.TemporaryDirectory(prefix='mrpatchy-recovery-') as temporary:
         root=Path(temporary);bundle=root/'bundle';bundle.mkdir(mode=0o700)
         data=Path(data);url=active_database_url(data)
@@ -203,7 +213,9 @@ def backup(data,tls,caddy_data,caddy_config):
         read_manifest(bundle)
         # Stable relative archive path independent of temporary directory.
         run(['restic','backup','--tag','mrpatchy','bundle'],cwd=root)
-        run(['restic','check','--read-data'])
+        # Reading every pack of every snapshot grows with history; the explicit
+        # `check` action still does the full --read-data verification.
+        run(['restic','check'])
 def restore(snapshot,destination):
     remote();destination=Path(destination)
     if destination.exists() and any(destination.iterdir()):raise ValueError('Restore destination must be empty')

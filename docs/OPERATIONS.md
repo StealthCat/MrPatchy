@@ -62,13 +62,15 @@ Recreate the deployment with matching volumes and database, then check host fing
 
 ## Password reset
 
-There is no unauthenticated password-reset endpoint. With trusted shell access to the Docker host:
+There is no unauthenticated password-reset endpoint. With trusted shell access to the Docker host, from the deployment directory, use the supported helper (it takes the maintenance lock, syncs the legacy `Setting("admin")` hash, revokes the account's sessions and audits the change):
 
 ```bash
-docker compose exec -u mrpatchy app python -c 'import getpass; from app.db import Session,audit; from app.identity import User; from app.security import password_hash; p=getpass.getpass("New administrator password: "); assert len(p)>=12; s=Session(); u=s.get(User,"admin"); assert u is not None; u.password=password_hash(p); u.generation+=1; audit(s,"console password reset","admin"); s.commit(); s.close()'
+./reset-admin-password.sh                       # default administrator "admin"
+./reset-admin-password.sh --username alice      # another existing administrator
+./reset-admin-password.sh --username alice --reset-mfa --enable   # explicit MFA/disabled-state recovery
 ```
 
-This resets the named account and invalidates its existing sessions. It retains MFA. If MFA recovery is needed, use a separate trusted-console procedure to clear that account’s OTP fields and increment its session generation; changing the legacy `Setting("admin")` hash does not reset a named user.
+MFA and disabled status are preserved unless `--reset-mfa` / `--enable` are given. See "Reset an administrator password locally" in the README for `--password-stdin`, `MRPATCHY_PROJECT_DIR` and direct (non-Docker) installations (`python -m app.admin_reset`).
 
 ## Remove a target's access
 
