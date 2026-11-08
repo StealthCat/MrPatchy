@@ -14,15 +14,14 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 
 ## License
 
-**Free for individual, personal, noncommercial use. Commercial and organizational
-use requires a separate paid license before deployment.**
+**Free for personal, noncommercial use and for nonprofits and local governments
+running their own systems. Commercial use and other organizational use require a
+separate paid license before deployment.**
 
-See [LICENSE](LICENSE) for the full Mr Patchy Personal and Commercial License v1.0
+See [LICENSE](LICENSE) for the full Mr Patchy Personal and Commercial License v1.1
 and [COMMERCIAL.md](COMMERCIAL.md) for examples and commercial-license requests.
-A personal homelab or private household is free; employer/client systems, paid
-services and organizational deployments require a paid agreement or a separate
-written exception. Pricing and scope are agreed in writing with Robert Cronin
-through the [official project](https://github.com/StealthCat/MrPatchy/issues).
+Pricing and scope are agreed in writing with Robert Cronin through the
+[official project](https://github.com/StealthCat/MrPatchy/issues).
 
 This is source-available software with commercial-use restrictions. Third-party
 licenses and earlier valid license grants remain unchanged. New contributions
@@ -165,7 +164,7 @@ For a script stored elsewhere, set `MRPATCHY_PROJECT_DIR` to the deployment dire
 
 ## Enroll a server in three steps
 
-Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed already. Debian-family targets need dpkg; RPM targets need `python3-dnf` and `python3-rpm` (including Fedora with DNF5). SELinux-enabled targets need `policycoreutils-python-utils`. See [RPM setup and support boundaries](docs/RPM_SUPPORT.md). Offline preparation does not download missing prerequisites.
+Targets need systemd, Python 3.8 or newer at `/usr/bin/python3`, OpenSSH server, sudo and OpenSSL installed already. Debian-family targets need dpkg; RPM targets need `python3-dnf` and `python3-rpm` (including Fedora with DNF5). SELinux-enabled targets need `policycoreutils-python-utils`. Enrollment and deployment refuse older interpreters before replacing managed helpers; install a supported Python version first. See [RPM setup and support boundaries](docs/RPM_SUPPORT.md). Offline preparation does not download missing prerequisites.
 
 1. **Endpoint:** select **Add server** and enter a name, IP/hostname and SSH port.
 2. **Prepare:** download the personalized Bash script, transfer it to the target and run `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, its public SSH key, the root-owned bridge and restricted sudo permissions. The script performs no downloads, APT queries or callbacks. Click **I ran the script · Proceed to step 3**. Curl and ordinary-download delivery use the same bootstrap; curl links expire after one hour. In curl mode, select **Fetch from HTTPS endpoint**: the default `PUBLIC_URL`, **Internal HTTPS**, or **External HTTPS**. Enabled profiles use their configured hostname and browser-facing port. Choose an address reachable from the target; for a private CA, use curl’s `--cacert /path/to/ca.pem` with a trusted bundle for the site certificate.
@@ -303,6 +302,8 @@ Optional bpftrace exec capture retains short-lived observations. Unverifiable id
 Process triage checks retained, controller-authenticated Debian and RPM artifact manifests against the recorded executable SHA-256 first. It then checks the exact known-good cache and uses AI for unresolved behavior. A hash mismatch against the newest authenticated artifact bypasses cache reuse. A matching hash verifies the recorded bytes against the artifact; it cannot establish that the process behaved safely.
 
 Administrators can open **File status** from fleet or server navigation and the corresponding Overview. Filter recorded managed, startup, vendor-inspected and process files by path or status. The views show hashes, evidence sources, assessment history, baseline comparison, freshness and coverage gaps. They use stored evidence and make no target or AI-provider requests. Coverage depends on recorded observations and retained artifacts, and baseline approval stays manual.
+
+Before a manual startup-baseline approval, the baseline review resolves retained authenticated artifact hashes first and then applies the strict known-good eligibility rules. Startup metadata without the complete verified process context remains an explicit cache miss, and a hash mismatch bypasses reuse. The browser submits a digest of the displayed provenance review and requires a refresh if that evidence changes. Existing API clients may omit this additive digest and keep the inventory-bound approval contract. An explicitly requested startup advisory plan receives bounded assessments for the current and approved inventories; omitted entries remain bound through a digest, and changed provenance invalidates the generated plan. These checks never turn authentic bytes into safe behavior, approve a baseline, invoke AI while merely viewing the review, or authorize a response action.
 
 Open **Settings → AI & models** and use **Save API key** first; no valid model is required to save a key. Click **Refresh available models** and choose a model, or select **Enter a model ID manually** if discovery is unavailable. **Save AI settings** only persists your choice; **Save and test selected model** saves it first and then tests that exact model. A provider error never rolls back the save. Results identify the tested model and retain the request ID when supplied; user-visible provider failures are limited to bounded diagnostics explicitly created by Mr Patchy, while unexpected exception text is replaced with a fixed message. The list comes from your key’s accessible models; it does not certify Responses API/structured-output compatibility. A saved model missing from the list is marked unavailable without silently selecting a replacement. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Process-investigation evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent by that workflow. Release configuration planning separately sends eligible configuration text, as disclosed before planning. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
 
@@ -580,9 +581,13 @@ semantics. This is a local/shared-state foundation, not remote maintenance accep
 Set startup-only `MRPATCHY_JOB_CONCURRENCY` (1–8, default 2),
 `MRPATCHY_POLL_CONCURRENCY` (1–32, default 8) and `MRPATCHY_AI_CONCURRENCY`
 (1–8, default 4; set 1 for serial operation) in `.env`, then recreate the worker.
-Direct worker/embedded processes use the same variables. Invalid values refuse
-startup. These limits size the real executors. Poll/notification work shares the
-poll pool; process investigations and update scoring share AI slots.
+Set `MRPATCHY_AI_HTTP_CONNECTIONS` (1–64, default 16) and recreate both the app
+and workers to size each process's reusable AI provider HTTP pool. Activity →
+Workers reports this transport ceiling separately from AI task capacity. Direct
+worker/embedded processes use the same variables. Invalid values refuse startup.
+The executor limits size the real worker pools; the HTTP setting does not raise
+task concurrency, override provider limits or guarantee throughput. Poll/notification
+work shares the poll pool; process investigations and update scoring share AI slots.
 
 Independent servers can undergo process triage concurrently. Each server has an
 administrator-configurable process-investigation occupancy of one to four AI slots,
