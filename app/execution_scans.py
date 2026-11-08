@@ -14,6 +14,7 @@ from .db import Base,Session,Host,Job,Setting,audit
 from . import host_lifecycle,incidents,operations
 from .coordination import Lock
 from target.agent import scan_excluded
+from .scan_paths import canonical
 
 DEFAULT={'enabled':False,'paths':['/usr/local/bin','/tmp'],'debounce_seconds':30,'cooldown_minutes':15,'max_per_hour':4,'revision':'','activated':0}
 MAX_PENDING=128
@@ -41,12 +42,6 @@ class Trigger(Base):
 def policy(s,host_id):
     row=s.get(Setting,'execution-scan-policy:'+host_id)
     return {**DEFAULT,**(row.value if row else {})}
-
-
-def canonical(path):
-    return (isinstance(path,str) and 1<len(path)<=4096 and path.startswith('/') and not path.startswith('//')
-        and str(PurePosixPath(path))==path and '..' not in PurePosixPath(path).parts
-        and not any(ord(c)<32 or ord(c)==127 for c in path) and not scan_excluded(PurePosixPath(path)))
 
 
 def paths_valid(paths):
