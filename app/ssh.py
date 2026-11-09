@@ -158,6 +158,9 @@ def _call(host, payload, timeout=60, key_file=None, stage=None, deadline=None):
     except paramiko.AuthenticationException as error:
         raise RuntimeError('SSH authentication rejected for drpatch. Re-run this server’s installer from a trusted console and verify its local account/key. On GCP, check OS Login username/UID conflicts and guest-agent key management; IAP does not replace SSH authentication.') from error
     except (socket.timeout, paramiko.ssh_exception.NoValidConnectionsError, socket.gaierror) as error:
+        if stage.get('started') and isinstance(error,TimeoutError):
+            # The command was already requested: this is a deadline/idle timeout, not a connection failure.
+            raise RuntimeError('SSH '+str(payload.get('action','request'))+' exceeded its '+str(int(timeout))+' s deadline; the remote outcome is unknown. Verify target state before retrying.') from error
         hint=('Check the runtime gcloud identity, IAP tunnel permissions, VM state and IAP firewall rule.'
               if route.transport=='gcp_iap' else 'Check the saved address/port, VM state, routing and SSH firewall. GCP ephemeral external IPs can change after stop/start.')
         raise RuntimeError('SSH connection unavailable. '+hint+' Verify target operation state before retrying a patch.') from error
@@ -181,6 +184,8 @@ def expected_files(host):
     if optional in host.baseline:files[optional]=host.baseline[optional]
     return files
 
+TARGET_PYTHON_TOO_OLD='Mr Patchy target helpers require Python 3.8 or newer at /usr/bin/python3 (EL8 ships 3.6 by default). The target refused the deployment before replacing any helper. Install a newer python3 and finish installation again.'
+
 def deploy(host):
     from target.bridge import UNIT
     code=(TARGET/'agent.py').read_bytes()
@@ -191,10 +196,19 @@ def deploy(host):
     payload={'action':'deploy','rpm_support':base64.b64encode(rpm_code).decode(),'rpm_sha256':expected['rpm_sha256'],'agent':base64.b64encode(code).decode(),'sha256':expected['deployed'],
                       'bridge':base64.b64encode(bridge).decode(),'bridge_sha256':expected['bridge_sha256'],
                       'unit':UNIT,'unit_sha256':expected['unit_sha256'],'release':base64.b64encode(release).decode(),'release_sha256':expected['release_sha256']}
-    result=call(host,payload)
+    def send():
+        try:return call(host,payload)
+        except RuntimeError as error:
+            # The central agent.py always compiles on Python >=3.8, so a target-side
+            # syntax rejection of it means the target interpreter is older. Bridges
+            # compile every payload before replacing any file, so nothing was written.
+            if 'invalid syntax (agent.py' not in str(error):raise
+            refused=RuntimeError(TARGET_PYTHON_TOO_OLD);refused.remote_started=getattr(error,'remote_started',True)
+            raise refused from error
+    result=send()
     if result.get('bridge_sha256')==expected['bridge_sha256'] and ('release_sha256' not in result or 'rpm_sha256' not in result):
         # Older bridges accept their own replacement before understanding runner deployment.
-        result=call(host,payload)
+        result=send()
     if result.get('bridge_sha256') is None:
         raise RuntimeError('Target uses the legacy bootstrap bridge. Download and rerun its installer through a trusted console, then finish installation again.')
     if any(result.get(key)!=value for key,value in expected.items()):
@@ -210,6 +224,7 @@ set -euo pipefail
 for command in python3 sshd ssh-keygen sudo visudo useradd sha256sum openssl; do
   command -v "$command" >/dev/null || {{ echo "Missing prerequisite: $command. Install python3 openssh-server sudo first."; exit 1; }}
 done
+/usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || {{ echo 'Mr Patchy target helpers require Python 3.8 or newer at /usr/bin/python3 (EL8 ships 3.6 by default). Install a newer python3 first.'; exit 1; }}
 if [ ! -f /var/lib/dpkg/status ]; then
   /usr/bin/python3 -c 'import dnf,rpm' || {{ echo 'RPM targets require Python 3 with python3-dnf and python3-rpm installed first (DNF4 bindings, including on DNF5 systems).'; exit 1; }}
 fi
