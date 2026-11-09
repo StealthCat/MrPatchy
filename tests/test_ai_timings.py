@@ -38,7 +38,7 @@ def test_full_pipeline_preserves_capability_and_records_stage_timings(admin,monk
     detail,values=stages(admin,identifier)
     assert detail['state']=='complete' and detail['stage']=='complete' and detail['calls']==1+followup
     assert detail['message']=='Structured result validated and processing completed.'
-    for name in ('admission','queue_age','run','result_persistence'):assert values.count(name)==1
+    for name in ('claim_lock','admission','queue_age','run','result_persistence'):assert values.count(name)==1
     for name in ('provider','provider_admission','receipt_persistence','usage_persistence'):assert values.count(name)==1+followup
     assert values.count('ssh_evidence')==values.count('evidence_persistence')==int(followup)
     assert len(ssh_calls)==int(followup)
@@ -85,3 +85,67 @@ def test_bad_timing_inputs_and_diagnostic_failure_cannot_change_result(admin,mon
             ai_runs.flush_timings()
     detail,values=stages(admin,identifier)
     assert result=='validated' and detail['state']=='complete' and values==['run']
+
+
+def test_triage_timing_summary_uses_retained_samples_without_exposing_details(admin):
+    with Session() as s:
+        for identifier, purpose, state, finished in (
+            ('good', 'triage', 'complete', 8),
+            ('failed', 'triage', 'error', 9),
+            ('no-timings', 'triage', 'complete', 10),
+            ('running', 'triage', 'running', 0),
+            ('test-call', 'connection_test', 'complete', 11),
+        ):
+            s.add(ai_runs.AIRun(id=identifier, purpose=purpose, state=state,
+                                finished=finished, subject='/private/evidence'))
+        for identifier, message in (
+            ('good', 'provider: 0.000 ms; outcome=complete'),
+            ('good', 'provider: 10.000 ms; outcome=complete'),
+            ('failed', 'provider: 20.000 ms; outcome=error'),
+            ('failed', 'provider: 30.000 ms; outcome=error'),
+            ('failed', 'provider: 40.000 ms; outcome=complete private-key'),
+            ('failed', 'queue age: 99.000 ms; outcome=complete'),
+            ('failed', 'private-key' * 100),
+            ('running', 'provider: 999.000 ms; outcome=complete'),
+            ('test-call', 'provider: 999.000 ms; outcome=complete'),
+        ):
+            s.add(ai_runs.AIEvent(run_id=identifier, stage='timing_provider', message=message))
+        s.commit()
+
+    response = admin.get('/api/ai/triage/timings')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['sampled_runs'] == 3
+    assert data['runs_without_samples'] == 1
+    assert data['discarded_events'] == 3
+    assert not data['events_truncated']
+    assert data['stages']['provider'] == {
+        'samples': 4, 'errors': 2, 'p50_ms': 10.0, 'p95_ms': 30.0,
+    }
+    assert data['stages']['ssh_evidence'] == {
+        'samples': 0, 'errors': 0, 'p50_ms': None, 'p95_ms': None,
+    }
+    assert '/private/evidence' not in response.text and 'private-key' not in response.text
+    assert 'no-timings' not in response.text
+
+
+def test_triage_timing_summary_bounds_runs_and_events(admin, monkeypatch):
+    monkeypatch.setattr(ai_runs, 'TIMING_SUMMARY_EVENT_LIMIT', 2)
+    with Session() as s:
+        for identifier, finished in (('earlier', 1), ('latest', 2)):
+            s.add(ai_runs.AIRun(id=identifier, purpose='triage', state='complete',
+                                started=finished, finished=finished))
+        for identifier, ms in (('earlier', 999), ('latest', 10), ('latest', 20), ('latest', 30)):
+            s.add(ai_runs.AIEvent(run_id=identifier, stage='timing_queue_age',
+                                  message=f'queue age: {ms}.000 ms; outcome=complete'))
+        s.commit()
+
+    response = admin.get('/api/ai/triage/timings', params={'limit': 1})
+    assert response.status_code == 200
+    data = response.json()
+    assert data['sampled_runs'] == 1 and data['events_truncated']
+    assert data['stages']['queue_age'] == {
+        'samples': 2, 'errors': 0, 'p50_ms': 20.0, 'p95_ms': 30.0,
+    }
+    for limit in (0, 101):
+        assert admin.get('/api/ai/triage/timings', params={'limit': limit}).status_code == 400
