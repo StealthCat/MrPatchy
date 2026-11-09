@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.53.3 — 2026-11-09
+
+1. [PR #598](https://github.com/StealthCat/MrPatchy/pull/598): Add an ordered `(purpose, state, started)` index for active AI run status and recovery lookups, and create it idempotently on existing databases while retaining run history and diagnostics. SQLite and MySQL query-plan tests verify the active index is selected without a temporary sort/filesort.
+2. Compatibility and limits: additive startup index creation may require normal database DDL time and disk space. No query-result, API, role, lease, recovery, provider or response-authorization behavior changes. This is a bounded database optimization; production throughput and end-to-end parallel triage acceptance remain open. This source update does not publish a Docker image.
+
 ## 1.53.2 — 2026-11-09
 
 1. [PR #585](https://github.com/StealthCat/MrPatchy/pull/585): Reuse the initial settings and encrypted key snapshot during triage preflight, including rate and budget checks and retry-signature construction. Preserve gate order, while refreshing capped eligibility after the queue lock and retaining the authoritative provider reservation.
