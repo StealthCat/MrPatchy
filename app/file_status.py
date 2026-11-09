@@ -62,7 +62,8 @@ def resolve(path, checksum, proofs):
 def before_ai(s, row):
     """Always replace any target-supplied claim with controller-derived evidence."""
     evidence = copy.deepcopy(row.evidence or {})
-    evidence['file_assessment'] = resolve(evidence.get('executable'), evidence.get('sha256'),
+    from .file_trust import assess
+    evidence['file_assessment'] = assess(s, row.host_id, evidence.get('executable'), evidence.get('sha256'),
                                           repositories(s, row.host_id))
     evidence['file_assessment']['behavior_note'] = (
         'File authenticity does not resolve process behavior. Check the exact known-good '
@@ -71,6 +72,7 @@ def before_ai(s, row):
 
 
 def page(s, host, offset=0, q='', status='', limit=50):
+    from .file_trust import assess, Trust, identity
     proofs = repositories(s, host.id)
     baseline = persistence.status(s, host.id)
     rows = {}
@@ -81,7 +83,7 @@ def page(s, host, offset=0, q='', status='', limit=50):
         key = (path, checksum if isinstance(checksum, str) else '')
         if key not in rows:
             rows[key] = {'path': path, 'sha256': key[1], 'sources': [],
-                         'observed': observed, **resolve(path, checksum, proofs), **extra}
+                         'observed': observed, **assess(s, host.id, path, checksum, proofs, persist=False), **extra}
         rows[key]['sources'].append(source)
         rows[key]['observed'] = max(rows[key]['observed'] or 0, observed or 0)
         rows[key].update(extra)
@@ -138,6 +140,11 @@ def page(s, host, offset=0, q='', status='', limit=50):
             if assessment.source == 'known_good' and context['known_good'].get('published'):
                 item.update(status='known_good', method='known_good_database',
                             reason='Exact verified context matches an active retained known-good candidate.')
+                trust = s.get(Trust, identity(host.id, path, checksum, 'known_good_database',
+                    {'assessment_id': assessment.id, 'fingerprint': context['known_good']['fingerprint']}))
+                if trust and trust.reference.get('assessment_id') == assessment.id:
+                    item.update(trusted=True, trust_id=trust.id,
+                        reason='Automatically trusted and stored: exact active known-good context.')
     all_rows = sorted(rows.values(), key=lambda r: (r['path'], r['sha256']))
     now = time.time()
     for row in all_rows:

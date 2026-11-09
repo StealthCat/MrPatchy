@@ -6281,6 +6281,30 @@ by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
 
 ## Ordered file assessment and visibility (#626)
 
+### Automatic retained file trust (#636)
+
+File observations matching controller-authenticated artifact bytes now retain an
+immutable trust decision and audit record during telemetry ingestion, authenticated
+inspection and pre-AI evidence resolution. Repeated identical matches reuse the
+same record. Exact path/SHA-256 matches can reuse a previous repository-rooted
+observation across servers only while its original authenticated inspection remains
+the latest matching proof. A local newer mismatch takes precedence. Missing,
+invalid, merely observed or changed bytes cannot seed trust. Trust receipts are
+independent of diagnostic pruning; missing origin evidence fails closed.
+
+Exact contextual known-good cache reuse also stores a file trust receipt. Its
+display remains conditional on the existing active, validated assessment and cache
+provenance; revocation retains history but removes effective trust. Read-only file
+status shows automatic trust without creating records. Existing observations are
+populated on the next ingestion/inspection/investigation, not by a GET migration.
+
+This trusts file identity, not every use of that file. Behavior approval, integrity
+alarms, incident history, deterministic protection and response authorization are
+unchanged. Current signing-key revocation and automatic repository retrieval remain
+separate unfinished work. Acceptance includes durable/idempotent writes, prior
+cross-server matches, newer mismatches, deleted origins, cache revocation and
+unchanged administrator boundaries, with native SQLite/MySQL CI required.
+
 The controller checks retained authenticated Debian/RPM artifact manifests against
 recorded SHA-256 values before exact known-good behavior lookup and optional AI.
 Target-supplied file-assessment claims are replaced. A mismatch against the latest
