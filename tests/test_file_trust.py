@@ -159,7 +159,13 @@ def test_older_snapshot_cannot_restore_trust_after_newer_same_artifact_mismatch(
         assert not [row for row in s.scalars(select(file_trust.Trust))
                     if row.reference.get('inspection_id') == 'mismatch']
         assert not file_trust.assess(s, 'third', PATH, HASH, {}).get('trusted')
-        # A legitimate observation after the mismatch receipt remains eligible.
-        host.telemetry = {**host.telemetry, 'hashed_at': time.time()+10}
+        # Target clocks are not comparable to the receipt time: even a sweep
+        # stamped well after the mismatch (e.g. 45s clock skew) cannot restore trust.
+        host.telemetry = {**host.telemetry, 'hashed_at': time.time()+60}
         file_trust.record_snapshot(s, host);s.flush()
-        assert file_trust.assess(s, 'fourth', PATH, HASH, {}).get('trusted')
+        assert not file_trust.assess(s, 'fourth', PATH, HASH, {}).get('trusted')
+        # A newer authenticated matching inspection restores eligibility.
+        s.add(Inspection(id='rematch', host_id='host-one', created=time.time()+20, report=report()))
+        s.flush()
+        file_trust.record_snapshot(s, host);s.flush()
+        assert file_trust.assess(s, 'fifth', PATH, HASH, {}).get('trusted')

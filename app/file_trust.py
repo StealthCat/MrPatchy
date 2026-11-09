@@ -87,7 +87,7 @@ def previous(s, path, checksum):
     return None
 
 
-def assess(s, host_id, path, checksum, proofs, *, persist=True, observed=None):
+def assess(s, host_id, path, checksum, proofs, *, persist=True):
     from .file_status import resolve
     if not isinstance(path, str) or not path.startswith('/') or len(path) > 4096:
         return {'status': 'unavailable', 'method': 'none', 'reason': 'No valid file path recorded.'}
@@ -95,13 +95,13 @@ def assess(s, host_id, path, checksum, proofs, *, persist=True, observed=None):
     reference = None
     if result['status'] == 'verified':
         proof = result['reference']
-        later = (isinstance(observed, (int, float)) and not isinstance(observed, bool)
-                 and observed > (proof.get('created') or 0))
-        if proof.get('finding') and not later:
+        if proof.get('finding'):
             # The newest authenticated receipt reported different (or missing)
-            # bytes at this path. Older byte evidence stays historical and must
-            # not become current trust; only a later observation may.
-            result['reason'] += (' Not trusted: a newer authenticated receipt reported different '
+            # bytes at this path. Target-reported observation times are on the
+            # target's clock and cannot be ordered against the controller's
+            # receipt, so no telemetry observation may restore trust. Only a
+            # newer authenticated matching inspection can.
+            result['reason'] += (' Not trusted: the newest authenticated receipt reported different '
                                  'bytes at this path.')
             return result
         reference = {'host_id': host_id, 'inspection_id': proof['inspection_id']}
@@ -123,11 +123,10 @@ def record_snapshot(s, host):
     from .file_status import repositories
     proofs = repositories(s, host.id)
     telemetry = host.telemetry or {}
-    observed = telemetry.get('hashed_at')
     for path, checksum in telemetry.get('managed', {}).items():
-        assess(s, host.id, path, checksum, proofs, observed=observed)
+        assess(s, host.id, path, checksum, proofs)
     for process in telemetry.get('processes', []):
-        assess(s, host.id, process.get('executable'), process.get('sha256'), proofs, observed=observed)
+        assess(s, host.id, process.get('executable'), process.get('sha256'), proofs)
 
 
 def record_reuse(s, behavior, assessment, hit):
