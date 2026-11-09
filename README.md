@@ -39,6 +39,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
+| Fleet analysis | API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
 | Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
@@ -145,6 +146,32 @@ Run `docker compose up -d --build` after changing bindings. Optional `HTTP_BIND_
 
 For dual CAs, use a private ACME server for `patchy.home.example.com` and Let's Encrypt for `patchy.example.com`. Both DNS names reach the same listener; TLS selects the appropriate certificate by hostname. **Internal is a certificate profile, not an access-control boundary**—use network controls if one name must be LAN-only. Public ACME HTTP-01/TLS-ALPN-01 validation still requires external TCP 80/443 forwarded to Caddy, even when Docker publishes 8080/8443. Wildcard issuance/DNS-01 is not included. Keep `PUBLIC_URL` aligned with the default enrollment/SSO address; curl enrollment can also use either enabled HTTPS profile. See [Docker bindings and dual TLS](docs/DOCKER_TLS.md) for setup, migration and recovery.
 
+
+### Custom app and worker layouts
+
+Use the menu-driven configurator to generate standalone Compose YAML for apps +
+workers, apps only or workers only, with 1–16 containers per selected role:
+
+```bash
+python -m pip install -r requirements-configure.txt
+python tools/configure_compose.py
+docker compose --env-file .env -f compose.custom.yaml config --quiet
+docker compose --env-file .env -f compose.custom.yaml up --build -d --wait
+```
+
+The menu configures build/GCP/image options, project and shared storage, database
+requirements, ports/network, worker concurrency and IDs, and memory. Preview before
+saving; replacing an existing output requires confirmation and keeps a `.bak`.
+Use the generated file by itself, not as an overlay on `compose.yaml`. Its default
+`mrpatchy-custom` project has separate volumes from an existing installation.
+
+Worker-only layouts require an existing controller data volume on the same Docker
+host, matching source version and database selection. App-only layouts need
+separate workers for background jobs. Multiple apps share local state and a DNS
+endpoint with ordered initial startup; this does not provide production HA,
+guaranteed load balancing or coordinated rolling upgrades. See
+[Compose configuration](docs/COMPOSE_CONFIGURATION.md) for prerequisites, limits
+and non-interactive command examples.
 
 ## Reset an administrator password locally
 
@@ -392,7 +419,7 @@ Workers claim durable SQL jobs and coordinate with per-host locks; one elected c
 
 Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
 
-Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
+Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. **Test connection** checks the entered MySQL values, including unsaved edits, from the serving controller: it verifies TLS and the host name when enabled, authenticates and runs only `SELECT 1` within a five-second overall deadline, and reports a sanitized category such as timeout, connectivity, TLS, authentication, access or missing database. It never stages settings, switches databases or creates objects, and a success does not prove migration privileges, schema compatibility or HA readiness. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
 
 For a new deployment without existing data, you can still configure MySQL 8+ through `.env` and recreate **both app and workers**:
 
@@ -980,6 +1007,22 @@ Timings overlap and must not be summed. Queue age includes pause/backoff and tim
 before eligibility. Small diagnostic batches flush at run completion (or 32 events);
 crashes/database failures can leave gaps. Run timing excludes creation/admission
 and the final timing flush. Existing run-history retention applies to these metrics.
+
+Administrators can query `GET /api/ai/triage/timings` for a bounded aggregate of
+retained process-triage timing events. The endpoint samples at most 100 recently
+completed or failed triage runs and 2,048 timing events, returning per-stage sample
+and error counts plus nearest-rank p50/p95 milliseconds. It reports missing-run
+coverage, discarded malformed events and truncation without returning event text,
+run or host identities, credentials or evidence. Missing samples produce null
+percentiles, stages can overlap, and retained/pruned events are diagnostic history
+rather than matched production performance measurements.
+
+Administrators can load the same summary from Fleet AI logs in a dedicated Process
+triage timings panel. The panel distinguishes measured zero from missing percentiles,
+shows sample/error counts and coverage or truncation warnings, and can retry without
+interrupting the individual-run list. It discards stale responses after navigation
+and remains confined to the administrator fleet view; per-server logs and other
+roles are unchanged.
 
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
