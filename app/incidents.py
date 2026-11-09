@@ -240,11 +240,24 @@ def auto_plan_tick(now=None):
                 rows+=[r for r in batch if r.evidence.get('scan_context',{}).get('engine')!='YARA']
                 if len(batch)<100:break
                 offset+=100
-            for row in rows[:100]:
+            candidates=rows[:100]
+            if not candidates:return
+            occupied=select(Job.id).where(
+                Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
+                Job.state.in_(['queued','running'])).exists()
+            eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
+                select(Incident.host_id,Host.id,occupied).join(Host,Host.id==Incident.host_id)
+                .where(Incident.id.in_([row.id for row in candidates])))}
+            occupied_hosts=set()
+            for row in candidates:
                 if remaining<=0:break
-                pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
-                if pending or not s.get(Host,row.host_id):continue
-                try:enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True});remaining-=1
+                status=eligibility.get(row.host_id)
+                if not status:continue
+                canonical_host,has_active_plan=status
+                if has_active_plan or canonical_host in occupied_hosts:continue
+                try:
+                    enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
+                    occupied_hosts.add(canonical_host);remaining-=1
                 except ValueError:continue
 
 
