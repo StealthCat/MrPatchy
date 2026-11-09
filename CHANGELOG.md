@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.2 — 2026-11-09
+
+1. [PR #593](https://github.com/StealthCat/MrPatchy/pull/593): Batch candidate-host and queued/running advisory-plan occupancy eligibility into one bounded query for up to 100 incidents, preserving database host collation in SQL and canonical-host deduplication within each tick. Compatibility and limits: no schema, API, UI, provider-call, role, spend-control, plan-content or response-authorization change; candidate order and the ten-plan allowance remain unchanged. The 12-host fixture falls from 151 to 132 SELECTs, but production throughput is unverified; earlier pause/quarantine reads and smooth shared admission remain unfinished. This source bump does not publish a Docker image.
+
 ## 1.54.1 — 2026-11-09
 
 1. [PR #579](https://github.com/StealthCat/MrPatchy/pull/579): Read live process-triage claim counts and saved per-server concurrency policy together under the existing admission lock, preserving expiry, candidate selection, defaults and the minimum fallback. No schema, public API, role or response-authorization change.
