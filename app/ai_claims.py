@@ -96,8 +96,9 @@ def acquire(owner=None):
             # Read-only gate: do not create runs/attempts for work that the shared
             # rate gate, provider backoff or daily budget cannot admit right now.
             from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing
-            if any(gate.waiting(s,now) for gate in (ai_admission,ai_provider_backoff,ai_budget)):return None
-            signature=ai_retry.configuration(s)
+            if (ai_admission.waiting(s,now,settings=cfg) or ai_provider_backoff.waiting(s,now) or
+                ai_budget.waiting(s,now,settings=cfg)):return None
+            signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             # Active claims are globally bounded by worker capacity. Resolve
             # each occupied host's revisioned policy under this admission lock
             # so a settings change and the next claim cannot cross.
