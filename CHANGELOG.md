@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.53.1 — 2026-11-09
+
+1. [PR #618](https://github.com/StealthCat/MrPatchy/pull/618): Skip the shared AI rate lock for legacy, daily-cap-only and unthrottled provider starts after a fresh mode read; paced starts keep atomic admission and reread the current mode/rate under lock. This removes one shared lock acquisition per start in modes that do not use shared pacing, while preserving same-work continuation behavior.
+2. Compatibility and limits: no schema, API, settings migration, provider, budget, pause, or authorization changes. Paced starts add one settings read. This is a bounded lock-contention reduction, not a production throughput claim; broader shared-control acceptance remains open. This source update does not publish a Docker image.
+
 ## 1.53.0 — 2026-11-09
 
 1. [PR #377](https://github.com/StealthCat/MrPatchy/pull/377): Add administrator-managed, versioned saved fleet queries over OS, package, state, enabled and overdue-update filters. Viewers can retrieve bounded, paginated host and matching-package evidence with evaluation time, query version and freshness; stale or incomplete observations are flagged, not counted as fresh.

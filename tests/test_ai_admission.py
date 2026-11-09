@@ -1,5 +1,6 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import pytest
 from sqlalchemy import select
@@ -87,11 +88,56 @@ def test_shared_rate_race_admits_only_one(admin,monkeypatch):
     with Session() as session:assert session.get(ai_admission.Admission, 'global').admitted==1
 
 
-def test_unthrottled_and_legacy_do_not_create_shared_reservations(admin):
-    for mode in ('unthrottled','legacy'):
-        configure(mode)
-        assert ai_admission.admit('fixture-model')['mode']==mode
-    with Session() as session:assert session.get(ai_admission.Admission, 'global') is None
+@pytest.mark.parametrize('mode', ['legacy', 'daily_cap', 'unthrottled'])
+def test_modes_without_shared_pacing_skip_the_rate_lock(admin, monkeypatch, mode):
+    configure(mode)
+    lock = ai_admission.Lock
+    lock_names = []
+
+    def record_lock(name):
+        lock_names.append(name)
+        return lock(name)
+
+    monkeypatch.setattr(ai_admission, 'Lock', record_lock)
+    token = ai_admission.begin_scope()
+    try:
+        assert ai_admission.admit('fixture-model') == {
+            'mode': mode, 'admitted': True, 'next_at': None,
+        }
+        assert ai_admission.admit('fixture-model')['mode'] == 'continuation'
+    finally:
+        ai_admission.end_scope(token)
+    assert lock_names == []
+    with Session() as session:
+        assert session.get(ai_admission.Admission, 'global') is None
+
+
+@pytest.mark.parametrize('mode,expected_mode,next_at', [
+    ('daily_cap', 'daily_cap', None),
+    ('rate_and_daily', 'rate', 5060.0),
+])
+def test_shared_rate_rereads_settings_after_lock(admin, monkeypatch, mode, expected_mode, next_at):
+    configure('rate', rate=20)
+    lock = ai_admission.Lock
+
+    @contextmanager
+    def change_settings_while_entering(name):
+        assert name == 'ai-shared-admission'
+        configure(mode, rate=60)
+        with lock(name):
+            yield
+
+    monkeypatch.setattr(ai_admission, 'Lock', change_settings_while_entering)
+    monkeypatch.setattr(ai_admission.time, 'time', lambda: 5000.0)
+    assert ai_admission.admit('fixture-model') == {
+        'mode': expected_mode, 'admitted': True, 'next_at': next_at,
+    }
+    with Session() as session:
+        row = session.get(ai_admission.Admission, 'global')
+        if next_at is None:
+            assert row is None
+        else:
+            assert row.admitted == 1 and row.next_at == next_at
 
 
 def test_existing_configuration_requires_explicit_migration(admin):
