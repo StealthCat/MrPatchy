@@ -77,3 +77,89 @@ def test_contextual_known_good_trust_is_stored_but_revocation_wins(client):
         entry = s.get(known_good.Entry, hit['fingerprint']);entry.active=False;s.commit()
         assert not file_status.page(s, host)['items'][0].get('trusted')
         assert s.scalar(select(func.count()).select_from(file_trust.Trust)) == 1
+
+
+def test_duplicate_observation_from_concurrent_writer_resolves_winner(client):
+    """Session A's snapshot predates B's commit; retain must still return B's row."""
+    reference = {'host_id': 'one', 'inspection_id': 'receipt'}
+    key = file_trust.identity('one', PATH, HASH, 'authenticated_repository', reference)
+    with Session() as a:
+        assert a.get(file_trust.Trust, key) is None  # establishes A's read snapshot
+        with Session() as b:
+            file_trust.retain(b, 'one', PATH, HASH, 'authenticated_repository', reference)
+            b.commit()
+        row = file_trust.retain(a, 'one', PATH, HASH, 'authenticated_repository', reference)
+        assert row is not None and row.id == key and row.reference == reference
+        a.commit()
+    with Session() as s:
+        assert s.scalar(select(func.count()).select_from(file_trust.Trust)) == 1
+        assert s.scalar(select(func.count()).select_from(Audit).where(
+            Audit.action == 'automatically trust file')) == 1
+
+
+def test_integrity_error_fallback_uses_current_read(client, monkeypatch):
+    reference = {'host_id': 'one', 'inspection_id': 'receipt'}
+    with Session() as b:
+        winner = file_trust.retain(b, 'one', PATH, HASH, 'authenticated_repository', reference)
+        b.commit()
+        key = winner.id
+    calls = []
+    with Session() as a:
+        original = a.get
+
+        def stale_get(entity, ident, **kw):
+            calls.append(kw)
+            # Simulate a REPEATABLE READ snapshot: plain reads miss the winner.
+            return original(entity, ident, **kw) if kw.get('with_for_update') else None
+        monkeypatch.setattr(a, 'get', stale_get)
+        row = file_trust.retain(a, 'one', PATH, HASH, 'authenticated_repository', reference)
+        assert row.id == key and calls[-1].get('with_for_update')
+        a.commit()
+    with Session() as s:
+        assert s.scalar(select(func.count()).select_from(file_trust.Trust)) == 1
+        assert s.scalar(select(func.count()).select_from(Audit).where(
+            Audit.action == 'automatically trust file')) == 1
+
+
+def test_exact_path_is_not_crowded_out_by_newer_same_hash_paths(client):
+    others = [f'/usr/lib/fixture/f{n:03}' for n in range(100)]
+    receipt = report()
+    receipt['vendor_manifest']['entries'] += [{'path': p, 'sha256': HASH, 'size': 4} for p in others]
+    receipt['vendor_verification'].update(examined=101, scope_files=101)
+    with Session() as s:
+        s.add(Inspection(id='wide', host_id='origin', report=receipt));s.flush()
+        proofs = file_status.repositories(s, 'origin')
+        assert file_trust.assess(s, 'origin', PATH, HASH, proofs).get('trusted')
+        for n, other in enumerate(others):
+            row = file_trust.retain(s, 'origin', other, HASH, 'authenticated_repository',
+                                    {'host_id': 'origin', 'inspection_id': 'wide'})
+            row.created = time.time() + 10 + n
+        s.flush()
+        result = file_trust.assess(s, 'second', PATH, HASH, {})
+        assert result['status'] == 'known_good' and result.get('trusted')
+        # Case-distinct POSIX paths stay distinct identities on every database.
+        assert file_trust.assess(s, 'third', PATH.upper(), HASH, {})['status'] == 'unassessed'
+
+
+def test_older_snapshot_cannot_restore_trust_after_newer_same_artifact_mismatch(client):
+    setup()
+    with Session() as s:
+        host = s.get(Host, 'host-one')
+        host.telemetry = {**host.telemetry, 'hashed_at': time.time()}
+        file_trust.record_snapshot(s, host);s.flush()
+        assert file_trust.assess(s, 'second', PATH, HASH, {})['status'] == 'known_good'
+        mismatch = report()
+        mismatch['vendor_verification'].update(state='differences', findings=[{
+            'path': PATH, 'status': 'content_differs', 'expected_sha256': HASH, 'observed_sha256': 'f'*64}])
+        s.add(Inspection(id='mismatch', host_id='host-one', created=time.time()+5, report=mismatch))
+        s.flush()
+        assert file_trust.assess(s, 'second', PATH, HASH, {})['status'] == 'unassessed'
+        # The origin's existing, older telemetry is processed again.
+        file_trust.record_snapshot(s, host);s.flush()
+        assert not [row for row in s.scalars(select(file_trust.Trust))
+                    if row.reference.get('inspection_id') == 'mismatch']
+        assert not file_trust.assess(s, 'third', PATH, HASH, {}).get('trusted')
+        # A legitimate observation after the mismatch receipt remains eligible.
+        host.telemetry = {**host.telemetry, 'hashed_at': time.time()+10}
+        file_trust.record_snapshot(s, host);s.flush()
+        assert file_trust.assess(s, 'fourth', PATH, HASH, {}).get('trusted')

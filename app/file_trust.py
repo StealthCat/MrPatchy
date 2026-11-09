@@ -3,7 +3,7 @@ import hashlib
 import json
 import time
 
-from sqlalchemy import String, Text, Double, JSON, select
+from sqlalchemy import String, Text, Double, JSON, Index, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
@@ -17,7 +17,15 @@ class Trust(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     source: Mapped[str] = mapped_column(String(40))
     reference: Mapped[dict] = mapped_column(JSON)
+    # Exact path identity independent of database collation (MySQL Text
+    # comparisons are case-insensitive by default; POSIX paths are not).
+    path_sha256: Mapped[str] = mapped_column(String(64), default='')
     created: Mapped[float] = mapped_column(Double, default=time.time)
+    __table_args__ = (Index('ix_file_trust_lookup', 'sha256', 'path_sha256', 'source'),)
+
+
+def path_identity(path):
+    return hashlib.sha256(path.encode('utf-8', 'surrogateescape')).hexdigest()
 
 
 def identity(host_id, path, checksum, source, reference):
@@ -32,13 +40,16 @@ def retain(s, host_id, path, checksum, source, reference):
     if row is None:
         try:
             with s.begin_nested():
-                row = Trust(id=key, host_id=host_id, path=path, sha256=checksum,
-                            source=source, reference=reference)
+                row = Trust(id=key, host_id=host_id, path=path, path_sha256=path_identity(path),
+                            sha256=checksum, source=source, reference=reference)
                 s.add(row)
                 s.flush()
                 audit(s, 'automatically trust file', host_id+' '+key+' '+source)
         except IntegrityError:
-            row = s.get(Trust, key)
+            # A concurrent writer committed the same observation. Under MySQL
+            # REPEATABLE READ a plain read still uses this transaction's older
+            # snapshot, so resolve the winner with a locking (current) read.
+            row = s.get(Trust, key, with_for_update={'read': True}, populate_existing=True)
             if row is None:
                 raise
     return row
@@ -51,13 +62,21 @@ def previous(s, path, checksum):
     this byte lookup. No chains of trust or target-supplied assertions are used.
     """
     from .file_status import repositories, resolve
-    roots = {}
-    for row in s.scalars(select(Trust).where(Trust.sha256 == checksum,
-            Trust.source == 'authenticated_repository').order_by(Trust.created.desc()).limit(100)):
+    roots, seen = {}, set()
+    # Bind exact path identity in SQL so unrelated paths sharing these bytes can
+    # never crowd the requested path out; recheck the exact text in Python.
+    query = select(Trust).where(Trust.sha256 == checksum, Trust.path_sha256 == path_identity(path),
+            Trust.source == 'authenticated_repository').order_by(Trust.created.desc(), Trust.id)
+    # Buffered (not streamed): origin revalidation below issues further queries.
+    for row in s.scalars(query).all():
         if row.path != path:
             continue
         if not isinstance(row.reference, dict) or not row.reference.get('host_id'):
             continue
+        marker = (row.reference.get('host_id'), row.reference.get('inspection_id'))
+        if marker in seen:
+            continue
+        seen.add(marker)
         origin = row.reference['host_id']
         if origin not in roots:
             roots[origin] = repositories(s, origin)
@@ -68,14 +87,24 @@ def previous(s, path, checksum):
     return None
 
 
-def assess(s, host_id, path, checksum, proofs, *, persist=True):
+def assess(s, host_id, path, checksum, proofs, *, persist=True, observed=None):
     from .file_status import resolve
     if not isinstance(path, str) or not path.startswith('/') or len(path) > 4096:
         return {'status': 'unavailable', 'method': 'none', 'reason': 'No valid file path recorded.'}
     result = resolve(path, checksum, proofs)
     reference = None
     if result['status'] == 'verified':
-        reference = {'host_id': host_id, 'inspection_id': result['reference']['inspection_id']}
+        proof = result['reference']
+        later = (isinstance(observed, (int, float)) and not isinstance(observed, bool)
+                 and observed > (proof.get('created') or 0))
+        if proof.get('finding') and not later:
+            # The newest authenticated receipt reported different (or missing)
+            # bytes at this path. Older byte evidence stays historical and must
+            # not become current trust; only a later observation may.
+            result['reason'] += (' Not trusted: a newer authenticated receipt reported different '
+                                 'bytes at this path.')
+            return result
+        reference = {'host_id': host_id, 'inspection_id': proof['inspection_id']}
     elif result['status'] == 'unassessed':
         reference = previous(s, path, checksum)
         if reference:
@@ -94,10 +123,11 @@ def record_snapshot(s, host):
     from .file_status import repositories
     proofs = repositories(s, host.id)
     telemetry = host.telemetry or {}
+    observed = telemetry.get('hashed_at')
     for path, checksum in telemetry.get('managed', {}).items():
-        assess(s, host.id, path, checksum, proofs)
+        assess(s, host.id, path, checksum, proofs, observed=observed)
     for process in telemetry.get('processes', []):
-        assess(s, host.id, process.get('executable'), process.get('sha256'), proofs)
+        assess(s, host.id, process.get('executable'), process.get('sha256'), proofs, observed=observed)
 
 
 def record_reuse(s, behavior, assessment, hit):
