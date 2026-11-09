@@ -28,7 +28,7 @@ a.button { display:inline-block;box-sizing:border-box;max-width:100%;text-decora
 button, .button { cursor: pointer; background: #253b47; border: 1px solid var(--line-bright); color: var(--text); padding: 10px 16px; border-radius: 11px; font-weight: 550; line-height: 1.5; transition: background .16s, border-color .16s, box-shadow .16s; }
 button:hover, .button:hover { background: #314e5a; border-color: #a3cfc770; }
 button:active { box-shadow: inset 0 2px 6px #0003; }
-button:disabled { opacity: .55; cursor: not-allowed; }
+button:disabled, #database-test[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
 button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--mint); }
 .primary { background: linear-gradient(145deg, #b0efdb, #7bd5bf); color: #0b302a; border-color: #b8f7e2; font-weight: 700; box-shadow: 0 4px 18px #63cdbb16, inset 0 1px 0 #fff5; }
 .primary:hover { background: #c0f6e5; border-color: #dcfff4; }
@@ -512,3 +512,13 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .badge.ok,.badge.warning{background:#274a40;color:#a8efd3}
 .badge.warning{background:#4c402a;color:var(--amber)}
 .badge.unavailable{color:var(--muted);background:#a7bdc714}
+
+/* Shared error artwork retains its proportions on narrow screens. */
+.error-state .empty-mascot { width: 150px; height: auto; max-height: none; object-fit: contain; }
+.error-state>div { min-width: 0; overflow-wrap: anywhere; }
+#login-error-mascot { display: block; width: 90px; height: auto; margin: 16px auto 8px; }
+#login-error-mascot[hidden] { display: none; }
+@media (max-width: 600px) { .error-state .empty-mascot { width: 120px; height: auto; } }
+
+.file-status-hash{overflow-wrap:anywhere;word-break:break-all}
+.file-status-panel td{vertical-align:top}
