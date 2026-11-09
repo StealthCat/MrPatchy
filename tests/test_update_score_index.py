@@ -44,3 +44,13 @@ def test_memoized_identity_reuses_unchanged_and_invalidates_on_change(monkeypatc
     assert changed!=first and changed==real_identity(H,P) and calls=={'index':2,'identity':2}
     P.candidate='5.3-1'
     assert update_scores.cached_identity(H,P,update_scores._memo(H))==real_identity(H,P)
+
+
+def test_memo_ignores_timestamp_only_inventory_refresh():
+    update_scores._MEMO.clear()
+    class H:id='h-ts';inventory={**_inv(),'collected':1.0}
+    first=update_scores._memo(H)
+    H.inventory={**H.inventory,'collected':2.0}
+    assert update_scores._memo(H) is first
+    H.inventory={**H.inventory,'rpm_packages':H.inventory['rpm_packages']+[{'name':'kernel','arch':'x86_64','evr':'5.1-3'}]}
+    assert update_scores._memo(H) is not first

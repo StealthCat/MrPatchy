@@ -45,16 +45,17 @@ def identity(host,package,index=None):
     return hashlib.sha256((host.id+json.dumps(evidence(host,package,index),sort_keys=True)).encode()).hexdigest()
 
 
-_MEMO={};_MEMO_HOSTS=256
+_MEMO={};_MEMO_HOSTS=256  # FIFO bound: fleets above 256 hosts rebuild indexes each pass
 
 
 def _memo(host):
     """Per-host version index and identity memo, invalidated by any inventory change.
 
-    The key is a content hash of the whole inventory, so changed evidence always
-    misses; unchanged hosts skip the O(rpm_packages) index and per-package hashing.
+    The key is a content hash of the inventory excluding the observation-only
+    `collected` timestamp (never used in scoring evidence), so changed evidence always
+    misses and a timestamp-only refresh hits; unchanged hosts skip the O(rpm_packages) index and per-package hashing.
     """
-    fp=hashlib.sha256(json.dumps(host.inventory,sort_keys=True,default=str).encode()).hexdigest()
+    fp=hashlib.sha256(json.dumps({k:v for k,v in host.inventory.items() if k!='collected'},sort_keys=True,default=str).encode()).hexdigest()
     entry=_MEMO.get(host.id)
     if entry is None or entry[0]!=fp:
         if len(_MEMO)>=_MEMO_HOSTS and host.id not in _MEMO:_MEMO.pop(next(iter(_MEMO)),None)
