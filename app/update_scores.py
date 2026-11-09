@@ -45,6 +45,33 @@ def identity(host,package,index=None):
     return hashlib.sha256((host.id+json.dumps(evidence(host,package,index),sort_keys=True)).encode()).hexdigest()
 
 
+_MEMO={};_MEMO_HOSTS=256  # FIFO bound: fleets above 256 hosts rebuild indexes each pass
+
+
+def _memo(host):
+    """Per-host version index and identity memo, invalidated by any inventory change.
+
+    The key is a content hash of the inventory excluding the observation-only
+    `collected` timestamp (never used in scoring evidence), so changed evidence always
+    misses and a timestamp-only refresh hits; unchanged hosts skip the O(rpm_packages) index and per-package hashing.
+    """
+    fp=hashlib.sha256(json.dumps({k:v for k,v in host.inventory.items() if k!='collected'},sort_keys=True,default=str).encode()).hexdigest()
+    entry=_MEMO.get(host.id)
+    if entry is None or entry[0]!=fp:
+        if len(_MEMO)>=_MEMO_HOSTS and host.id not in _MEMO:_MEMO.pop(next(iter(_MEMO)),None)
+        entry=_MEMO[host.id]=(fp,version_index(host.inventory),{})
+    return entry
+
+
+def cached_identity(host,package,memo):
+    key=(package.name,package.installed,package.candidate,package.priority,bool(package.priority_manual),package.held,package.dpkg_state)
+    found=memo[2].get(key)
+    if found is None:
+        if len(memo[2])>=20000:memo[2].clear()
+        found=memo[2][key]=identity(host,package,memo[1])
+    return found
+
+
 def public(row,enabled=True):
     if not row:return {'state':'pending' if enabled else 'disabled','score':None,'explanation':'Awaiting an AI assessment.' if enabled else 'Enable AI update scoring in Settings.'}
     return {k:getattr(row,k) for k in ('state','score','confidence','explanation','limitations','model','attempted','next_at','completed','run_id')}
@@ -78,8 +105,8 @@ def scoring_candidates(s):
             rows=s.execute(select(Host.id,Host.inventory).where(Host.id.in_(missing)))
             hosts.update({row.id:row for row in rows})
         for p in packages:
-            if p.host_id in hosts and p.host_id not in indexes:indexes[p.host_id]=version_index(hosts[p.host_id].inventory)
-        current=[(p,hosts[p.host_id],identity(hosts[p.host_id],p,indexes[p.host_id])) for p in packages if p.host_id in hosts]
+            if p.host_id in hosts and p.host_id not in indexes:indexes[p.host_id]=_memo(hosts[p.host_id])
+        current=[(p,hosts[p.host_id],cached_identity(hosts[p.host_id],p,indexes[p.host_id])) for p in packages if p.host_id in hosts]
         if not current:continue
         score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
             UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,raiseload=True))
