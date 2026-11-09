@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.54.4 — 2026-11-09
+
+1. [PR #591](https://github.com/StealthCat/MrPatchy/pull/591): Read the newest running triage stage and newest triage/worker diagnostic through one bounded UNION ALL query and one database snapshot, projecting only the fields used by the existing status response. Compatibility and limits: no schema, API, UI, provider, admission, pause, scoring, operational policy or response-authorization change. This reduces a polling round trip but does not establish production throughput or complete the broader faster-AI milestones. This source bump does not publish a Docker image.
+
+## 1.54.3 — 2026-11-09
+
+1. [PR #587](https://github.com/StealthCat/MrPatchy/pull/587): Batch the rolling triage-run count/oldest timestamp and deferred update-score count/next eligibility into one aggregate query each, reducing empty AI-status reads from 20 to 18 SQL statements and keeping each pair on one database snapshot. Compatibility and limits: no schema, API, UI, status, pause, admission, budget, provider-backoff, authorization or response behavior change; SQLite and MySQL remain supported. This is a partial database-read optimization; production throughput, threaded investigations, fair scheduling, shared accounting and the remaining failover/reset milestones are not established. This source bump does not publish a Docker image.
+
+## 1.54.2 — 2026-11-09
+
+1. [PR #593](https://github.com/StealthCat/MrPatchy/pull/593): Batch candidate-host and queued/running advisory-plan occupancy eligibility into one bounded query for up to 100 incidents, preserving database host collation in SQL and canonical-host deduplication within each tick. Compatibility and limits: no schema, API, UI, provider-call, role, spend-control, plan-content or response-authorization change; candidate order and the ten-plan allowance remain unchanged. The 12-host fixture falls from 151 to 132 SELECTs, but production throughput is unverified; earlier pause/quarantine reads and smooth shared admission remain unfinished. This source bump does not publish a Docker image.
+
+## 1.54.1 — 2026-11-09
+
+1. [PR #579](https://github.com/StealthCat/MrPatchy/pull/579): Read live process-triage claim counts and saved per-server concurrency policy together under the existing admission lock, preserving expiry, candidate selection, defaults and the minimum fallback. No schema, public API, role or response-authorization change.
+2. This reduces database reads; production throughput impact remains unverified.
+
+## 1.54.0 — 2026-11-09
+
+1. [PR #393](https://github.com/StealthCat/MrPatchy/pull/393): Show conservative vendor-sourced operating-system lifecycle status (standard, extended, ended and unknown) on each server Overview, failing closed for derivatives, stale or future-dated inventory, unverified extended-support architectures and unobserved Ubuntu Pro entitlement.
+2. Compatibility and limits: the existing viewer-scoped summary API gains bounded read-only lifecycle metadata; no schema, mutation, role, AI, patching or response-authorization behavior changes. The catalog is static/versioned and displays its review date; Ubuntu Pro entitlement is not observed. This is a partial #341 increment: migration queue/plans, target correlation, fleet filters/reports, alerts, RPM/vendor coverage, entitlement discovery, automated catalog refresh and real-target upgrade acceptance remain out of scope. A source bump does not publish a Docker image.
+
+## 1.53.4 — 2026-11-09
+
+1. [PR #640](https://github.com/StealthCat/MrPatchy/pull/640): Memoize host RPM version indexes and candidate identities across idle scoring passes while inventory and package fields are unchanged, including timestamp-only refreshes. Real scoring-relevant inventory and package changes still invalidate identities and preserve existing rescoring behavior.
+2. Compatibility and limits: no API, schema, settings, provider-evidence, scoring-result or response-authorization behavior changes. The process-local FIFO retains 256 hosts and up to 20,000 identities per host; larger or frequently cycling host sets can rebuild indexes, and the host inventory fingerprint is still computed per pass. SQLite/MySQL fixture timings are not production benchmarks. This is a partial fix for #436; broader performance scope remains open. This source update does not publish a Docker image.
+
 ## 1.53.3 — 2026-11-09
 
 1. [PR #598](https://github.com/StealthCat/MrPatchy/pull/598): Add an ordered `(purpose, state, started)` index for active AI run status and recovery lookups, and create it idempotently on existing databases while retaining run history and diagnostics. SQLite and MySQL query-plan tests verify the active index is selected without a temporary sort/filesort.
