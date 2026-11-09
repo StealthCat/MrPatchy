@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.7 — 2026-11-09
+
+1. [PR #629](https://github.com/StealthCat/MrPatchy/pull/629): Update python-multipart from 0.0.32 to 0.0.33 in the runtime requirements and hash-pinned lock for safer form parsing. No application code, configuration, schema or public API changes; no compatibility impact is expected. This source update does not publish a Docker image.
+
 ## 1.54.6 — 2026-11-09
 
 1. [PR #576](https://github.com/StealthCat/MrPatchy/pull/576): Reduce database reads during investigation lease validation by rejecting lost, replaced and expired claims before fetching behavior evidence, then selecting only the host lifecycle fields (`enabled` and `deleted_at`) needed for valid leases. Preserve the evidence, owner, configuration, expiry, heartbeat, disabled/deleted-host and mutation fences. Compatibility and limits: no schema, public API, locking, lease lifetime, provider policy or response-authorization change; production throughput remains unverified. This source bump does not publish a Docker image.
