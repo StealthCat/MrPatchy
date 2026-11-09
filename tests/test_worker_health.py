@@ -46,3 +46,10 @@ def test_compose_worker_stop_grace_outlasts_longest_job_ssh_timeout():
     m = re.search(r"^    stop_grace_period: \$\{[A-Z_]+:-(\d+)s\}$", worker, re.M)
     assert m, "worker needs a stop_grace_period; Docker's 10 s default SIGKILLs running jobs"
     assert int(m.group(1)) > 7500
+
+
+def test_compose_passes_bounded_ai_http_connections_to_app_and_worker():
+    text = (ROOT / "compose.yaml").read_text()
+    for service in ("app", "worker"):
+        block = re.search(rf"^  {service}:\n(.*?)(?=^  \w)", text, re.S | re.M).group(1)
+        assert "MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}" in block
