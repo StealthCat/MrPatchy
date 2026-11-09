@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.51.2 — 2026-11-09
+
+1. [PR #637](https://github.com/StealthCat/MrPatchy/pull/637): Automatically retain and explain file trust for matches backed by authenticated repository evidence and exact active known-good context. Trust records carry host/path/SHA-256 provenance and audit history; exact-path lookups remain collation-independent, concurrent duplicate observations resolve safely, and older telemetry cannot restore trust after a newer authenticated mismatch.
+2. Compatibility and limits: adds an indexed `file_trust_observations` table through normal schema initialization, with no API, role, manual approval or response-authorization changes. Trust concerns file identity and does not approve behavior or suppress incidents and response safeguards. Existing records are learned on later ingestion/inspection/investigation; signing-key revocation and automatic repository retrieval remain separate work. This source update does not publish a Docker image.
+
+## 1.51.1 — 2026-11-09
+
+1. [PR #616](https://github.com/StealthCat/MrPatchy/pull/616): Skip the fleet-wide daily spend lock and spend quote when AI budget admission starts in legacy, rate-only or unthrottled mode. Capped requests reread settings after waiting for the lock; a removed cap skips the quote and ledger write, while an active cap is quoted and reserved atomically.
+2. Compatibility and limits: no schema, API, setting or default changes; capped requests add a settings read and compute the bounded quote while holding the lock. Rate, provider and policy controls remain independent. This removes one lock acquisition for uncapped budget admission; broader shared-controls and production throughput acceptance remain open. This source update does not publish a Docker image.
+
 ## 1.51.0 — 2026-11-08
 
 1. [PR #639](https://github.com/StealthCat/MrPatchy/pull/639): Add a menu-driven Python Compose configurator for app-and-worker, app-only and worker-only layouts with 1–16 containers per selected role. Customize normal/GCP builds or an existing image, project and shared data volume, database requirements, ports/subnet, worker concurrency and IDs, and memory limits. Preview generated YAML before saving; explicit replacement preserves a backup. The generator inherits maintained service restrictions, health checks and worker drain settings, orders initial app startup and removes local app/TLS dependencies from worker-only output. Fixes #638.
