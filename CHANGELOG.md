@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.53.2 — 2026-11-09
+
+1. [PR #585](https://github.com/StealthCat/MrPatchy/pull/585): Reuse the initial settings and encrypted key snapshot during triage preflight, including rate and budget checks and retry-signature construction. Preserve gate order, while refreshing capped eligibility after the queue lock and retaining the authoritative provider reservation.
+2. Compatibility and limits: no public API, schema or settings migration. No provider, budget, pause or response-authorization behavior changes. The change reduces repeated settings reads; production throughput remains unverified. This source update does not publish a Docker image.
+
 ## 1.53.1 — 2026-11-09
 
 1. [PR #618](https://github.com/StealthCat/MrPatchy/pull/618): Skip the shared AI rate lock for legacy, daily-cap-only and unthrottled provider starts after a fresh mode read; paced starts keep atomic admission and reread the current mode/rate under lock. This removes one shared lock acquisition per start in modes that do not use shared pacing, while preserving same-work continuation behavior.
