@@ -6527,5 +6527,4 @@ This changes no schema, public API, provider call, spend control, plan content,
 response authority or incident ordering. Per-policy pause and quarantine reads that
 occur before candidate selection remain separate work, and this checkpoint does not
 complete smooth shared planning admission, threaded investigations, production
-throughput or failover acceptance. Coordinator integration, exact-head SQLite/MySQL/
-full-suite checks and fresh code-scanning inventory remain required before delivery.
+throughput or failover acceptance. Coordinator integration with current main is complete; exact integrated-head SQLite/MySQL/full-suite checks and fresh code-scanning inventory remain required before merge. The reported 12-host SELECT reduction is fixture evidence, not production-throughput validation.
