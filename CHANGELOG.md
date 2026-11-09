@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.54.4 — 2026-11-09
+
+1. [PR #591](https://github.com/StealthCat/MrPatchy/pull/591): Read the newest running triage stage and newest triage/worker diagnostic through one bounded UNION ALL query and one database snapshot, projecting only the fields used by the existing status response. Compatibility and limits: no schema, API, UI, provider, admission, pause, scoring, operational policy or response-authorization change. This reduces a polling round trip but does not establish production throughput or complete the broader faster-AI milestones. This source bump does not publish a Docker image.
+
+## 1.54.3 — 2026-11-09
+
+1. [PR #587](https://github.com/StealthCat/MrPatchy/pull/587): Batch the rolling triage-run count/oldest timestamp and deferred update-score count/next eligibility into one aggregate query each, reducing empty AI-status reads from 20 to 18 SQL statements and keeping each pair on one database snapshot. Compatibility and limits: no schema, API, UI, status, pause, admission, budget, provider-backoff, authorization or response behavior change; SQLite and MySQL remain supported. This is a partial database-read optimization; production throughput, threaded investigations, fair scheduling, shared accounting and the remaining failover/reset milestones are not established. This source bump does not publish a Docker image.
+
+## 1.54.2 — 2026-11-09
+
+1. [PR #593](https://github.com/StealthCat/MrPatchy/pull/593): Batch candidate-host and queued/running advisory-plan occupancy eligibility into one bounded query for up to 100 incidents, preserving database host collation in SQL and canonical-host deduplication within each tick. Compatibility and limits: no schema, API, UI, provider-call, role, spend-control, plan-content or response-authorization change; candidate order and the ten-plan allowance remain unchanged. The 12-host fixture falls from 151 to 132 SELECTs, but production throughput is unverified; earlier pause/quarantine reads and smooth shared admission remain unfinished. This source bump does not publish a Docker image.
+
 ## 1.54.1 — 2026-11-09
 
 1. [PR #579](https://github.com/StealthCat/MrPatchy/pull/579): Read live process-triage claim counts and saved per-server concurrency policy together under the existing admission lock, preserving expiry, candidate selection, defaults and the minimum fallback. No schema, public API, role or response-authorization change.
