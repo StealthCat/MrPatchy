@@ -2135,6 +2135,21 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+Successful process-triage claims retain a separate monotonic `claim_lock` timing
+sample (#619) in the existing redacted run diagnostics. The sample covers only
+waiting to acquire the distributed `ai-triage` claim lock; aggregate admission
+still includes claim selection and run creation, and queue age remains distinct.
+Refused or empty claims create no run and therefore no fabricated timing. This
+adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence and
+response-authorization behavior are unchanged. Production contention baselines
+and the broader faster-AI acceptance remain open.
+
+The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
+summary from #523. It reports per-stage sample counts, errors and p50/p95 with
+coverage and truncation, and keeps individual run logs available when the summary
+request fails. The panel is read-only and available to administrators. Matched
+production serial/parallel measurements remain outstanding.
+
 ### Update-scoring candidate database reads
 
 Candidate discovery reads server IDs and inventory in its existing bounded
@@ -2154,6 +2169,13 @@ before accepting an assessment. A five-item fixture reduces ID-filtered score
 SELECTs from twelve to four, including candidate and host-scope reads. This is
 partial scoring performance work. Idle candidate hashing, measured production
 throughput and full parallel scoring acceptance remain open.
+
+Worker checkpoint #597 adds an ordered purpose/state/start-time index for active
+AI run status and recovery lookups. Startup adds the index to existing databases
+while retaining history and existing indexes. The retained-history fixture uses
+the active-run index instead of filtering completed runs and sorting the result.
+This is a partial database performance increment. Production throughput and
+end-to-end parallel triage acceptance remain open.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2198,6 +2220,21 @@ diagnostic. Valid bodies send the validated bytes and retain their structured
 evidence for pricing and accounting. This checkpoint covers outbound request
 validation. Production throughput and wider transport acceptance remain open.
 
+The spend-reservation path checks the current budget mode before computing a quote
+or acquiring the shared budget lock (#615). Legacy, rate-only and unthrottled
+requests skip both operations and create no budget entry. Capped requests still
+recheck settings in a fresh session under the lock, then quote and atomically
+reserve spend if the cap still applies. Capped requests add one settings read
+and compute the quote while holding the lock. This checkpoint removes one
+shared lock acquisition per request that begins budget admission uncapped.
+End-to-end throughput and broader shared-controls acceptance remain open.
+
+Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
+history query to legacy mode. Shared modes still queue at most ten plans per tick
+and enforce shared admission at execution. The legacy combined security/startup
+allowance stays in effect until explicit migration. This avoids a history read
+under the queue lock and leaves migration and throughput acceptance open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -2205,6 +2242,14 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 | Rate throttle | Smoothly pace eligible work at configured rates using shared token/leaky-bucket admission; defer it durably until refill instead of consuming an hourly allowance in a burst and stopping. |
 | Daily spend cap | Allow work while its conservative reservation fits the configured USD/day budget; queue remaining work until the next calendar-day reset. A rate throttle may also be enabled. |
 | Unthrottled | Apply no Mr Patchy rate or spend allowance; run as quickly as configured concurrency, resources and provider limits permit. |
+
+Shared provider-start admission skips the fleet rate lock when a fresh mode read
+shows legacy, daily-cap-only or unthrottled operation (#617). Paced modes add a
+settings read before locking, then reread the current mode and rate under the
+lock before updating the durable pacing row. Continuations still share the
+logical work item's start. This removes one lock acquisition per start that does
+not use shared pacing. Production throughput and broader shared-controls
+acceptance remain open.
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
@@ -2216,6 +2261,13 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
 ### Finite implementation and acceptance milestones
+
+Initial triage preflight reuses the global settings and encrypted key already
+loaded under the admission lock. The rate and budget preflights retain their
+order and the retry signature retains its existing format. Capped eligibility
+still reads current settings after the queue lock, and the provider reservation
+remains authoritative. This reduces repeated settings reads. Production
+throughput remains unverified.
 
 1. **Baseline, transport and known-good reuse:** record queue/admission/provider/SSH/persistence stage timing, p50/p95 end-to-end latency, throughput, calls/tokens/cost, errors and backlog age for representative one/two-stage workloads; add safe client pooling, evidence deduplication and the fleet-wide exact-match known-good cache with explicit re-triage, without changing the capability contract.
 2. **Threaded execution:** deliver configurable concurrent tasks, atomic claims/leases, context/session isolation, fair scheduling, pause-safe same-host/cross-host admission, drain and recovery. Compare serial and parallel execution on identical delayed I/O fixtures: four eligible independent investigations must actually overlap and complete materially faster than their serial sum without lost work or reduced checks. Report measured production limits separately.
@@ -2253,6 +2305,21 @@ Check that both reports retain the same provider call count and one-stage and
 two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
+
+### Retained process-triage timing sample — worker checkpoint #522
+
+The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
+recently started completed or failed process investigations (up to 100, configurable
+with `limit`). It reads at most 2,048 retained timing events plus a truncation probe,
+without returning event messages, run IDs or evidence. Each allowlisted stage reports
+its sample and error counts and nearest-rank p50/p95 milliseconds, including both
+successful and failed samples. Missing percentiles are null. Runs without valid
+samples, discarded malformed events and event truncation are visible.
+
+A run can supply multiple provider or persistence samples, and stages overlap.
+These are retained diagnostic samples, subject to pruning or incomplete writes.
+Dashboard presentation and matched serial/parallel production measurement remain
+open. There is no new collection, migration, provider call or admission change.
 
 ### Bounded same-server process triage — worker checkpoint #379
 
@@ -6260,6 +6327,37 @@ by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
 
 ## Ordered file assessment and visibility (#626)
 
+### Automatic retained file trust (#636)
+
+File observations matching controller-authenticated artifact bytes now retain an
+immutable trust decision and audit record during telemetry ingestion, authenticated
+inspection and pre-AI evidence resolution. Repeated identical matches reuse the
+same record. Exact path/SHA-256 matches can reuse a previous repository-rooted
+observation across servers only while its original authenticated inspection remains
+the latest matching proof. A local newer mismatch takes precedence. When the latest
+receipt reports different or missing bytes at a path, only an observation made
+after that receipt can become trust; older byte evidence stays historical. Prior
+lookups bind the exact, collation-independent path identity before reading history,
+so unrelated paths sharing the same bytes cannot hide an eligible match, and a
+concurrently committed duplicate observation is resolved with a current read
+without aborting the caller's transaction or duplicating its audit entry. Missing,
+invalid, merely observed or changed bytes cannot seed trust. Trust receipts are
+independent of diagnostic pruning; missing origin evidence fails closed.
+
+Exact contextual known-good cache reuse also stores a file trust receipt. Its
+display remains conditional on the existing active, validated assessment and cache
+provenance; revocation retains history but removes effective trust. Read-only file
+status shows automatic trust without creating records. Existing observations are
+populated on the next ingestion/inspection/investigation, not by a GET migration.
+
+This trusts file identity, not every use of that file. Behavior approval, integrity
+alarms, incident history, deterministic protection and response authorization are
+unchanged. Current signing-key revocation and automatic repository retrieval remain
+separate unfinished work. Acceptance includes durable/idempotent writes, prior
+cross-server matches, newer mismatches, deleted origins, cache revocation and
+unchanged administrator boundaries, with native SQLite/MySQL CI required.
+
+
 The controller checks retained authenticated Debian/RPM artifact manifests against
 recorded SHA-256 values before exact known-good behavior lookup and optional AI.
 Target-supplied file-assessment claims are replaced. A mismatch against the latest
@@ -6377,6 +6475,26 @@ database performance. The default remains zero added persistence delay. Runtime
 admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
 response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
 the broader faster-AI roadmap remain incomplete.
+
+
+### Verified operating-system lifecycle status — worker checkpoint #341
+
+The server Overview now reports a read-only lifecycle assessment for reviewed
+Ubuntu and Debian releases. Matching is strict on the exact `ID` and
+`VERSION_ID`; derivatives, unknown releases, stale or future-dated inventory and
+unverified extended-support architectures fail closed as unknown. The versioned
+catalog records the vendor source and review date. Ubuntu extended coverage
+explicitly reports that Pro entitlement is not observed, while Debian 12 LTS
+checks the published architecture set. Inclusive support boundaries have focused
+regression coverage.
+
+This increment does not schedule, recommend or authorize an upgrade and does not
+change patching, response or AI behavior. The migration-planning queue, supported
+target correlation, fleet filters/reports, lifecycle alerts, RPM/vendor coverage,
+entitlement discovery, signed or automated catalog refresh/expiry, and real-target
+upgrade acceptance remain planned under #341. Coordinator integration, exact-head
+full SQLite/MySQL/browser checks and fresh code scanning remain required before
+this checkpoint is delivered.
 
 
 ### Batched automatic security-plan eligibility — worker checkpoint #592
