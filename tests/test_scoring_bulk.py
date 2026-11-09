@@ -46,6 +46,41 @@ def capture_assessments(monkeypatch):
     return sent
 
 
+def test_candidate_host_reads_only_load_scoring_inputs(admin):
+    expected_order=seed(450,completed=0)
+    with Session() as s:
+        host=s.get(Host,'bulk-1')
+        host.inventory={'package_manager':'rpm','os':'ID=almalinux\nVERSION_ID=9',
+            'rpm_packages':[{'name':'pkg0000','arch':'x86_64','evr':'0:1-1'}]}
+        package=s.get(Package,'bulk-1:pkg0000')
+        package.name='pkg0000:x86_64'
+        package.id='bulk-1:'+package.name
+        expected_order[1]=package.id
+        s.commit()
+
+    host_selects=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):
+        if statement.startswith('SELECT hosts.'):
+            host_selects.append(statement.partition('\n')[0].strip())
+
+    with Session() as s:
+        event.listen(engine,'before_cursor_execute',observe)
+        try:
+            candidates=list(update_scores.scoring_candidates(s))
+        finally:
+            event.remove(engine,'before_cursor_execute',observe)
+        assert host_selects==['SELECT hosts.id, hosts.inventory'],host_selects
+        assert [package.id for package,*_ in candidates]==expected_order
+        full_hosts={host.id:host for host in s.scalars(select(Host))}
+        for package,host,key,score,deferred in candidates:
+            full_host=full_hosts[package.host_id]
+            assert update_scores.evidence(host,package)==update_scores.evidence(full_host,package)
+            assert key==update_scores.identity(full_host,package)
+            assert score is None and not deferred
+        rpm_package,rpm_host,*_=candidates[1]
+        assert update_scores.evidence(rpm_host,rpm_package)['installed']==['0:1-1']
+
+
 @pytest.mark.parametrize('count',[100,1000])
 @pytest.mark.parametrize('state',['complete','deferred'])
 def test_idle_fleet_selects_scale_by_chunks_not_packages(admin,monkeypatch,count,state):
@@ -72,6 +107,26 @@ def test_complete_current_scores_still_supersede_changed_deferred_history(admin,
         rows=list(s.scalars(select(update_scores.UpdateScore)))
         assert sum(r.state=='complete' for r in rows)==450
         assert sum(r.state=='superseded' and r.next_at==0 for r in rows)==450
+
+
+def test_scoring_candidate_queries_only_load_scheduling_fields(admin):
+    seed(450)
+    score_reads=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):
+        if statement.startswith('SELECT update_scores.'):
+            score_reads.append(statement.partition('\n')[0].strip())
+
+    with Session() as s:
+        event.listen(engine,'before_cursor_execute',observe)
+        try:
+            candidates=list(update_scores.scoring_candidates(s))
+        finally:
+            event.remove(engine,'before_cursor_execute',observe)
+        assert len(score_reads)==6,score_reads
+        fields=('id','host_id','name','state','attempted','next_at')
+        projection='SELECT '+', '.join('update_scores.'+field for field in fields)
+        assert all(statement==projection for statement in score_reads),score_reads[0]
+        assert len(candidates)==450 and all(row.state=='complete' for _,_,_,row,_ in candidates)
 
 
 @pytest.mark.parametrize('count,completed',[(513,505),(1000,0)])
