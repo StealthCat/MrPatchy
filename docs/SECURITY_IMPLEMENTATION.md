@@ -2323,6 +2323,12 @@ open. There is no new collection, migration, provider call or admission change.
 
 ### Bounded same-server process triage — worker checkpoint #379
 
+Claim admission reads live server occupancy and saved per-server investigation
+limits together while holding the existing admission lock. Missing limits keep
+the default and malformed limits keep the minimum fallback. The regression
+checks that saturated servers are skipped without per-server policy reads.
+This reduces database round trips. Production throughput remains unverified.
+
 This bounded threaded-execution increment permits two independent renewable process-
 triage leases for one server, while the configured fleet-wide AI executor capacity
 remains the outer bound. The subject claim stays exclusive and selection excludes a
