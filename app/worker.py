@@ -669,6 +669,10 @@ def execute_locked(job_id):
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
+            if job.action=='evidence-preserve':
+                from .evidence_vault import EvidenceCopy
+                copy=s.get(EvidenceCopy,job.payload.get('copy_id'))
+                if copy and copy.host_id==job.host_id and copy.state=='queued':copy.state='rejected';copy.expires=0
             if job.action=='evidence-acquire':
                 from . import evidence_archive
                 from .evidence_vault import EvidenceArchive
@@ -760,9 +764,21 @@ def _assess_active_behavior(s,row,cfg,secret):
     policy=ai.investigation_policy()
     policy_hashes=[ai_assessments.digest([policy]),ai_assessments.digest([policy,policy])]
 
+    # Resolve authenticated file provenance before cache lookup or provider input.
+    # This never approves a behavior: authentic programs can be abused.
+    from . import file_status
+    if lease:
+        with lease.mutation() as (write,saved):
+            saved.evidence=file_status.before_ai(write,saved)
+        row.evidence=copy.deepcopy(saved.evidence)
+    else:
+        row.evidence=file_status.before_ai(s,row)
+        s.commit()
+
     def reuse(write,saved):
         hit=known_good.lookup(write,saved.evidence,cfg['ai_model'],policy_hashes,
-            bypass=bool(write.get(ai_assessments.Refresh,saved.id)))
+            bypass=bool(write.get(ai_assessments.Refresh,saved.id)) or
+                saved.evidence.get('file_assessment',{}).get('status')=='changed')
         if not hit:return False
         result=hit['result']
         saved.verdict='low'
