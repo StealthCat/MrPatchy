@@ -267,6 +267,8 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
+    from .file_trust import record_snapshot
+    record_snapshot(s,h)
     s.commit()
     return ids
 
@@ -730,6 +732,7 @@ def investigate_one(owner=None):
         row=lease.work
         try:
             with ai_runs.track('triage',lease.cfg['ai_model'],row.host_id,row.id,run_id=lease.run_id):
+                ai_runs.timing('claim_lock',lease.claim_lock_wait)
                 lease.check()
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
                 ai_runs.timing('queue_age',time.time()-row.first_seen)
@@ -784,6 +787,8 @@ def _assess_active_behavior(s,row,cfg,secret):
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
         assessment=ai_assessments.record_reuse(write,saved,hit)
         known_good.link_reuse(write,assessment,hit)
+        from .file_trust import record_reuse
+        record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)
         return True
 
