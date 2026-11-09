@@ -38,7 +38,7 @@ def test_full_pipeline_preserves_capability_and_records_stage_timings(admin,monk
     detail,values=stages(admin,identifier)
     assert detail['state']=='complete' and detail['stage']=='complete' and detail['calls']==1+followup
     assert detail['message']=='Structured result validated and processing completed.'
-    for name in ('admission','queue_age','run','result_persistence'):assert values.count(name)==1
+    for name in ('claim_lock','admission','queue_age','run','result_persistence'):assert values.count(name)==1
     for name in ('provider','provider_admission','receipt_persistence','usage_persistence'):assert values.count(name)==1+followup
     assert values.count('ssh_evidence')==values.count('evidence_persistence')==int(followup)
     assert len(ssh_calls)==int(followup)

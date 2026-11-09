@@ -92,6 +92,14 @@ def test_refused_admission_lock_does_not_mutate_work(admin,monkeypatch):
         assert not list(s.scalars(select(ai_runs.AIRun)))
 
 
+def test_successful_claim_retains_monotonic_lock_wait(admin,monkeypatch):
+    seed(count=1)
+    ticks=iter((40.0,40.125))
+    monkeypatch.setattr(ai_claims,'perf_counter',lambda:next(ticks),raising=False)
+    lease=ai_claims.acquire()
+    assert lease and lease.claim_lock_wait==pytest.approx(.125)
+    with lease:pass
+
 def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
     seed(count=4,same_host=True);started=threading.Event();release=threading.Event();sent=[];guard=threading.Lock()
     def post(*a,**k):
