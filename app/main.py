@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.52.2'
+APP_VERSION='1.53.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -455,6 +455,47 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
         return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
             for h,a,ak,o,ok,m,mk,saved in rows]
+
+def saved_query_or_404(s,query_id):
+    row=s.get(fleet_queries.SavedFleetQuery,query_id)
+    if not row:raise HTTPException(404,'Saved fleet query not found')
+    return row
+
+@app.get('/api/fleet/queries')
+def fleet_query_list(user=Depends(viewer_user)):
+    with Session() as s:return [fleet_queries.public(r) for r in s.scalars(select(fleet_queries.SavedFleetQuery).order_by(fleet_queries.SavedFleetQuery.name).limit(500))]
+
+@app.post('/api/fleet/queries')
+def fleet_query_create(body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row=fleet_queries.SavedFleetQuery(id=fleet_queries.new_id(),name=body.name,definition=body.filter.model_dump(),created_by=user['username'])
+        s.add(row);audit(s,'fleet-query-create',row.id+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.put('/api/fleet/queries/{query_id}')
+def fleet_query_update(query_id:str,body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        if body.expected_version!=row.version:raise HTTPException(409,'Saved fleet query changed; reload it before editing')
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name,fleet_queries.SavedFleetQuery.id!=query_id)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row.name=body.name;row.definition=body.filter.model_dump();row.version+=1;row.updated=time.time()
+        audit(s,'fleet-query-update',row.id+' v'+str(row.version)+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.delete('/api/fleet/queries/{query_id}')
+def fleet_query_delete(query_id:str,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        s.delete(row);audit(s,'fleet-query-delete',row.id+' '+row.name);s.commit()
+        return {'deleted':query_id}
+
+@app.get('/api/fleet/queries/{query_id}/results')
+def fleet_query_results(query_id:str,offset:int=0,limit:int=50,user=Depends(viewer_user)):
+    if offset<0 or not 1<=limit<=fleet_queries.PAGE_MAX:raise HTTPException(400,'Invalid fleet query pagination')
+    with Session() as s:
+        row=saved_query_or_404(s,query_id)
+        return fleet_queries.evaluate(s,fleet_queries.FleetFilter(**row.definition),offset,limit)|{'query':{'id':row.id,'name':row.name,'version':row.version,'filter':row.definition}}
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
