@@ -1,5 +1,79 @@
 # Changelog
 
+## 1.54.0 — 2026-11-09
+
+1. [PR #393](https://github.com/StealthCat/MrPatchy/pull/393): Show conservative vendor-sourced operating-system lifecycle status (standard, extended, ended and unknown) on each server Overview, failing closed for derivatives, stale or future-dated inventory, unverified extended-support architectures and unobserved Ubuntu Pro entitlement.
+2. Compatibility and limits: the existing viewer-scoped summary API gains bounded read-only lifecycle metadata; no schema, mutation, role, AI, patching or response-authorization behavior changes. The catalog is static/versioned and displays its review date; Ubuntu Pro entitlement is not observed. This is a partial #341 increment: migration queue/plans, target correlation, fleet filters/reports, alerts, RPM/vendor coverage, entitlement discovery, automated catalog refresh and real-target upgrade acceptance remain out of scope. A source bump does not publish a Docker image.
+
+## 1.53.4 — 2026-11-09
+
+1. [PR #640](https://github.com/StealthCat/MrPatchy/pull/640): Memoize host RPM version indexes and candidate identities across idle scoring passes while inventory and package fields are unchanged, including timestamp-only refreshes. Real scoring-relevant inventory and package changes still invalidate identities and preserve existing rescoring behavior.
+2. Compatibility and limits: no API, schema, settings, provider-evidence, scoring-result or response-authorization behavior changes. The process-local FIFO retains 256 hosts and up to 20,000 identities per host; larger or frequently cycling host sets can rebuild indexes, and the host inventory fingerprint is still computed per pass. SQLite/MySQL fixture timings are not production benchmarks. This is a partial fix for #436; broader performance scope remains open. This source update does not publish a Docker image.
+
+## 1.53.3 — 2026-11-09
+
+1. [PR #598](https://github.com/StealthCat/MrPatchy/pull/598): Add an ordered `(purpose, state, started)` index for active AI run status and recovery lookups, and create it idempotently on existing databases while retaining run history and diagnostics. SQLite and MySQL query-plan tests verify the active index is selected without a temporary sort/filesort.
+2. Compatibility and limits: additive startup index creation may require normal database DDL time and disk space. No query-result, API, role, lease, recovery, provider or response-authorization behavior changes. This is a bounded database optimization; production throughput and end-to-end parallel triage acceptance remain open. This source update does not publish a Docker image.
+
+## 1.53.2 — 2026-11-09
+
+1. [PR #585](https://github.com/StealthCat/MrPatchy/pull/585): Reuse the initial settings and encrypted key snapshot during triage preflight, including rate and budget checks and retry-signature construction. Preserve gate order, while refreshing capped eligibility after the queue lock and retaining the authoritative provider reservation.
+2. Compatibility and limits: no public API, schema or settings migration. No provider, budget, pause or response-authorization behavior changes. The change reduces repeated settings reads; production throughput remains unverified. This source update does not publish a Docker image.
+
+## 1.53.1 — 2026-11-09
+
+1. [PR #618](https://github.com/StealthCat/MrPatchy/pull/618): Skip the shared AI rate lock for legacy, daily-cap-only and unthrottled provider starts after a fresh mode read; paced starts keep atomic admission and reread the current mode/rate under lock. This removes one shared lock acquisition per start in modes that do not use shared pacing, while preserving same-work continuation behavior.
+2. Compatibility and limits: no schema, API, settings migration, provider, budget, pause, or authorization changes. Paced starts add one settings read. This is a bounded lock-contention reduction, not a production throughput claim; broader shared-control acceptance remains open. This source update does not publish a Docker image.
+
+## 1.53.0 — 2026-11-09
+
+1. [PR #377](https://github.com/StealthCat/MrPatchy/pull/377): Add administrator-managed, versioned saved fleet queries over OS, package, state, enabled and overdue-update filters. Viewers can retrieve bounded, paginated host and matching-package evidence with evaluation time, query version and freshness; stale or incomplete observations are flagged, not counted as fresh.
+2. Compatibility and limits: additive viewer/admin API and one `saved_fleet_queries` table created by normal schema initialization; no existing API or response-authorization behavior changes. This is the API-only first slice of #344; CVE/hash filters, group/owner/site dimensions, reports/exports, UI and large-fleet MySQL scale verification remain open. This source update does not publish a Docker image.
+
+## 1.52.2 — 2026-11-09
+
+1. [PR #620](https://github.com/StealthCat/MrPatchy/pull/620): Retain the monotonic distributed `claim_lock` wait separately from aggregate admission and queue-age timings for successful process-triage claims.
+2. Compatibility and limits: diagnostic-only; no schema, API, setting, role, lease, lock, evidence or response-authorization changes. Older retained runs lack this sample; failed lock acquisitions and termination before timing flush may leave coverage incomplete. Production contention baselines and broader faster-AI acceptance remain open. This source update does not publish a Docker image.
+
+## 1.52.1 — 2026-11-09
+
+1. [PR #602](https://github.com/StealthCat/MrPatchy/pull/602): Skip the rolling-hour security/startup plan-history count when automatic planning uses rate, daily-cap, combined or unthrottled shared admission. Preserve the combined hourly allowance in legacy mode; the per-tick queue maximum and downstream shared admission remain unchanged.
+2. Compatibility and limits: no schema, API, setting, default or scheduling changes. The legacy combined allowance remains until explicit migration; broader shared-control migration and end-to-end throughput acceptance remain open. This source update does not publish a Docker image.
+
+# Changelog
+
+## 1.52.0 — 2026-11-09
+
+1. [PR #637](https://github.com/StealthCat/MrPatchy/pull/637): Add durable automatic file trust for matches backed by authenticated repository evidence and exact active known-good context. Trust records carry host/path/SHA-256 provenance and audit history; exact-path lookups remain collation-independent, concurrent duplicate observations resolve safely, and after a newer authenticated mismatch, only a subsequent authenticated matching inspection restores trust.
+2. Compatibility and limits: adds an indexed `file_trust_observations` table through normal schema initialization, with no API, role, manual approval or response-authorization changes. Trust concerns file identity and does not approve behavior or suppress incidents and response safeguards. Existing records are learned on later ingestion/inspection/investigation; signing-key revocation and automatic repository retrieval remain separate work. This source update does not publish a Docker image.
+
+## 1.51.1 — 2026-11-09
+
+1. [PR #616](https://github.com/StealthCat/MrPatchy/pull/616): Skip the fleet-wide daily spend lock and spend quote when AI budget admission starts in legacy, rate-only or unthrottled mode. Capped requests reread settings after waiting for the lock; a removed cap skips the quote and ledger write, while an active cap is quoted and reserved atomically.
+2. Compatibility and limits: no schema, API, setting or default changes; capped requests add a settings read and compute the bounded quote while holding the lock. Rate, provider and policy controls remain independent. This removes one lock acquisition for uncapped budget admission; broader shared-controls and production throughput acceptance remain open. This source update does not publish a Docker image.
+
+## 1.51.0 — 2026-11-08
+
+1. [PR #639](https://github.com/StealthCat/MrPatchy/pull/639): Add a menu-driven Python Compose configurator for app-and-worker, app-only and worker-only layouts with 1–16 containers per selected role. Customize normal/GCP builds or an existing image, project and shared data volume, database requirements, ports/subnet, worker concurrency and IDs, and memory limits. Preview generated YAML before saving; explicit replacement preserves a backup. The generator inherits maintained service restrictions, health checks and worker drain settings, orders initial app startup and removes local app/TLS dependencies from worker-only output. Fixes #638.
+2. Compatibility and limits: generated YAML is standalone and defaults to a separate project; existing deployments and runtime dependencies are unchanged. Worker-only layouts require matching controller state on the same Docker host. Multiple apps share local state and a DNS endpoint; they do not establish load-balancing, migration fencing, cross-host storage or production HA guarantees. The host-side tool requires PyYAML. This source update does not publish a Docker image.
+
+## 1.50.0 — 2026-11-09
+
+1. [PR #635](https://github.com/StealthCat/MrPatchy/pull/635): Add an administrator-only **Test connection** action to Settings → Database (`POST /api/settings/database/test`) that checks the entered MySQL values, including unsaved edits, before a migration destination is staged. The probe verifies TLS and the host name when enabled, authenticates to the selected database and runs only `SELECT 1` in a disposable subprocess with a five-second overall deadline, at most two concurrent probes per controller process, sanitized result categories and an audit record of the category only. The button keeps keyboard focus, ignores duplicate activation, announces results through a live status and clears stale results after edits or Save. Fixes #634.
+2. Compatibility: this is an additive administrator endpoint and UI with the existing administrator and CSRF guards; there is no schema or deployment migration, and saving, staging and offline migration behavior are unchanged. Material limits: results describe only the serving controller, the concurrency limit is per process, and a success does not verify migration privileges, schema compatibility or HA readiness. This source update does not publish a Docker image.
+
+## 1.49.8 — 2026-11-08
+
+1. [PR #612](https://github.com/StealthCat/MrPatchy/pull/612): Add an administrator-only Process triage timings panel to Fleet AI logs, backed by the bounded summary API delivered in PR #523. The panel lazily loads per-stage sample/error counts and p50/p95 milliseconds, preserves measured zero versus missing values, reports missing, malformed and truncated coverage, retries independently of run history, and discards stale responses after navigation. Compatibility: this is a presentation-only addition with no schema, provider traffic, target access, identity/evidence exposure, scheduling, role, admission, authorization or response-action change; per-server logs and non-administrator views are unchanged. Material limits: retained diagnostics can be incomplete or pruned, stages overlap, and the panel does not establish matched production serial/parallel performance, so #611 remains open. This source update does not publish a Docker image.
+
+## 1.49.7 — 2026-11-08
+
+1. [PR #523](https://github.com/StealthCat/MrPatchy/pull/523): Add an administrator-only `GET /api/ai/triage/timings` endpoint that summarizes a bounded sample of retained completed or failed process-triage timing events with per-stage sample/error counts and nearest-rank p50/p95 milliseconds. The response discloses missing-run coverage, malformed-event discards and event truncation while omitting event text, run/host identities, credentials and evidence. Compatibility: this is an additive read-only API with no schema migration, provider traffic, scheduling, admission, role, audit, authorization or response-action change. Material limits: the summary samples at most 100 runs and 2,048 events, stages may overlap, retained history can be incomplete or pruned, and it does not provide matched production serial/parallel measurements or the separately tracked dashboard presentation in #611/#612. This source update does not publish a Docker image.
+
+## 1.49.6 — 2026-11-08
+
+1. [PR #493](https://github.com/StealthCat/MrPatchy/pull/493): Add a regression guard requiring the GCP Compose override to extend only base services and inherit, rather than replace, production capability, privilege, identity, namespace, read-only-root, temporary-filesystem, process and memory hardening. The guard also pins writable Google Cloud CLI state to the persistent `/data/gcloud` location. Compatibility: this is test-only and does not alter existing Compose output, application behavior, deployment settings, API, schema, role, audit, authorization or response handling. Material limits: the regression verifies the repository configuration structure but does not inspect a live deployment or complete the remaining GitHub security-alert inventory tracked by #201, which stays open. This source update does not publish a Docker image.
+
 ## 1.49.5 — 2026-11-08
 
 1. [PR #614](https://github.com/StealthCat/MrPatchy/pull/614): Add a bounded `--persistence-delay-ms` control to the disposable AI triage benchmark so receipt creation and usage reconciliation can each be measured under the same selected synthetic latency. Machine-readable output now includes the configured delay and completed/approved subject counts, focused acceptance proves equivalent serial and parallel work, and a reproducible 12-subject fixture artifact records the bounded comparison. Compatibility: the control defaults to zero, preserving existing benchmark execution, and the additional report fields are additive; v1.49.4 comparisons normalize older reports without the delay field to the same zero-delay contract. There is no application runtime, deployment setting, production provider, target access, database schema, API, UI, role, authorization or response change. Material limits: the fixture does not emulate database lock contention, network latency, failover, MySQL behavior or production/TLS/database performance, and it does not complete the wider faster-AI program. This source update does not publish a Docker image.

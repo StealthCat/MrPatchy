@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.49.5'
+APP_VERSION='1.54.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -456,6 +456,47 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
             for h,a,ak,o,ok,m,mk,saved in rows]
 
+def saved_query_or_404(s,query_id):
+    row=s.get(fleet_queries.SavedFleetQuery,query_id)
+    if not row:raise HTTPException(404,'Saved fleet query not found')
+    return row
+
+@app.get('/api/fleet/queries')
+def fleet_query_list(user=Depends(viewer_user)):
+    with Session() as s:return [fleet_queries.public(r) for r in s.scalars(select(fleet_queries.SavedFleetQuery).order_by(fleet_queries.SavedFleetQuery.name).limit(500))]
+
+@app.post('/api/fleet/queries')
+def fleet_query_create(body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row=fleet_queries.SavedFleetQuery(id=fleet_queries.new_id(),name=body.name,definition=body.filter.model_dump(),created_by=user['username'])
+        s.add(row);audit(s,'fleet-query-create',row.id+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.put('/api/fleet/queries/{query_id}')
+def fleet_query_update(query_id:str,body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        if body.expected_version!=row.version:raise HTTPException(409,'Saved fleet query changed; reload it before editing')
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name,fleet_queries.SavedFleetQuery.id!=query_id)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row.name=body.name;row.definition=body.filter.model_dump();row.version+=1;row.updated=time.time()
+        audit(s,'fleet-query-update',row.id+' v'+str(row.version)+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.delete('/api/fleet/queries/{query_id}')
+def fleet_query_delete(query_id:str,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        s.delete(row);audit(s,'fleet-query-delete',row.id+' '+row.name);s.commit()
+        return {'deleted':query_id}
+
+@app.get('/api/fleet/queries/{query_id}/results')
+def fleet_query_results(query_id:str,offset:int=0,limit:int=50,user=Depends(viewer_user)):
+    if offset<0 or not 1<=limit<=fleet_queries.PAGE_MAX:raise HTTPException(400,'Invalid fleet query pagination')
+    with Session() as s:
+        row=saved_query_or_404(s,query_id)
+        return fleet_queries.evaluate(s,fleet_queries.FleetFilter(**row.definition),offset,limit)|{'query':{'id':row.id,'name':row.name,'version':row.version,'filter':row.definition}}
+
 class HostLifecycleInput(BaseModel):
     enabled:bool
     expected_revision:str=Field(default='',max_length=36)
@@ -526,6 +567,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
         behaviors=list(s.execute(select(Behavior.verdict,Behavior.approved).where(Behavior.host_id==host_id)))
         jobs=dict(s.execute(select(Job.state,func.count()).where(Job.host_id==host_id).group_by(Job.state)).all())
         last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='patch').order_by(Job.created.desc(),Job.id).limit(1))
+        lifecycle=os_lifecycle.evaluate(h.inventory,now,cfg['repo_minutes']*120)
         return {'host':object_dict(h,('inventory','telemetry','baseline'))|{'os_upgrade':os_upgrade.status(h)},
                 'system':{k:h.inventory.get(k) for k in ('os','architecture','foreign_architectures','package_manager','machine_id','collected')},
                 'collector':{'collected':h.telemetry.get('collected'), 'hashed_at':h.telemetry.get('hashed_at'),
@@ -534,7 +576,8 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
-                'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+                'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None,
+                'lifecycle':lifecycle}
 
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
@@ -1157,6 +1200,14 @@ def database_settings_save(body:database_config.DatabaseInput,user=Depends(admin
         audit(s,'stage database migration',user['username']+' staged '+body.backend+' destination; active database unchanged')
         s.commit()
     return {'ok':True,'target':result}
+
+@app.post('/api/settings/database/test')
+def database_settings_test(body:database_config.DatabaseInput,user=Depends(admin_user)):
+    try:result=database_config.test_connection(body)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with Session() as s:
+        audit(s,'test database connection',user['username']+' tested MySQL connection: '+result['category']);s.commit()
+    return result
 
 class TLSInput(BaseModel):
     domain:str=Field(default='',max_length=253)
@@ -1861,6 +1912,14 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(adm
         scheduling.cancel_pending(s,schedule_id,'Schedule deleted')
         s.delete(row);audit(s,'delete patch schedule',user['username']+' '+schedule_id);s.commit()
     return {'ok':True}
+
+@app.get('/api/ai/triage/timings')
+def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depends(admin_user)):
+    if not 1 <= limit <= ai_runs.TIMING_SUMMARY_RUN_LIMIT:
+        raise HTTPException(400, 'Invalid timing sample limit')
+    with Session() as s:
+        return ai_runs.triage_timing_summary(s, limit)
+
 
 @app.get('/api/ai/runs')
 def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(admin_user)):

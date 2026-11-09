@@ -92,10 +92,10 @@ def _state(session,cfg,now):
     return enabled,name,start,reset,groups,counted,cap
 
 
-def waiting(session,now,payload=None):
+def waiting(session,now,payload=None,*,settings=None):
     """Read-only preflight; final atomic reserve still owns spending authority."""
-    cfg=config(session)
-    enabled,_name,_start,reset,_groups,counted,cap=_state(session,cfg,now)
+    if settings is None:settings=config(session)
+    enabled,_name,_start,reset,_groups,counted,cap=_state(session,settings,now)
     if not enabled:return 0
     if counted>=cap:return reset
     if payload is not None:
@@ -107,11 +107,16 @@ def waiting(session,now,payload=None):
 def reserve(payload):
     """Atomically retain a conservative per-call amount before rate admission."""
     from .ai import AIError
-    quote=ai_pricing.reservation(payload)
+    with Session() as session:
+        if config(session)['ai_control_mode'] not in ai_pricing.CAP_MODES:
+            return None
+
     with Lock('ai-shared-budget'):
+        # Read again after waiting: the preflight does not authorize a capped reservation.
         with Session() as session:
             cfg=config(session)
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
+            quote=ai_pricing.reservation(payload)
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
             now=time.time();enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
