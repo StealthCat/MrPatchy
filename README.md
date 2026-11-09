@@ -981,6 +981,22 @@ before eligibility. Small diagnostic batches flush at run completion (or 32 even
 crashes/database failures can leave gaps. Run timing excludes creation/admission
 and the final timing flush. Existing run-history retention applies to these metrics.
 
+Administrators can query `GET /api/ai/triage/timings` for a bounded aggregate of
+retained process-triage timing events. The endpoint samples at most 100 recently
+completed or failed triage runs and 2,048 timing events, returning per-stage sample
+and error counts plus nearest-rank p50/p95 milliseconds. It reports missing-run
+coverage, discarded malformed events and truncation without returning event text,
+run or host identities, credentials or evidence. Missing samples produce null
+percentiles, stages can overlap, and retained/pruned events are diagnostic history
+rather than matched production performance measurements.
+
+Administrators can load the same summary from Fleet AI logs in a dedicated Process
+triage timings panel. The panel distinguishes measured zero from missing percentiles,
+shows sample/error counts and coverage or truncation warnings, and can retry without
+interrupting the individual-run list. It discards stale responses after navigation
+and remains confined to the administrator fleet view; per-server logs and other
+roles are unchanged.
+
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
@@ -999,7 +1015,18 @@ historical two-second seed, applies to every synthetic observation and keeps
 report; invalid values are rejected before fixture startup. This control is fixture
 only: it does not reproduce scheduler contention, pause, budget/rate deferral,
 provider backoff or production load, and it is not a production speed or
-parallel-throughput promise.
+parallel-throughput promise. Comparisons also require matching synthetic
+persistence-delay controls: reported `persistence_delay_ms` values must be integers
+from 0 through 1,000, while older reports without the field use the documented
+zero-delay default. The normalized value and whether it came from the report or the
+legacy default are retained in comparison output; mismatched delays are rejected
+before any performance delta is emitted. The benchmark producer's optional
+`--persistence-delay-ms` control accepts 0 through 1,000 and defaults to zero. It
+adds the selected synthetic delay around both receipt creation and usage
+reconciliation while retaining their separate timing stages, and reports the
+configured delay plus completed and approved subject counts so serial and parallel
+fixtures can prove result equivalence. This fixture does not emulate database lock
+contention, network latency, failover or production/TLS/database performance.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical
