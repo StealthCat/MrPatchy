@@ -2213,6 +2213,12 @@ and compute the quote while holding the lock. This checkpoint removes one
 shared lock acquisition per request that begins budget admission uncapped.
 End-to-end throughput and broader shared-controls acceptance remain open.
 
+Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
+history query to legacy mode. Shared modes still queue at most ten plans per tick
+and enforce shared admission at execution. The legacy combined security/startup
+allowance stays in effect until explicit migration. This avoids a history read
+under the queue lock and leaves migration and throughput acceptance open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
