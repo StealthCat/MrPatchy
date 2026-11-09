@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_, or_, case
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, func, and_, or_, case
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -29,6 +29,10 @@ class AIRun(Base):
     started: Mapped[float] = mapped_column(Double, default=time.time, index=True)
     finished: Mapped[float] = mapped_column(Double, default=0)
     calls: Mapped[int] = mapped_column(Integer, default=0)
+
+
+ACTIVE_RUN_INDEX = Index('ix_ai_runs_purpose_state_started', AIRun.purpose, AIRun.state, AIRun.started)
+
 
 class AIEvent(Base):
     __tablename__ = 'ai_events'

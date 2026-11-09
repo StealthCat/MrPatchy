@@ -2170,6 +2170,13 @@ SELECTs from twelve to four, including candidate and host-scope reads. This is
 partial scoring performance work. Idle candidate hashing, measured production
 throughput and full parallel scoring acceptance remain open.
 
+Worker checkpoint #597 adds an ordered purpose/state/start-time index for active
+AI run status and recovery lookups. Startup adds the index to existing databases
+while retaining history and existing indexes. The retained-history fixture uses
+the active-run index instead of filtering completed runs and sorting the result.
+This is a partial database performance increment. Production throughput and
+end-to-end parallel triage acceptance remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.
@@ -2254,6 +2261,13 @@ acceptance remain open.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
 ### Finite implementation and acceptance milestones
+
+Initial triage preflight reuses the global settings and encrypted key already
+loaded under the admission lock. The rate and budget preflights retain their
+order and the retry signature retains its existing format. Capped eligibility
+still reads current settings after the queue lock, and the provider reservation
+remains authoritative. This reduces repeated settings reads. Production
+throughput remains unverified.
 
 1. **Baseline, transport and known-good reuse:** record queue/admission/provider/SSH/persistence stage timing, p50/p95 end-to-end latency, throughput, calls/tokens/cost, errors and backlog age for representative one/two-stage workloads; add safe client pooling, evidence deduplication and the fleet-wide exact-match known-good cache with explicit re-triage, without changing the capability contract.
 2. **Threaded execution:** deliver configurable concurrent tasks, atomic claims/leases, context/session isolation, fair scheduling, pause-safe same-host/cross-host admission, drain and recovery. Compare serial and parallel execution on identical delayed I/O fixtures: four eligible independent investigations must actually overlap and complete materially faster than their serial sum without lost work or reduced checks. Report measured production limits separately.

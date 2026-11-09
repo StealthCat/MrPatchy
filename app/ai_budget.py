@@ -92,10 +92,10 @@ def _state(session,cfg,now):
     return enabled,name,start,reset,groups,counted,cap
 
 
-def waiting(session,now,payload=None):
+def waiting(session,now,payload=None,*,settings=None):
     """Read-only preflight; final atomic reserve still owns spending authority."""
-    cfg=config(session)
-    enabled,_name,_start,reset,_groups,counted,cap=_state(session,cfg,now)
+    if settings is None:settings=config(session)
+    enabled,_name,_start,reset,_groups,counted,cap=_state(session,settings,now)
     if not enabled:return 0
     if counted>=cap:return reset
     if payload is not None:

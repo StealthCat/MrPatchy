@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.53.3 — 2026-11-09
+
+1. [PR #598](https://github.com/StealthCat/MrPatchy/pull/598): Add an ordered `(purpose, state, started)` index for active AI run status and recovery lookups, and create it idempotently on existing databases while retaining run history and diagnostics. SQLite and MySQL query-plan tests verify the active index is selected without a temporary sort/filesort.
+2. Compatibility and limits: additive startup index creation may require normal database DDL time and disk space. No query-result, API, role, lease, recovery, provider or response-authorization behavior changes. This is a bounded database optimization; production throughput and end-to-end parallel triage acceptance remain open. This source update does not publish a Docker image.
+
+## 1.53.2 — 2026-11-09
+
+1. [PR #585](https://github.com/StealthCat/MrPatchy/pull/585): Reuse the initial settings and encrypted key snapshot during triage preflight, including rate and budget checks and retry-signature construction. Preserve gate order, while refreshing capped eligibility after the queue lock and retaining the authoritative provider reservation.
+2. Compatibility and limits: no public API, schema or settings migration. No provider, budget, pause or response-authorization behavior changes. The change reduces repeated settings reads; production throughput remains unverified. This source update does not publish a Docker image.
+
 ## 1.53.1 — 2026-11-09
 
 1. [PR #618](https://github.com/StealthCat/MrPatchy/pull/618): Skip the shared AI rate lock for legacy, daily-cap-only and unthrottled provider starts after a fresh mode read; paced starts keep atomic admission and reread the current mode/rate under lock. This removes one shared lock acquisition per start in modes that do not use shared pacing, while preserving same-work continuation behavior.

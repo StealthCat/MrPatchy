@@ -71,12 +71,12 @@ def _reserve_start(model):
             return 'rate',row.next_at
 
 
-def waiting(session,now):
+def waiting(session,now,*,settings=None):
     """Read-only: the instant the shared rate gate reopens, or 0 when open."""
-    if config(session)['ai_control_mode'] not in ('rate','rate_and_daily'):return 0
+    if settings is None:settings=config(session)
+    if settings['ai_control_mode'] not in ('rate','rate_and_daily'):return 0
     row=session.get(Admission,'global')
     return row.next_at if row and row.next_at>now else 0
-
 
 def status(session):
     settings=config(session);row=session.get(Admission,'global')
