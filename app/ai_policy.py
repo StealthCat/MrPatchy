@@ -16,7 +16,11 @@ MAX_CONCURRENCY=4
 
 
 def investigation_limit(s,host_id):
-    row=s.get(Setting,PREFIX+host_id);value=row.value if row else {}
+    row=s.get(Setting,PREFIX+host_id)
+    return investigation_limit_value(row.value if row else {})
+
+
+def investigation_limit_value(value):
     raw=value.get('concurrency_limit')
     if raw is None:return DEFAULT_CONCURRENCY
     if type(raw) is int and MIN_CONCURRENCY<=raw<=MAX_CONCURRENCY:return raw
