@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_, or_, case, literal
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, func, and_, or_, case, literal
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -29,6 +29,10 @@ class AIRun(Base):
     started: Mapped[float] = mapped_column(Double, default=time.time, index=True)
     finished: Mapped[float] = mapped_column(Double, default=0)
     calls: Mapped[int] = mapped_column(Integer, default=0)
+
+
+ACTIVE_RUN_INDEX = Index('ix_ai_runs_purpose_state_started', AIRun.purpose, AIRun.state, AIRun.started)
+
 
 class AIEvent(Base):
     __tablename__ = 'ai_events'
@@ -77,7 +81,62 @@ def run_hosts(s, run_ids):
 # cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
 TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
                  'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age',
-                 'known_good_lookup'}
+                 'known_good_lookup','claim_lock'}
+
+
+TIMING_SUMMARY_RUN_LIMIT = 100
+TIMING_SUMMARY_EVENT_LIMIT = 2048
+_TIMING_MESSAGE = re.compile(r'([a-z ]{1,32}): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
+
+
+def triage_timing_summary(s, limit):
+    """Summarize a bounded sample of retained process-triage timing events."""
+    run_ids = list(s.scalars(
+        select(AIRun.id)
+        .where(AIRun.purpose == 'triage', AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
+        .order_by(AIRun.started.desc(), AIRun.id)
+        .limit(limit)
+    ))
+    stage_names = {'timing_' + stage: stage for stage in sorted(TIMING_STAGES)}
+    rows = []
+    if run_ids:
+        rows = s.execute(
+            select(AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96))
+            .where(AIEvent.run_id.in_(run_ids),
+                   AIEvent.stage.in_(tuple(stage_names)))
+            .order_by(AIEvent.id.desc())
+            .limit(TIMING_SUMMARY_EVENT_LIMIT + 1)
+        ).all()
+
+    timings = {stage: [] for stage in stage_names.values()}
+    errors = dict.fromkeys(timings, 0)
+    covered_runs = set()
+    discarded = 0
+    for run_id, event_stage, message in rows[:TIMING_SUMMARY_EVENT_LIMIT]:
+        stage = stage_names.get(event_stage)
+        match = _TIMING_MESSAGE.fullmatch(message) if isinstance(message, str) else None
+        if stage is None or not match or match[1] != stage.replace('_', ' '):
+            discarded += 1
+            continue
+        timings[stage].append(float(match[2]))
+        errors[stage] += match[3] == 'error'
+        covered_runs.add(run_id)
+
+    stages = {}
+    for stage, samples in timings.items():
+        samples.sort()
+        size = len(samples)
+        stages[stage] = {
+            'samples': size, 'errors': errors[stage],
+            'p50_ms': samples[(size * 50 + 99) // 100 - 1] if size else None,
+            'p95_ms': samples[(size * 95 + 99) // 100 - 1] if size else None,
+        }
+    return {
+        'run_limit': limit, 'event_limit': TIMING_SUMMARY_EVENT_LIMIT,
+        'sampled_runs': len(run_ids), 'runs_without_samples': len(run_ids) - len(covered_runs),
+        'discarded_events': discarded, 'events_truncated': len(rows) > TIMING_SUMMARY_EVENT_LIMIT,
+        'stages': stages,
+    }
 
 
 def timing(stage, seconds, outcome='complete'):

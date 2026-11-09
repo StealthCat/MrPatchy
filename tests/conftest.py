@@ -5,6 +5,15 @@ os.environ['DATABASE_URL']=os.getenv('TEST_DATABASE_URL','sqlite:///'+os.environ
 os.environ['ADMIN_PASSWORD']='test-password-long-enough'
 os.environ['COOKIE_SECURE']='false'
 os.environ['DISABLE_SCHEDULER']='1'
+import sys
+import types
+try:
+    import imghdr  # noqa: F401
+except ModuleNotFoundError:
+    # PGPy (test-only signing fixtures) imports imghdr, removed in Python 3.13 (PEP 594).
+    # It only uses imghdr.what() to sniff photo user IDs, which the fixtures never contain.
+    _imghdr=types.ModuleType('imghdr');_imghdr.what=lambda file,h=None:None
+    sys.modules['imghdr']=_imghdr
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app,login_attempts
