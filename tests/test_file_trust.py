@@ -64,9 +64,9 @@ def test_contextual_known_good_trust_is_stored_but_revocation_wins(client):
     from app.db import Behavior
     from test_known_good import complete, retained
     with Session() as s:
-        host = Host(id='one', name='One', address='192.0.2.1', fingerprint='')
+        host = Host(id='host-one', name='One', address='192.0.2.1', fingerprint='')
         source = retained();s.add(source);known_good.publish(s, source)
-        behavior = Behavior(id='new', host_id='one', evidence=complete(), verdict='low', analysis='safe')
+        behavior = Behavior(id='new', host_id='host-one', evidence=complete(), verdict='low', analysis='safe')
         s.add_all([host, behavior]);s.flush()
         hit = known_good.lookup(s, behavior.evidence, source.model, [source.policy_hash])
         assessment = ai_assessments.record_reuse(s, behavior, hit)
