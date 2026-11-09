@@ -1,3 +1,8 @@
+## 1.54.1 — 2026-11-09
+
+1. [PR #579](https://github.com/StealthCat/MrPatchy/pull/579): Read live process-triage claim counts and saved per-server concurrency policy together under the existing admission lock, preserving expiry, candidate selection, defaults and the minimum fallback. No schema, public API, role or response-authorization change.
+2. This reduces database reads; production throughput impact remains unverified.
+
 # Changelog
 
 ## 1.54.0 — 2026-11-09
