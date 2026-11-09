@@ -2323,6 +2323,12 @@ open. There is no new collection, migration, provider call or admission change.
 
 ### Bounded same-server process triage — worker checkpoint #379
 
+Claim admission reads live server occupancy and saved per-server investigation
+limits together while holding the existing admission lock. Missing limits keep
+the default and malformed limits keep the minimum fallback. The regression
+checks that saturated servers are skipped without per-server policy reads.
+This reduces database round trips. Production throughput remains unverified.
+
 This bounded threaded-execution increment permits two independent renewable process-
 triage leases for one server, while the configured fleet-wide AI executor capacity
 remains the outer bound. The subject claim stays exclusive and selection excludes a
@@ -6496,6 +6502,32 @@ upgrade acceptance remain planned under #341. Coordinator integration, exact-hea
 full SQLite/MySQL/browser checks and fresh code scanning remain required before
 this checkpoint is delivered.
 
+
+### Batched automatic security-plan eligibility — worker checkpoint #592
+
+This bounded faster-AI increment shortens the database work performed while holding
+the distributed automatic security-plan queue lock. After the existing policy,
+pause, quarantine, lifecycle, prior-attempt and YARA filters select at most 100
+incidents, one projected eligibility query joins each bounded incident ID to its
+canonical host identity and uses a correlated `EXISTS` to read queued/running
+security or startup-plan occupancy. Keeping both comparisons in SQL preserves the
+database's host-ID collation. A successful enqueue updates an in-memory set with
+the canonical host ID, so another collating-equal incident remains deferred exactly
+as it was when each loop iteration queried the job table again.
+
+The 12-host SQLite reproduction admits at most the existing ten plans. Current main
+performs ten final host lookups plus ten final pending-job lookups; the candidate
+uses one bounded eligibility read, reducing the fixture from 151 to 132 SELECT
+statements. Focused coverage also retains a pre-existing startup-plan occupant and
+verifies that two eligible incidents on one host still produce only one automatic
+plan. Native MySQL coverage exercises differently cased stored/candidate host IDs,
+an existing collating-equal occupant and within-tick canonical-host deduplication.
+
+This changes no schema, public API, provider call, spend control, plan content,
+response authority or incident ordering. Per-policy pause and quarantine reads that
+occur before candidate selection remain separate work, and this checkpoint does not
+complete smooth shared planning admission, threaded investigations, production
+throughput or failover acceptance. Coordinator integration with current main is complete; exact integrated-head SQLite/MySQL/full-suite checks and fresh code-scanning inventory remain required before merge. The reported 12-host SELECT reduction is fixture evidence, not production-throughput validation.
 
 ### Batched AI-status aggregates — worker checkpoint #586
 
