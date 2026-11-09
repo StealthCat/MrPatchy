@@ -6288,7 +6288,13 @@ immutable trust decision and audit record during telemetry ingestion, authentica
 inspection and pre-AI evidence resolution. Repeated identical matches reuse the
 same record. Exact path/SHA-256 matches can reuse a previous repository-rooted
 observation across servers only while its original authenticated inspection remains
-the latest matching proof. A local newer mismatch takes precedence. Missing,
+the latest matching proof. A local newer mismatch takes precedence. When the latest
+receipt reports different or missing bytes at a path, only an observation made
+after that receipt can become trust; older byte evidence stays historical. Prior
+lookups bind the exact, collation-independent path identity before reading history,
+so unrelated paths sharing the same bytes cannot hide an eligible match, and a
+concurrently committed duplicate observation is resolved with a current read
+without aborting the caller's transaction or duplicating its audit entry. Missing,
 invalid, merely observed or changed bytes cannot seed trust. Trust receipts are
 independent of diagnostic pruning; missing origin evidence fails closed.
 
