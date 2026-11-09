@@ -2135,6 +2135,15 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+Successful process-triage claims retain a separate monotonic `claim_lock` timing
+sample (#619) in the existing redacted run diagnostics. The sample covers only
+waiting to acquire the distributed `ai-triage` claim lock; aggregate admission
+still includes claim selection and run creation, and queue age remains distinct.
+Refused or empty claims create no run and therefore no fabricated timing. This
+adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence and
+response-authorization behavior are unchanged. Production contention baselines
+and the broader faster-AI acceptance remain open.
+
 The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
 summary from #523. It reports per-stage sample counts, errors and p50/p95 with
 coverage and truncation, and keeps individual run logs available when the summary
