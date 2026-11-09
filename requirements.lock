@@ -14,9 +14,9 @@ anyio==4.16.0 \
     # via
     #   httpx
     #   starlette
-authlib==1.9.1 \
-    --hash=sha256:5c7d9848f47cac340f060f76ae0bc09b59f5c8e89cc1bb032d4370a0c55b5974 \
-    --hash=sha256:8b9be8b1e5174dcbf5520e984f1a22dc2edae5b6e40a61d4cedbf86b97e9e69b
+authlib==1.9.4 \
+    --hash=sha256:1b092ea87ba11cf3bd06d38ec993d82bc6255995fcd85ee436cbbba1d050b2fc \
+    --hash=sha256:f55a25f561f1f157ceca64da9df776f469f23715ac89ee338aa2f83dc9774e13
     # via -r requirements.txt
 bcrypt==5.0.0 \
     --hash=sha256:046ad6db88edb3c5ece4369af997938fb1c19d6a699b9c1b27b0db432faae4c4 \
