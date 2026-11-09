@@ -59,3 +59,32 @@ def test_every_service_has_read_only_root_with_tmp_tmpfs():
     for name, block in _services().items():
         assert re.search(r"^    read_only:\s*true\s*$", block, re.M), name
         assert "/tmp" in _flow_list(block, "tmpfs"), name
+
+
+HARDENING_KEYS = (
+    "cap_drop", "cap_add", "security_opt", "privileged", "read_only",
+    "tmpfs", "pids_limit", "mem_limit", "user", "network_mode", "pid", "ipc",
+    "devices", "cgroup_parent", "extends",
+)
+
+
+def test_gcp_override_inherits_hardening_without_redefining_it():
+    """Compose merges scalar/list keys by replacement, so the GCP override must not
+    restate any hardening key: it then keeps the base file's capability, read-only
+    root, PID and memory limits for the services it extends."""
+    base = _services()
+    text = (ROOT / "compose.gcp.yaml").read_text()
+    section = re.search(r"^services:\n(.*?)(?=^\S|\Z)", text, re.S | re.M)
+    blocks = re.split(r"^  (?=[A-Za-z0-9_-]+:\s*$)", section.group(1), flags=re.M)
+    override = {}
+    for block in filter(None, blocks):
+        name, _, rest = block.partition(":")
+        override[name.strip()] = rest
+    assert set(override) <= set(base), "override may only extend base services"
+    assert {"app", "worker"} <= set(override)
+    for name, block in override.items():
+        for key in HARDENING_KEYS:
+            assert not re.search(rf"^    {key}:", block, re.M), f"{name} must inherit {key}"
+        # the only writable gcloud state lives on the persistent data volume
+        assert "CLOUDSDK_CONFIG: /data/gcloud" in block, name
+

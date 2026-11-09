@@ -216,8 +216,10 @@ def auto_plan_tick(now=None):
         with Session() as s:
             cfg=config(s)
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not s.get(Setting,'openai_key'):return
-            recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
-            remaining=10-recent if cfg['ai_control_mode']=='legacy' else 10
+            remaining=10
+            if cfg['ai_control_mode']=='legacy':
+                recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
+                remaining-=recent
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
             from . import ai_policy
@@ -238,11 +240,24 @@ def auto_plan_tick(now=None):
                 rows+=[r for r in batch if r.evidence.get('scan_context',{}).get('engine')!='YARA']
                 if len(batch)<100:break
                 offset+=100
-            for row in rows[:100]:
+            candidates=rows[:100]
+            if not candidates:return
+            occupied=select(Job.id).where(
+                Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
+                Job.state.in_(['queued','running'])).exists()
+            eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
+                select(Incident.host_id,Host.id,occupied).join(Host,Host.id==Incident.host_id)
+                .where(Incident.id.in_([row.id for row in candidates])))}
+            occupied_hosts=set()
+            for row in candidates:
                 if remaining<=0:break
-                pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
-                if pending or not s.get(Host,row.host_id):continue
-                try:enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True});remaining-=1
+                status=eligibility.get(row.host_id)
+                if not status:continue
+                canonical_host,has_active_plan=status
+                if has_active_plan or canonical_host in occupied_hosts:continue
+                try:
+                    enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
+                    occupied_hosts.add(canonical_host);remaining-=1
                 except ValueError:continue
 
 
@@ -279,6 +294,17 @@ def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
     from .persistence import record_changes
     record_changes(s,host_id,job_id)
     audit(s,'security inspection receipt',host_id+' '+job_id)
+    if vendor_authenticated:
+        from .file_trust import assess
+        from .file_status import repositories
+        proofs = repositories(s,host_id)
+        for path, proof in proofs.items():
+            if proof['inspection_id'] != job_id:
+                continue
+            finding = proof['finding'] or {}
+            checksum = (finding.get('observed_sha256') if finding else
+                        proof['expected_sha256'] if proof['receipt_state'] == 'matches_artifact_bytes' else None)
+            assess(s,host_id,path,checksum,proofs)
 
 
 class PersistenceBaseline(Base):

@@ -4,8 +4,12 @@ import fcntl
 import json
 import os
 import ssl
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
+from threading import BoundedSemaphore
+import time
 
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field, ConfigDict
@@ -86,28 +90,97 @@ class DatabaseInput(BaseModel):
     sqlite_file: str = Field(default='mrpatchy-migrated.db', pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}\.db$')
 
 
-def stage(body):
-    previous = read_profile('target') or {}
+def _mysql_profile(body, previous):
+    """Validate MySQL input and resolve the password under the unchanged-destination rules."""
     values = body.model_dump(exclude={'clear_password'})
     if any(c in body.username + body.password + body.ca_file for c in '\x00\r\n'):
         raise ValueError('Database credentials and paths cannot contain NUL or line breaks')
+    if not body.host or not body.username: raise ValueError('MySQL host and username are required')
+    if body.password and body.clear_password: raise ValueError('Provide a password or clear it, not both')
+    if not body.password and not body.clear_password:
+        identity = ('backend', 'host', 'port', 'database', 'username', 'tls', 'ca_file')
+        if all(previous.get(k) == values[k] for k in identity):
+            values['password'] = previous.get('password', '')
+        else:
+            raise ValueError('Enter the password (or explicitly select no password) when changing the MySQL destination or TLS settings')
+    if body.ca_file and not body.tls: raise ValueError('Enable verified TLS to use a CA file')
+    if body.ca_file and not Path(body.ca_file).is_absolute(): raise ValueError('CA file must be an absolute path accessible inside the app and worker containers')
+    return values
+
+
+def stage(body):
+    previous = read_profile('target') or {}
+    values = body.model_dump(exclude={'clear_password'})
     if body.backend == 'mysql':
-        if not body.host or not body.username: raise ValueError('MySQL host and username are required')
-        if body.password and body.clear_password: raise ValueError('Provide a password or clear it, not both')
-        if not body.password and not body.clear_password:
-            identity = ('backend', 'host', 'port', 'database', 'username', 'tls', 'ca_file')
-            if all(previous.get(k) == values[k] for k in identity):
-                values['password'] = previous.get('password', '')
-            else:
-                raise ValueError('Enter the password (or explicitly select no password) when changing the MySQL destination or TLS settings')
-        if body.ca_file and not body.tls: raise ValueError('Enable verified TLS to use a CA file')
-        if body.ca_file and not Path(body.ca_file).is_absolute(): raise ValueError('CA file must be an absolute path accessible inside the app and worker containers')
+        values = _mysql_profile(body, previous)
     else:
+        if any(c in body.username + body.password + body.ca_file for c in '\x00\r\n'):
+            raise ValueError('Database credentials and paths cannot contain NUL or line breaks')
         values['password'] = ''
     # Validate URL construction without opening or changing either database.
     profile_url(values)
     write_profile('target', values)
     return public_target(values)
+
+
+TEST_TIMEOUT = 5
+_TEST_SLOTS = BoundedSemaphore(2)
+TEST_SCOPE = 'Result describes connectivity from this controller only, not other workers or HA members.'
+_TEST_DETAILS = {
+    'ok': 'Connected, authenticated and ran a read-only query. This does not prove migration privileges, schema compatibility or HA readiness.',
+    'busy': 'Other connection tests are in progress on this controller. Try again shortly.',
+    'timeout': 'The connection test timed out. Check the host, port and firewall.',
+    'authentication': 'Authentication failed. Check the username and password.',
+    'database': 'The database does not exist. Create it first.',
+    'access': 'The account cannot access this database.',
+    'tls': 'TLS verification failed. Check the CA file and that the host name matches the certificate.',
+    'connectivity': 'Could not reach the database host. Check the host name, port and network access.',
+    'error': 'The connection test failed. Check the database settings.',
+}
+
+
+def test_connection(body):
+    """Read-only, bounded connectivity check using the entered (unsaved) values.
+
+    Never writes settings, creates objects or returns driver text; the result only
+    proves this controller can authenticate and run SELECT 1 against the database.
+    """
+    if body.backend != 'mysql': raise ValueError('Only MySQL destinations can be tested')
+    values = _mysql_profile(body, read_profile('target') or {})
+    url = make_url(profile_url(values))
+    kwargs = dict(host=url.host, port=url.port, user=url.username, password=url.password or '', database=url.database,
+                  charset='utf8mb4', connect_timeout=TEST_TIMEOUT, read_timeout=TEST_TIMEOUT, write_timeout=TEST_TIMEOUT,
+                  autocommit=False, read_default_file=None)
+    if values['tls']:
+        kwargs.update(ssl_ca=url.query['ssl_ca'], ssl_verify_cert=True, ssl_verify_identity=True)
+    started = time.monotonic()
+    category = 'busy'
+    if _TEST_SLOTS.acquire(blocking=False):
+        try:
+            category = _run_mysql_probe(kwargs)
+        finally:
+            _TEST_SLOTS.release()
+    result = {'ok': category == 'ok', 'category': category, 'scope': TEST_SCOPE, 'detail': _TEST_DETAILS[category]}
+    if result['ok']:
+        result['elapsed_ms'] = int((time.monotonic() - started) * 1000)
+    return result
+
+
+def _run_mysql_probe(kwargs):
+    # Killing and reaping the child stops DNS and network activity before the slot is released.
+    # Pass credentials through stdin, and accept only a fixed category from the child.
+    try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name('database_probe.py'))],
+            input=json.dumps(kwargs).encode(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=TEST_TIMEOUT, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 'timeout'
+    except OSError:
+        return 'error'
+    category = result.stdout.decode('ascii', errors='replace').strip()
+    return category if result.returncode == 0 and category in _TEST_DETAILS else 'error'
 
 
 def profile_url(profile):

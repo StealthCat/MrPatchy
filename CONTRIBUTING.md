@@ -1,9 +1,9 @@
 # Contributing to Mr Patchy
 
 Please read [LICENSE](LICENSE) and [COMMERCIAL.md](COMMERCIAL.md) before contributing.
-Mr Patchy is free for personal, noncommercial use; commercial and organizational
-operation requires a separate paid agreement. Source availability does not remove
-that requirement.
+Mr Patchy is free for personal, noncommercial use and for nonprofits and local
+governments running their own systems. Commercial use and other organizational
+use require a separate paid agreement.
 
 ## Rights in new contributions
 
@@ -12,7 +12,7 @@ after these terms are published, you represent that you own the contribution or
 have authority to grant the following rights. You retain ownership and grant
 Robert Cronin a perpetual, worldwide, nonexclusive, royalty-free, irrevocable
 copyright license to use, reproduce, modify, display, distribute and sublicense
-the contribution as part of Mr Patchy under the project's personal-use license,
+the contribution as part of Mr Patchy under the project's free-use grants,
 separate paid commercial agreements, and future licensing terms. This grant does
 not transfer ownership and does not cover unrelated work you have not submitted.
 
