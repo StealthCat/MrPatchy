@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.54.0 — 2026-11-09
+
+1. [PR #393](https://github.com/StealthCat/MrPatchy/pull/393): Show conservative vendor-sourced operating-system lifecycle status (standard, extended, ended and unknown) on each server Overview, failing closed for derivatives, stale or future-dated inventory, unverified extended-support architectures and unobserved Ubuntu Pro entitlement.
+2. Compatibility and limits: the existing viewer-scoped summary API gains bounded read-only lifecycle metadata; no schema, mutation, role, AI, patching or response-authorization behavior changes. The catalog is static/versioned and displays its review date; Ubuntu Pro entitlement is not observed. This is a partial #341 increment: migration queue/plans, target correlation, fleet filters/reports, alerts, RPM/vendor coverage, entitlement discovery, automated catalog refresh and real-target upgrade acceptance remain out of scope. A source bump does not publish a Docker image.
+
+## 1.53.4 — 2026-11-09
+
+1. [PR #640](https://github.com/StealthCat/MrPatchy/pull/640): Memoize host RPM version indexes and candidate identities across idle scoring passes while inventory and package fields are unchanged, including timestamp-only refreshes. Real scoring-relevant inventory and package changes still invalidate identities and preserve existing rescoring behavior.
+2. Compatibility and limits: no API, schema, settings, provider-evidence, scoring-result or response-authorization behavior changes. The process-local FIFO retains 256 hosts and up to 20,000 identities per host; larger or frequently cycling host sets can rebuild indexes, and the host inventory fingerprint is still computed per pass. SQLite/MySQL fixture timings are not production benchmarks. This is a partial fix for #436; broader performance scope remains open. This source update does not publish a Docker image.
+
 ## 1.53.3 — 2026-11-09
 
 1. [PR #598](https://github.com/StealthCat/MrPatchy/pull/598): Add an ordered `(purpose, state, started)` index for active AI run status and recovery lookups, and create it idempotently on existing databases while retaining run history and diagnostics. SQLite and MySQL query-plan tests verify the active index is selected without a temporary sort/filesort.

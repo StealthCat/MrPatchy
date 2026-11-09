@@ -13,7 +13,7 @@ def servers(admin):
     with Session() as s:
         for identifier in ('alpha','beta'):
             s.add(Host(id=identifier,name=identifier,address='192.0.2.1',fingerprint='SHA256:test',state='online',last_seen=now,
-                last_repo=now,inventory={'os':'ID=debian','architecture':'amd64','files':{'private':'sensitive repository config'},
+                last_repo=now,inventory={'os':'ID=debian\nVERSION_ID=13','architecture':'amd64','files':{'private':'sensitive repository config'},
                 'machine_id':identifier+'-machine','collected':now},telemetry={'collected':now,'hashed_at':now,'processes':[{'secret':'process arguments'}]},baseline={'private':'hash'}))
             s.add(Package(id=identifier+':bash',host_id=identifier,name='bash',installed='1',candidate='2',priority='critical',available_since=now-86400*2))
             s.add(Behavior(id=identifier,host_id=identifier,evidence={'executable':'/'+identifier},verdict='pending'))
@@ -31,6 +31,8 @@ def test_summary_is_scoped_and_uses_explicit_safe_fields(admin,servers):
     assert data['host']['id']=='alpha' and data['system']['machine_id']=='alpha-machine'
     assert data['counts']=={'packages':1,'updates':1,'held':0,'overdue':1,'investigations':1,'unapproved':1,'pending_ai':1}
     assert data['last_patch']['id']=='alpha' and data['collector']['processes']==1
+    assert data['lifecycle']['state']=='standard' and data['lifecycle']['release']=='13'
+    assert data['lifecycle']['source']['url']=='https://www.debian.org/releases/'
     assert not any(value in response.text for value in ('sensitive repository','process arguments','private job payload','beta-machine'))
     assert not {'inventory','telemetry','baseline'} & data['host'].keys()
 
