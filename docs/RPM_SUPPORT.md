@@ -13,7 +13,7 @@ sudo dnf install policycoreutils-python-utils
 sudo systemctl enable --now sshd
 ```
 
-DNF5 installations also need the `python3-dnf` DNF4 compatibility API. Legacy Yum 3/Python 2 systems are not supported. Offline enrollment never downloads prerequisites. The bootstrap sets persistent SELinux labels for `/opt/drpatch` and its SSH directory; it does not disable SELinux. Test enrollment with your host's enforcing policy before fleet rollout.
+DNF5 installations also need the `python3-dnf` DNF4 compatibility API. Legacy Yum 3/Python 2 systems are not supported. Target helpers require `/usr/bin/python3` 3.8 or newer; the installer and deployment refuse older interpreters (for example the default Python 3.6 on EL8) with a clear message. Offline enrollment never downloads prerequisites. The bootstrap sets persistent SELinux labels for `/opt/drpatch` and its SSH directory; it does not disable SELinux. Test enrollment with your host's enforcing policy before fleet rollout.
 
 Rebuild the central Docker image after upgrading, then finish/verify enrollment to deploy the RPM helper. The helper is root-owned and included in the five-minute managed-file integrity checks.
 

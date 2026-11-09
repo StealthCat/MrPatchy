@@ -11,6 +11,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from types import SimpleNamespace
+from time import perf_counter
 from sqlalchemy import String, Double, select, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
@@ -85,7 +86,9 @@ def abandon_owner(owner):
 
 def acquire(owner=None):
     lock=Lock('ai-triage')
+    lock_started=perf_counter()
     if not lock.acquire():return None
+    claim_lock_wait=perf_counter()-lock_started
     try:
         with Session() as s:
             now=time.time();reconcile(s,now);s.commit()
@@ -98,15 +101,18 @@ def acquire(owner=None):
             # Read-only gate: do not create runs/attempts for work that the shared
             # rate gate, provider backoff or daily budget cannot admit right now.
             from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing
-            if any(gate.waiting(s,now) for gate in (ai_admission,ai_provider_backoff,ai_budget)):return None
-            signature=ai_retry.configuration(s)
+            if (ai_admission.waiting(s,now,settings=cfg) or ai_provider_backoff.waiting(s,now) or
+                ai_budget.waiting(s,now,settings=cfg)):return None
+            signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             # Active claims are globally bounded by worker capacity. Resolve
             # each occupied host's revisioned policy under this admission lock
             # so a settings change and the next claim cannot cross.
-            active_by_host=dict(s.execute(select(Claim.host_id,func.count()).where(
-                Claim.expires>now).group_by(Claim.host_id)).all())
-            saturated_hosts=[host_id for host_id,count in active_by_host.items()
-                if count>=ai_policy.investigation_limit(s,host_id)]
+            live_counts=(select(Claim.host_id,func.count().label('live_count')).where(
+                Claim.expires>now).group_by(Claim.host_id).subquery())
+            occupancy=s.execute(select(live_counts.c.host_id,live_counts.c.live_count,Setting.key,Setting.value)
+                .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
+            saturated_hosts=[host_id for host_id,count,key,policy in occupancy
+                if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
             row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
                 Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
@@ -135,15 +141,16 @@ def acquire(owner=None):
                         configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
                     s.add(claim);s.commit()
                     work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
-                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner)
+                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
             except host_lifecycle.Inactive:return None
     finally:lock.release()
 
 
 class Lease:
-    def __init__(self,claim,work,cfg,secret,owner):
+    def __init__(self,claim,work,cfg,secret,owner,claim_lock_wait):
         self.subject=claim.subject;self.token=claim.token;self.run_id=claim.run_id;self.host_id=claim.host_id
         self.work=work;self.cfg=cfg;self.secret=SimpleNamespace(value=secret);self.owner=owner
+        self.claim_lock_wait=claim_lock_wait
         self.stopped=threading.Event();self.lost=threading.Event()
 
     def validate(self,s):
