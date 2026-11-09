@@ -2135,6 +2135,15 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+Successful process-triage claims retain a separate monotonic `claim_lock` timing
+sample (#619) in the existing redacted run diagnostics. The sample covers only
+waiting to acquire the distributed `ai-triage` claim lock; aggregate admission
+still includes claim selection and run creation, and queue age remains distinct.
+Refused or empty claims create no run and therefore no fabricated timing. This
+adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence and
+response-authorization behavior are unchanged. Production contention baselines
+and the broader faster-AI acceptance remain open.
+
 The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
 summary from #523. It reports per-stage sample counts, errors and p50/p95 with
 coverage and truncation, and keeps individual run logs available when the summary
@@ -2212,6 +2221,12 @@ reserve spend if the cap still applies. Capped requests add one settings read
 and compute the quote while holding the lock. This checkpoint removes one
 shared lock acquisition per request that begins budget admission uncapped.
 End-to-end throughput and broader shared-controls acceptance remain open.
+
+Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
+history query to legacy mode. Shared modes still queue at most ten plans per tick
+and enforce shared admission at execution. The legacy combined security/startup
+allowance stays in effect until explicit migration. This avoids a history read
+under the queue lock and leaves migration and throughput acceptance open.
 
 Provide administrator-controlled modes in Settings with clear effects before save:
 

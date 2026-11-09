@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.53.0 — 2026-11-09
+
+1. [PR #377](https://github.com/StealthCat/MrPatchy/pull/377): Add administrator-managed, versioned saved fleet queries over OS, package, state, enabled and overdue-update filters. Viewers can retrieve bounded, paginated host and matching-package evidence with evaluation time, query version and freshness; stale or incomplete observations are flagged, not counted as fresh.
+2. Compatibility and limits: additive viewer/admin API and one `saved_fleet_queries` table created by normal schema initialization; no existing API or response-authorization behavior changes. This is the API-only first slice of #344; CVE/hash filters, group/owner/site dimensions, reports/exports, UI and large-fleet MySQL scale verification remain open. This source update does not publish a Docker image.
+
+## 1.52.2 — 2026-11-09
+
+1. [PR #620](https://github.com/StealthCat/MrPatchy/pull/620): Retain the monotonic distributed `claim_lock` wait separately from aggregate admission and queue-age timings for successful process-triage claims.
+2. Compatibility and limits: diagnostic-only; no schema, API, setting, role, lease, lock, evidence or response-authorization changes. Older retained runs lack this sample; failed lock acquisitions and termination before timing flush may leave coverage incomplete. Production contention baselines and broader faster-AI acceptance remain open. This source update does not publish a Docker image.
+
+## 1.52.1 — 2026-11-09
+
+1. [PR #602](https://github.com/StealthCat/MrPatchy/pull/602): Skip the rolling-hour security/startup plan-history count when automatic planning uses rate, daily-cap, combined or unthrottled shared admission. Preserve the combined hourly allowance in legacy mode; the per-tick queue maximum and downstream shared admission remain unchanged.
+2. Compatibility and limits: no schema, API, setting, default or scheduling changes. The legacy combined allowance remains until explicit migration; broader shared-control migration and end-to-end throughput acceptance remain open. This source update does not publish a Docker image.
+
+# Changelog
+
 ## 1.52.0 — 2026-11-09
 
 1. [PR #637](https://github.com/StealthCat/MrPatchy/pull/637): Add durable automatic file trust for matches backed by authenticated repository evidence and exact active known-good context. Trust records carry host/path/SHA-256 provenance and audit history; exact-path lookups remain collation-independent, concurrent duplicate observations resolve safely, and after a newer authenticated mismatch, only a subsequent authenticated matching inspection restores trust.
