@@ -2135,6 +2135,12 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
+summary from #523. It reports per-stage sample counts, errors and p50/p95 with
+coverage and truncation, and keeps individual run logs available when the summary
+request fails. The panel is read-only and available to administrators. Matched
+production serial/parallel measurements remain outstanding.
+
 ### Update-scoring candidate database reads
 
 Candidate discovery reads server IDs and inventory in its existing bounded
@@ -2253,6 +2259,21 @@ Check that both reports retain the same provider call count and one-stage and
 two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
+
+### Retained process-triage timing sample — worker checkpoint #522
+
+The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
+recently started completed or failed process investigations (up to 100, configurable
+with `limit`). It reads at most 2,048 retained timing events plus a truncation probe,
+without returning event messages, run IDs or evidence. Each allowlisted stage reports
+its sample and error counts and nearest-rank p50/p95 milliseconds, including both
+successful and failed samples. Missing percentiles are null. Runs without valid
+samples, discarded malformed events and event truncation are visible.
+
+A run can supply multiple provider or persistence samples, and stages overlap.
+These are retained diagnostic samples, subject to pruning or incomplete writes.
+Dashboard presentation and matched serial/parallel production measurement remain
+open. There is no new collection, migration, provider call or admission change.
 
 ### Bounded same-server process triage — worker checkpoint #379
 
@@ -6350,3 +6371,30 @@ measurements, dashboard presentation and the full faster-AI acceptance milestone
 remain separate and incomplete. Coordinator integration must first preserve #527,
 then remove the prerequisite diff and run every applicable exact-head check before
 delivery.
+
+
+### Configurable AI benchmark persistence latency — worker checkpoint #613
+
+The disposable serial/parallel triage benchmark now accepts a bounded
+`--persistence-delay-ms` input. The synthetic delay is applied independently to
+billable request-receipt creation and usage reconciliation, and both operations keep
+their separate measured stages. Machine-readable output records the configured delay,
+completed and approved subject counts, provider calls and token totals so comparisons
+can reject a workload or result mismatch instead of reporting an invalid speedup.
+
+Focused coverage rejects values outside 0–1000 milliseconds and runs the same four
+subjects serially and with two workers. Both executions complete four low-risk,
+non-approved subjects, make six provider calls, account for 600 input and 120 output
+tokens, and record the configured delay in all six receipt and usage measurements.
+The reproducible 12-subject comparison in
+`docs/benchmarks/ai-persistence-delay.json` used a 5 ms loopback provider, a 20 ms
+synthetic receipt/usage persistence delay and the existing 10 ms SSH fixture. It
+measured 8.647 subjects/second serially and 19.497 with four workers (2.255x), with
+identical provider calls, tokens, completed subjects and zero errors.
+
+This fixture isolates controlled accounting-persistence pressure; it does not emulate
+database lock, network or failover behavior and does not establish production, TLS or
+database performance. The default remains zero added persistence delay. Runtime
+admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
+response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
+the broader faster-AI roadmap remain incomplete.

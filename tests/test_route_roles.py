@@ -16,6 +16,7 @@ EXPECTED_ROLES = {
     ('GET','/'):'public',
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
     ('POST','/api/ai/provider-backoff/clear'):'admin',
+    ('GET','/api/ai/triage/timings'):'admin',
     ('GET','/api/ai/runs'):'admin',
     ('GET','/api/ai/runs/{run_id}'):'admin',
     ('GET','/api/audit'):'admin',
