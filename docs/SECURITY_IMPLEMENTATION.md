@@ -2357,6 +2357,12 @@ per-server bound administrator-configurable, or establish full multi-controller/
 failover acceptance. Exact-head full CI and coordinator integration remain required.
 
 
+Lease recovery reads expired claims and their retained run rows together
+under the existing admission lock. It still interrupts running orphaned runs,
+preserves live leases and provider receipts, and removes expired claims with
+missing runs. The recovery fixture checks the fixed read count and idempotent
+interruption history. Production throughput remains unverified.
+
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
 This stacked threaded-execution increment replaces the fixed two-lease server bound
