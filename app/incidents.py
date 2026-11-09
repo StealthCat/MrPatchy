@@ -216,8 +216,10 @@ def auto_plan_tick(now=None):
         with Session() as s:
             cfg=config(s)
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not s.get(Setting,'openai_key'):return
-            recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
-            remaining=10-recent if cfg['ai_control_mode']=='legacy' else 10
+            remaining=10
+            if cfg['ai_control_mode']=='legacy':
+                recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
+                remaining-=recent
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
             from . import ai_policy
@@ -279,6 +281,17 @@ def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
     from .persistence import record_changes
     record_changes(s,host_id,job_id)
     audit(s,'security inspection receipt',host_id+' '+job_id)
+    if vendor_authenticated:
+        from .file_trust import assess
+        from .file_status import repositories
+        proofs = repositories(s,host_id)
+        for path, proof in proofs.items():
+            if proof['inspection_id'] != job_id:
+                continue
+            finding = proof['finding'] or {}
+            checksum = (finding.get('observed_sha256') if finding else
+                        proof['expected_sha256'] if proof['receipt_state'] == 'matches_artifact_bytes' else None)
+            assess(s,host_id,path,checksum,proofs)
 
 
 class PersistenceBaseline(Base):
