@@ -29,9 +29,13 @@ class TriageRetry(Base):
 
 def configuration(s):
     cfg=config(s);key=s.get(Setting,'openai_key')
+    return configuration_signature(cfg['ai_model'],key.value if key else None)
+
+
+def configuration_signature(model,key_value):
     # The ciphertext is hashed locally, never returned. Model/key changes unblock
     # configuration failures; enable/disable toggles do not reset attempt limits.
-    return hashlib.sha256(json.dumps(['triage-retry-v1',cfg['ai_model'],key.value if key else None],sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(['triage-retry-v1',model,key_value],sort_keys=True).encode()).hexdigest()
 
 
 def eligible(signature,now):
