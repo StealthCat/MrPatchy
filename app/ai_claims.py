@@ -117,24 +117,24 @@ def acquire(owner=None):
             # Active claims are globally bounded by worker capacity. Resolve
             # each occupied host's revisioned policy under this admission lock
             # so a settings change and the next claim cannot cross.
-            active_by_host=dict(s.execute(select(Claim.host_id,func.count()).where(
-                Claim.expires>now).group_by(Claim.host_id)).all())
-            saturated_hosts=[host_id for host_id,count in active_by_host.items()
-                if count>=ai_policy.investigation_limit(s,host_id)]
-            active_counts=(select(Claim.host_id.label('host_id'),func.count().label('active')).where(
+            live_counts=(select(Claim.host_id,func.count().label('live_count')).where(
                 Claim.expires>now).group_by(Claim.host_id).subquery())
+            occupancy=s.execute(select(live_counts.c.host_id,live_counts.c.live_count,Setting.key,Setting.value)
+                .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
+            saturated_hosts=[host_id for host_id,count,key,policy in occupancy
+                if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
             # Balance live occupancy first. Ties use the durable least-recent
             # host turn; a host with no turn sorts ahead of one already served.
             host_id=s.scalar(select(Behavior.host_id).outerjoin(
                 ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).outerjoin(
-                active_counts,active_counts.c.host_id==Behavior.host_id).outerjoin(
+                live_counts,live_counts.c.host_id==Behavior.host_id).outerjoin(
                 HostTurn,HostTurn.host_id==Behavior.host_id).where(
                 Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
                 Behavior.id.not_in(select(Claim.subject)),Behavior.verdict.in_(('pending','error')),
                 ai_retry.eligible(signature,now)).group_by(
-                Behavior.host_id,active_counts.c.active,HostTurn.last_turn).order_by(
-                func.coalesce(active_counts.c.active,0),func.coalesce(HostTurn.last_turn,0),
+                Behavior.host_id,live_counts.c.live_count,HostTurn.last_turn).order_by(
+                func.coalesce(live_counts.c.live_count,0),func.coalesce(HostTurn.last_turn,0),
                 func.min(Behavior.first_seen),Behavior.host_id).limit(1))
             if not host_id:return None
             row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
