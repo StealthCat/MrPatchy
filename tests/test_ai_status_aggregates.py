@@ -34,6 +34,20 @@ def test_status_counts_without_loading_pending_rows(admin):
     assert not any('FROM behaviors' in q and 'count(' not in q.lower() and 'min(' not in q.lower() for q in statements)
 
 
+def test_status_combines_run_and_scoring_aggregates(admin):
+    """The polled status endpoint must not scan either aggregate dataset twice."""
+    statements=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):statements.append(statement.lower())
+    event.listen(engine,'before_cursor_execute',observe)
+    try:
+        with Session() as session:ai_runs.status(session)
+    finally:event.remove(engine,'before_cursor_execute',observe)
+    run_aggregates=[query for query in statements if 'from ai_runs' in query and ('count(' in query or 'min(' in query)]
+    scoring_aggregates=[query for query in statements if 'from update_scores' in query and 'join packages' in query]
+    assert len(run_aggregates)==1 and 'count(' in run_aggregates[0] and 'min(' in run_aggregates[0]
+    assert len(scoring_aggregates)==1 and 'count(' in scoring_aggregates[0] and 'min(' in scoring_aggregates[0]
+
+
 def test_status_counts_share_one_snapshot_under_concurrent_insert(admin):
     now=time.time()
     with Session() as s:
