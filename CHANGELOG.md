@@ -2,7 +2,7 @@
 
 ## 1.51.1 — 2026-11-09
 
-1. [PR #616](https://github.com/StealthCat/MrPatchy/pull/616): Skip the fleet-wide daily spend lock and spend quote when AI budget admission starts in legacy, rate-only or unthrottled mode. Capped requests reread current settings under the lock, then quote and reserve spend atomically if a cap still applies.
+1. [PR #616](https://github.com/StealthCat/MrPatchy/pull/616): Skip the fleet-wide daily spend lock and spend quote when AI budget admission starts in legacy, rate-only or unthrottled mode. Capped requests reread settings after waiting for the lock; a removed cap skips the quote and ledger write, while an active cap is quoted and reserved atomically.
 2. Compatibility and limits: no schema, API, setting or default changes; capped requests add a settings read and compute the bounded quote while holding the lock. Rate, provider and policy controls remain independent. This removes one lock acquisition for uncapped budget admission; broader shared-controls and production throughput acceptance remain open. This source update does not publish a Docker image.
 
 ## 1.51.0 — 2026-11-08
