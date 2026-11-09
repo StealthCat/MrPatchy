@@ -146,6 +146,32 @@ Run `docker compose up -d --build` after changing bindings. Optional `HTTP_BIND_
 For dual CAs, use a private ACME server for `patchy.home.example.com` and Let's Encrypt for `patchy.example.com`. Both DNS names reach the same listener; TLS selects the appropriate certificate by hostname. **Internal is a certificate profile, not an access-control boundary**—use network controls if one name must be LAN-only. Public ACME HTTP-01/TLS-ALPN-01 validation still requires external TCP 80/443 forwarded to Caddy, even when Docker publishes 8080/8443. Wildcard issuance/DNS-01 is not included. Keep `PUBLIC_URL` aligned with the default enrollment/SSO address; curl enrollment can also use either enabled HTTPS profile. See [Docker bindings and dual TLS](docs/DOCKER_TLS.md) for setup, migration and recovery.
 
 
+### Custom app and worker layouts
+
+Use the menu-driven configurator to generate standalone Compose YAML for apps +
+workers, apps only or workers only, with 1–16 containers per selected role:
+
+```bash
+python -m pip install -r requirements-configure.txt
+python tools/configure_compose.py
+docker compose --env-file .env -f compose.custom.yaml config --quiet
+docker compose --env-file .env -f compose.custom.yaml up --build -d --wait
+```
+
+The menu configures build/GCP/image options, project and shared storage, database
+requirements, ports/network, worker concurrency and IDs, and memory. Preview before
+saving; replacing an existing output requires confirmation and keeps a `.bak`.
+Use the generated file by itself, not as an overlay on `compose.yaml`. Its default
+`mrpatchy-custom` project has separate volumes from an existing installation.
+
+Worker-only layouts require an existing controller data volume on the same Docker
+host, matching source version and database selection. App-only layouts need
+separate workers for background jobs. Multiple apps share local state and a DNS
+endpoint with ordered initial startup; this does not provide production HA,
+guaranteed load balancing or coordinated rolling upgrades. See
+[Compose configuration](docs/COMPOSE_CONFIGURATION.md) for prerequisites, limits
+and non-interactive command examples.
+
 ## Reset an administrator password locally
 
 From your deployment directory, with the updated app container running:

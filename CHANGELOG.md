@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.51.0 — 2026-11-08
+
+1. [PR #639](https://github.com/StealthCat/MrPatchy/pull/639): Add a menu-driven Python Compose configurator for app-and-worker, app-only and worker-only layouts with 1–16 containers per selected role. Customize normal/GCP builds or an existing image, project and shared data volume, database requirements, ports/subnet, worker concurrency and IDs, and memory limits. Preview generated YAML before saving; explicit replacement preserves a backup. The generator inherits maintained service restrictions, health checks and worker drain settings, orders initial app startup and removes local app/TLS dependencies from worker-only output. Fixes #638.
+2. Compatibility and limits: generated YAML is standalone and defaults to a separate project; existing deployments and runtime dependencies are unchanged. Worker-only layouts require matching controller state on the same Docker host. Multiple apps share local state and a DNS endpoint; they do not establish load-balancing, migration fencing, cross-host storage or production HA guarantees. The host-side tool requires PyYAML. This source update does not publish a Docker image.
+
 ## 1.50.0 — 2026-11-09
 
 1. [PR #635](https://github.com/StealthCat/MrPatchy/pull/635): Add an administrator-only **Test connection** action to Settings → Database (`POST /api/settings/database/test`) that checks the entered MySQL values, including unsaved edits, before a migration destination is staged. The probe verifies TLS and the host name when enabled, authenticates to the selected database and runs only `SELECT 1` in a disposable subprocess with a five-second overall deadline, at most two concurrent probes per controller process, sanitized result categories and an audit record of the category only. The button keeps keyboard focus, ignores duplicate activation, announces results through a live status and clears stale results after edits or Save. Fixes #634.
