@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, freezes, os_upgrade
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, freezes
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.48.2'
+APP_VERSION='1.53.3'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -455,6 +455,47 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
         return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
             for h,a,ak,o,ok,m,mk,saved in rows]
+
+def saved_query_or_404(s,query_id):
+    row=s.get(fleet_queries.SavedFleetQuery,query_id)
+    if not row:raise HTTPException(404,'Saved fleet query not found')
+    return row
+
+@app.get('/api/fleet/queries')
+def fleet_query_list(user=Depends(viewer_user)):
+    with Session() as s:return [fleet_queries.public(r) for r in s.scalars(select(fleet_queries.SavedFleetQuery).order_by(fleet_queries.SavedFleetQuery.name).limit(500))]
+
+@app.post('/api/fleet/queries')
+def fleet_query_create(body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row=fleet_queries.SavedFleetQuery(id=fleet_queries.new_id(),name=body.name,definition=body.filter.model_dump(),created_by=user['username'])
+        s.add(row);audit(s,'fleet-query-create',row.id+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.put('/api/fleet/queries/{query_id}')
+def fleet_query_update(query_id:str,body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        if body.expected_version!=row.version:raise HTTPException(409,'Saved fleet query changed; reload it before editing')
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name,fleet_queries.SavedFleetQuery.id!=query_id)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row.name=body.name;row.definition=body.filter.model_dump();row.version+=1;row.updated=time.time()
+        audit(s,'fleet-query-update',row.id+' v'+str(row.version)+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.delete('/api/fleet/queries/{query_id}')
+def fleet_query_delete(query_id:str,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        s.delete(row);audit(s,'fleet-query-delete',row.id+' '+row.name);s.commit()
+        return {'deleted':query_id}
+
+@app.get('/api/fleet/queries/{query_id}/results')
+def fleet_query_results(query_id:str,offset:int=0,limit:int=50,user=Depends(viewer_user)):
+    if offset<0 or not 1<=limit<=fleet_queries.PAGE_MAX:raise HTTPException(400,'Invalid fleet query pagination')
+    with Session() as s:
+        row=saved_query_or_404(s,query_id)
+        return fleet_queries.evaluate(s,fleet_queries.FleetFilter(**row.definition),offset,limit)|{'query':{'id':row.id,'name':row.name,'version':row.version,'filter':row.definition}}
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
@@ -1152,6 +1193,14 @@ def database_settings_save(body:database_config.DatabaseInput,user=Depends(admin
         audit(s,'stage database migration',user['username']+' staged '+body.backend+' destination; active database unchanged')
         s.commit()
     return {'ok':True,'target':result}
+
+@app.post('/api/settings/database/test')
+def database_settings_test(body:database_config.DatabaseInput,user=Depends(admin_user)):
+    try:result=database_config.test_connection(body)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with Session() as s:
+        audit(s,'test database connection',user['username']+' tested MySQL connection: '+result['category']);s.commit()
+    return result
 
 class TLSInput(BaseModel):
     domain:str=Field(default='',max_length=253)
@@ -1886,6 +1935,14 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(adm
         scheduling.cancel_pending(s,schedule_id,'Schedule deleted')
         s.delete(row);audit(s,'delete patch schedule',user['username']+' '+schedule_id);s.commit()
     return {'ok':True}
+
+@app.get('/api/ai/triage/timings')
+def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depends(admin_user)):
+    if not 1 <= limit <= ai_runs.TIMING_SUMMARY_RUN_LIMIT:
+        raise HTTPException(400, 'Invalid timing sample limit')
+    with Session() as s:
+        return ai_runs.triage_timing_summary(s, limit)
+
 
 @app.get('/api/ai/runs')
 def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(admin_user)):
@@ -2858,6 +2915,12 @@ def persistence_comparison(host_id:str,inspection_id:str,user=Depends(admin_user
 
 
 class AgentPolicyInput(BaseModel):
+    # None (or omitted) means "use the global default"; False/True are explicit overrides.
+    auto_upgrade:bool|None=None
+    auto_repair:bool|None=None
+    expected:dict
+
+class AgentGlobalPolicyInput(BaseModel):
     auto_upgrade:bool=False
     auto_repair:bool=False
     expected:dict
@@ -2867,6 +2930,20 @@ def agent_state(host_id:str,user=Depends(admin_user)):
     from . import agent_maintenance
     with Session() as s:return agent_maintenance.public(s,host_or_404(s,host_id))
 
+@app.get('/api/settings/agent-maintenance')
+def agent_global_policy(user=Depends(admin_user)):
+    from . import agent_maintenance
+    with Session() as s:return agent_maintenance.global_policy(s)
+
+@app.put('/api/settings/agent-maintenance')
+def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_user)):
+    from . import agent_maintenance
+    value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+    try:saved=agent_maintenance.save_global(value,body.expected,lambda s:audit(s,'agent global policy updated',json.dumps(value)))
+    except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
+    if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
+    return value
+
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
     from . import agent_maintenance
@@ -2874,12 +2951,12 @@ def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
         with Session() as s:
             host_or_404(s,host_id)
             if body.expected!=agent_maintenance.policy(s,host_id):raise HTTPException(409,'Agent policy changed; refresh before saving')
-            value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+            value={k:v for k,v in (('auto_upgrade',body.auto_upgrade),('auto_repair',body.auto_repair)) if v is not None}
             row=s.get(Setting,'agent-policy:'+host_id)
             if row:row.value=value
             else:s.add(Setting(key='agent-policy:'+host_id,value=value))
-            audit(s,'agent policy updated',host_id+' '+json.dumps(value));s.commit()
-            return value
+            audit(s,'agent policy updated',host_id+' overrides '+json.dumps(value));s.commit()
+            return agent_maintenance.public(s,host_or_404(s,host_id))['policy']
 
 @app.post('/api/hosts/{host_id}/security/agent/{action}')
 def agent_action(host_id:str,action:str,user=Depends(admin_user)):

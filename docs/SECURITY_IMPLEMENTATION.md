@@ -2135,6 +2135,21 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+Successful process-triage claims retain a separate monotonic `claim_lock` timing
+sample (#619) in the existing redacted run diagnostics. The sample covers only
+waiting to acquire the distributed `ai-triage` claim lock; aggregate admission
+still includes claim selection and run creation, and queue age remains distinct.
+Refused or empty claims create no run and therefore no fabricated timing. This
+adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence and
+response-authorization behavior are unchanged. Production contention baselines
+and the broader faster-AI acceptance remain open.
+
+The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
+summary from #523. It reports per-stage sample counts, errors and p50/p95 with
+coverage and truncation, and keeps individual run logs available when the summary
+request fails. The panel is read-only and available to administrators. Matched
+production serial/parallel measurements remain outstanding.
+
 ### Update-scoring candidate database reads
 
 Candidate discovery reads server IDs and inventory in its existing bounded
@@ -2154,6 +2169,13 @@ before accepting an assessment. A five-item fixture reduces ID-filtered score
 SELECTs from twelve to four, including candidate and host-scope reads. This is
 partial scoring performance work. Idle candidate hashing, measured production
 throughput and full parallel scoring acceptance remain open.
+
+Worker checkpoint #597 adds an ordered purpose/state/start-time index for active
+AI run status and recovery lookups. Startup adds the index to existing databases
+while retaining history and existing indexes. The retained-history fixture uses
+the active-run index instead of filtering completed runs and sorting the result.
+This is a partial database performance increment. Production throughput and
+end-to-end parallel triage acceptance remain open.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2198,6 +2220,21 @@ diagnostic. Valid bodies send the validated bytes and retain their structured
 evidence for pricing and accounting. This checkpoint covers outbound request
 validation. Production throughput and wider transport acceptance remain open.
 
+The spend-reservation path checks the current budget mode before computing a quote
+or acquiring the shared budget lock (#615). Legacy, rate-only and unthrottled
+requests skip both operations and create no budget entry. Capped requests still
+recheck settings in a fresh session under the lock, then quote and atomically
+reserve spend if the cap still applies. Capped requests add one settings read
+and compute the quote while holding the lock. This checkpoint removes one
+shared lock acquisition per request that begins budget admission uncapped.
+End-to-end throughput and broader shared-controls acceptance remain open.
+
+Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
+history query to legacy mode. Shared modes still queue at most ten plans per tick
+and enforce shared admission at execution. The legacy combined security/startup
+allowance stays in effect until explicit migration. This avoids a history read
+under the queue lock and leaves migration and throughput acceptance open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -2205,6 +2242,14 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 | Rate throttle | Smoothly pace eligible work at configured rates using shared token/leaky-bucket admission; defer it durably until refill instead of consuming an hourly allowance in a burst and stopping. |
 | Daily spend cap | Allow work while its conservative reservation fits the configured USD/day budget; queue remaining work until the next calendar-day reset. A rate throttle may also be enabled. |
 | Unthrottled | Apply no Mr Patchy rate or spend allowance; run as quickly as configured concurrency, resources and provider limits permit. |
+
+Shared provider-start admission skips the fleet rate lock when a fresh mode read
+shows legacy, daily-cap-only or unthrottled operation (#617). Paced modes add a
+settings read before locking, then reread the current mode and rate under the
+lock before updating the durable pacing row. Continuations still share the
+logical work item's start. This removes one lock acquisition per start that does
+not use shared pacing. Production throughput and broader shared-controls
+acceptance remain open.
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
@@ -2216,6 +2261,13 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
 ### Finite implementation and acceptance milestones
+
+Initial triage preflight reuses the global settings and encrypted key already
+loaded under the admission lock. The rate and budget preflights retain their
+order and the retry signature retains its existing format. Capped eligibility
+still reads current settings after the queue lock, and the provider reservation
+remains authoritative. This reduces repeated settings reads. Production
+throughput remains unverified.
 
 1. **Baseline, transport and known-good reuse:** record queue/admission/provider/SSH/persistence stage timing, p50/p95 end-to-end latency, throughput, calls/tokens/cost, errors and backlog age for representative one/two-stage workloads; add safe client pooling, evidence deduplication and the fleet-wide exact-match known-good cache with explicit re-triage, without changing the capability contract.
 2. **Threaded execution:** deliver configurable concurrent tasks, atomic claims/leases, context/session isolation, fair scheduling, pause-safe same-host/cross-host admission, drain and recovery. Compare serial and parallel execution on identical delayed I/O fixtures: four eligible independent investigations must actually overlap and complete materially faster than their serial sum without lost work or reduced checks. Report measured production limits separately.
@@ -2236,6 +2288,38 @@ Other transport timeouts, interrupted workers and lost replies retain conservati
 charges when the provider outcome is unknown. The existing transient backoff still
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
+
+### SSH evidence delay in the triage benchmark — worker checkpoint #524
+
+`tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
+remains 10 ms. Both simulated delays are included in the JSON report. For a
+matched SSH-heavy serial/parallel comparison, run the same eight investigations
+with the same provider and SSH delays:
+
+```sh
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 1
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 4
+```
+
+Check that both reports retain the same provider call count and one-stage and
+two-stage workload before comparing their stage percentiles and throughput.
+These are loopback and stubbed SSH measurements. Production comparison remains
+open.
+
+### Retained process-triage timing sample — worker checkpoint #522
+
+The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
+recently started completed or failed process investigations (up to 100, configurable
+with `limit`). It reads at most 2,048 retained timing events plus a truncation probe,
+without returning event messages, run IDs or evidence. Each allowlisted stage reports
+its sample and error counts and nearest-rank p50/p95 milliseconds, including both
+successful and failed samples. Missing percentiles are null. Runs without valid
+samples, discarded malformed events and event truncation are visible.
+
+A run can supply multiple provider or persistence samples, and stages overlap.
+These are retained diagnostic samples, subject to pruning or incomplete writes.
+Dashboard presentation and matched serial/parallel production measurement remain
+open. There is no new collection, migration, provider call or admission change.
 
 ### Bounded same-server process triage — worker checkpoint #379
 
@@ -4387,6 +4471,43 @@ place. This is a finite safe-transport improvement; it does not establish provid
 availability, guarantee throughput, change AI concurrency or complete the faster-AI
 performance program. No schema, UI, target helper or agent change is required.
 
+### Observed AI benchmark workload fingerprint — worker checkpoint #530
+
+Fixture reports include `workload_fingerprint` with a version and SHA-256 value.
+Compare the full field across matched runs. It covers the actual synthetic model
+requests and SSH evidence requests, including duplicates, and excludes dispatch
+order, the fixture collection timestamp and ordering within the SSH check set.
+A mismatch identifies a workload difference even when token and call counts
+match. Compare delay settings and capability counts separately. Reports expose
+no request contents. Comparator enforcement and production measurements remain
+open.
+
+
+
+### Workload-bound AI benchmark comparison — worker checkpoint #536
+
+The fixture comparator now requires the observed version-1 workload fingerprint
+from both reports and refuses missing, malformed, unsupported or unequal values
+before emitting performance deltas. Matching call counts, token totals, stage
+sample counts and fixture delays are no longer sufficient to claim capability
+equivalence when the underlying synthetic provider or SSH request multiset differs.
+Accepted comparison output retains only the version and SHA-256 fingerprint for
+audit; it never includes the raw fixture requests. Historical reports that predate
+the fingerprint must be regenerated rather than treated as equivalent without
+evidence. Existing strict JSON, bounded-input, stage/count, cost-status and timing
+consistency validation remains. This is fixture-only tooling: it changes no
+production provider call, target access, runtime admission or response authority,
+and it does not establish production performance or complete the faster-AI gate.
+
+The seeded fixture queue age is a capability control, not a measured result, and
+the workload fingerprint does not cover it. The comparator therefore requires the
+same queue age in both reports before emitting deltas. It reads `queue_age_seconds`,
+otherwise `initial_fixture_queue_age_seconds`, otherwise the documented legacy fixed
+two-second seed; it refuses malformed or out-of-range values (integer seconds,
+0–86,400) and reports whose two queue-age fields disagree. A configured-queue-age
+pair with matching fingerprints but different seeds is refused rather than reported
+as a queue-age latency delta.
+
 
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
@@ -6090,6 +6211,26 @@ integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning r
 required before this increment is delivered.
 
 
+### Configurable AI benchmark queue age — worker checkpoint #542
+
+This bounded faster-AI measurement increment lets the fixture-only serial/parallel
+benchmark seed observations with a selected synthetic queue age from zero through
+one day. The historical two-second default remains unchanged. The selected age is
+reported in the machine-readable profile and drives the existing queue-age timing,
+so paired runs can exercise fresh and delayed-backlog telemetry without sleeping or
+changing the provider, SSH-evidence, persistence, model, reasoning, evidence or
+one/two-stage workload.
+
+Focused acceptance rejects negative and excessive ages before fixture startup, then
+proves a five-second selection yields two queue-age samples at or beyond the selected
+age while preserving three provider calls and the SSH follow-up for two subjects.
+The queue age remains synthetic: it does not reproduce scheduler contention, pause,
+rate/budget deferral, provider backoff or production load, and it does not establish
+a production speedup. Coordinator integration of prerequisite #525, exact-head
+SQLite/MySQL/full-suite checks and fresh code scanning remain required before this
+increment is delivered.
+
+
 ### Retained AI spend history — worker checkpoint #372
 
 This bounded faster-AI increment exposes retained daily accounting windows to
@@ -6186,6 +6327,37 @@ by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
 
 ## Ordered file assessment and visibility (#626)
 
+### Automatic retained file trust (#636)
+
+File observations matching controller-authenticated artifact bytes now retain an
+immutable trust decision and audit record during telemetry ingestion, authenticated
+inspection and pre-AI evidence resolution. Repeated identical matches reuse the
+same record. Exact path/SHA-256 matches can reuse a previous repository-rooted
+observation across servers only while its original authenticated inspection remains
+the latest matching proof. A local newer mismatch takes precedence. When the latest
+receipt reports different or missing bytes at a path, only an observation made
+after that receipt can become trust; older byte evidence stays historical. Prior
+lookups bind the exact, collation-independent path identity before reading history,
+so unrelated paths sharing the same bytes cannot hide an eligible match, and a
+concurrently committed duplicate observation is resolved with a current read
+without aborting the caller's transaction or duplicating its audit entry. Missing,
+invalid, merely observed or changed bytes cannot seed trust. Trust receipts are
+independent of diagnostic pruning; missing origin evidence fails closed.
+
+Exact contextual known-good cache reuse also stores a file trust receipt. Its
+display remains conditional on the existing active, validated assessment and cache
+provenance; revocation retains history but removes effective trust. Read-only file
+status shows automatic trust without creating records. Existing observations are
+populated on the next ingestion/inspection/investigation, not by a GET migration.
+
+This trusts file identity, not every use of that file. Behavior approval, integrity
+alarms, incident history, deterministic protection and response authorization are
+unchanged. Current signing-key revocation and automatic repository retrieval remain
+separate unfinished work. Acceptance includes durable/idempotent writes, prior
+cross-server matches, newer mismatches, deleted origins, cache revocation and
+unchanged administrator boundaries, with native SQLite/MySQL CI required.
+
+
 The controller checks retained authenticated Debian/RPM artifact manifests against
 recorded SHA-256 values before exact known-good behavior lookup and optional AI.
 Target-supplied file-assessment claims are replaced. A mismatch against the latest
@@ -6255,3 +6427,51 @@ response authority. It does not complete production baseline collection, dashboa
 presentation or the faster-AI end-to-end acceptance milestone. Coordinator
 integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
 required before delivery.
+
+
+
+### AI benchmark timing-consistency gate — worker checkpoint #532
+
+The fixture-report comparison gate now reconciles each report's run count, elapsed
+time and derived throughput before emitting deltas. Because the producer rounds
+elapsed seconds and runs per second independently to three decimal places, the
+check uses the exact half-unit intervals implied by that precision instead of a
+loose percentage tolerance. A report is accepted only when those
+rounding intervals can describe the same underlying execution. This preserves the
+retained v1.22 fixture pair and values produced at either elapsed-time rounding edge,
+while rejecting understated or overstated throughput with a field-specific error.
+
+This bounded follow-up is stacked on #526/#527 and does not edit its frozen branch.
+It adds no provider call, target access, benchmark workload, production runtime,
+schema, admission or response authority. Workload fingerprints, repeated production
+measurements, dashboard presentation and the full faster-AI acceptance milestone
+remain separate and incomplete. Coordinator integration must first preserve #527,
+then remove the prerequisite diff and run every applicable exact-head check before
+delivery.
+
+
+### Configurable AI benchmark persistence latency — worker checkpoint #613
+
+The disposable serial/parallel triage benchmark now accepts a bounded
+`--persistence-delay-ms` input. The synthetic delay is applied independently to
+billable request-receipt creation and usage reconciliation, and both operations keep
+their separate measured stages. Machine-readable output records the configured delay,
+completed and approved subject counts, provider calls and token totals so comparisons
+can reject a workload or result mismatch instead of reporting an invalid speedup.
+
+Focused coverage rejects values outside 0–1000 milliseconds and runs the same four
+subjects serially and with two workers. Both executions complete four low-risk,
+non-approved subjects, make six provider calls, account for 600 input and 120 output
+tokens, and record the configured delay in all six receipt and usage measurements.
+The reproducible 12-subject comparison in
+`docs/benchmarks/ai-persistence-delay.json` used a 5 ms loopback provider, a 20 ms
+synthetic receipt/usage persistence delay and the existing 10 ms SSH fixture. It
+measured 8.647 subjects/second serially and 19.497 with four workers (2.255x), with
+identical provider calls, tokens, completed subjects and zero errors.
+
+This fixture isolates controlled accounting-persistence pressure; it does not emulate
+database lock, network or failover behavior and does not establish production, TLS or
+database performance. The default remains zero added persistence delay. Runtime
+admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
+response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
+the broader faster-AI roadmap remain incomplete.
