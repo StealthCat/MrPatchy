@@ -279,6 +279,17 @@ def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
     from .persistence import record_changes
     record_changes(s,host_id,job_id)
     audit(s,'security inspection receipt',host_id+' '+job_id)
+    if vendor_authenticated:
+        from .file_trust import assess
+        from .file_status import repositories
+        proofs = repositories(s,host_id)
+        for path, proof in proofs.items():
+            if proof['inspection_id'] != job_id:
+                continue
+            finding = proof['finding'] or {}
+            checksum = (finding.get('observed_sha256') if finding else
+                        proof['expected_sha256'] if proof['receipt_state'] == 'matches_artifact_bytes' else None)
+            assess(s,host_id,path,checksum,proofs)
 
 
 class PersistenceBaseline(Base):
