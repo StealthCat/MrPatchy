@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.6 — 2026-11-09
+
+1. [PR #576](https://github.com/StealthCat/MrPatchy/pull/576): Reduce database reads during investigation lease validation by rejecting lost, replaced and expired claims before fetching behavior evidence, then selecting only the host lifecycle fields (`enabled` and `deleted_at`) needed for valid leases. Preserve the evidence, owner, configuration, expiry, heartbeat, disabled/deleted-host and mutation fences. Compatibility and limits: no schema, public API, locking, lease lifetime, provider policy or response-authorization change; production throughput remains unverified. This source bump does not publish a Docker image.
+
 ## 1.54.5 — 2026-11-09
 
 1. [PR #581](https://github.com/StealthCat/MrPatchy/pull/581): Join expired AI lease claims to their retained run rows in one bounded read, followed by the existing bounded orphan scan. Preserve live leases, completed runs, interruption events, provider receipts, idempotent recovery and the admission lock. Compatibility and limits: no schema, API, queue-policy, retry or response-authorization change; production throughput remains unverified. This source bump does not publish a Docker image.
