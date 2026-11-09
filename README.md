@@ -14,15 +14,14 @@ Meet **Mr Patchy**, the slightly wild raccoon in patched overalls keeping you co
 
 ## License
 
-**Free for individual, personal, noncommercial use. Commercial and organizational
-use requires a separate paid license before deployment.**
+**Free for personal, noncommercial use and for nonprofits and local governments
+running their own systems. Commercial use and other organizational use require a
+separate paid license before deployment.**
 
-See [LICENSE](LICENSE) for the full Mr Patchy Personal and Commercial License v1.0
+See [LICENSE](LICENSE) for the full Mr Patchy Personal and Commercial License v1.1
 and [COMMERCIAL.md](COMMERCIAL.md) for examples and commercial-license requests.
-A personal homelab or private household is free; employer/client systems, paid
-services and organizational deployments require a paid agreement or a separate
-written exception. Pricing and scope are agreed in writing with Robert Cronin
-through the [official project](https://github.com/StealthCat/MrPatchy/issues).
+Pricing and scope are agreed in writing with Robert Cronin through the
+[official project](https://github.com/StealthCat/MrPatchy/issues).
 
 This is source-available software with commercial-use restrictions. Third-party
 licenses and earlier valid license grants remain unchanged. New contributions
@@ -40,6 +39,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
+| Fleet analysis | API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
 | Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
@@ -147,6 +147,32 @@ Run `docker compose up -d --build` after changing bindings. Optional `HTTP_BIND_
 For dual CAs, use a private ACME server for `patchy.home.example.com` and Let's Encrypt for `patchy.example.com`. Both DNS names reach the same listener; TLS selects the appropriate certificate by hostname. **Internal is a certificate profile, not an access-control boundary**—use network controls if one name must be LAN-only. Public ACME HTTP-01/TLS-ALPN-01 validation still requires external TCP 80/443 forwarded to Caddy, even when Docker publishes 8080/8443. Wildcard issuance/DNS-01 is not included. Keep `PUBLIC_URL` aligned with the default enrollment/SSO address; curl enrollment can also use either enabled HTTPS profile. See [Docker bindings and dual TLS](docs/DOCKER_TLS.md) for setup, migration and recovery.
 
 
+### Custom app and worker layouts
+
+Use the menu-driven configurator to generate standalone Compose YAML for apps +
+workers, apps only or workers only, with 1–16 containers per selected role:
+
+```bash
+python -m pip install -r requirements-configure.txt
+python tools/configure_compose.py
+docker compose --env-file .env -f compose.custom.yaml config --quiet
+docker compose --env-file .env -f compose.custom.yaml up --build -d --wait
+```
+
+The menu configures build/GCP/image options, project and shared storage, database
+requirements, ports/network, worker concurrency and IDs, and memory. Preview before
+saving; replacing an existing output requires confirmation and keeps a `.bak`.
+Use the generated file by itself, not as an overlay on `compose.yaml`. Its default
+`mrpatchy-custom` project has separate volumes from an existing installation.
+
+Worker-only layouts require an existing controller data volume on the same Docker
+host, matching source version and database selection. App-only layouts need
+separate workers for background jobs. Multiple apps share local state and a DNS
+endpoint with ordered initial startup; this does not provide production HA,
+guaranteed load balancing or coordinated rolling upgrades. See
+[Compose configuration](docs/COMPOSE_CONFIGURATION.md) for prerequisites, limits
+and non-interactive command examples.
+
 ## Reset an administrator password locally
 
 From your deployment directory, with the updated app container running:
@@ -165,7 +191,7 @@ For a script stored elsewhere, set `MRPATCHY_PROJECT_DIR` to the deployment dire
 
 ## Enroll a server in three steps
 
-Targets need systemd, Python 3, OpenSSH server, sudo and OpenSSL installed already. Debian-family targets need dpkg; RPM targets need `python3-dnf` and `python3-rpm` (including Fedora with DNF5). SELinux-enabled targets need `policycoreutils-python-utils`. See [RPM setup and support boundaries](docs/RPM_SUPPORT.md). Offline preparation does not download missing prerequisites.
+Targets need systemd, Python 3.8 or newer at `/usr/bin/python3`, OpenSSH server, sudo and OpenSSL installed already. Debian-family targets need dpkg; RPM targets need `python3-dnf` and `python3-rpm` (including Fedora with DNF5). SELinux-enabled targets need `policycoreutils-python-utils`. Enrollment and deployment refuse older interpreters before replacing managed helpers; install a supported Python version first. See [RPM setup and support boundaries](docs/RPM_SUPPORT.md). Offline preparation does not download missing prerequisites.
 
 1. **Endpoint:** select **Add server** and enter a name, IP/hostname and SSH port.
 2. **Prepare:** download the personalized Bash script, transfer it to the target and run `sudo bash mrpatchy-enroll.sh`. It creates `/opt/drpatch`, the `drpatch` account, its public SSH key, the root-owned bridge and restricted sudo permissions. The script performs no downloads, APT queries or callbacks. Click **I ran the script · Proceed to step 3**. Curl and ordinary-download delivery use the same bootstrap; curl links expire after one hour. In curl mode, select **Fetch from HTTPS endpoint**: the default `PUBLIC_URL`, **Internal HTTPS**, or **External HTTPS**. Enabled profiles use their configured hostname and browser-facing port. Choose an address reachable from the target; for a private CA, use curl’s `--cacert /path/to/ca.pem` with a trusted bundle for the site certificate.
@@ -219,7 +245,7 @@ After a reviewed staged rollout is queued, its dialog closes and a confirmation 
 
 Enable **AI update importance scores** in Settings alongside AI investigations. Pending updates receive an advisory **0–100** score with an expandable explanation, limitations, model and assessment time. Assessments bind to the exact installed/candidate versions and policy evidence; a changed candidate needs a new assessment. The default separate allowance is 20 batches/hour, with up to five updates per call. Scores use package metadata and repository classification, carry **low confidence**, and do not claim verified CVE/changelog evidence or change your patch schedule/priority.
 
-Update-score eligibility is read in bounded ordered chunks, reducing database work when a fleet already has completed or future-deferred assessments. Run linkage and outcome persistence also load each existing five-item scoring batch together instead of rereading each score row individually. Exact evidence matching, durable deferrals, oldest-first batches, separate persistence phases and existing AI admission/spend limits still apply.
+Update-score eligibility is read in bounded ordered chunks, and candidate discovery loads only the server ID and saved inventory needed for scoring rather than unrelated telemetry or baseline fields. The scheduling pass fetches only the retained score fields needed to match identities and check eligibility. Full assessment explanations and limitations remain available in score details. Run linkage and outcome persistence also load each existing five-item scoring batch together instead of rereading each score row individually. Exact evidence matching, durable deferrals, oldest-first batches, separate persistence phases and existing AI admission/spend limits still apply.
 
 **Expected installation** shows the earliest estimated start from an approved schedule or queued job, including maintenance windows and urgent exceptions. It is separate from the policy deadline. Unscheduled updates say **Not scheduled**. File, process, replacement-publication and service-monitoring holds explain the review needed before a start can be estimated; dates remain unknown until a separately authorized release. Recovery, offline targets and unknown dependency completion also explain why a date cannot be given. All times displayed in the table use your browser's timezone.
 
@@ -300,6 +326,12 @@ The collector hashes Mr Patchy's managed files and readable running executables.
 
 Optional bpftrace exec capture retains short-lived observations. Unverifiable identities stay marked unverified through central processing. Enabling eBPF relaxes the collector sandbox for kernel tracing; kernel support and acceptance testing are required. It is not guaranteed lossless capture or hardware attestation.
 
+Process triage checks retained, controller-authenticated Debian and RPM artifact manifests against the recorded executable SHA-256 first. It then checks the exact known-good cache and uses AI for unresolved behavior. A hash mismatch against the newest authenticated artifact bypasses cache reuse. A matching hash verifies the recorded bytes against the artifact; it cannot establish that the process behaved safely.
+
+Administrators can open **File status** from fleet or server navigation and the corresponding Overview. Filter recorded managed, startup, vendor-inspected and process files by path or status. The views show hashes, evidence sources, assessment history, baseline comparison, freshness and coverage gaps. They use stored evidence and make no target or AI-provider requests. Coverage depends on recorded observations and retained artifacts, and baseline approval stays manual.
+
+Before a manual startup-baseline approval, the baseline review resolves retained authenticated artifact hashes first and then applies the strict known-good eligibility rules. Startup metadata without the complete verified process context remains an explicit cache miss, and a hash mismatch bypasses reuse. The browser submits a digest of the displayed provenance review and requires a refresh if that evidence changes. Existing API clients may omit this additive digest and keep the inventory-bound approval contract. An explicitly requested startup advisory plan receives bounded assessments for the current and approved inventories; omitted entries remain bound through a digest, and changed provenance invalidates the generated plan. These checks never turn authentic bytes into safe behavior, approve a baseline, invoke AI while merely viewing the review, or authorize a response action.
+
 Open **Settings → AI & models** and use **Save API key** first; no valid model is required to save a key. Click **Refresh available models** and choose a model, or select **Enter a model ID manually** if discovery is unavailable. **Save AI settings** only persists your choice; **Save and test selected model** saves it first and then tests that exact model. A provider error never rolls back the save. Results identify the tested model and retain the request ID when supplied; user-visible provider failures are limited to bounded diagnostics explicitly created by Mr Patchy, while unexpected exception text is replaced with a fixed message. The list comes from your key’s accessible models; it does not certify Responses API/structured-output compatibility. A saved model missing from the list is marked unavailable without silently selecting a replacement. Each investigation uses at most two calls and only fixed, read-only follow-up checks. The default cap is 20 investigations/hour. No model-generated shell command runs, and no AI verdict automatically approves behavior. Process-investigation evidence can include paths, hashes, UIDs and network endpoints; arguments, environment variables, process memory and file contents are not sent by that workflow. Release configuration planning separately sends eligible configuration text, as disclosed before planning. `store: false` does not override organization-level API retention policies. API billing is separate from ChatGPT subscriptions.
 
 Open **AI run logs** to inspect request stages, safe provider errors, model, request IDs and attempt times. The worker-status panel explains disabled/missing settings, missing heartbeat, active work, hourly limits and retry backoff. **Investigations → Retry** makes a failed/pending behavior eligible again without bypassing the hourly quota. Unhandled background failures are recorded instead of silently disappearing. See [the troubleshooting workflow](docs/AI_AND_PACKAGE_HISTORY.md#diagnose-stalled-triage).
@@ -308,7 +340,7 @@ Each action now shows **estimated API cost in USD**, including follow-up calls. 
 
 ![AI diagnostics and worker status](docs/screenshots/ai-run-logs.jpg)
 
-The target's durable spool partitions normal observations into batches of at most 256 KiB and acknowledges them only after central commit. It retains up to 48 MB, exposes queued bytes and reasoned cumulative oversize/capacity loss counters, and reports only newly observed loss as an active integrity finding. Authenticated users with access to a server can read its stored spool summary at `/api/hosts/{id}/spool-health`: the response reports freshness, queue pressure and cumulative loss without making a remote call or exposing observation payloads, paths or unknown telemetry keys. The same stored summary appears as a read-only **Agent event spool** card on the server Overview, with explicit stale/unavailable states, cumulative loss by reason and warning/critical links to Agent health. Fleet Overview adds an exhaustive read-only rollup with a bounded ten-server urgent list, while servers without counters remain unavailable rather than healthy. Deleted-server records remain administrator-only, and metrics the agent does not collect—such as oldest-observation age, rates, retries and delivery latency—remain explicitly unavailable. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty. Within a poll, the first event batch reuses its committed ingestion result before acknowledgement. A lost acknowledgement can still replay a batch; deduplication preserves the stored observations.
+The target's durable spool partitions normal and eBPF observations into serialized batches using a per-server ceiling of 256 KiB by default. Administrators can set a strict 16 KiB–1 MiB ceiling through the typed spool operation; the root-owned target configuration is written atomically, applied only after collector restart and reported in spool telemetry. Failed restarts restore the prior configuration, while an uncertain SSH result is accepted only after a serialized read-only check confirms the requested value and an active collector. Existing targets keep the default until configured and need the established **Finish and verify installation** workflow to receive the updated bridge and collector. The spool acknowledges batches only after central commit, retains up to 48 MB, exposes queued bytes and reasoned cumulative oversize/capacity loss counters, and reports only newly observed loss as an active integrity finding. Authenticated users with access to a server can read its stored spool summary at `/api/hosts/{id}/spool-health`: the response reports freshness, queue pressure and cumulative loss without making a remote call or exposing observation payloads, paths or unknown telemetry keys. The same stored summary appears as a read-only **Agent event spool** card on the server Overview, with explicit stale/unavailable states, cumulative loss by reason and warning/critical links to Agent health. Fleet Overview adds an exhaustive read-only rollup with a bounded ten-server urgent list, while servers without counters remain unavailable rather than healthy. Deleted-server records remain administrator-only, and metrics the agent does not collect—such as oldest-observation age, rates, retries and delivery latency—remain explicitly unavailable. Each poll drains up to 32 eight-record batches within a ten-second catch-up budget, fetching events without repeating the full inventory. Outstanding batches stay queued for the next poll. Inventory/observation history defaults to 30-day retention. Known-good behavior approvals are tied to exact recorded identities, including provenance and verification uncertainty. Within a poll, the first event batch reuses its committed ingestion result before acknowledgement. A lost acknowledgement can still replay a batch; deduplication preserves the stored observations.
 
 ## Reviewed file replacement
 
@@ -387,7 +419,7 @@ Workers claim durable SQL jobs and coordinate with per-host locks; one elected c
 
 Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
 
-Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
+Configure MySQL host, port, database, credentials and verified TLS in **Settings → Database**. Saving stages the destination without changing the running database. **Test connection** checks the entered MySQL values, including unsaved edits, from the serving controller: it verifies TLS and the host name when enabled, authenticates and runs only `SELECT 1` within a five-second overall deadline, and reports a sanitized category such as timeout, connectivity, TLS, authentication, access or missing database. It never stages settings, switches databases or creates objects, and a success does not prove migration privileges, schema compatibility or HA readiness. The displayed offline workflow stops app/workers, checks the source and empty destination, copies all application tables, verifies row counts/content fingerprints and activates the destination only after success. SQLite ↔ MySQL is supported; the source is preserved. The offline CLI reports progress and sanitized stage/cause diagnostics on stderr, keeps results as JSON on stdout, and accepts `--verbose` for bounded technical context. See [database migration and recovery](docs/DATABASE_MIGRATION.md).
 
 For a new deployment without existing data, you can still configure MySQL 8+ through `.env` and recreate **both app and workers**:
 
@@ -469,6 +501,16 @@ retry limits and cases requiring trusted-console recovery. Manual agent upgrades
 require a review confirmation, and the check and upgrade controls stay disabled
 while either request is pending in the current Agent health view.
 
+Administrators can manage the automatic agent-upgrade and repair defaults through
+`GET/PUT /api/settings/agent-maintenance`. Both defaults remain off until explicitly
+enabled. A server inherits each global value unless its agent policy stores an
+explicit `true` or `false` override; sending `null` or omitting that field from the
+per-server update restores inheritance. Agent-health responses identify the global
+values and whether each effective value is inherited or overridden. Global saves
+use the supplied expected values and return HTTP 409 when another save wins or the
+coordination lock cannot be obtained, rather than replacing a newer policy. The
+Settings and per-server inheritance controls are not yet exposed in the web UI.
+
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact
 hash matches, path-only matches and changed bytes are labeled separately. Searches
@@ -541,7 +583,7 @@ Rebuild/restart the controller and workers to enable reporting. No schema migrat
 or target-helper update is needed: records use the existing settings/audit tables,
 which are already included in offline database migration. Existing job claims,
 per-host/recovery locks, coordinator election and operational approval boundaries
-are preserved. Defaults remain 2 jobs/8 polls/1 AI task. Supported separate-host workers,
+are preserved. Defaults remain 2 jobs/8 polls/4 AI tasks. Supported separate-host workers,
 shared secrets/artifacts/state preflight, expected-node
 inventory, controller/endpoint/GCP health and full deployment acceptance remain
 planned; this view does not complete remote-worker deployment or the unified dashboard.
@@ -576,9 +618,13 @@ semantics. This is a local/shared-state foundation, not remote maintenance accep
 Set startup-only `MRPATCHY_JOB_CONCURRENCY` (1–8, default 2),
 `MRPATCHY_POLL_CONCURRENCY` (1–32, default 8) and `MRPATCHY_AI_CONCURRENCY`
 (1–8, default 4; set 1 for serial operation) in `.env`, then recreate the worker.
-Direct worker/embedded processes use the same variables. Invalid values refuse
-startup. These limits size the real executors. Poll/notification work shares the
-poll pool; process investigations and update scoring share AI slots.
+Set `MRPATCHY_AI_HTTP_CONNECTIONS` (1–64, default 16) and recreate both the app
+and workers to size each process's reusable AI provider HTTP pool. Activity →
+Workers reports this transport ceiling separately from AI task capacity. Direct
+worker/embedded processes use the same variables. Invalid values refuse startup.
+The executor limits size the real worker pools; the HTTP setting does not raise
+task concurrency, override provider limits or guarantee throughput. Poll/notification
+work shares the poll pool; process investigations and update scoring share AI slots.
 
 Independent servers can undergo process triage concurrently. Each server has an
 administrator-configurable process-investigation occupancy of one to four AI slots,
@@ -962,11 +1008,52 @@ before eligibility. Small diagnostic batches flush at run completion (or 32 even
 crashes/database failures can leave gaps. Run timing excludes creation/admission
 and the final timing flush. Existing run-history retention applies to these metrics.
 
+Administrators can query `GET /api/ai/triage/timings` for a bounded aggregate of
+retained process-triage timing events. The endpoint samples at most 100 recently
+completed or failed triage runs and 2,048 timing events, returning per-stage sample
+and error counts plus nearest-rank p50/p95 milliseconds. It reports missing-run
+coverage, discarded malformed events and truncation without returning event text,
+run or host identities, credentials or evidence. Missing samples produce null
+percentiles, stages can overlap, and retained/pruned events are diagnostic history
+rather than matched production performance measurements.
+
+Administrators can load the same summary from Fleet AI logs in a dedicated Process
+triage timings panel. The panel distinguishes measured zero from missing percentiles,
+shows sample/error counts and coverage or truncation warnings, and can retry without
+interrupting the individual-run list. It discards stale responses after navigation
+and remains confined to the administrator fleet view; per-server logs and other
+roles are unchanged.
+
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
 provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
-reuse is validated; this is not a production speed or parallel-throughput promise.
+reuse is validated. Benchmark comparisons also verify that independently rounded
+run counts, elapsed time and throughput can describe the same execution before
+reporting deltas; inconsistent baseline or candidate reports are rejected while
+valid three-decimal rounding is accepted. Comparisons additionally require matching
+versioned SHA-256 fingerprints of the observed synthetic provider and SSH workload,
+plus matching seeded fixture queue ages; only the verified fingerprint and bounded
+queue-age controls are retained in comparison output, never raw requests. Reports
+created before workload fingerprinting must be regenerated. The benchmark producer's
+optional `--queue-age-seconds` control accepts 0 through 86,400, defaults to the
+historical two-second seed, applies to every synthetic observation and keeps
+`queue_age_seconds` synchronized with `initial_fixture_queue_age_seconds` in the
+report; invalid values are rejected before fixture startup. This control is fixture
+only: it does not reproduce scheduler contention, pause, budget/rate deferral,
+provider backoff or production load, and it is not a production speed or
+parallel-throughput promise. Comparisons also require matching synthetic
+persistence-delay controls: reported `persistence_delay_ms` values must be integers
+from 0 through 1,000, while older reports without the field use the documented
+zero-delay default. The normalized value and whether it came from the report or the
+legacy default are retained in comparison output; mismatched delays are rejected
+before any performance delta is emitted. The benchmark producer's optional
+`--persistence-delay-ms` control accepts 0 through 1,000 and defaults to zero. It
+adds the selected synthetic delay around both receipt creation and usage
+reconciliation while retaining their separate timing stages, and reports the
+configured delay plus completed and approved subject counts so serial and parallel
+fixtures can prove result equivalence. This fixture does not emulate database lock
+contention, network latency, failover or production/TLS/database performance.
 Threaded claims/leases and classified retries are implemented. Strict exact fleet
 reuse is available only for fully complete candidates; administrators can invalidate
 an entry fleet-wide and a retained final non-low provider result for the identical

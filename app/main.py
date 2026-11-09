@@ -12,7 +12,7 @@ import shlex
 import threading
 import time
 import uuid
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, recovery_readiness
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, recovery_readiness
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -52,11 +52,11 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.44.0'
+APP_VERSION='1.53.3'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from . import sso
+from . import sso, error_pages
 app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
 
@@ -105,6 +105,7 @@ async def guard(request,call_next):
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
+    response=error_pages.decorate(request,response)
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='no-referrer'
@@ -455,6 +456,47 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
             for h,a,ak,o,ok,m,mk,saved in rows]
 
+def saved_query_or_404(s,query_id):
+    row=s.get(fleet_queries.SavedFleetQuery,query_id)
+    if not row:raise HTTPException(404,'Saved fleet query not found')
+    return row
+
+@app.get('/api/fleet/queries')
+def fleet_query_list(user=Depends(viewer_user)):
+    with Session() as s:return [fleet_queries.public(r) for r in s.scalars(select(fleet_queries.SavedFleetQuery).order_by(fleet_queries.SavedFleetQuery.name).limit(500))]
+
+@app.post('/api/fleet/queries')
+def fleet_query_create(body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row=fleet_queries.SavedFleetQuery(id=fleet_queries.new_id(),name=body.name,definition=body.filter.model_dump(),created_by=user['username'])
+        s.add(row);audit(s,'fleet-query-create',row.id+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.put('/api/fleet/queries/{query_id}')
+def fleet_query_update(query_id:str,body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        if body.expected_version!=row.version:raise HTTPException(409,'Saved fleet query changed; reload it before editing')
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name,fleet_queries.SavedFleetQuery.id!=query_id)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row.name=body.name;row.definition=body.filter.model_dump();row.version+=1;row.updated=time.time()
+        audit(s,'fleet-query-update',row.id+' v'+str(row.version)+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.delete('/api/fleet/queries/{query_id}')
+def fleet_query_delete(query_id:str,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        s.delete(row);audit(s,'fleet-query-delete',row.id+' '+row.name);s.commit()
+        return {'deleted':query_id}
+
+@app.get('/api/fleet/queries/{query_id}/results')
+def fleet_query_results(query_id:str,offset:int=0,limit:int=50,user=Depends(viewer_user)):
+    if offset<0 or not 1<=limit<=fleet_queries.PAGE_MAX:raise HTTPException(400,'Invalid fleet query pagination')
+    with Session() as s:
+        row=saved_query_or_404(s,query_id)
+        return fleet_queries.evaluate(s,fleet_queries.FleetFilter(**row.definition),offset,limit)|{'query':{'id':row.id,'name':row.name,'version':row.version,'filter':row.definition}}
+
 class HostLifecycleInput(BaseModel):
     enabled:bool
     expected_revision:str=Field(default='',max_length=36)
@@ -571,6 +613,15 @@ def host_snapshot(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return {'inventory':h.inventory,'telemetry':h.telemetry,'baseline':h.baseline}
+
+@app.get('/api/hosts/{host_id}/file-status')
+def host_file_status(host_id:str,offset:int=Query(default=0,ge=0),
+                     q:str=Query(default='',max_length=200),
+                     status:str=Query(default='',max_length=40),user=Depends(admin_user)):
+    from . import file_status
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return file_status.page(s,h,offset,q,status)
 
 @app.get('/api/hosts/{host_id}/patching')
 def host_patching(host_id:str,start:float,end:float,user=Depends(viewer_user)):
@@ -1160,6 +1211,14 @@ def database_settings_save(body:database_config.DatabaseInput,user=Depends(admin
         s.commit()
     return {'ok':True,'target':result}
 
+@app.post('/api/settings/database/test')
+def database_settings_test(body:database_config.DatabaseInput,user=Depends(admin_user)):
+    try:result=database_config.test_connection(body)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with Session() as s:
+        audit(s,'test database connection',user['username']+' tested MySQL connection: '+result['category']);s.commit()
+    return result
+
 class TLSInput(BaseModel):
     domain:str=Field(default='',max_length=253)
     aliases:list[str]=Field(default_factory=list,max_length=20)
@@ -1495,13 +1554,49 @@ def cancel_job(job_id:str,user=Depends(admin_user)):
         audit(s,'cancel job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
+def sbom_components(inventory,packages):
+    from urllib.parse import quote
+    values={}
+    for line in (inventory.get('os') or '').splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            key,value=line.split('=',1);values[key.strip()]=value.strip().strip('"').strip("'")
+    rpm=package_backend.is_rpm(inventory)
+    ident=values.get('ID','').lower()
+    namespace=quote(ident,safe='')+'/' if re.fullmatch(r'[a-z0-9][a-z0-9._-]*',ident) else ''
+    distro=ident+'-'+values['VERSION_ID'] if namespace and re.fullmatch(r'[A-Za-z0-9._-]+',values.get('VERSION_ID','')) else ''
+    def component(name,arch,version,epoch=None):
+        qualifiers=[('arch',arch)] if arch else []
+        if epoch and epoch!='0':qualifiers.append(('epoch',epoch))
+        if distro:qualifiers.append(('distro',distro))
+        query=('?'+'&'.join(k+'='+quote(v,safe='') for k,v in qualifiers)) if qualifiers else ''
+        return {'type':'library','name':name,'version':version,'purl':('pkg:rpm/' if rpm else 'pkg:deb/')+namespace+quote(name,safe='')+'@'+quote(version,safe='')+query}
+    if rpm and inventory.get('rpm_packages'):
+        # Every installed version is reported, including older install-only kernels.
+        entries=sorted({(p['name'],p['arch'],p['evr']) for p in inventory['rpm_packages']})
+        result=[]
+        for name,arch,evr in entries:
+            epoch,sep,version=evr.partition(':')
+            if not sep:epoch,version='0',evr
+            result.append(component(name,arch,version,epoch))
+        return result
+    result=[]
+    for p in packages:
+        name,_,arch=p.name.rpartition(':')
+        if not name:name,arch=p.name,''
+        if rpm:
+            epoch,sep,version=p.installed.partition(':')
+            if not sep:epoch,version='0',p.installed
+            result.append(component(name,arch,version,epoch))
+        else:result.append(component(name,arch,p.installed))
+    return result
+
 @app.get('/api/hosts/{host_id}/sbom')
 def sbom(host_id:str,user=Depends(viewer_user)):
-    from urllib.parse import quote
     with Session() as s:
         h=host_or_404(s,host_id)
+        packages=s.scalars(select(Package).where(Package.host_id==host_id).order_by(Package.name)).all()
         return {'bomFormat':'CycloneDX','specVersion':'1.5','version':1,'serialNumber':'urn:uuid:'+str(uuid.uuid4()),
-            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':('pkg:rpm/' if package_backend.is_rpm(h.inventory) else 'pkg:deb/')+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
+            'components':sbom_components(h.inventory or {},packages)}
 
 @app.get('/api/audit/export')
 def export_audit(after:int=0,limit:int=1000,user=Depends(admin_user)):
@@ -1666,6 +1761,50 @@ def observability(host_id:str,body:ObservabilityInput,user=Depends(admin_user)):
         audit(s,'configure eBPF',host_id+' '+str(body.ebpf));s.commit()
     return result
 
+class SpoolBatchInput(BaseModel):
+    batch_limit_bytes:int=Field(ge=16*1024,le=1024*1024,strict=True)
+
+@app.put('/api/operations/{host_id}/spool')
+def configure_spool(host_id:str,body:SpoolBatchInput,user=Depends(admin_user)):
+    limit = body.batch_limit_bytes
+    expected = {'configured': True, 'version': 1, 'batch_limit_bytes': limit}
+    with host_change(host_id),Session() as s:
+        h = host_or_404(s, host_id)
+        rejected = False
+        try:
+            result = ssh.call(h, {'action': 'spool-config', 'batch_limit_bytes': limit}, lifecycle_blocking=False)
+        except Exception as error:
+            if ssh.request_unstarted(error):
+                raise
+            rejected = isinstance(error, ssh.RemoteFailure)
+            result = None
+        detail = f'{host_id} batch_limit_bytes={limit}'
+        if (result != expected or result['configured'] is not True
+                or type(result['version']) is not int or type(result['batch_limit_bytes']) is not int):
+            # The bridge lock serializes this observation with the original request.
+            # A lost receipt must never cause a second configuration mutation.
+            try:
+                observed = ssh.call(h, {'action': 'spool-config-status'}, timeout=10, lifecycle_blocking=False)
+            except Exception:
+                observed = None
+            if (isinstance(observed, dict) and type(observed.get('version')) is int and observed['version'] == 1
+                    and type(observed.get('batch_limit_bytes')) is int
+                    and 16*1024 <= observed['batch_limit_bytes'] <= 1024*1024
+                    and type(observed.get('active')) is bool):
+                detail += f" observed_batch_limit_bytes={observed['batch_limit_bytes']} active={observed['active']}"
+            else:
+                observed = None
+                detail += ' target state unverified'
+            if rejected or observed is None or not observed['active'] or observed['batch_limit_bytes'] != limit:
+                audit(s, 'configure agent spool failed', detail)
+                s.commit()
+                raise HTTPException(502, 'Target did not confirm the requested spool configuration. Check collector state before retrying.')
+            detail += ' verified by readback'
+        s.merge(Setting(key='spool:'+host_id, value={'version': 1, 'batch_limit_bytes': limit}))
+        audit(s, 'configure agent spool', detail)
+        s.commit()
+    return expected
+
 class ReconcileInput(BaseModel):
     verified_target_state:bool=False
     verified_ai_receipts:bool=False
@@ -1783,6 +1922,14 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(adm
         scheduling.cancel_pending(s,schedule_id,'Schedule deleted')
         s.delete(row);audit(s,'delete patch schedule',user['username']+' '+schedule_id);s.commit()
     return {'ok':True}
+
+@app.get('/api/ai/triage/timings')
+def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depends(admin_user)):
+    if not 1 <= limit <= ai_runs.TIMING_SUMMARY_RUN_LIMIT:
+        raise HTTPException(400, 'Invalid timing sample limit')
+    with Session() as s:
+        return ai_runs.triage_timing_summary(s, limit)
+
 
 @app.get('/api/ai/runs')
 def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(admin_user)):
@@ -2755,6 +2902,12 @@ def persistence_comparison(host_id:str,inspection_id:str,user=Depends(admin_user
 
 
 class AgentPolicyInput(BaseModel):
+    # None (or omitted) means "use the global default"; False/True are explicit overrides.
+    auto_upgrade:bool|None=None
+    auto_repair:bool|None=None
+    expected:dict
+
+class AgentGlobalPolicyInput(BaseModel):
     auto_upgrade:bool=False
     auto_repair:bool=False
     expected:dict
@@ -2764,6 +2917,20 @@ def agent_state(host_id:str,user=Depends(admin_user)):
     from . import agent_maintenance
     with Session() as s:return agent_maintenance.public(s,host_or_404(s,host_id))
 
+@app.get('/api/settings/agent-maintenance')
+def agent_global_policy(user=Depends(admin_user)):
+    from . import agent_maintenance
+    with Session() as s:return agent_maintenance.global_policy(s)
+
+@app.put('/api/settings/agent-maintenance')
+def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_user)):
+    from . import agent_maintenance
+    value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+    try:saved=agent_maintenance.save_global(value,body.expected,lambda s:audit(s,'agent global policy updated',json.dumps(value)))
+    except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
+    if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
+    return value
+
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
     from . import agent_maintenance
@@ -2771,12 +2938,12 @@ def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
         with Session() as s:
             host_or_404(s,host_id)
             if body.expected!=agent_maintenance.policy(s,host_id):raise HTTPException(409,'Agent policy changed; refresh before saving')
-            value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+            value={k:v for k,v in (('auto_upgrade',body.auto_upgrade),('auto_repair',body.auto_repair)) if v is not None}
             row=s.get(Setting,'agent-policy:'+host_id)
             if row:row.value=value
             else:s.add(Setting(key='agent-policy:'+host_id,value=value))
-            audit(s,'agent policy updated',host_id+' '+json.dumps(value));s.commit()
-            return value
+            audit(s,'agent policy updated',host_id+' overrides '+json.dumps(value));s.commit()
+            return agent_maintenance.public(s,host_or_404(s,host_id))['policy']
 
 @app.post('/api/hosts/{host_id}/security/agent/{action}')
 def agent_action(host_id:str,action:str,user=Depends(admin_user)):
@@ -2792,6 +2959,7 @@ def agent_action(host_id:str,action:str,user=Depends(admin_user)):
 
 
 class PersistenceApproval(BaseModel):
+    review_digest:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
     inspection_id:str=Field(max_length=36)
     evidence_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
     expected:str=Field(default='',max_length=36)
@@ -2802,14 +2970,14 @@ def get_persistence_baseline(host_id:str,user=Depends(admin_user)):
     from . import persistence
     with Session() as s:
         host_or_404(s,host_id)
-        return persistence.status(s,host_id)
+        return persistence.review(s,host_id)
 
 @app.post('/api/hosts/{host_id}/security/baseline')
 def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(admin_user)):
     from . import persistence
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
-        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'])
+        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'],body.review_digest)
         except ValueError as error:raise HTTPException(409,str(error)) from None
         s.commit()
         return {'id':identifier}
