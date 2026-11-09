@@ -118,7 +118,7 @@ def config(s):
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
 def register_models():
     # Imports register mappings only; no DDL or web application bootstrap.
-    from . import identity,operations,notifications,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good  # noqa: F401
+    from . import identity,operations,notifications,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good,file_trust,fleet_queries  # noqa: F401
     from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health,service_monitor,execution_scans  # noqa: F401
 
 def init():
@@ -161,3 +161,5 @@ def init():
                         table_name = model.__tablename__
                         column_name = column['name']
                         connection.execute(text(f'ALTER TABLE `{table_name}` MODIFY COLUMN `{column_name}` DOUBLE NOT NULL'))
+        from . import os_upgrade
+        os_upgrade.backfill(connection)

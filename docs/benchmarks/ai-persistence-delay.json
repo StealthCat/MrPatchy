@@ -1,0 +1,58 @@
+{
+  "recorded_at_utc": "2026-11-06T23:08:00Z",
+  "base_commit": "e5a3bc43788a450cda74ed6b689ef78e47d04aae",
+  "fixture_only": true,
+  "commands": {
+    "serial": "python tools/benchmark_ai.py --runs 12 --concurrency 1 --provider-delay-ms 5 --persistence-delay-ms 20",
+    "parallel": "python tools/benchmark_ai.py --runs 12 --concurrency 4 --provider-delay-ms 5 --persistence-delay-ms 20"
+  },
+  "workload": {
+    "runs": 12,
+    "provider_calls": 18,
+    "provider_delay_ms": 5,
+    "persistence_delay_ms": 20,
+    "ssh_delay_ms": 10,
+    "completed_subjects": 12,
+    "approved_subjects": 0,
+    "input_tokens": 1800,
+    "output_tokens": 360,
+    "errors": 0
+  },
+  "serial": {
+    "concurrency": 1,
+    "connections": 1,
+    "elapsed_seconds": 1.388,
+    "runs_per_second": 8.647,
+    "receipt_persistence": {
+      "count": 18,
+      "p50_ms": 21.632,
+      "p95_ms": 23.183
+    },
+    "usage_persistence": {
+      "count": 18,
+      "p50_ms": 21.295,
+      "p95_ms": 22.657
+    }
+  },
+  "parallel": {
+    "concurrency": 4,
+    "connections": 4,
+    "elapsed_seconds": 0.615,
+    "runs_per_second": 19.497,
+    "receipt_persistence": {
+      "count": 18,
+      "p50_ms": 21.962,
+      "p95_ms": 25.377
+    },
+    "usage_persistence": {
+      "count": 18,
+      "p50_ms": 21.949,
+      "p95_ms": 26.642
+    }
+  },
+  "comparison": {
+    "throughput_ratio_parallel_over_serial": 2.255,
+    "equivalent_workload_and_results": true
+  },
+  "limits": "Disposable loopback fixture with a synthetic delay around receipt creation and usage reconciliation. Results do not establish production, TLS or database performance."
+}

@@ -95,11 +95,65 @@ def status(s,host_id):
         'eligible':eligible,'max_age_seconds':MAX_AGE,'comparison':comparison}
 
 
-def approve(s,host_id,inspection_id,evidence_digest,expected,reason,actor):
+def review(s, host_id):
+    """Read-only evidence review; file authenticity never grants approval."""
+    current = status(s, host_id)
+    latest_row = current['latest']
+    current['file_review'] = assess_inventory(
+        s, host_id, latest_row['inventory'] if latest_row else None)
+    from .incidents import digest
+    current['review_digest'] = digest(current['file_review'])
+    return current
+
+
+def assess_inventory(s, host_id, inventory):
+    from . import file_status, known_good, ai_assessments
+    from .db import config
+    # Resolve authenticated bytes before checking the strict reuse contract.
+    proofs = file_status.repositories(s, host_id)
+    result = {'order': file_status.ORDER, 'items': [], 'coverage': 'unavailable',
+        'note': 'Authentic file bytes do not establish safe startup behavior. '
+                'Startup metadata lacks the complete process context required by the '
+                'known-good database. Unresolved changes may be investigated with an '
+                'explicitly requested AI plan; baseline approval remains manual.'}
+    try:
+        validate(inventory)
+    except ValueError:
+        return result
+    result['coverage'] = inventory['state']
+    result['gaps'] = inventory['gaps']
+    result['skipped'] = inventory['skipped']
+    result['missing_roots'] = inventory['missing_roots']
+    cfg = config(s)
+    policy = ai_assessments.digest(['startup-metadata-review-v1'])
+    for entry in inventory['entries']:
+        assessment = file_status.resolve(entry['path'], entry.get('sha256'), proofs)
+        # Construct only the observed startup fields. Never accept a target's
+        # identity_verified or known_good_context claim, or borrow a process's
+        # verdict for an unbound startup entry with merely the same hash/path.
+        snapshot = {'executable': entry['path'], 'sha256': entry.get('sha256')}
+        hit = known_good.lookup(s, snapshot, cfg['ai_model'], [policy],
+                               bypass=assessment['status'] == 'changed')
+        # The current metadata-only inventory cannot satisfy the strict cache
+        # contract. A future richer collector must separately bind startup context.
+        result['items'].append({'path': entry['path'], 'sha256': entry.get('sha256'),
+            **assessment, 'known_good': {'status': 'bypassed' if assessment['status'] == 'changed' else 'miss',
+                'reason': 'Authenticated artifact mismatch.' if assessment['status'] == 'changed' else
+                          'Complete verified startup/process context is unavailable.',
+                'reusable_for_startup': False},
+            'behavior_status': 'unresolved'})
+        if hit:
+            raise ValueError('Unexpected known-good match without verified startup context')
+    return result
+
+
+def approve(s,host_id,inspection_id,evidence_digest,expected,reason,actor,review_digest=None):
     import uuid
     from .db import Setting,audit
     from .incidents import PersistenceBaseline
-    current=status(s,host_id)
+    current=review(s,host_id)
+    if review_digest is not None and review_digest != current['review_digest']:
+        raise ValueError('File provenance changed; refresh and review again')
     actual=current['baseline']['id'] if current['baseline'] else ''
     if actual!=expected:raise ValueError('Baseline changed; refresh and review again')
     row=current['latest']

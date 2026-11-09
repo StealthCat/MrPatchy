@@ -11,6 +11,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from types import SimpleNamespace
+from time import perf_counter
 from sqlalchemy import String, Double, select, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
@@ -80,7 +81,9 @@ def abandon_owner(owner):
 
 def acquire(owner=None):
     lock=Lock('ai-triage')
+    lock_started=perf_counter()
     if not lock.acquire():return None
+    claim_lock_wait=perf_counter()-lock_started
     try:
         with Session() as s:
             now=time.time();reconcile(s,now);s.commit()
@@ -130,15 +133,16 @@ def acquire(owner=None):
                         configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
                     s.add(claim);s.commit()
                     work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
-                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner)
+                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
             except host_lifecycle.Inactive:return None
     finally:lock.release()
 
 
 class Lease:
-    def __init__(self,claim,work,cfg,secret,owner):
+    def __init__(self,claim,work,cfg,secret,owner,claim_lock_wait):
         self.subject=claim.subject;self.token=claim.token;self.run_id=claim.run_id;self.host_id=claim.host_id
         self.work=work;self.cfg=cfg;self.secret=SimpleNamespace(value=secret);self.owner=owner
+        self.claim_lock_wait=claim_lock_wait
         self.stopped=threading.Event();self.lost=threading.Event()
 
     def validate(self,s):

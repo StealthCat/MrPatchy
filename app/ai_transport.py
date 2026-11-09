@@ -5,17 +5,28 @@ its own receipt. Shutdown waits for admitted sends; drain only closes an idle po
 """
 from contextlib import contextmanager
 import atexit
+import os
+import re
 import threading
 import zlib
 import httpx
 
-MAX_CONNECTIONS = 16
+DEFAULT_CONNECTIONS = 16
+MAX_CONNECTIONS = 64
+CONNECTIONS_ENV = 'MRPATCHY_AI_HTTP_CONNECTIONS'
 MAX_RESPONSE_BYTES = 2_000_000
 READ_CHUNK_BYTES = 64 * 1024
 _condition = threading.Condition()
 _client = None
 _active = 0
 _closing = False
+
+
+def connection_limit():
+    value=os.getenv(CONNECTIONS_ENV,str(DEFAULT_CONNECTIONS))
+    if not re.fullmatch(r'[0-9]{1,2}',value) or not 1<=int(value)<=MAX_CONNECTIONS:
+        raise ValueError(CONNECTIONS_ENV+' must be an integer from 1 to '+str(MAX_CONNECTIONS))
+    return int(value)
 
 
 def _safe_snapshot(response):
@@ -104,8 +115,9 @@ def _borrow():
     with _condition:
         _condition.wait_for(lambda: not _closing)
         if _client is None:
-            _client = httpx.Client(limits=httpx.Limits(max_connections=MAX_CONNECTIONS,
-                max_keepalive_connections=MAX_CONNECTIONS, keepalive_expiry=30), follow_redirects=False)
+            limit=connection_limit()
+            _client = httpx.Client(limits=httpx.Limits(max_connections=limit,
+                max_keepalive_connections=limit, keepalive_expiry=30), follow_redirects=False)
         client = _client
         _active += 1
         _condition.notify_all()
@@ -116,7 +128,7 @@ def _borrow():
             _condition.notify_all()
 
 
-def post(url, *, headers, json, timeout, encoded_body=None):
+def _send(method, url, *, headers, timeout, json=None, encoded_body=None):
     # Build directly, rather than Client.build_request: never merge a previous
     # response's cookies or any credential-bearing client defaults into a send.
     deadline = httpx.Timeout(timeout, connect=min(timeout, 10), pool=min(timeout, 5))
@@ -126,12 +138,21 @@ def post(url, *, headers, json, timeout, encoded_body=None):
         defaults = {name:client.headers[name] for name in
                     ('accept','connection','user-agent') if name in client.headers}
         defaults['accept-encoding']='gzip'
-        request = httpx.Request('POST', url, headers={**defaults, **headers}, json=json,
-                                content=encoded_body,
-                                extensions={'timeout': deadline.as_dict()})
+        values={'headers':{**defaults, **headers},'extensions':{'timeout':deadline.as_dict()}}
+        if json is not None:values['json']=json
+        if encoded_body is not None:values['content']=encoded_body
+        request = httpx.Request(method, url, **values)
         if encoded_body is not None:request.headers.setdefault('content-type','application/json')
         try:return _bounded(client.send(request,follow_redirects=False,stream=True))
         finally: client.cookies.clear()
+
+
+def get(url, *, headers, timeout):
+    return _send('GET',url,headers=headers,timeout=timeout)
+
+
+def post(url, *, headers, json, timeout, encoded_body=None):
+    return _send('POST',url,headers=headers,json=json,timeout=timeout,encoded_body=encoded_body)
 
 
 def close(*, wait=True):

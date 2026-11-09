@@ -9,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.skipif(shutil.which('node') is None, reason='node not installed')
 
 SRC = (Path(__file__).resolve().parents[1] / 'app/static/app.js').read_text()
-FN = re.search(r"async function api\(.*?\n", SRC).group(0)
+FN = re.search(r"function apiErrorMessage\(.*?\n}\n", SRC, re.S).group(0) + re.search(r"async function api\(.*?\n", SRC).group(0)
 
 HARNESS = """
 let sessionRevision=0,csrf='t',logins=0;function showLogin(){logins++;}
@@ -43,8 +43,23 @@ def test_api_handles_non_json_and_empty_bodies():
     assert out[1] == {'ok': {}}
     assert out[2]['err'] == 'Unexpected non-JSON response (HTTP 200)'
     assert out[3]['err'] == 'nope'
-    assert 'msg' in out[4]['err']
+    assert out[4]['err'] == 'x'
     assert out[5] == {'ok': {'a': 1}}
     assert out[6]['err'].startswith('Request failed (HTTP 401')
     assert out[7] == {'ok': None}  # valid JSON null is not a parse failure
     assert res['logins'] == 1
+
+
+def test_api_validation_arrays_never_echo_rejected_input():
+    canary = 'SECRETPASSWORD' + 'p' * 400
+    out = run([
+        {'status': 422, 'body': json.dumps({'detail': [{'type': 'string_pattern_mismatch', 'loc': ['body', 'address'], 'msg': 'String should match pattern', 'input': canary, 'ctx': {'pattern': canary}}]})},
+        {'status': 422, 'body': json.dumps({'detail': [{'loc': ['body', 'a'], 'msg': 'one'}, {'loc': ['body', 'b'], 'msg': 'two'}]})},
+        {'status': 422, 'body': json.dumps({'detail': {'input': canary}})},
+        {'status': 422, 'body': json.dumps({'detail': [{'input': canary}]})},
+    ])['out']
+    assert out[0]['err'] == 'address: String should match pattern'
+    assert out[1]['err'] == 'a: one; b: two'
+    assert out[2]['err'].startswith('Request failed (HTTP 422')
+    assert out[3]['err'].startswith('Request failed (HTTP 422')
+    assert all('SECRETPASSWORD' not in o['err'] for o in out)

@@ -77,7 +77,62 @@ def run_hosts(s, run_ids):
 # cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
 TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
                  'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age',
-                 'known_good_lookup'}
+                 'known_good_lookup','claim_lock'}
+
+
+TIMING_SUMMARY_RUN_LIMIT = 100
+TIMING_SUMMARY_EVENT_LIMIT = 2048
+_TIMING_MESSAGE = re.compile(r'([a-z ]{1,32}): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
+
+
+def triage_timing_summary(s, limit):
+    """Summarize a bounded sample of retained process-triage timing events."""
+    run_ids = list(s.scalars(
+        select(AIRun.id)
+        .where(AIRun.purpose == 'triage', AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
+        .order_by(AIRun.started.desc(), AIRun.id)
+        .limit(limit)
+    ))
+    stage_names = {'timing_' + stage: stage for stage in sorted(TIMING_STAGES)}
+    rows = []
+    if run_ids:
+        rows = s.execute(
+            select(AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96))
+            .where(AIEvent.run_id.in_(run_ids),
+                   AIEvent.stage.in_(tuple(stage_names)))
+            .order_by(AIEvent.id.desc())
+            .limit(TIMING_SUMMARY_EVENT_LIMIT + 1)
+        ).all()
+
+    timings = {stage: [] for stage in stage_names.values()}
+    errors = dict.fromkeys(timings, 0)
+    covered_runs = set()
+    discarded = 0
+    for run_id, event_stage, message in rows[:TIMING_SUMMARY_EVENT_LIMIT]:
+        stage = stage_names.get(event_stage)
+        match = _TIMING_MESSAGE.fullmatch(message) if isinstance(message, str) else None
+        if stage is None or not match or match[1] != stage.replace('_', ' '):
+            discarded += 1
+            continue
+        timings[stage].append(float(match[2]))
+        errors[stage] += match[3] == 'error'
+        covered_runs.add(run_id)
+
+    stages = {}
+    for stage, samples in timings.items():
+        samples.sort()
+        size = len(samples)
+        stages[stage] = {
+            'samples': size, 'errors': errors[stage],
+            'p50_ms': samples[(size * 50 + 99) // 100 - 1] if size else None,
+            'p95_ms': samples[(size * 95 + 99) // 100 - 1] if size else None,
+        }
+    return {
+        'run_limit': limit, 'event_limit': TIMING_SUMMARY_EVENT_LIMIT,
+        'sampled_runs': len(run_ids), 'runs_without_samples': len(run_ids) - len(covered_runs),
+        'discarded_events': discarded, 'events_truncated': len(rows) > TIMING_SUMMARY_EVENT_LIMIT,
+        'stages': stages,
+    }
 
 
 def timing(stage, seconds, outcome='complete'):
@@ -170,14 +225,13 @@ def safe_error(error):
     return 'Internal '+kind+' during AI processing. Check worker/database health; no provider result was accepted.'
 
 
-def event(stage, message, *, state=None, call=False):
+def event(stage, message, *, state=None):
     run_id = active.get()
     if not run_id: return
     with Session() as s:
         row = s.get(AIRun, run_id)
         if not row or row.state!='running': return
         row.stage = stage; row.message = message[:2000]
-        if call: row.calls += 1
         if state: row.state = state; row.finished = time.time()
         s.add(AIEvent(run_id=run_id, stage=stage, message=message[:2000])); s.commit()
     log.info('AI run=%s stage=%s %s', run_id, stage, message[:2000])
