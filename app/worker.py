@@ -267,6 +267,8 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
+    from .file_trust import record_snapshot
+    record_snapshot(s,h)
     s.commit()
     return ids
 
@@ -784,6 +786,8 @@ def _assess_active_behavior(s,row,cfg,secret):
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
         assessment=ai_assessments.record_reuse(write,saved,hit)
         known_good.link_reuse(write,assessment,hit)
+        from .file_trust import record_reuse
+        record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)
         return True
 
