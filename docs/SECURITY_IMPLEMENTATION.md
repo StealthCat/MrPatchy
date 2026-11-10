@@ -4699,6 +4699,18 @@ fairness and shared throttle/daily-spend/unthrottled controls follow under the e
 priority; notification and broader security/deployment/UI roadmaps remain planned.
 
 
+### Newest authenticated receipt for AI follow-up (issue #645)
+
+Within the retained inspection search, the newest validated vendor receipt that
+names the exact executable path governs provenance. A different hash, an observed
+difference, or incomplete verification leaves the package evidence gap in place.
+Invalid receipts and receipts for unrelated paths do not mask valid evidence.
+
+This slice covers follow-up provenance binding. Roadmap B remains incomplete.
+Fleet-wide reuse still requires end-to-end acceptance of complete evidence,
+zero-call cross-host hits, invalidation, Re-triage, and role isolation on SQLite
+and MySQL.
+
 ## v1.25.0 — Controller-authenticated artifact provenance binding
 
 Issue-first reconciliation read current main `d80965e0`, repository instructions,
