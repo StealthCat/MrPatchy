@@ -81,6 +81,80 @@ def test_candidate_host_reads_only_load_scoring_inputs(admin):
         assert update_scores.evidence(rpm_host,rpm_package)['installed']==['0:1-1']
 
 
+def test_scoring_memo_survives_unrelated_inventory_refresh(admin, monkeypatch):
+    seed(2, completed=0)
+    with Session() as session:
+        rpm_host = session.get(Host, 'bulk-1')
+        rpm_host.inventory = {
+            'package_manager': 'rpm',
+            'os': 'ID=almalinux\nVERSION_ID=9',
+            'rpm_packages': [{'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1-1'}],
+            'files': {'/etc/yum.repos.d/example.repo': '[example]\n'},
+            'collected': 1,
+        }
+        rpm_package = session.get(Package, 'bulk-1:pkg0000')
+        rpm_package.name = 'pkg0000:x86_64'
+        rpm_package.id = 'bulk-1:' + rpm_package.name
+        for package in session.scalars(select(Package)):
+            host = session.get(Host, package.host_id)
+            session.add(update_scores.UpdateScore(
+                id=update_scores.identity(host, package), host_id=host.id,
+                name=package.name, installed=package.installed,
+                candidate=package.candidate, state='complete', score=50,
+            ))
+        session.commit()
+
+    def candidates():
+        with Session() as session:
+            return {host.id: (key, score.state if score else None)
+                    for _, host, key, score, _ in update_scores.scoring_candidates(session)}
+
+    monkeypatch.setattr(update_scores, '_MEMO', {})
+    original = candidates()
+    assert set(original) == {'bulk-0', 'bulk-1'}
+    assert all(state == 'complete' for _, state in original.values())
+    memo = update_scores._MEMO.copy()
+    with Session() as session:
+        rpm_host = session.get(Host, 'bulk-1')
+        rpm_host.inventory = {
+            **rpm_host.inventory,
+            'files': {'/etc/yum.repos.d/example.repo': '[example]\n# refreshed\n'},
+            'os': rpm_host.inventory['os'] + '\nUNUSED_FIELD=ignored',
+            'collected': 2,
+        }
+        apt_host = session.get(Host, 'bulk-0')
+        apt_host.inventory = {**apt_host.inventory, 'status': 'unrelated dpkg data', 'collected': 2}
+        session.commit()
+
+    with monkeypatch.context() as patch:
+        def unexpected(*args):
+            pytest.fail('Unrelated inventory changes must reuse the warm scoring memo')
+
+        patch.setattr(update_scores, 'identity', unexpected)
+        patch.setattr(update_scores, 'version_index', unexpected)
+        assert candidates() == original
+        assert all(update_scores._MEMO[host_id] is entry for host_id, entry in memo.items())
+
+    for changes in (
+        {'rpm_packages': [{'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1-2'}]},
+        {'os': 'ID=almalinux\nVERSION_ID=10'},
+        {'package_manager': 'apt'},
+    ):
+        with Session() as session:
+            host = session.get(Host, 'bulk-1')
+            before = host.inventory
+            host.inventory = {**before, **changes}
+            expected = update_scores.identity(host, session.get(Package, 'bulk-1:pkg0000:x86_64'))
+            session.commit()
+        current = candidates()
+        assert expected != original['bulk-1'][0]
+        assert current == {**original, 'bulk-1': (expected, None)}
+        with Session() as session:
+            session.get(Host, 'bulk-1').inventory = before
+            session.commit()
+        assert candidates() == original
+
+
 @pytest.mark.parametrize('count',[100,1000])
 @pytest.mark.parametrize('state',['complete','deferred'])
 def test_idle_fleet_selects_scale_by_chunks_not_packages(admin,monkeypatch,count,state):
