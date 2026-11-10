@@ -68,6 +68,48 @@ def test_target_assessment_is_replaced_without_mutating_input(client):
     assert actual['file_assessment']['status']=='unassessed' and evidence==original
 
 
+def test_triage_validates_only_receipts_that_can_resolve_the_exact_path(client, monkeypatch):
+    checked = []
+    validate = file_status.vendor.validate_authenticated
+
+    def counted(manifest, proof, receipt):
+        checked.append(proof['bundle_id'])
+        return validate(manifest, proof, receipt)
+
+    monkeypatch.setattr(file_status.vendor, 'validate_authenticated', counted)
+    with Session() as s:
+        unrelated = report()
+        unrelated['vendor_manifest']['entries'][0]['path'] = PATH.upper()
+        unrelated['vendor_authentication']['bundle_id'] = 'unrelated'
+        newest = report('f'*64)
+        newest['vendor_authentication']['bundle_id'] = 'newest'
+        corrupt = report()
+        corrupt['vendor_authentication'].update(bundle_id='corrupt', artifact_sha256='invalid')
+        for index in range(105):
+            s.add(Inspection(id=f'older-{index}', host_id='host-one', created=100 + index,
+                             report=report()))
+            s.add(Inspection(id=f'unrelated-{index}', host_id='host-one', created=300 + index,
+                             report=unrelated))
+        s.add_all([
+            Inspection(id='target-a', host_id='host-one', created=220, report=report()),
+            Inspection(id='target-z', host_id='host-one', created=220, report=newest),
+            Inspection(id='corrupt', host_id='host-one', created=230, report=corrupt),
+        ])
+        s.commit()
+
+        row = SimpleNamespace(host_id='host-one', evidence={'executable': PATH, 'sha256': HASH})
+        assessment = file_status.before_ai(s, row)['file_assessment']
+        assert assessment['status'] == 'changed'
+        assert assessment['reference']['inspection_id'] == 'target-z'
+        assert not assessment.get('trusted')
+        assert checked == ['corrupt', 'newest']
+
+        # A following query on the same session must work after early exit.
+        proofs = file_status.repositories(s, 'host-one')
+        assert proofs[PATH] == assessment['reference']
+        assert proofs[PATH.upper()]['expected_sha256'] == HASH
+
+
 def test_page_includes_unassessed_missing_baseline_and_all_pages(admin):
     setup()
     with Session() as s:
@@ -104,8 +146,8 @@ def test_worker_orders_repository_cache_then_provider(client,monkeypatch,cached,
         if cached:s.add(source);known_good.publish(s,source)
         s.commit()
     events=[];resolve=file_status.repositories;lookup=known_good.lookup
-    def repositories(*args):
-        events.append('repository');return resolve(*args)
+    def repositories(*args, **kwargs):
+        events.append('repository');return resolve(*args, **kwargs)
     def cache(*args,**kwargs):
         events.append('cache');return lookup(*args,**kwargs)
     def provider(evidence,*args):
