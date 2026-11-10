@@ -348,6 +348,17 @@ def notification_list(unread_only:bool=False,include_dismissed:bool=False,
         return {'items':items,'offset':offset,'limit':limit,'total':total,
                 'more':offset+len(items)<total}
 
+@app.get('/api/notifications/arrivals')
+def notification_arrivals(after:int|None=None,limit:int=50,user=Depends(self_user)):
+    """Return visible revisions committed after a durable arrival cursor."""
+    with Session() as s:
+        try:
+            result=notification_events.arrivals_for_user(
+                s,user['username'],after=after,limit=limit)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
+        return result or {'items':[],'cursor':0,'more':False,'reset':False}
+
 @app.get('/api/notifications/unread-count')
 def notification_unread_count(user=Depends(self_user)):
     with Session() as s:

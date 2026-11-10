@@ -3037,6 +3037,38 @@ milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client a
 connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
 two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
 
+Worker checkpoint (issue #668): a bounded milestone-2 increment adds a durable
+arrival sequence. Every newly created notification revision appends one row to
+`notification_arrivals` in the publisher's transaction. Identical repeated
+observations append nothing. `GET /api/notifications/arrivals` is available to any
+signed-in role:
+
+- Without `after` it returns only a baseline cursor.
+- With `after` it returns, in arrival order, current revisions committed after that
+  cursor. Items use the list API shape plus `arrival`, and the response carries a
+  `more` flag and a new cursor.
+
+Results apply the caller's current role, and read and dismissed flags are reported,
+not filtered. Superseded revisions and hidden events are skipped, but the cursor
+still advances past them. A cursor beyond the retained sequence resets to a fresh
+baseline and sets `reset`.
+
+Discovery is independent of producer timestamps and list ordering. A newly
+committed revision is found even when its producer clock lags, or when 100 or more
+newer unread events of the same severity crowd it out of a bounded page. Those are
+the two gaps the live-toast reviews reproduced.
+
+Sequence values are allocated before commit. So a reader stops before a missing
+lower value until the arrival after the gap is 60 seconds old (by the publishing
+process's clock), then treats the gap as settled. This covers an in-flight
+transaction on MySQL as well as a rolled-back insert. Clock skew larger than that
+hold can settle a gap early. Each request scans at most 500 arrival rows.
+
+This is additive: SSE payloads, list/count APIs, read/dismiss/acknowledgement
+semantics and response authorization are unchanged. Client adoption by the live
+toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
+do arrival retention/pruning and multi-controller acceptance.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 

@@ -82,6 +82,21 @@ class NotificationRevision(Base):
     created: Mapped[float] = mapped_column(Double, default=time.time)
 
 
+class NotificationArrival(Base):
+    """Append-only commit sequence for every created notification revision.
+
+    The sequence is independent of producer timestamps and list ordering, so a
+    client cursor can find newly committed revisions even when older unread
+    events crowd them out of a bounded page or a producer clock lags.
+    """
+    __tablename__ = 'notification_arrivals'
+    __table_args__ = {'sqlite_autoincrement': True}
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(64), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    created: Mapped[float] = mapped_column(Double, default=time.time, index=True)
+
+
 class NotificationUserState(Base):
     """Per-user state; revisions keep changed/reopened events discoverable."""
 
@@ -172,6 +187,10 @@ def publish(session, *, source, kind, subject_type, subject_id,
         event_id=event_id, revision=event.revision,
         subject_revision=subject_revision, severity=severity, reason=reason,
         deep_link=deep_link, lifecycle=lifecycle, created=timestamp))
+    # Wall-clock arrival time on the publishing process.  It only bounds how long
+    # a reader holds a sequence gap; ordering always uses the sequence itself.
+    session.add(NotificationArrival(
+        event_id=event_id, revision=event.revision, created=time.time()))
     return event, True
 
 
@@ -230,7 +249,11 @@ def list_for_user(session, username, *, unread_only=False,
         return []
     rows = session.execute(query.order_by(
         NotificationEvent.updated.desc(), NotificationEvent.id).limit(limit).offset(offset))
-    return [{
+    return [_item(event, revision, state) for event, revision, state in rows]
+
+
+def _item(event, revision, state):
+    return {
         'id': event.id,
         'revision': event.revision,
         'source': event.source,
@@ -245,7 +268,7 @@ def list_for_user(session, username, *, unread_only=False,
         'created': revision.created,
         'read': bool(state and state.read_revision >= event.revision),
         'dismissed': bool(state and state.dismissed_revision >= event.revision),
-    } for event, revision, state in rows]
+    }
 
 
 def unread_count(session, username):
@@ -332,3 +355,85 @@ def dismiss(session, username, event_id, revision, *, now=None):
     state.updated = time.time() if now is None else now
     audit(session, 'dismiss notification', f'{username} {event_id} revision {revision}')
     return state
+
+
+ARRIVAL_GAP_HOLD_SECONDS = 60
+ARRIVAL_SCAN_LIMIT = 500
+
+
+def _safe_head(session, after, now):
+    """Return the highest arrival sequence a reader can safely pass.
+
+    Sequence values are allocated before commit, so on MySQL a lower value can
+    still be in flight (or rolled back) while a higher one is visible.  The head
+    stops before a missing value until the arrival after the gap is older than
+    the hold, then treats the gap as settled.  Returns ``(head, scanned_rows,
+    scan_exhausted)``.
+    """
+    rows = session.execute(
+        select(NotificationArrival.seq, NotificationArrival.created)
+        .where(NotificationArrival.seq > after)
+        .order_by(NotificationArrival.seq).limit(ARRIVAL_SCAN_LIMIT)).all()
+    head = after
+    for seq, created in rows:
+        if seq != head + 1 and now - created < ARRIVAL_GAP_HOLD_SECONDS:
+            break
+        head = seq
+    return head, rows, len(rows) == ARRIVAL_SCAN_LIMIT
+
+
+def _baseline(session, now):
+    settled = session.scalar(
+        select(func.max(NotificationArrival.seq))
+        .where(NotificationArrival.created < now - ARRIVAL_GAP_HOLD_SECONDS)) or 0
+    head, _, _ = _safe_head(session, settled, now)
+    return head
+
+
+def arrivals_for_user(session, username, *, after=None, limit=50, now=None):
+    """Return visible current revisions committed after an arrival cursor.
+
+    Without ``after`` this returns only a baseline cursor.  Items use the list
+    API shape plus ``arrival``.  Superseded revisions and events hidden from the
+    caller's current role are skipped while the cursor still advances past
+    them.  A cursor beyond the retained sequence is reset to a fresh baseline.
+    """
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError('Notification limit must be between 1 and 100')
+    if after is not None and (type(after) is not int or after < 0):
+        raise ValueError('Notification arrival cursor must be a non-negative integer')
+    now = time.time() if now is None else now
+    user = _user(session, username)
+    if not user:
+        return None
+    latest = session.scalar(select(func.max(NotificationArrival.seq))) or 0
+    if after is None or after > latest:
+        return {'items': [], 'cursor': _baseline(session, now), 'more': False,
+                'reset': after is not None}
+    head, rows, exhausted = _safe_head(session, after, now)
+    if head == after:
+        return {'items': [], 'cursor': after, 'more': False, 'reset': False}
+    own_state = and_(
+        NotificationUserState.event_id == NotificationEvent.id,
+        NotificationUserState.username == username)
+    current = and_(
+        NotificationRevision.event_id == NotificationEvent.id,
+        NotificationRevision.revision == NotificationEvent.revision)
+    found = session.execute(
+        select(NotificationArrival.seq, NotificationEvent, NotificationRevision,
+               NotificationUserState)
+        .join(NotificationEvent, and_(
+            NotificationEvent.id == NotificationArrival.event_id,
+            NotificationEvent.revision == NotificationArrival.revision))
+        .join(NotificationRevision, current)
+        .outerjoin(NotificationUserState, own_state)
+        .where(NotificationArrival.seq > after, NotificationArrival.seq <= head,
+               NotificationEvent.minimum_role.in_(_allowed_roles(user.role)))
+        .order_by(NotificationArrival.seq).limit(limit + 1)).all()
+    items = [_item(event, revision, state) | {'arrival': seq}
+             for seq, event, revision, state in found[:limit]]
+    if len(found) > limit:
+        return {'items': items, 'cursor': items[-1]['arrival'], 'more': True,
+                'reset': False}
+    more = exhausted and head == rows[-1][0]
+    return {'items': items, 'cursor': head, 'more': more, 'reset': False}
