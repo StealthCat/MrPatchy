@@ -2,7 +2,7 @@
 
 ## 1.54.7 — 2026-11-09
 
-1. [PR #629](https://github.com/StealthCat/MrPatchy/pull/629): Update python-multipart from 0.0.32 to 0.0.33 in the runtime requirements and hash-pinned lock for safer form parsing. No application code, configuration, schema or public API changes; no compatibility impact is expected. This source update does not publish a Docker image.
+1. [PR #629](https://github.com/StealthCat/MrPatchy/pull/629): Update python-multipart from 0.0.32 to 0.0.33 in the runtime requirements and hash-pinned lock for upstream parser, upload and decoding fixes. Upstream drops Python 3.10; the application image uses Python 3.12, so its supported runtime is unaffected. Target-agent Python requirements are unchanged. Upstream URL-encoded field caps are opt-in and this update does not enable them. No application code, configuration, schema or public API changes. This source update does not publish a Docker image.
 
 ## 1.54.6 — 2026-11-09
 
