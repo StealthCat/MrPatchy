@@ -222,12 +222,12 @@ def validate_authenticated(manifest,proof,result):
 
 
 def known_good_binding(manifest,proof,result,path,checksum):
-    """Bind one exact path/hash to signed package evidence without target trust."""
+    """Bind an exact path, or return None when a valid receipt cannot prove its bytes."""
     verified=validate_authenticated(manifest,proof,result)
-    if result.get('state')!='matches_artifact_bytes':raise ValueError('Vendor inspection did not verify all authenticated regular files')
-    entries=[entry for entry in manifest['entries'] if entry['path']==path and entry['sha256']==checksum]
-    if len(entries)!=1:raise ValueError('Executable is not an exact authenticated vendor artifact match')
-    entry=entries[0];basis=trust_basis(manifest)
+    entry=next((entry for entry in manifest['entries'] if entry['path']==path),None)
+    if entry is None:raise ValueError('Executable is absent from the authenticated vendor manifest')
+    if result['state']!='matches_artifact_bytes' or entry['sha256']!=checksum:return None
+    basis=trust_basis(manifest)
     artifact={'version':1,'verified':True,'kind':'vendor-package-regular-file','path':path,'sha256':checksum,
         'size':entry['size'],'manifest_sha256':sha(json.dumps(entry,sort_keys=True,separators=(',',':')).encode())}
     provenance={'version':1,'verified':True,'scheme':basis,'subject':manifest['package'],'release':manifest['version'],

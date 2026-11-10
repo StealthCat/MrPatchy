@@ -3,6 +3,7 @@ import copy
 import re
 import time
 from collections import Counter
+from contextlib import closing
 
 from sqlalchemy import select
 from . import ai_assessments, known_good, persistence, vendor
@@ -15,30 +16,44 @@ NOTE = ('Recorded files only, not a full filesystem inventory. Signed artifact m
         'AI results are advisory and never approve a baseline.')
 
 
-def repositories(s, host_id):
+def repositories(s, host_id, *, path=None):
     """Newest authenticated receipt for each path wins; never hide a newer mismatch."""
     result = {}
-    query = select(Inspection).where(Inspection.host_id == host_id).order_by(
-        Inspection.created.desc(), Inspection.id.desc())
-    for row in s.scalars(query).yield_per(100):
-        report = row.report or {}
-        if report.get('trust_basis') not in (
-                'controller_authenticated_debian_artifact', 'controller_authenticated_rpm_artifact'):
-            continue
-        manifest, proof, receipt = (report.get(k) for k in (
-            'vendor_manifest', 'vendor_authentication', 'vendor_verification'))
-        try:
-            binding = vendor.validate_authenticated(manifest, proof, receipt)
-        except (TypeError, ValueError):
-            continue
-        findings = {f['path']: f for f in receipt['findings']}
-        for entry in manifest['entries']:
-            result.setdefault(entry['path'], {
-                'expected_sha256': entry['sha256'], 'inspection_id': row.id,
-                'created': row.created, 'package': manifest['package'], 'version': manifest['version'],
-                'proof_sha256': binding['proof_sha256'],
-                'receipt_state': receipt['state'], 'finding': findings.get(entry['path']),
-            })
+    query = select(Inspection.id, Inspection.created, Inspection.report).where(
+        Inspection.host_id == host_id).order_by(Inspection.created.desc(), Inspection.id.desc())
+    with closing(s.execute(query.execution_options(yield_per=100))) as rows:
+        for inspection_id, created, report in rows:
+            report = report or {}
+            if report.get('trust_basis') not in (
+                    'controller_authenticated_debian_artifact', 'controller_authenticated_rpm_artifact'):
+                continue
+            manifest, proof, receipt = (report.get(k) for k in (
+                'vendor_manifest', 'vendor_authentication', 'vendor_verification'))
+            selected = None
+            if path is not None:
+                entries = manifest.get('entries') if isinstance(manifest, dict) else None
+                if not isinstance(entries, list):
+                    continue
+                # The raw manifest can eliminate an irrelevant receipt. Only
+                # complete revalidation can make a matching receipt usable.
+                selected = next((entry for entry in entries
+                                 if isinstance(entry, dict) and entry.get('path') == path), None)
+                if selected is None:
+                    continue
+            try:
+                binding = vendor.validate_authenticated(manifest, proof, receipt)
+            except (TypeError, ValueError):
+                continue
+            findings = {f['path']: f for f in receipt['findings']}
+            for entry in manifest['entries'] if selected is None else (selected,):
+                result.setdefault(entry['path'], {
+                    'expected_sha256': entry['sha256'], 'inspection_id': inspection_id,
+                    'created': created, 'package': manifest['package'], 'version': manifest['version'],
+                    'proof_sha256': binding['proof_sha256'],
+                    'receipt_state': receipt['state'], 'finding': findings.get(entry['path']),
+                })
+            if selected is not None:
+                break
     return result
 
 
@@ -63,8 +78,7 @@ def before_ai(s, row):
     """Always replace any target-supplied claim with controller-derived evidence."""
     evidence = copy.deepcopy(row.evidence or {})
     from .file_trust import assess
-    evidence['file_assessment'] = assess(s, row.host_id, evidence.get('executable'), evidence.get('sha256'),
-                                          repositories(s, row.host_id))
+    evidence['file_assessment'] = assess(s, row.host_id, evidence.get('executable'), evidence.get('sha256'))
     evidence['file_assessment']['behavior_note'] = (
         'File authenticity does not resolve process behavior. Check the exact known-good '
         'database next; AI may investigate only the remaining behavior uncertainty.')

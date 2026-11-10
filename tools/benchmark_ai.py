@@ -45,6 +45,8 @@ def main():
                         help='simulated latency of a follow-up SSH evidence request (default: 10)')
     parser.add_argument('--queue-age-seconds', type=int, default=2,
                         help='synthetic age of queued observations without a real wait (default: 2)')
+    parser.add_argument('--retained-history-rows', type=int, default=0,
+                        help='number of older completed observations to seed (default: 0)')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
     if not 1<=args.concurrency<=8:parser.error('--concurrency must be between 1 and 8')
@@ -54,12 +56,15 @@ def main():
         parser.error('--ssh-delay-ms must be between 0 and 1000')
     if not 0 <= args.queue_age_seconds <= 86400:
         parser.error('--queue-age-seconds must be between 0 and 86400')
+    if not 0 <= args.retained_history_rows <= 50_000:
+        parser.error('--retained-history-rows must be between 0 and 50000')
     begin=ContextVar('benchmark_begin');two_stage=ContextVar('benchmark_two_stage',default=False)
     # Set before importing runtime modules; never inherit a deployment database.
     with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory:
         os.environ.update(DATA_DIR=directory, DATABASE_URL='sqlite:///'+directory+'/bench.db', DISABLE_SCHEDULER='1')
         for name in list(os.environ):
             if name.lower().endswith('_proxy'):os.environ.pop(name)
+        from sqlalchemy import insert
         from app import ai, worker, ai_runs
         from app.db import init, Session, Host, Setting, Behavior, engine
         from app.security import seal
@@ -117,14 +122,22 @@ def main():
             return original_assess(s,row,*a)
         worker._assess_behavior = admission
         try:
+            subjects = [f'fixture-{index}' for index in range(args.runs)]
             with Session() as s:
                 s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model','ai_hourly_limit':100}))
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
+                if args.retained_history_rows:
+                    history_time = time.time() - args.queue_age_seconds - 3600
+                    s.execute(insert(Behavior), [
+                        {'id': f'history-{index}', 'host_id': 'fixture-host-0', 'verdict': 'low',
+                         'evidence': {}, 'first_seen': history_time, 'last_seen': history_time}
+                        for index in range(args.retained_history_rows)
+                    ])
                 first_seen=time.time()-args.queue_age_seconds
-                for index in range(args.runs):
+                for index, subject in enumerate(subjects):
                     host_id='fixture-host-'+str(index)
                     s.add(Host(id=host_id,name='Fixture only',address='192.0.2.1',fingerprint=''))
-                    s.add(Behavior(id='fixture-'+str(index),host_id=host_id,first_seen=first_seen+index*.0001,
+                    s.add(Behavior(id=subject,host_id=host_id,first_seen=first_seen+index*.0001,
                                    evidence={'executable':'/fixture/artifact','sha256':'a'*64,'identity_verified':True,'two_stage':bool(index%2)}))
                 s.commit()
             started=time.perf_counter()
@@ -137,7 +150,10 @@ def main():
             with ThreadPoolExecutor(max_workers=args.concurrency) as pool:list(pool.map(run_one,range(args.runs)))
             elapsed=time.perf_counter()-started
             with Session() as s:
-                rows=list(s.query(Behavior));assert len(rows)==args.runs and all(row.verdict=='low' and not row.approved for row in rows), [(r.verdict,r.analysis) for r in rows]
+                rows=s.query(Behavior).filter(Behavior.id.in_(subjects)).all()
+                assert len(rows)==args.runs and all(row.verdict=='low' and not row.approved for row in rows), [(r.verdict,r.analysis) for r in rows]
+                retained_history_rows = s.query(Behavior).count() - len(rows)
+                assert retained_history_rows == args.retained_history_rows
                 completed_subjects=sum(row.verdict=='low' for row in rows)
                 approved_subjects=sum(bool(row.approved) for row in rows)
                 assert sum(r.calls for r in s.query(ai_runs.AIRun))==len(requests)==args.runs+args.runs//2
@@ -152,7 +168,8 @@ def main():
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
             print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
-                'connections':len(connections),'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
+                'retained_history_rows':retained_history_rows,'connections':len(connections),
+                'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
