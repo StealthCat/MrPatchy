@@ -1,4 +1,6 @@
 """Durable notification arrival cursor (#668)."""
+import os
+import threading
 import time
 
 import pytest
@@ -55,7 +57,7 @@ def test_publish_appends_one_arrival_per_created_revision(admin):
         rows = session.execute(select(
             notifications.NotificationArrival.event_id,
             notifications.NotificationArrival.revision)
-            .order_by(notifications.NotificationArrival.seq)).all()
+            .order_by(notifications.NotificationArrival.id)).all()
     assert rows == [(event.id, 1), (event.id, 2)]
 
 
@@ -94,9 +96,11 @@ def test_current_role_filter_and_superseded_revisions_still_advance_cursor(admin
         publish(session, 'changed', subject_revision='revision-2', severity='high')
         session.commit()
         changed_id = changed.id
+    body = admin.get(f'/api/notifications/arrivals?after={cursor}').json()
+    with Session() as session:
         latest = session.scalar(select(notifications.NotificationArrival.seq)
                                 .order_by(notifications.NotificationArrival.seq.desc()).limit(1))
-    body = admin.get(f'/api/notifications/arrivals?after={cursor}').json()
+    assert latest == cursor + 3
     assert [(item['id'], item['revision'], item['severity']) for item in body['items']] == [
         (changed_id, 2, 'high')]
     assert body['cursor'] == latest and body['more'] is False
@@ -140,55 +144,111 @@ def test_read_and_dismissed_state_is_reported_not_filtered(admin):
     assert item['read'] is True and item['dismissed'] is True
 
 
-def test_gap_is_held_until_settled(admin):
-    """A lower in-flight (or rolled-back) sequence must not be skipped immediately."""
+def test_baseline_covers_every_committed_revision_beyond_one_scan_batch(admin):
+    """Review finding on 84e860f: 501 recent arrivals left one beyond the baseline."""
+    add_user('reader', 'viewer')
     with Session() as session:
-        session.add(User(username='reader', password='x', role='viewer'))
+        for index in range(notifications.ARRIVAL_SEQUENCE_BATCH + 1):
+            publish(session, f'recent-{index}')
+        session.commit()
+    login(admin, 'reader')
+    cursor = baseline(admin)
+    assert cursor >= notifications.ARRIVAL_SEQUENCE_BATCH + 1
+    again = admin.get(f'/api/notifications/arrivals?after={cursor}').json()
+    assert again == {'items': [], 'cursor': cursor, 'more': False, 'reset': False}
+
+
+def test_unsequenced_arrival_committed_late_is_returned_after_cursor(admin):
+    """A producer that commits after a reader advanced is sequenced above it."""
+    add_user('reader', 'viewer')
+    login(admin, 'reader')
+    cursor = baseline(admin)
+    with Session() as session:
         first = publish(session, 'first')
         session.commit()
-        cursor = session.scalar(select(notifications.NotificationArrival.seq))
-        # Simulate a committed later arrival while cursor+1 is still uncommitted.
-        later = publish(session, 'later')
-        session.flush()
-        row = session.scalar(select(notifications.NotificationArrival)
-                             .where(notifications.NotificationArrival.event_id == later.id))
-        row.seq = cursor + 2
-        session.commit()
-        now = row.created + 1
-        held = notifications.arrivals_for_user(session, 'reader', after=cursor, now=now)
-        assert held == {'items': [], 'cursor': cursor, 'more': False, 'reset': False}
-        # A fresh baseline also stays before the unsettled gap.
-        assert notifications.arrivals_for_user(session, 'reader', now=now)['cursor'] == cursor
-
-        # The missing sequence commits late: it is returned before the later one.
-        missing = publish(session, 'missing')
-        session.flush()
-        row_missing = session.scalar(select(notifications.NotificationArrival)
-                                     .where(notifications.NotificationArrival.event_id == missing.id))
-        row_missing.seq = cursor + 1
-        session.commit()
-        filled = notifications.arrivals_for_user(session, 'reader', after=cursor, now=now)
-        assert [item['subject_id'] for item in filled['items']] == ['missing', 'later']
-        assert filled['cursor'] == cursor + 2
-        assert first.id not in {item['id'] for item in filled['items']}
-
-
-def test_rolled_back_gap_is_skipped_after_hold(admin):
+        first_id = first.id
+    body = admin.get(f'/api/notifications/arrivals?after={cursor}').json()
+    assert [item['id'] for item in body['items']] == [first_id]
     with Session() as session:
-        session.add(User(username='reader', password='x', role='viewer'))
-        publish(session, 'first')
+        # A lower allocation id than anything sequenced later still cannot be
+        # skipped: sequence numbers are assigned at sequencing time.
+        late = publish(session, 'late')
         session.commit()
-        cursor = session.scalar(select(notifications.NotificationArrival.seq))
-        later = publish(session, 'later')
+        late_id = late.id
+    next_body = admin.get(f"/api/notifications/arrivals?after={body['cursor']}").json()
+    assert [item['id'] for item in next_body['items']] == [late_id]
+    assert next_body['items'][0]['arrival'] == body['cursor'] + 1
+
+
+def test_rolled_back_publish_never_appears_and_leaves_no_gap(admin):
+    add_user('reader', 'viewer')
+    login(admin, 'reader')
+    cursor = baseline(admin)
+    with Session() as session:
+        publish(session, 'rolled-back')
         session.flush()
-        row = session.scalar(select(notifications.NotificationArrival)
-                             .where(notifications.NotificationArrival.event_id == later.id))
-        row.seq = cursor + 5
+        session.rollback()
+    with Session() as session:
+        kept = publish(session, 'kept')
         session.commit()
-        now = row.created + notifications.ARRIVAL_GAP_HOLD_SECONDS + 1
-        settled = notifications.arrivals_for_user(session, 'reader', after=cursor, now=now)
-        assert [item['subject_id'] for item in settled['items']] == ['later']
-        assert settled['cursor'] == cursor + 5
+        kept_id = kept.id
+    body = admin.get(f'/api/notifications/arrivals?after={cursor}').json()
+    assert [item['id'] for item in body['items']] == [kept_id]
+    assert body['items'][0]['arrival'] == cursor + 1 == body['cursor']
+
+
+def test_concurrent_sequencers_assign_dense_unique_sequence(admin):
+    with Session() as session:
+        for index in range(40):
+            publish(session, f'concurrent-{index}')
+        session.commit()
+    errors = []
+
+    def run():
+        try:
+            notifications.sequence_arrivals()
+        except Exception as error:  # pragma: no cover - reported below
+            errors.append(error)
+
+    workers = [threading.Thread(target=run) for _ in range(6)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert errors == []
+    with Session() as session:
+        rows = session.execute(select(notifications.NotificationArrival.id,
+                                      notifications.NotificationArrival.seq)
+                               .order_by(notifications.NotificationArrival.id)).all()
+        head = session.get(notifications.NotificationArrivalHead, 1).head
+    assert [seq for _, seq in rows] == list(range(1, len(rows) + 1))
+    assert head == len(rows) == 40
+
+
+@pytest.mark.skipif(not os.getenv('TEST_DATABASE_URL', '').startswith('mysql'),
+                    reason='SQLite serializes writers, so commits cannot reorder')
+def test_slow_lower_transaction_is_not_skipped_by_faster_higher_commit(admin):
+    """Review finding on 84e860f, reproduced on MySQL 8.4 with two writers."""
+    add_user('reader', 'viewer')
+    login(admin, 'reader')
+    cursor = baseline(admin)
+    slow_session = Session()
+    try:
+        slow = publish(slow_session, 'slow')
+        slow_session.flush()  # allocated first, still uncommitted
+        slow_id = slow.id
+        with Session() as session:
+            fast = publish(session, 'fast')
+            session.commit()
+            fast_id = fast.id
+        first = admin.get(f'/api/notifications/arrivals?after={cursor}').json()
+        assert [item['id'] for item in first['items']] == [fast_id]
+        slow_session.commit()
+    finally:
+        slow_session.close()
+    second = admin.get(f"/api/notifications/arrivals?after={first['cursor']}").json()
+    assert [item['id'] for item in second['items']] == [slow_id]
+    assert second['cursor'] > first['cursor']
 
 
 def test_cursor_beyond_retained_sequence_resets_to_baseline(admin):

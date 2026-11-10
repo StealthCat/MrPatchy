@@ -11,10 +11,11 @@ import re
 import threading
 import time
 
-from sqlalchemy import Double, Integer, String, Text, and_, func, select
+from sqlalchemy import Double, Integer, String, Text, and_, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .db import Base, audit
+from .db import Base, Session, audit
 
 
 ROLES = {'viewer': 0, 'operator': 1, 'admin': 2}
@@ -83,18 +84,29 @@ class NotificationRevision(Base):
 
 
 class NotificationArrival(Base):
-    """Append-only commit sequence for every created notification revision.
+    """Append-only arrival record for every created notification revision.
 
-    The sequence is independent of producer timestamps and list ordering, so a
-    client cursor can find newly committed revisions even when older unread
-    events crowd them out of a bounded page or a producer clock lags.
+    ``publish()`` inserts the row unsequenced inside the producer transaction.
+    ``sequence_arrivals()`` later assigns ``seq`` only to rows that have already
+    committed, one serialized sequencing transaction at a time, so every reader
+    snapshot sees a gap-free committed prefix.  A slow or rolled-back producer
+    can therefore never be skipped or replayed by a cursor, and the sequence is
+    independent of producer timestamps and bounded list ordering.
     """
     __tablename__ = 'notification_arrivals'
     __table_args__ = {'sqlite_autoincrement': True}
-    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
     event_id: Mapped[str] = mapped_column(String(64), index=True)
     revision: Mapped[int] = mapped_column(Integer)
-    created: Mapped[float] = mapped_column(Double, default=time.time, index=True)
+    created: Mapped[float] = mapped_column(Double, default=time.time)
+
+
+class NotificationArrivalHead(Base):
+    """Single-row lock and high-water mark serializing arrival sequencing."""
+    __tablename__ = 'notification_arrival_head'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    head: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class NotificationUserState(Base):
@@ -187,8 +199,7 @@ def publish(session, *, source, kind, subject_type, subject_id,
         event_id=event_id, revision=event.revision,
         subject_revision=subject_revision, severity=severity, reason=reason,
         deep_link=deep_link, lifecycle=lifecycle, created=timestamp))
-    # Wall-clock arrival time on the publishing process.  It only bounds how long
-    # a reader holds a sequence gap; ordering always uses the sequence itself.
+    # Unsequenced until committed; readers order by the sequence assigned later.
     session.add(NotificationArrival(
         event_id=event_id, revision=event.revision, created=time.time()))
     return event, True
@@ -357,60 +368,79 @@ def dismiss(session, username, event_id, revision, *, now=None):
     return state
 
 
-ARRIVAL_GAP_HOLD_SECONDS = 60
-ARRIVAL_SCAN_LIMIT = 500
+ARRIVAL_SEQUENCE_BATCH = 500
 
 
-def _safe_head(session, after, now):
-    """Return the highest arrival sequence a reader can safely pass.
+def sequence_arrivals(factory=Session):
+    """Assign arrival sequence numbers to committed, unsequenced arrivals.
 
-    Sequence values are allocated before commit, so on MySQL a lower value can
-    still be in flight (or rolled back) while a higher one is visible.  The head
-    stops before a missing value until the arrival after the gap is older than
-    the hold, then treats the gap as settled.  Returns ``(head, scanned_rows,
-    scan_exhausted)``.
+    Each pass runs in its own short transaction whose first statement writes the
+    single head row, so concurrent sequencers (and SQLite writers) serialize
+    before reading.  On MySQL the pass's snapshot therefore starts after the
+    previous pass committed, and only rows already committed by producers are
+    visible to it.  Numbers are dense and strictly above every earlier pass, and
+    a pass commits atomically, so readers only ever see a complete prefix.
+    Callers must not hold uncommitted writes in another session on SQLite.
+    Returns the committed head.
     """
-    rows = session.execute(
-        select(NotificationArrival.seq, NotificationArrival.created)
-        .where(NotificationArrival.seq > after)
-        .order_by(NotificationArrival.seq).limit(ARRIVAL_SCAN_LIMIT)).all()
-    head = after
-    for seq, created in rows:
-        if seq != head + 1 and now - created < ARRIVAL_GAP_HOLD_SECONDS:
-            break
-        head = seq
-    return head, rows, len(rows) == ARRIVAL_SCAN_LIMIT
+    while True:
+        with factory() as session:
+            locked = session.execute(
+                update(NotificationArrivalHead).where(NotificationArrivalHead.id == 1)
+                .values(head=NotificationArrivalHead.head)
+                .execution_options(synchronize_session=False))
+            head = session.scalar(select(NotificationArrivalHead.head)
+                                  .where(NotificationArrivalHead.id == 1))
+            if head is None:
+                if locked.rowcount:
+                    raise RuntimeError('Notification arrival head is inconsistent')
+                start = session.scalar(select(func.max(NotificationArrival.seq))) or 0
+                session.add(NotificationArrivalHead(id=1, head=start))
+                try:
+                    session.commit()
+                except IntegrityError:
+                    session.rollback()
+                continue
+            pending = session.scalars(
+                select(NotificationArrival.id).where(NotificationArrival.seq.is_(None))
+                .order_by(NotificationArrival.id).limit(ARRIVAL_SEQUENCE_BATCH)).all()
+            if not pending:
+                session.rollback()
+                return head
+            session.execute(update(NotificationArrival), [
+                {'id': row_id, 'seq': head + index}
+                for index, row_id in enumerate(pending, start=1)])
+            head += len(pending)
+            session.execute(update(NotificationArrivalHead)
+                            .where(NotificationArrivalHead.id == 1).values(head=head)
+                            .execution_options(synchronize_session=False))
+            session.commit()
+            if len(pending) < ARRIVAL_SEQUENCE_BATCH:
+                return head
 
 
-def _baseline(session, now):
-    settled = session.scalar(
-        select(func.max(NotificationArrival.seq))
-        .where(NotificationArrival.created < now - ARRIVAL_GAP_HOLD_SECONDS)) or 0
-    head, _, _ = _safe_head(session, settled, now)
-    return head
+def arrivals_for_user(session, username, *, after=None, limit=50, factory=Session):
+    """Return visible current revisions sequenced after an arrival cursor.
 
-
-def arrivals_for_user(session, username, *, after=None, limit=50, now=None):
-    """Return visible current revisions committed after an arrival cursor.
-
-    Without ``after`` this returns only a baseline cursor.  Items use the list
-    API shape plus ``arrival``.  Superseded revisions and events hidden from the
-    caller's current role are skipped while the cursor still advances past
-    them.  A cursor beyond the retained sequence is reset to a fresh baseline.
+    Committed arrivals are sequenced first in a separate transaction, so
+    ``session`` should not have begun a read snapshot yet (a fresh session is
+    ideal).  Without ``after`` this returns only a baseline cursor covering every
+    revision committed before the call.  Items use the list API shape plus
+    ``arrival``.  Superseded revisions and events hidden from the caller's
+    current role are skipped while the cursor still advances past them.  A
+    cursor beyond the retained sequence is reset to a fresh baseline.
     """
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('Notification limit must be between 1 and 100')
     if after is not None and (type(after) is not int or after < 0):
         raise ValueError('Notification arrival cursor must be a non-negative integer')
-    now = time.time() if now is None else now
+    sequence_arrivals(factory)
     user = _user(session, username)
     if not user:
         return None
-    latest = session.scalar(select(func.max(NotificationArrival.seq))) or 0
-    if after is None or after > latest:
-        return {'items': [], 'cursor': _baseline(session, now), 'more': False,
-                'reset': after is not None}
-    head, rows, exhausted = _safe_head(session, after, now)
+    head = session.scalar(select(func.max(NotificationArrival.seq))) or 0
+    if after is None or after > head:
+        return {'items': [], 'cursor': head, 'more': False, 'reset': after is not None}
     if head == after:
         return {'items': [], 'cursor': after, 'more': False, 'reset': False}
     own_state = and_(
@@ -435,5 +465,4 @@ def arrivals_for_user(session, username, *, after=None, limit=50, now=None):
     if len(found) > limit:
         return {'items': items, 'cursor': items[-1]['arrival'], 'more': True,
                 'reset': False}
-    more = exhausted and head == rows[-1][0]
-    return {'items': items, 'cursor': head, 'more': more, 'reset': False}
+    return {'items': items, 'cursor': head, 'more': False, 'reset': False}

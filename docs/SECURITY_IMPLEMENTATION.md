@@ -3038,7 +3038,7 @@ connection-exhaustion drills, multi-controller failover, pruned-cursor gap handl
 two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
 
 Worker checkpoint (issue #668): a bounded milestone-2 increment adds a durable
-arrival sequence. Every newly created notification revision appends one row to
+arrival sequence. Every newly created notification revision appends one unsequenced row to
 `notification_arrivals` in the publisher's transaction. Identical repeated
 observations append nothing. `GET /api/notifications/arrivals` is available to any
 signed-in role:
@@ -3058,11 +3058,22 @@ committed revision is found even when its producer clock lags, or when 100 or mo
 newer unread events of the same severity crowd it out of a bounded page. Those are
 the two gaps the live-toast reviews reproduced.
 
-Sequence values are allocated before commit. So a reader stops before a missing
-lower value until the arrival after the gap is 60 seconds old (by the publishing
-process's clock), then treats the gap as settled. This covers an in-flight
-transaction on MySQL as well as a rolled-back insert. Clock skew larger than that
-hold can settle a gap early. Each request scans at most 500 arrival rows.
+Arrival numbers are assigned only after the producer commits. Before reading,
+the arrivals endpoint runs a short sequencing transaction. It first writes the
+single `notification_arrival_head` row, which serializes sequencers on SQLite and
+MySQL. It then numbers the committed unsequenced rows densely above the head and
+commits them atomically. So every reader snapshot sees a gap-free committed
+prefix:
+
+- A slow lower transaction that commits after a faster higher one is numbered
+  above any cursor already returned, so it is never skipped.
+- A rolled-back publish never appears and leaves no gap.
+- A baseline covers every revision committed before the request, however many
+  there are. This removes the earlier 60-second gap hold, its clock-skew limit and
+  the 500-row partial baseline that the #669 reviews reproduced.
+
+The sequencing transaction itself is the only serialization point; publishers do
+not wait on it.
 
 This is additive: SSE payloads, list/count APIs, read/dismiss/acknowledgement
 semantics and response authorization are unchanged. Client adoption by the live
