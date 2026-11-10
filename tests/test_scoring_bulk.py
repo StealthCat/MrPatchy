@@ -51,7 +51,8 @@ def test_candidate_host_reads_only_load_scoring_inputs(admin):
     with Session() as s:
         host=s.get(Host,'bulk-1')
         host.inventory={'package_manager':'rpm','os':'ID=almalinux\nVERSION_ID=9',
-            'rpm_packages':[{'name':'pkg0000','arch':'x86_64','evr':'0:1-1'}]}
+            'rpm_packages':[{'name':'pkg0000','arch':'x86_64','evr':'0:1-1'}],
+            'files':{'/etc/yum.repos.d/example.repo':'[example]\n'}}
         package=s.get(Package,'bulk-1:pkg0000')
         package.name='pkg0000:x86_64'
         package.id='bulk-1:'+package.name
@@ -74,6 +75,9 @@ def test_candidate_host_reads_only_load_scoring_inputs(admin):
         full_hosts={host.id:host for host in s.scalars(select(Host))}
         for package,host,key,score,deferred in candidates:
             full_host=full_hosts[package.host_id]
+            assert host.inventory == {field: full_host.inventory[field]
+                                      for field in ('os', 'package_manager')
+                                      if field in full_host.inventory}
             assert update_scores.evidence(host,package)==update_scores.evidence(full_host,package)
             assert key==update_scores.identity(full_host,package)
             assert score is None and not deferred
@@ -305,3 +309,53 @@ def test_paused_and_inactive_hosts_stay_out_of_scoring_and_stale_supersession(ad
     with Session() as s:
         assert all(r.state=='deferred' for r in s.scalars(select(update_scores.UpdateScore)))
         assert ai_policy.status(s,'bulk-0')['paused']
+
+
+@pytest.mark.parametrize("evidence_changed", [False, True])
+def test_scoring_sends_indexed_rpm_versions_and_rechecks_live_inventory(admin, monkeypatch, evidence_changed):
+    seed(2, completed=0)
+    with Session() as session:
+        host = session.get(Host, "bulk-1")
+        host.inventory = {
+            "package_manager": "rpm",
+            "os": 'ID=almalinux\nVERSION_ID="9"\nPRETTY_NAME="Fixture"\nID=almalinux',
+            "files": {"/etc/example.repo": "private fixture marker"},
+            "rpm_packages": [
+                {"name": "pkg0000", "arch": "x86_64", "evr": "0:1.1-1"},
+                {"name": "pkg0000", "arch": "aarch64", "evr": "0:0.1-1"},
+                {"name": "pkg0000", "arch": "x86_64", "evr": "0:1.0-1"},
+                {"name": "pkg0000", "arch": "x86_64", "evr": "0:1.1-1"},
+            ],
+        }
+        package = session.get(Package, "bulk-1:pkg0000")
+        package.name = "pkg0000:x86_64"
+        package.id = "bulk-1:" + package.name
+        expected_key = update_scores.identity(host, package)
+        expected = {"id": expected_key, **update_scores.evidence(host, package)}
+        assert expected["installed"] == ["0:1.0-1", "0:1.1-1"]
+        session.commit()
+
+    sent = capture_assessments(monkeypatch)
+    if evidence_changed:
+        provider = ai.request
+
+        def change_inventory(*args, **kwargs):
+            with Session() as session:
+                host = session.get(Host, "bulk-1")
+                records = host.inventory["rpm_packages"]
+                host.inventory = {
+                    **host.inventory, "rpm_packages": [
+                        {**records[0], "evr": "0:1.2-1"}, *records[1:],
+                    ],
+                }
+                session.commit()
+            return provider(*args, **kwargs)
+
+        monkeypatch.setattr(ai, "request", change_inventory)
+
+    update_scores.run_one()
+    actual, = [item for item in sent if item["package"] == "pkg0000:x86_64"]
+    assert actual == expected
+    with Session() as session:
+        score = session.get(update_scores.UpdateScore, expected_key)
+        assert score.state == ("superseded" if evidence_changed else "complete")

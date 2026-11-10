@@ -2263,6 +2263,15 @@ Regression coverage checks the scheduling queries across batches, including
 durable deferral, stale-state updates and the existing assessment identity.
 Candidate hashing and production throughput validation remain open.
 
+Scoring prepares the operating-system fields, package manager and installed RPM
+version index as each bounded host batch is read. Raw inventory is released
+with that batch. The pass keeps the prepared inputs in first-candidate order
+and uses the same installed versions in the outbound evidence. Result
+persistence still rechecks live inventory. Focused SQLite and MySQL tests
+cover exact score identities, multi-version and multi-architecture RPM payloads,
+and superseding a result after a committed inventory change. Compact per-host
+state still scales with the eligible fleet. Production throughput remains open.
+
 ### Fleet-wide exact-match known-good cache
 
 Additional user requirement (2026-10-30): once an item has completed triage and is
