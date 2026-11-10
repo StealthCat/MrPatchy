@@ -1,3 +1,12 @@
+## 1.56.0 — 2026-11-10
+
+1. [PR #355](https://github.com/StealthCat/MrPatchy/pull/355): Add administrator-only, read-only recovery readiness derived from operator-recorded drill receipts. `POST /api/recovery/receipts` validates and audits one version-2 receipt per stage (backup, archive verification, isolated restore, optional boot recovery, application recovery). Each receipt is bound to one backup ID, archive SHA-256, environment/adapter, database/trust identity, non-secret key fingerprint, and records a key-verification time; each later stage names its exact parent receipt. `GET /api/recovery/readiness` reports per-stage missing, failed, stale, mismatched, unbound or unknown states and blockers. Readiness requires a current, matched backup → archive-verification → isolated-restore → application-recovery chain, a restore that covers the declared backup scope, externally held key custody and a recent key verification. An archive checksum alone is never sufficient. Receipt appends are serialized by the shared recovery-receipts lock, retain the newest 100 receipts and reject unknown fields, so key material cannot be stored.
+2. Compatibility and limits: new admin-only routes; receipts are stored in the existing settings table with no schema migration, and no existing route, role or response-authorization behavior changes. Readiness reports matched operator attestations, not independently executed drills or proof that a deployment is recoverable. Recording a receipt never starts a backup, restore, stop or activation. This is a partial #345 increment: UI, adapter examples and scheduled verification remain open. This source update does not publish a Docker image.
+
+## 1.55.11 — 2026-11-10
+
+1. [PR #659](https://github.com/StealthCat/MrPatchy/pull/659): Stabilize the Settings browser test after clearing reviewed provider backoff by waiting for the post-clear reload to detach the old control. Test-only; no runtime, API, schema, permission, or configuration change. This source update does not publish a Docker image.
+
 ## 1.55.10 — 2026-11-10
 
 1. [PR #657](https://github.com/StealthCat/MrPatchy/pull/657): Fix server AI capacity and Pause/Resume saves so a still-current dialog closes and shows the persisted policy even when a background refresh replaces the panel and its older policy read completes afterward. Preserve navigation and dialog revision guards, role/CSRF checks, required reason, and existing conflict behavior. No API, schema, permission, or configuration change. This source update does not publish a Docker image.

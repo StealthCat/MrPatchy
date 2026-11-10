@@ -49,7 +49,10 @@ module.exports=async(page,capture)=>{
  await page.getByText('Reviewed provider backoff cleared.').waitFor();
  await page.locator('#ai-settings-form').waitFor();
  assert.deepEqual(clearRequest,{expected_revision:providerRevision,reason:'Reviewed provider status and current quota.',confirmation:'CLEAR BACKOFF'});
- assert.equal(await page.locator('#provider-backoff-clear').count(),0);
+ // The success toast precedes the asynchronous Settings reload, and the old
+ // #ai-settings-form also satisfies the wait above, so wait for the old button
+ // to detach instead of counting it immediately.
+ await page.locator('#provider-backoff-clear').waitFor({state:'detached'});
  assert.match(await page.locator('#ai-spend-history').textContent(),/local public-price estimates.*not provider invoices/s);
  assert.equal(await page.locator('#ai-spend-history img[src=x]').count(),0);assert.equal(await page.evaluate(()=>window.__spendInjected),undefined);
  await page.locator('#ai-spend-history-days').selectOption('7');await page.getByRole('status').filter({hasText:'No retained billable AI calls'}).waitFor();

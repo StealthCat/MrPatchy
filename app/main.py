@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION = "1.55.10"
+APP_VERSION = "1.56.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -592,6 +592,23 @@ def host_spool_health(host_id:str,user=Depends(viewer_user)):
     with Session() as s:
         h=host_or_404(s,host_id);require_host_read(s,host_id,user)
         return agent_spool_health.health(h)
+
+RECOVERY_RECEIPTS='recovery-receipts'
+@app.get('/api/recovery/readiness')
+def recovery_readiness_status(user=Depends(admin_user)):
+    with Session() as s:
+        row=s.get(Setting,RECOVERY_RECEIPTS)
+        return recovery_readiness.readiness((row.value or {}).get('items',[]) if row else [])
+
+@app.post('/api/recovery/receipts')
+def record_recovery_receipt(body:dict,user=Depends(admin_user)):
+    with worker.Lock('recovery-receipts'),Session() as s:
+        row=s.get(Setting,RECOVERY_RECEIPTS)
+        try:items,item=recovery_readiness.add((row.value or {}).get('items',[]) if row else [],body)
+        except ValueError as e:raise HTTPException(400,str(e))
+        s.merge(Setting(key=RECOVERY_RECEIPTS,value={'items':items}))
+        audit(s,'record recovery receipt',f"{item['stage']} {item['result']} {item['id']}");s.commit()
+        return {'receipt':item,'readiness':recovery_readiness.readiness(items)}
 
 @app.get('/api/hosts/{host_id}/snapshot')
 def host_snapshot(host_id:str,user=Depends(admin_user)):

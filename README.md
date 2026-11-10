@@ -433,6 +433,8 @@ Use [the encrypted restic workflow](docs/ENTERPRISE_RECOVERY.md#complete-encrypt
 
 The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.py` for full deployment recovery. Test restores before relying on them.
 
+Administrators can record recovery drill receipts with `POST /api/recovery/receipts` and read derived readiness with `GET /api/recovery/readiness`. Submit version-2 receipts in backup → archive verification → isolated restore → application recovery order (boot recovery is optional). Keep each returned receipt ID for the next stage's `parent_id`. Every stage must repeat the same backup ID, archive SHA-256, environment, adapter, database and trust identities and key fingerprint, and record when the key was last verified. Readiness needs a current, successful, matched chain, restore evidence covering the declared backup scope, and key custody recorded as `external`. Receipts are operator attestations: recording one never runs a backup or restore, and readiness is not proof that a deployment is recoverable.
+
 ## Upgrade
 
 1. Back up the database and all persistent volumes with app/workers stopped.
