@@ -126,6 +126,7 @@ def register_models():
 
 def init():
     register_models()
+    from .ai_assessments import Assessment
     from .ai_runs import ACTIVE_RUN_INDEX
     # Reflection and DDL must share a connection. SQLite PRAGMA reflection can
     # otherwise observe an old per-connection schema after another pooled
@@ -152,7 +153,7 @@ def init():
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
         # create_all() never adds indexes to a table that already exists.
-        for model in (Job, Behavior):
+        for model in (Job, Assessment, Behavior):
             for index in model.__table__.indexes:
                 index.create(connection,checkfirst=True)
         ACTIVE_RUN_INDEX.create(connection,checkfirst=True)
