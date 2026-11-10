@@ -635,9 +635,14 @@ async function renderServerAIPolicy(panel,hostId,deleted=false){
  const saveDone=async(saved,revision,message)=>{
   if(modalRevision!==revision)return;
   policy=saved;$('#modal').close();
-  if(panel.isConnected)show();
-  else{const live=$('#server-ai-policy');if(live&&live!==panel)await renderServerAIPolicy(live,hostId,deleted).catch(error=>{if(live.isConnected)live.innerHTML=PatchyUI.error('Unable to load server policy',esc(error.message));});}
-  if(modalRevision===revision)toast(message);
+  if(!panel.isConnected){
+   // A background refresh replaced this panel and started its own policy GET, which may
+   // have been read before this save. Swap in a fresh node so that older render (result or
+   // error) fails its isConnected guard, then show the saved response here directly.
+   const live=$('#server-ai-policy');
+   if(live&&live!==panel){const fresh=live.cloneNode(false);live.replaceWith(fresh);panel=fresh;}
+  }
+  show();toast(message);
  };
  const show=()=>{
   if(!panel.isConnected)return;
