@@ -58,22 +58,26 @@ def identity(host,package,index=None):
     return hashlib.sha256((host.id+json.dumps(evidence(host,package,index),sort_keys=True)).encode()).hexdigest()
 
 
-_MEMO={};_MEMO_HOSTS=256  # FIFO bound: fleets above 256 hosts rebuild indexes each pass
+_MEMO = {}
+_MEMO_HOSTS = 256  # Warm entries stay resident; overflow uses pass-local indexes
 
 
 def _memo(host):
     """Reuse the per-host memo while the inventory inputs to scoring stay stable."""
     inventory = host.inventory
+    entry = _MEMO.get(host.id)
+    if entry is None and len(_MEMO) >= _MEMO_HOSTS:
+        # Overflow uses a memo for this pass without evicting a warm server.
+        return None, version_index(inventory), {}
+
     context = _inventory_scoring_context(inventory)
     # RPM versions come from installed records. APT uses the package-row
     # fallback, which is already part of the per-package memo key.
     if context['package_manager'] == 'rpm':
         context['rpm_packages'] = inventory.get('rpm_packages', [])
     fp = hashlib.sha256(json.dumps(context, sort_keys=True, default=str).encode()).hexdigest()
-    entry=_MEMO.get(host.id)
-    if entry is None or entry[0]!=fp:
-        if len(_MEMO)>=_MEMO_HOSTS and host.id not in _MEMO:_MEMO.pop(next(iter(_MEMO)),None)
-        entry=_MEMO[host.id]=(fp,version_index(inventory),{})
+    if entry is None or entry[0] != fp:
+        entry = _MEMO[host.id] = (fp, version_index(inventory), {})
     return entry
 
 
@@ -112,7 +116,11 @@ def scoring_candidates(s):
             query=query.where(or_(Package.available_since>cursor[0],
                 and_(Package.available_since==cursor[0],Package.id>cursor[1])))
         packages=list(s.scalars(query.order_by(Package.available_since,Package.id).limit(200)))
-        if not packages:return
+        if not packages:
+            # Only an exhausted pass knows which servers were absent.
+            for host_id in _MEMO.keys() - hosts.keys():
+                del _MEMO[host_id]
+            return
         cursor=(packages[-1].available_since,packages[-1].id)
         missing={p.host_id for p in packages if p.host_id not in hosts}
         if missing:
