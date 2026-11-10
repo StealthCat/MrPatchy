@@ -1,4 +1,20 @@
+## 1.55.8 — 2026-11-10
+
+1. [PR #655](https://github.com/StealthCat/MrPatchy/pull/655): Add an opt-in same-server layout to the disposable AI investigation benchmark, report fixture topology, supported slots and observed peak provider overlap, and reject comparisons with mismatched layout or slot limits while retaining legacy report interpretation. No application API, schema or runtime configuration change. The CLI measures synthetic SQLite fixtures and does not establish production or MySQL throughput. This source update does not publish a Docker image.
+
+## 1.55.7 — 2026-11-10
+
+1. [PR #653](https://github.com/StealthCat/MrPatchy/pull/653): Release raw host inventory after preparing bounded update-scoring batches, retaining only scoring context and indexed RPM versions while preserving score identities, candidate order, outbound evidence, and fresh-inventory persistence checks. No schema, API or configuration migration. Compact per-host state still scales with the eligible fleet; synthetic allocation results do not establish production throughput or complete #436. This source update does not publish a Docker image.
+
 # Changelog
+
+## 1.55.6 — 2026-11-10
+
+1. [PR #652](https://github.com/StealthCat/MrPatchy/pull/652): Preserve warm update-scoring memo entries at the 256-server cap while evaluating overflow with a bounded pass-local memo. Reclaim slots only after a complete pass confirms retained servers are no longer eligible; early exits preserve unvisited entries. Keep candidate order, score identities, RPM evidence invalidation, provider payloads and pause/lifecycle filters unchanged. No schema, API or settings migration. The selector still walks eligible candidates, and this fixture-based optimization does not establish production throughput or complete the broader #436 performance work. This source update does not publish a Docker image.
+
+## 1.55.5 — 2026-11-10
+
+1. [PR #554](https://github.com/StealthCat/MrPatchy/pull/554): Add a reviewed administrator reset for an active fleet-wide provider Retry-After/transient-failure cooldown in Settings. Show the sanitized reason, failure count, recorded time and next eligibility; require the reviewed-state revision, a meaningful reason and exact confirmation, with a locked recheck that rejects stale or expired state. Clearing sends no provider or target request and releases only the shared provider floor and provider-only waits; local retries, rate/budget, pause, lifecycle, concurrency and authorization controls remain in force. Compatibility: the administrator-only clear endpoint now requires JSON fields `expected_revision`, `reason` and `confirmation`; bodyless calls are rejected, and active status adds `updated_at` and `revision`. No schema or helper upgrade. Does not diagnose provider health, reconcile uncertain billing or complete the broader faster-AI program. This source update does not publish a Docker image.
 
 ## 1.55.4 — 2026-11-10
 
