@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -246,6 +247,39 @@ def test_admin_clear_rejects_changed_or_expired_backoff(admin):
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff,'global')
         assert row.failures==2  # an expired reviewed floor is not rewritten by the stale action
+
+
+def test_admin_clear_rejects_backoff_expiring_during_lock_wait(admin, monkeypatch):
+    from app.db import Audit
+
+    with Session.begin() as session:
+        session.add(ai_provider_backoff.ProviderBackoff(
+            id='global', blocked_until=110, failures=1, updated=95, reason='fixture backoff',
+        ))
+    with Session() as session:
+        reviewed = ai_provider_backoff.status(session, now=100)
+
+    clock = SimpleNamespace(now=100)
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def delayed_lock(name):
+        with original_lock(name):
+            clock.now = 111
+            yield
+
+    monkeypatch.setattr(ai_provider_backoff, 'time', SimpleNamespace(time=lambda: clock.now))
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', delayed_lock)
+    result = admin.post('/api/ai/provider-backoff/clear', json={
+        'expected_revision': reviewed['revision'], 'reason': 'Reviewed the fleet provider backoff.',
+        'confirmation': 'CLEAR BACKOFF',
+    })
+
+    assert result.status_code == 409
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.blocked_until, row.failures, row.updated, row.reason) == (110, 1, 95, 'fixture backoff')
+        assert session.scalar(select(Audit.id).where(Audit.action == 'clear AI provider backoff')) is None
 
 
 @pytest.mark.parametrize('body',[

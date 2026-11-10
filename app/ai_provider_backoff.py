@@ -102,10 +102,10 @@ def _revision(row):
 
 def clear(now=None,expected_revision=None):
     """Reset a reviewed shared floor; reject changed/expired administrator reviews."""
-    now=time.time() if now is None else now
     with Lock('ai-provider-backoff'):
         with Session() as session:
             row=session.get(ProviderBackoff,'global')
+            now=time.time() if now is None else now
             active=bool(row and row.blocked_until>now)
             if expected_revision is not None and (not active or
                     not hmac.compare_digest(expected_revision,_revision(row))):
