@@ -1,3 +1,7 @@
+## 1.55.11 — 2026-11-10
+
+1. [PR #659](https://github.com/StealthCat/MrPatchy/pull/659): Stabilize the Settings browser test after clearing reviewed provider backoff by waiting for the post-clear reload to detach the old control. Test-only; no runtime, API, schema, permission, or configuration change. This source update does not publish a Docker image.
+
 ## 1.55.10 — 2026-11-10
 
 1. [PR #657](https://github.com/StealthCat/MrPatchy/pull/657): Fix server AI capacity and Pause/Resume saves so a still-current dialog closes and shows the persisted policy even when a background refresh replaces the panel and its older policy read completes afterward. Preserve navigation and dialog revision guards, role/CSRF checks, required reason, and existing conflict behavior. No API, schema, permission, or configuration change. This source update does not publish a Docker image.
