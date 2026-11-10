@@ -2183,6 +2183,13 @@ triage or worker diagnostic in one database snapshot, projecting only the fields
 used by the status response. This reduces a polling round trip. Production
 throughput and the full faster-AI acceptance milestones remain open.
 
+Investigation lease validation checks the current claim before fetching host or
+behavior evidence. A live lease reads only the host lifecycle fields and still
+checks the full behavior evidence, owner, configuration and expiry. Focused
+regressions verify the reduced SQL and continued refusal after lifecycle or
+evidence changes. This limits recurring lease-check I/O. Production throughput
+and the wider parallel-investigation acceptance remain open.
+
 Worker checkpoint #599 adds a composite approval/verdict/first-seen/identity
 index for the real process-triage admission query. Startup adds the index
 idempotently to existing databases while retaining behavior history and existing
@@ -2365,6 +2372,12 @@ rejection. This does not complete priority/aging across every AI purpose, make t
 per-server bound administrator-configurable, or establish full multi-controller/MySQL
 failover acceptance. Exact-head full CI and coordinator integration remain required.
 
+
+Lease recovery reads expired claims and their retained run rows together
+under the existing admission lock. It still interrupts running orphaned runs,
+preserves live leases and provider receipts, and removes expired claims with
+missing runs. The recovery fixture checks the fixed read count and idempotent
+interruption history. Production throughput remains unverified.
 
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
