@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.54.4'
+APP_VERSION='1.54.16'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -950,7 +950,7 @@ def investigation_history(behavior_id:str,host_id:str='',offset:int=0,limit:int=
         row=s.get(Behavior,behavior_id)
         if host_id:host_or_404(s,host_id)
         if not row or (host_id and row.host_id!=host_id):raise HTTPException(404,'Investigation not found in this scope')
-        rows=list(s.scalars(select(ai_assessments.Assessment).where(ai_assessments.Assessment.subject==row.id,ai_assessments.Assessment.host_id==row.host_id).order_by(ai_assessments.Assessment.created.desc(),ai_assessments.Assessment.id.desc()).offset(offset).limit(limit+1)))
+        rows=list(s.scalars(ai_assessments.subject_history_query(row.id,row.host_id).offset(offset).limit(limit+1)))
         return {'current':{'id':row.id,'host_id':row.host_id,'executable':row.evidence.get('executable',''),'verdict':row.verdict,'analysis':row.analysis,'approved':row.approved,'revision':ai_assessments.revision(row),'can_retriage':host_lifecycle.active(s.get(Host,row.host_id)) and row.verdict in ai_assessments.COMPLETE and not s.get(ai_assessments.Refresh,row.id),
             'refresh':ai_assessments.refresh_info(s.get(ai_assessments.Refresh,row.id))},
             'items':[{'id':r.id,'source':r.source,'created':r.created,'risk':r.result.get('risk','unknown'),'model':r.model,'run_id':r.run_id} for r in rows[:limit]],'more':len(rows)>limit}
