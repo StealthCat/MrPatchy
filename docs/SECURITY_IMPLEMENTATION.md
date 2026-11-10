@@ -2705,6 +2705,38 @@ requirement.
 - Validate native Debian/RPM and supported init/cron layouts, per-user/root jobs, unit precedence/drop-ins, transient/generated entries, package defaults versus legitimate edits, malicious and benign lookalikes, prompt injection/redaction, referenced-file changes, large inventories, offline/permission gaps and AI pause. Include real-target acceptance and migration/helper documentation. Do not mark this requirement complete solely because the existing metadata inventory or manual AI plan exists.
 
 
+### Individual cron jobs from crontab files — worker checkpoint #664
+
+Discovery increment only; the startup-awareness requirement remains incomplete.
+The target agent now parses individual jobs from the crontab-format files that are
+already in the built-in startup scope: `/etc/crontab`, `/etc/cron.d/*`,
+`/var/spool/cron/crontabs/*` and `/var/spool/cron/*`. It parses the same bytes it
+hashes, and it never executes or sources anything.
+
+**Reported per job**
+- source line number and schedule (five fields or a recognised `@special`)
+- execution account: the sixth field for system crontabs, or the spool file name for user crontabs
+- effective command line, with credentials redacted (password/token/secret/key/auth-style arguments, URL userinfo, bearer tokens and MySQL `-p` passwords) and truncated to 512 characters
+
+**Counted only**
+- Environment assignments are counted, and their values are never exported.
+- Malformed lines are counted, not guessed.
+
+**Limits**
+- At most 64 jobs per file and 256 per inventory.
+- When a limit is reached, the file is flagged as truncated rather than being marked as an incomplete inventory.
+
+**Controller and view**
+- The controller strictly validates the optional `cron` detail. Older agent receipts remain valid.
+- Inventory comparisons and startup-incident evidence strip the detail, so they remain metadata-only. An agent upgrade does not create a spurious change.
+- AI startup-plan payloads are unchanged.
+- The administrator-only **Startup files** view shows a jobs table per file and a parsed/unparsed summary on **Coverage**. It can search by account and redacted command. It identifies crontab files whose agent did not report jobs.
+
+**Not covered:** `run-parts` directories (`cron.daily` and similar), anacron, at queues, referenced-script inspection, cron.d naming rules, PATH/SHELL effects, daemon state, systemd units/timers, package-default provenance and AI classification.
+
+Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
+
+
 ## v0.3.0 — opt-in cross-source advisory AI evidence
 
 Delivery: [PR #55](https://github.com/StealthCat/MrPatchy/pull/55); initial implementation

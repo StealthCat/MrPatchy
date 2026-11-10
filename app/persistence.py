@@ -10,6 +10,34 @@ def path_ok(value):
             and str(PurePosixPath(value))==value and '..' not in PurePosixPath(value).parts)
 
 
+CRON_FILE_JOBS=64
+CRON_TOTAL_JOBS=256
+CRON_COMMAND_LIMIT=512
+
+
+def validate_cron(cron):
+    """Strictly validate optional parsed crontab jobs reported by newer agents."""
+    if not isinstance(cron,dict) or set(cron)!={'format','jobs','unparsed','environment','truncated'} or cron['format'] not in ('system','user'):
+        raise ValueError('Invalid cron job inventory')
+    if any(type(cron[k]) is not int or cron[k]<0 for k in ('unparsed','environment')) or type(cron['truncated']) is not bool:
+        raise ValueError('Invalid cron job inventory')
+    jobs=cron['jobs']
+    if not isinstance(jobs,list) or len(jobs)>CRON_FILE_JOBS:raise ValueError('Invalid cron job inventory')
+    for job in jobs:
+        if not isinstance(job,dict) or set(job)!={'line','schedule','account','command','redacted','command_truncated'}:raise ValueError('Invalid cron job')
+        if type(job['line']) is not int or job['line']<1 or type(job['redacted']) is not bool or type(job['command_truncated']) is not bool:raise ValueError('Invalid cron job')
+        if not isinstance(job['schedule'],str) or not 1<=len(job['schedule'])<=400 or not isinstance(job['command'],str) or not 1<=len(job['command'])<=CRON_COMMAND_LIMIT:
+            raise ValueError('Invalid cron job')
+        if job['account'] is not None and (not isinstance(job['account'],str) or not 1<=len(job['account'])<=33):raise ValueError('Invalid cron job')
+        if any('\x00' in job[k] for k in ('schedule','command')):raise ValueError('Invalid cron job')
+    return len(jobs)
+
+
+def metadata(row):
+    """Entry metadata without parsed job detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k!='cron'} if row is not None else None
+
+
 def validate(inventory):
     if not isinstance(inventory,dict) or inventory.get('state') not in ('collected','incomplete'):
         raise ValueError('Invalid persistence inventory')
@@ -20,7 +48,7 @@ def validate(inventory):
         raise ValueError('Invalid persistence coverage')
     if not isinstance(missing,list) or any(p not in scope for p in missing):raise ValueError('Invalid missing persistence roots')
     if type(inventory.get('skipped')) is not int or inventory['skipped']<0:raise ValueError('Invalid persistence skipped count')
-    seen=set()
+    seen=set();jobs=0
     for row in entries:
         if not isinstance(row,dict) or not path_ok(row.get('path')):raise ValueError('Invalid persistence path')
         path=row['path']
@@ -34,6 +62,10 @@ def validate(inventory):
         elif row.get('kind')=='symlink':
             if not isinstance(row.get('target'),str) or not 1<=len(row['target'])<=4096 or '\x00' in row['target']:raise ValueError('Invalid persistence link')
         else:raise ValueError('Invalid persistence entry type')
+        if 'cron' in row:
+            if row['kind']!='regular':raise ValueError('Cron jobs require a regular file')
+            jobs+=validate_cron(row['cron'])
+    if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
 
@@ -44,7 +76,8 @@ def compare(before,after):
     if before['state']!='collected' or after['state']!='collected':return result
     if set(before['scope'])!=set(after['scope']):
         return {**result,'note':'Inventory scope changed; collect another complete inventory with the same scope.'}
-    old={r['path']:r for r in before['entries']};new={r['path']:r for r in after['entries']}
+    # Parsed cron detail is administrator-view data; change evidence stays metadata-only.
+    old={r['path']:metadata(r) for r in before['entries']};new={r['path']:metadata(r) for r in after['entries']}
     changes=[]
     fields=('kind','sha256','target','uid','gid','mode','size')
     for path in sorted(old.keys()|new.keys()):
