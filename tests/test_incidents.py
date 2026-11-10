@@ -3,7 +3,7 @@ import time
 import pytest
 from sqlalchemy import select
 from app import incidents,ai
-from app.db import Session,Host,Setting
+from app.db import Session,Host,Setting,engine
 from app.security import seal
 from app.identity import User
 
@@ -116,6 +116,79 @@ def test_automatic_plan_fleet_hourly_limit(admin,recorded):
         s.commit()
     incidents.auto_plan_tick()
     with Session() as s:assert len(list(s.scalars(select(Job).where(Job.action=='security-plan'))))==10
+
+
+def test_automatic_plan_batches_host_and_occupancy_reads(admin):
+    from sqlalchemy import event
+    from app.db import Job
+    with Session() as session:
+        session.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
+        session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture'}))
+        for number in range(12):
+            host_id=f'plan-host-{number}'
+            session.add(Host(id=host_id,name=host_id,address='192.0.2.1',fingerprint='test'))
+            session.add(Setting(key='security-policy:'+host_id,value={'auto_ai_plan':True}))
+            session.add(incidents.Incident(id=f'incident-{number}',host_id=host_id,scan_id=f'scan-{number}',evidence={}))
+        session.commit()
+    statements=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):statements.append(statement.lower())
+    event.listen(engine,'before_cursor_execute',observe)
+    try:incidents.auto_plan_tick()
+    finally:event.remove(engine,'before_cursor_execute',observe)
+    eligibility_batches=[query for query in statements if 'select security_incidents.host_id' in query and 'join hosts' in query and 'exists (select jobs.id' in query]
+    assert len(eligibility_batches)==1
+    with Session() as session:
+        jobs=list(session.scalars(select(Job).where(Job.action=='security-plan')))
+    assert len(jobs)==10 and len({job.host_id for job in jobs})==10
+
+
+def test_automatic_plan_keeps_one_active_plan_per_host(admin):
+    from app.db import Job
+    with Session() as session:
+        session.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
+        session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture'}))
+        for host_id in ('shared','occupied'):
+            session.add(Host(id=host_id,name=host_id,address='192.0.2.1',fingerprint='test'))
+            session.add(Setting(key='security-policy:'+host_id,value={'auto_ai_plan':True}))
+        session.add_all([
+            incidents.Incident(id='shared-first',host_id='shared',scan_id='scan-1',evidence={}),
+            incidents.Incident(id='shared-second',host_id='shared',scan_id='scan-2',evidence={}),
+            incidents.Incident(id='occupied-incident',host_id='occupied',scan_id='scan-3',evidence={}),
+            Job(id='occupied-plan',host_id='occupied',action='startup-plan',state='queued'),
+        ])
+        session.commit()
+    incidents.auto_plan_tick()
+    with Session() as session:
+        jobs=list(session.scalars(select(Job).where(Job.state.in_(['queued','running']),Job.action.in_(['security-plan','startup-plan']))))
+    assert {(job.host_id,job.action) for job in jobs}=={('occupied','startup-plan'),('shared','security-plan')}
+
+
+def test_automatic_plan_preserves_database_collation_identity(admin):
+    if engine.dialect.name!='mysql':pytest.skip('requires native case-insensitive MySQL collation')
+    from app.db import Job
+    with Session() as session:
+        session.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
+        session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture'}))
+        session.add_all([
+            Host(id='OCCUPIED-HOST',name='occupied',address='192.0.2.1',fingerprint='test'),
+            Host(id='CANONICAL-HOST',name='canonical',address='192.0.2.2',fingerprint='test'),
+            Host(id='SHARED-HOST',name='shared',address='192.0.2.3',fingerprint='test'),
+            Setting(key='security-policy:occupied-host',value={'auto_ai_plan':True}),
+            Setting(key='security-policy:canonical-host',value={'auto_ai_plan':True}),
+            Setting(key='security-policy:shared-host',value={'auto_ai_plan':True}),
+            incidents.Incident(id='collation-occupied',host_id='occupied-host',scan_id='scan-occupied',evidence={}),
+            incidents.Incident(id='collation-canonical',host_id='canonical-host',scan_id='scan-canonical',evidence={}),
+            incidents.Incident(id='collation-shared-lower',host_id='shared-host',scan_id='scan-shared-lower',evidence={}),
+            incidents.Incident(id='collation-shared-upper',host_id='SHARED-HOST',scan_id='scan-shared-upper',evidence={}),
+            Job(id='collation-existing-plan',host_id='OCCUPIED-HOST',action='startup-plan',state='queued'),
+        ])
+        session.commit()
+    incidents.auto_plan_tick()
+    with Session() as session:
+        jobs=list(session.scalars(select(Job).where(Job.state.in_(['queued','running']),Job.action.in_(['security-plan','startup-plan']))))
+    assert len([job for job in jobs if job.host_id.lower()=='occupied-host'])==1
+    assert len([job for job in jobs if job.host_id.lower()=='canonical-host' and job.action=='security-plan'])==1
+    assert len([job for job in jobs if job.host_id.lower()=='shared-host' and job.action=='security-plan'])==1
 
 def test_ai_receives_bounded_signature_and_coverage_context(admin,recorded,monkeypatch):
     import json

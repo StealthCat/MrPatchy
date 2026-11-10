@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.54.11 — 2026-11-10
+
+1. [PR #642](https://github.com/StealthCat/MrPatchy/pull/642): Add a bounded `--retained-history-rows` control (0–50,000) to the disposable SQLite AI-triage benchmark, report the seeded count, and require matched history sizes when comparing serial and parallel runs; older reports default to zero. This is benchmark tooling only and does not change application runtime, schema, provider behavior or response authorization. Synthetic SQLite measurements do not establish MySQL, endpoint or production throughput. PR version checks now resolve the target branch tip when they run, avoiding stale base snapshots after integration preparation; this does not change runtime behavior. This source update does not publish a Docker image.
+
+## 1.54.10 — 2026-11-10
+
+1. [PR #600](https://github.com/StealthCat/MrPatchy/pull/600): Add the composite `ix_behaviors_admission (approved, verdict, first_seen, id)` index to accelerate pending/error process-triage admission over retained behavior history. Existing SQLite and MySQL databases add the index idempotently, preserving rows and oldest-eligible selection across both verdict ranges. Existing databases incur ordinary index-build locking and disk use; this is a partial performance milestone, not a production-throughput or full faster-AI completion claim. No API, schema-column or response-authorization changes. This source update does not publish a Docker image.
+
+## 1.54.9 — 2026-11-10
+
+1. [PR #631](https://github.com/StealthCat/MrPatchy/pull/631): Update SQLAlchemy from 2.1.6 to 2.1.8 in the runtime requirements and hash-pinned lock. No application code, configuration, schema or public API changes are included, with no compatibility impact expected. This source update does not publish a Docker image.
+
+## 1.54.8 — 2026-11-10
+
+1. [PR #630](https://github.com/StealthCat/MrPatchy/pull/630): Upgrade the hash-pinned Authlib runtime dependency from 1.9.1 to 1.9.4, including upstream OAuth ID-JAG scope and issuer/subject user-resolution fixes. Application OAuth configuration, schema and public API remain unchanged; existing integrations gain these upstream fixes where ID-JAG is used, with no expected compatibility impact. This source update does not publish a Docker image.
+
+## 1.54.7 — 2026-11-09
+
+1. [PR #629](https://github.com/StealthCat/MrPatchy/pull/629): Update python-multipart from 0.0.32 to 0.0.33 in the runtime requirements and hash-pinned lock for upstream parser, upload and decoding fixes. Upstream drops Python 3.10; the application image uses Python 3.12, so its supported runtime is unaffected. Target-agent Python requirements are unchanged. Upstream URL-encoded field caps are opt-in and this update does not enable them. No application code, configuration, schema or public API changes. This source update does not publish a Docker image.
+
+## 1.54.6 — 2026-11-09
+
+1. [PR #576](https://github.com/StealthCat/MrPatchy/pull/576): Reduce database reads during investigation lease validation by rejecting lost, replaced and expired claims before fetching behavior evidence, then selecting only the host lifecycle fields (`enabled` and `deleted_at`) needed for valid leases. Preserve the evidence, owner, configuration, expiry, heartbeat, disabled/deleted-host and mutation fences. Compatibility and limits: no schema, public API, locking, lease lifetime, provider policy or response-authorization change; production throughput remains unverified. This source bump does not publish a Docker image.
+
+## 1.54.5 — 2026-11-09
+
+1. [PR #581](https://github.com/StealthCat/MrPatchy/pull/581): Join expired AI lease claims to their retained run rows in one bounded read, followed by the existing bounded orphan scan. Preserve live leases, completed runs, interruption events, provider receipts, idempotent recovery and the admission lock. Compatibility and limits: no schema, API, queue-policy, retry or response-authorization change; production throughput remains unverified. This source bump does not publish a Docker image.
+
+## 1.54.4 — 2026-11-09
+
+1. [PR #591](https://github.com/StealthCat/MrPatchy/pull/591): Read the newest running triage stage and newest triage/worker diagnostic through one bounded UNION ALL query and one database snapshot, projecting only the fields used by the existing status response. Compatibility and limits: no schema, API, UI, provider, admission, pause, scoring, operational policy or response-authorization change. This reduces a polling round trip but does not establish production throughput or complete the broader faster-AI milestones. This source bump does not publish a Docker image.
+
+## 1.54.3 — 2026-11-09
+
+1. [PR #587](https://github.com/StealthCat/MrPatchy/pull/587): Batch the rolling triage-run count/oldest timestamp and deferred update-score count/next eligibility into one aggregate query each, reducing empty AI-status reads from 20 to 18 SQL statements and keeping each pair on one database snapshot. Compatibility and limits: no schema, API, UI, status, pause, admission, budget, provider-backoff, authorization or response behavior change; SQLite and MySQL remain supported. This is a partial database-read optimization; production throughput, threaded investigations, fair scheduling, shared accounting and the remaining failover/reset milestones are not established. This source bump does not publish a Docker image.
+
+## 1.54.2 — 2026-11-09
+
+1. [PR #593](https://github.com/StealthCat/MrPatchy/pull/593): Batch candidate-host and queued/running advisory-plan occupancy eligibility into one bounded query for up to 100 incidents, preserving database host collation in SQL and canonical-host deduplication within each tick. Compatibility and limits: no schema, API, UI, provider-call, role, spend-control, plan-content or response-authorization change; candidate order and the ten-plan allowance remain unchanged. The 12-host fixture falls from 151 to 132 SELECTs, but production throughput is unverified; earlier pause/quarantine reads and smooth shared admission remain unfinished. This source bump does not publish a Docker image.
+
 ## 1.54.1 — 2026-11-09
 
 1. [PR #579](https://github.com/StealthCat/MrPatchy/pull/579): Read live process-triage claim counts and saved per-server concurrency policy together under the existing admission lock, preserving expiry, candidate selection, defaults and the minimum fallback. No schema, public API, role or response-authorization change.
