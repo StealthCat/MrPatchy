@@ -1087,7 +1087,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     def gap(path,reason):
         report['skipped']+=1
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
-    cron_jobs=[0]
+    cron_total=[0]
     def capture(directory_fd,directory,name):
         path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;content=bytearray() if form else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
@@ -1125,8 +1125,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
             if content is not None and row['kind']=='regular':
                 # Parsed from exactly the bytes that were hashed above.
                 account=name if form=='user' and re.fullmatch(CRON_ACCOUNT,name) else None
-                row['cron']=parse_cron(bytes(content),form,account,CRON_TOTAL_JOBS-cron_jobs[0])
-                cron_jobs[0]+=len(row['cron']['jobs'])
+                row['cron']=parse_cron(bytes(content),form,account,CRON_TOTAL_JOBS-cron_total[0])
+                cron_total[0]+=len(row['cron']['jobs'])
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
