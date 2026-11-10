@@ -70,8 +70,7 @@ def test_status_counts_share_one_snapshot_under_concurrent_insert(admin):
     finally:event.remove(engine,'after_cursor_execute',insert_after_first_count)
     assert inserted
     assert status['paused']==0
-    assert status['pending']==status['ready']==status['queued'] and status['blocked']==0
-    assert status['eligible_unclaimed']==2
+    assert status['pending']==status['ready']==status['queued']==status['eligible_unclaimed'] and status['blocked']==0
     assert status['oldest_eligible_unclaimed_observation_at']==pytest.approx(now-10)
 
 
