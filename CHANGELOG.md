@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.16 — 2026-11-10
+
+1. [PR #529](https://github.com/StealthCat/MrPatchy/pull/529): Add administrator investigation-status fields for the count and oldest observation age of retry-eligible, unclaimed process-triage work. The same aggregate snapshot counts only active, unpaused observations, excludes blocked, delayed and live-leased work, and leaves expired-lease work visible; empty timestamps are null. This is additive and keeps existing viewer/operator fields and authorization unchanged, with no schema migration, provider call, scheduler or UI change. Shared admission and available worker capacity can still delay dispatch; matched production throughput and broader dashboard work remain open. This source update does not publish a Docker image.
+
 ## 1.54.15 — 2026-11-10
 
 1. [PR #646](https://github.com/StealthCat/MrPatchy/pull/646): In AI follow-up, let the newest validated authenticated vendor receipt for the exact executable path govern provenance. A mismatched hash, observed difference or incomplete verification keeps the package-authentication gap and prevents fallback to older matching proof; invalid receipts and unrelated paths remain skippable. No schema, configuration, API or authorization changes; the existing bounded receipt search remains. This is a partial provenance milestone and does not complete fleet-wide known-good reuse. This source update does not publish a Docker image.

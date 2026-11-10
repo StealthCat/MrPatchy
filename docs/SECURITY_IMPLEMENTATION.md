@@ -6640,3 +6640,18 @@ This slice covers follow-up provenance binding. Roadmap B remains incomplete.
 Fleet-wide reuse still requires end-to-end acceptance of complete evidence,
 zero-call cross-host hits, invalidation, Re-triage, and role isolation on SQLite
 and MySQL.
+
+### Eligible process-triage backlog telemetry — PR #529
+
+Administrator investigation status now reports the count of retry-eligible,
+unclaimed observations and the oldest qualifying observation timestamp from the
+same aggregate snapshot. Only active, unpaused servers qualify; approved,
+retry-delayed, blocked and live-leased work is excluded, while an expired lease
+does not hide otherwise eligible work. The timestamp is null when no observations
+qualify and measures observation age. Existing fields and viewer/operator
+response boundaries are preserved. Shared admission limits and available worker
+capacity may still delay dispatch.
+
+This is an additive administrator API change with no schema/configuration
+migration, provider call, scheduling change, UI change or response-authorization
+change. Matched production throughput and the broader dashboard remain open.
