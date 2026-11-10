@@ -2272,6 +2272,15 @@ Regression coverage checks the scheduling queries across batches, including
 durable deferral, stale-state updates and the existing assessment identity.
 Candidate hashing and production throughput validation remain open.
 
+Scoring prepares the operating-system fields, package manager and installed RPM
+version index as each bounded host batch is read. Raw inventory is released
+with that batch. The pass keeps the prepared inputs in first-candidate order
+and uses the same installed versions in the outbound evidence. Result
+persistence still rechecks live inventory. Focused SQLite and MySQL tests
+cover exact score identities, multi-version and multi-architecture RPM payloads,
+and superseding a result after a committed inventory change. Compact per-host
+state still scales with the eligible fleet. Production throughput remains open.
+
 ### Fleet-wide exact-match known-good cache
 
 Additional user requirement (2026-10-30): once an item has completed triage and is
@@ -2392,6 +2401,34 @@ counts across both reports. It interprets reports from older fixtures as zero.
 Use the same history size, run count and delays for a serial/parallel pair.
 The fixture still checks the same provider, SSH evidence and completion workload.
 Native MySQL and production throughput acceptance remain open.
+
+### Same-server process-triage benchmark (issue #654)
+
+The disposable benchmark can seed distinct process observations on one server.
+The fixture uses the runtime's maximum supported per-server slot limit for both
+executions and rejects a requested thread count above that limit. The following
+commands compare one worker with four under the same fixture conditions.
+
+```bash
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
+python tools/compare_ai_benchmarks.py serial.json parallel.json
+```
+
+The benchmark checks that every persisted run belongs to the expected subject
+and server, with a receipt for every provider call. Reports record the observed
+server count, the single-server slot limit, and peak simultaneous loopback
+provider handling. The comparator requires the same server count and slot limit
+in addition to matching observed evidence, calls, and sample counts. Older
+reports without topology fields retain their one-server-per-subject meaning.
+
+The CLI measures the existing claim and request path on disposable SQLite with
+synthetic provider and SSH delays. A separate native MySQL 8.4.13 preview changed
+only the fixture database URL. Three matched eight-subject pairs retained the
+same evidence fingerprint, 12 provider calls and four follow-ups per execution.
+Peak simultaneous provider handling rose from one to four in all three pairs.
+Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
+The CLI has no MySQL mode, and matched production measurements remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
