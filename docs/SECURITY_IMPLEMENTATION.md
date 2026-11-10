@@ -2170,6 +2170,15 @@ score keys and provider payloads are preserved. The worker still reads stored
 inventory, fingerprints the RPM list and walks eligible candidates. Production
 throughput and the broader parallel-scoring milestone remain open.
 
+At the 256-server memo bound, overflow servers use a pass-local memo and
+retained servers stay warm across scoring passes. An exhausted pass releases
+entries for absent eligible servers. A pass that stops after selecting a
+provider batch keeps entries for servers it has yet to visit. The regression
+checks overflow, early exit, slot reclaim and the exact completed-score matches
+on both database engines. The candidate walk and pass-local state still scale
+with the eligible fleet. Production throughput and parallel scoring remain
+open.
+
 ### Parallel execution and latency work
 
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run

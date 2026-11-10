@@ -155,6 +155,61 @@ def test_scoring_memo_survives_unrelated_inventory_refresh(admin, monkeypatch):
         assert candidates() == original
 
 
+def test_scoring_memo_retains_warm_hosts_above_capacity(admin, monkeypatch):
+    seed(402)
+    monkeypatch.setattr(update_scores, '_MEMO', {})
+    monkeypatch.setattr(update_scores, '_MEMO_HOSTS', 1)
+    original_index = update_scores.version_index
+    builds = 0
+
+    def version_index(inventory):
+        nonlocal builds
+        builds += 1
+        return original_index(inventory)
+
+    monkeypatch.setattr(update_scores, 'version_index', version_index)
+
+    def candidates():
+        with Session() as session:
+            rows = list(update_scores.scoring_candidates(session))
+            assert all(score and score.state == 'complete' for _, _, _, score, _ in rows)
+            return {package.id: key for package, _, key, _, _ in rows}
+
+    original = candidates()
+    assert len(original) == 402
+    builds = 0
+    assert candidates() == original
+    assert builds == 1
+    assert set(update_scores._MEMO) == {'bulk-0'}
+    warm = update_scores._MEMO['bulk-0']
+
+    with Session() as session:
+        for package in session.scalars(select(Package).where(Package.host_id == 'bulk-1')):
+            package.available_since = 1
+        session.commit()
+        # The first chunk contains only the overflow host. Closing the iterator
+        # here must not drop the retained host that is still eligible.
+        partial = update_scores.scoring_candidates(session)
+        assert next(partial)[1].id == 'bulk-1'
+        partial.close()
+    assert update_scores._MEMO['bulk-0'] is warm
+
+    with Session() as session:
+        session.get(Host, 'bulk-0').enabled = False
+        session.commit()
+    remaining = {package_id: key for package_id, key in original.items()
+                 if package_id.startswith('bulk-1:')}
+    assert candidates() == remaining
+    assert not update_scores._MEMO
+
+    builds = 0
+    assert candidates() == remaining
+    assert set(update_scores._MEMO) == {'bulk-1'}
+    assert builds == 1
+    assert candidates() == remaining
+    assert builds == 1
+
+
 @pytest.mark.parametrize('count',[100,1000])
 @pytest.mark.parametrize('state',['complete','deferred'])
 def test_idle_fleet_selects_scale_by_chunks_not_packages(admin,monkeypatch,count,state):
