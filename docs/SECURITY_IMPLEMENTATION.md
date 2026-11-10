@@ -2224,6 +2224,15 @@ existing databases and keeps retained scores and existing indexes. A fixture wit
 results. This is partial scoring performance work. Idle candidate hashing and
 end-to-end production throughput acceptance remain open.
 
+Worker checkpoint #649 indexes run purpose and start time for the administrator
+status aggregate and legacy triage and scoring counts. The index is installed
+during startup for new and existing databases. Focused tests verify the three
+real query plans, the strict hourly cutoff, unchanged admission and retry
+behavior, and idempotent index creation on SQLite and MySQL. The index adds
+maintenance to run inserts and retains the existing running-state index.
+Local query measurements do not establish production throughput or complete
+the faster-AI milestone.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.
@@ -2232,6 +2241,18 @@ end-to-end production throughput acceptance remain open.
 - Reuse lifecycle-managed HTTP clients/connection pools with bounded pool/connect/read deadlines and safe per-request credentials; close them on drain/shutdown. Keep slow provider/SSH operations outside database transactions wherever possible. Measure candidate-query/index and repeated evidence-collection costs before optimizing them.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
+
+### Live process-triage lease telemetry
+
+The administrator investigation status API reports
+`active_lease_expires_at`, the earliest expiry among currently live process
+investigation claims, or null when no claim is live. Expired claims are
+excluded. The AI worker status displays this boundary with the active count so
+an administrator can tell when an unrenewed slot becomes eligible for fenced
+recovery. Expiry does not prove a provider request stopped or was not billed.
+This telemetry is read-only: it does not renew, reconcile, cancel, retry or
+otherwise alter a claim. Full multi-controller failover and production
+recovery acceptance remain open.
 
 ### Update-scoring schedule-state reads
 
