@@ -2199,6 +2199,13 @@ pause, lifecycle, capacity and oldest-first eligibility checks. This is a partia
 database performance increment; production throughput and full faster-AI
 acceptance remain open.
 
+Worker checkpoint #603 adds a server/package/state/candidate index for exact
+score history and deferred scoring lookups. Startup creates it idempotently on
+existing databases and keeps retained scores and existing indexes. A fixture with
+5,000 unrelated scores on one server verifies the actual query plans and retained
+results. This is partial scoring performance work. Idle candidate hashing and
+end-to-end production throughput acceptance remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.
@@ -4902,6 +4909,31 @@ recorded in the completion report after publication; no earlier or failed head m
 merged.
 
 
+### Indexed retained assessment lookup/history — worker checkpoint #607
+
+Retained Assessment provenance grows independently of diagnostic pruning. Exact-state
+Re-triage preservation and the authenticated per-subject/per-host history endpoint
+previously filtered through separate single-column indexes and then sorted matching
+rows in temporary storage. This bounded faster-triage increment gives those two
+existing query shapes composite subject/state/creation and subject/host/creation
+indexes, including deterministic ID ordering. Existing installations reconcile the
+indexes idempotently during the established controller-owned startup migration; new
+installations receive them from shared SQLAlchemy metadata. MySQL queries use narrow
+join-scoped index hints for these exact paths so its optimizer cannot regress to intersecting
+the legacy single-column indexes and filesorting retained matches.
+
+Acceptance covers an old SQLite schema with retained data, repeat startup, exact
+newest-result/history ordering amid 1,000 unrelated retained rows and SQLite query
+plans without temporary sorting. The same test asserts the selected key and absence
+of filesort on the existing MySQL acceptance job. Index construction has the ordinary
+startup DDL lock, time and disk implications; no history is pruned and no cache,
+classification, approval, role, pause, admission or response-authorization semantics
+change. This is a finite lookup/persistence performance milestone only: the broader
+parallel investigation, fleet cache and shared rate/spend program remains incomplete,
+and coordinator integration plus exact integrated-head SQLite/MySQL acceptance remain
+pending.
+
+
 ## v1.29.0 — Audited fleet candidate invalidation and linked review
 
 Issue-first reconciliation read current main `05c46912`, repository instructions,
@@ -6426,6 +6458,16 @@ separate unfinished work. Acceptance includes durable/idempotent writes, prior
 cross-server matches, newer mismatches, deleted origins, cache revocation and
 unchanged administrator boundaries, with native SQLite/MySQL CI required.
 
+
+### Exact-path triage file provenance — worker checkpoint #643
+
+Single-executable triage and cross-server byte-trust rechecks resolve one path
+from the retained controller receipts. They skip manifests without that exact
+path and stop at the newest fully revalidated receipt that contains it, including
+receipts that report a mismatch. This reduces repeated validation and file-map
+construction. Inventory and bulk assessment still build the complete map.
+Misses can still scan retained history. Production latency and the broader
+known-good cache acceptance remain open.
 
 The controller checks retained authenticated Debian/RPM artifact manifests against
 recorded SHA-256 values before exact known-good behavior lookup and optional AI.
