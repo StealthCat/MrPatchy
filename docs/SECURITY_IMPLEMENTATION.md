@@ -2388,7 +2388,8 @@ Native MySQL and production throughput acceptance remain open.
 
 The disposable benchmark can seed distinct process observations on one server.
 The fixture uses the runtime's maximum supported per-server slot limit for both
-executions and rejects a requested thread count above that limit. For example:
+executions and rejects a requested thread count above that limit. The following
+commands compare one worker with four under the same fixture conditions.
 
 ```bash
 python tools/benchmark_ai.py --same-server --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
@@ -2403,9 +2404,13 @@ provider handling. The comparator requires the same server count and slot limit
 in addition to matching observed evidence, calls, and sample counts. Older
 reports without topology fields retain their one-server-per-subject meaning.
 
-This measures the existing claim and request path on disposable SQLite with
-synthetic provider and SSH delays. Matched production measurements and a MySQL
-benchmark remain open.
+The CLI measures the existing claim and request path on disposable SQLite with
+synthetic provider and SSH delays. A separate native MySQL 8.4.13 preview changed
+only the fixture database URL. Three matched eight-subject pairs retained the
+same evidence fingerprint, 12 provider calls and four follow-ups per execution.
+Peak simultaneous provider handling rose from one to four in all three pairs.
+Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
+The CLI has no MySQL mode, and matched production measurements remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
