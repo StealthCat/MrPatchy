@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.14 — 2026-11-10
+
+1. [PR #608](https://github.com/StealthCat/MrPatchy/pull/608): Add composite indexes for retained AI assessment exact-state Re-triage preservation and subject/host history, with idempotent startup reconciliation and SQLite/MySQL query-plan coverage. Existing rows, retention, newest-first ordering, query/API behavior, roles, provider behavior and response authorization remain unchanged. Existing databases incur ordinary index-build locking, time and disk costs; this is a bounded persistence/query-performance increment, not a production throughput or full faster-AI completion claim. This source update does not publish a Docker image.
+
 ## 1.54.13 — 2026-11-10
 
 1. [PR #644](https://github.com/StealthCat/MrPatchy/pull/644): Reduce repeated authenticated file-receipt validation during single-executable triage and cross-server byte-trust rechecks while preserving exact case-sensitive path matching, newest mismatch precedence, full validation of selected receipts and complete inventory maps. No schema, public API, trust-policy or authorization changes. Misses may still scan retained history; database-driver buffering and native runtime latency are outside this fixture-validated increment, and broader known-good-cache/production performance work remains open. This source update does not publish a Docker image.
