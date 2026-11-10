@@ -519,6 +519,8 @@ hash matches, path-only matches and changed bytes are labeled separately. Search
 are bounded and paginated; matches do not establish causation or authorize response.
 See [the implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md#cross-source-incident-evidence-pivots).
 
+Administrators can assign a scanner incident to an enabled administrator and append investigator notes through the API: `GET /api/hosts/{host_id}/security/incidents/{incident_id}/case`, `PUT …/owner` and `POST …/notes`. Assignment needs the current ownership revision and a 10–4000 character reason. Both actions are audited and appear on the incident timeline. They never change incident state, evidence or plans, or authorize a response, and they return HTTP 409 while the server has an active operation. There is no UI for them yet.
+
 Each server workspace includes an administrator **AI integration** pause/resume control.
 Pausing blocks new provider calls for that server, including queued security proposals,
 triage follow-ups and shared update scoring. Other servers and non-AI operations

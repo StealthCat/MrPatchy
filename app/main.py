@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION = "1.56.0"
+APP_VERSION = "1.56.1"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2827,6 +2827,41 @@ def security_incident_review(host_id:str,incident_id:str,body:IncidentReview,use
             if row.updated!=body.expected_updated:raise HTTPException(409,'Incident changed; refresh before reviewing')
             incidents.review(s,row,body.state,body.reason,user['username'],body.expected_updated)
             s.commit();return object_dict(row)
+
+class IncidentOwner(BaseModel):
+    owner:str=Field(max_length=64)
+    reason:str=Field(min_length=10,max_length=4000)
+    expected_revision:int=Field(ge=0)
+
+class IncidentNote(BaseModel):
+    note:str=Field(min_length=1,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/case')
+def security_incident_case(host_id:str,incident_id:str,user=Depends(admin_user)):
+    with Session() as s:
+        row=s.get(incidents.Incident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+        return incidents.case_state(s,row)
+
+@app.put('/api/hosts/{host_id}/security/incidents/{incident_id}/owner')
+def security_incident_owner(host_id:str,incident_id:str,body:IncidentOwner,user=Depends(admin_user)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            try:incidents.assign(s,row,body.owner,body.reason,user['username'],body.expected_revision)
+            except ValueError as e:raise HTTPException(409 if 'changed' in str(e) else 422,str(e))
+            s.commit();return incidents.case_state(s,row)
+
+@app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/notes')
+def security_incident_note(host_id:str,incident_id:str,body:IncidentNote,user=Depends(admin_user)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            try:incidents.add_note(s,row,body.note,user['username'])
+            except ValueError as e:raise HTTPException(422,str(e))
+            s.commit();return {'recorded':True}
 
 @app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/related')
 def security_related_evidence(host_id:str,incident_id:str,offset:int=0,as_of:float|None=None,expected_digest:str='',user=Depends(admin_user)):
