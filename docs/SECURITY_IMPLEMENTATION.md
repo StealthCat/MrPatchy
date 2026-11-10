@@ -2177,6 +2177,28 @@ the active-run index instead of filtering completed runs and sorting the result.
 This is a partial database performance increment. Production throughput and
 end-to-end parallel triage acceptance remain open.
 
+Worker checkpoint #590 groups the administrator AI status poll's two run-detail
+reads into one statement. It keeps the newest running triage stage and newest
+triage or worker diagnostic in one database snapshot, projecting only the fields
+used by the status response. This reduces a polling round trip. Production
+throughput and the full faster-AI acceptance milestones remain open.
+
+Investigation lease validation checks the current claim before fetching host or
+behavior evidence. A live lease reads only the host lifecycle fields and still
+checks the full behavior evidence, owner, configuration and expiry. Focused
+regressions verify the reduced SQL and continued refusal after lifecycle or
+evidence changes. This limits recurring lease-check I/O. Production throughput
+and the wider parallel-investigation acceptance remain open.
+
+Worker checkpoint #599 adds a composite approval/verdict/first-seen/identity
+index for the real process-triage admission query. Startup adds the index
+idempotently to existing databases while retaining behavior history and existing
+indexes. A retained-history fixture verifies that candidate filtering uses the
+index instead of scanning every completed behavior before the existing retry,
+pause, lifecycle, capacity and oldest-first eligibility checks. This is a partial
+database performance increment; production throughput and full faster-AI
+acceptance remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.
@@ -2306,6 +2328,16 @@ two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
 
+### Retained behavior history in the triage benchmark — worker checkpoint #641
+
+Use `--retained-history-rows` to seed 0–50,000 older completed observations in
+the disposable SQLite fixture before the timed investigations. The default is
+zero. The JSON report records the count, and the comparator requires equal
+counts across both reports. It interprets reports from older fixtures as zero.
+Use the same history size, run count and delays for a serial/parallel pair.
+The fixture still checks the same provider, SSH evidence and completion workload.
+Native MySQL and production throughput acceptance remain open.
+
 ### Retained process-triage timing sample — worker checkpoint #522
 
 The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
@@ -2322,6 +2354,12 @@ Dashboard presentation and matched serial/parallel production measurement remain
 open. There is no new collection, migration, provider call or admission change.
 
 ### Bounded same-server process triage — worker checkpoint #379
+
+Claim admission reads live server occupancy and saved per-server investigation
+limits together while holding the existing admission lock. Missing limits keep
+the default and malformed limits keep the minimum fallback. The regression
+checks that saturated servers are skipped without per-server policy reads.
+This reduces database round trips. Production throughput remains unverified.
 
 This bounded threaded-execution increment permits two independent renewable process-
 triage leases for one server, while the configured fleet-wide AI executor capacity
@@ -2344,6 +2382,12 @@ rejection. This does not complete priority/aging across every AI purpose, make t
 per-server bound administrator-configurable, or establish full multi-controller/MySQL
 failover acceptance. Exact-head full CI and coordinator integration remain required.
 
+
+Lease recovery reads expired claims and their retained run rows together
+under the existing admission lock. It still interrupts running orphaned runs,
+preserves live leases and provider receipts, and removes expired claims with
+missing runs. The recovery fixture checks the fixed read count and idempotent
+interruption history. Production throughput remains unverified.
 
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
@@ -6500,3 +6544,69 @@ database performance. The default remains zero added persistence delay. Runtime
 admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
 response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
 the broader faster-AI roadmap remain incomplete.
+
+
+### Verified operating-system lifecycle status — worker checkpoint #341
+
+The server Overview now reports a read-only lifecycle assessment for reviewed
+Ubuntu and Debian releases. Matching is strict on the exact `ID` and
+`VERSION_ID`; derivatives, unknown releases, stale or future-dated inventory and
+unverified extended-support architectures fail closed as unknown. The versioned
+catalog records the vendor source and review date. Ubuntu extended coverage
+explicitly reports that Pro entitlement is not observed, while Debian 12 LTS
+checks the published architecture set. Inclusive support boundaries have focused
+regression coverage.
+
+This increment does not schedule, recommend or authorize an upgrade and does not
+change patching, response or AI behavior. The migration-planning queue, supported
+target correlation, fleet filters/reports, lifecycle alerts, RPM/vendor coverage,
+entitlement discovery, signed or automated catalog refresh/expiry, and real-target
+upgrade acceptance remain planned under #341. Coordinator integration, exact-head
+full SQLite/MySQL/browser checks and fresh code scanning remain required before
+this checkpoint is delivered.
+
+
+### Batched automatic security-plan eligibility — worker checkpoint #592
+
+This bounded faster-AI increment shortens the database work performed while holding
+the distributed automatic security-plan queue lock. After the existing policy,
+pause, quarantine, lifecycle, prior-attempt and YARA filters select at most 100
+incidents, one projected eligibility query joins each bounded incident ID to its
+canonical host identity and uses a correlated `EXISTS` to read queued/running
+security or startup-plan occupancy. Keeping both comparisons in SQL preserves the
+database's host-ID collation. A successful enqueue updates an in-memory set with
+the canonical host ID, so another collating-equal incident remains deferred exactly
+as it was when each loop iteration queried the job table again.
+
+The 12-host SQLite reproduction admits at most the existing ten plans. Current main
+performs ten final host lookups plus ten final pending-job lookups; the candidate
+uses one bounded eligibility read, reducing the fixture from 151 to 132 SELECT
+statements. Focused coverage also retains a pre-existing startup-plan occupant and
+verifies that two eligible incidents on one host still produce only one automatic
+plan. Native MySQL coverage exercises differently cased stored/candidate host IDs,
+an existing collating-equal occupant and within-tick canonical-host deduplication.
+
+This changes no schema, public API, provider call, spend control, plan content,
+response authority or incident ordering. Per-policy pause and quarantine reads that
+occur before candidate selection remain separate work, and this checkpoint does not
+complete smooth shared planning admission, threaded investigations, production
+throughput or failover acceptance. Coordinator integration with current main is complete; exact integrated-head SQLite/MySQL/full-suite checks and fresh code-scanning inventory remain required before merge. The reported 12-host SELECT reduction is fixture evidence, not production-throughput validation.
+
+### Batched AI-status aggregates — worker checkpoint #586
+
+This bounded faster-AI increment reduces the database work performed whenever the
+AI worker dashboard is polled. The rolling triage-run count and oldest run now come
+from one aggregate statement and therefore one database snapshot. Deferred update-
+score count and next eligibility likewise come from one aggregate statement over
+the same scoped package join. The source-main reproduction issued 20 SQL statements
+for an empty status read: four read `ai_runs` and two read the deferred score join.
+The updated path issues 18: three read `ai_runs` and one reads the score join.
+
+Regression coverage rejects a return to separate count/minimum scans and preserves
+the existing pending, paused, ready, retry, provider-backoff, admission and budget
+status semantics. No schema, provider call, evidence, model, concurrency, pause,
+authorization or response behavior changes. This query reduction does not complete
+threaded investigations, fair scheduling, shared accounting across every billable
+path, production throughput acceptance or the remaining SQLite/MySQL failover and
+reset milestones. Coordinator integration, exact-head full-suite/SQLite/MySQL checks
+and fresh code scanning remain required before delivery.
