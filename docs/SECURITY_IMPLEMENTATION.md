@@ -3037,6 +3037,22 @@ milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client a
 connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
 two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
 
+Implementation checkpoint (issue #661): a bounded milestone-3 increment adds live
+toasts. After the first successful refresh following sign-in or page load, the
+shell records the visible event revisions as a baseline, so reloads, reconnects
+and catch-up never replay old events as toasts. A later refresh shows a toast only
+for a new or higher-revision unread, undismissed, unresolved `high` or `critical`
+notification. At most three toasts are visible; a larger burst collapses into
+one summary that links to the notification center. Toasts use a polite live
+region, render text nodes only, revalidate same-origin links, never take focus,
+pause their ten-second auto-hide on hover or focus, and mount inside an open modal
+so they stay usable above it. Hiding a toast is local to the tab and does not mark
+the notification read or dismissed, acknowledge an alert or perform any response.
+Logout and account reset clear toasts and the baseline. Remaining: per-user
+cross-tab toast deduplication (each open tab shows its own toast), producer and
+retention coverage, and the milestone 2 and 4 transport and end-to-end acceptance
+listed above.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 

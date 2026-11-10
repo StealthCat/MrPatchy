@@ -125,4 +125,68 @@ module.exports=async(page,capture)=>{
   assert.equal(await page.locator('#notification-list').textContent(),'','a late mutation response cannot restore account-scoped content after reset');
   assert.equal(await page.locator('#notification-status').textContent(),'','a late mutation response cannot restore account-scoped status after reset');
   assert.equal(await page.locator('#notification-badge').isHidden(),true);
+
+  // Live toasts: the initial set never toasts; new or re-revised unread
+  // high/critical events do, bounded, without focus theft or read side effects.
+  for(const item of items){item.read=false;item.dismissed=false;}
+  unread=items.length;
+  const toasts=page.locator('.notification-toast');
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.match(await bell.getAttribute('aria-label'),/3 unread/);
+  assert.equal(await toasts.count(),0,'events present at sign-in or reload do not toast');
+
+  await page.getByRole('button',{name:'+ Add server',exact:true}).click();
+  const toastName=page.locator('[name=name]');
+  await toastName.fill('Toast keeps this draft');
+  await toastName.focus();
+  const mutationCount=mutations.length;
+  items.unshift({id:'4'.repeat(64),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'scan-new',host_id:'',severity:'critical',reason:'<img src=x onerror="window.toastInjected=true"> New critical finding',deep_link:'#activity',lifecycle:'active',created:1700000200,read:false,dismissed:false});
+  unread++;
+  await page.evaluate(()=>window.notificationStreams.at(-1).emit('notifications'));
+  const newToast=toasts.filter({hasText:'New critical finding'});
+  await newToast.waitFor();
+  assert.equal(await toasts.count(),1);
+  assert.equal(await newToast.locator('img').count(),0);
+  assert.equal(await page.evaluate(()=>window.toastInjected),undefined);
+  assert.equal(await page.evaluate(()=>document.getElementById('notification-toasts').parentElement.id),'modal','the toast mounts inside the open modal so it is not inert');
+  assert.equal(await toastName.inputValue(),'Toast keeps this draft');
+  assert.equal(await toastName.evaluate(node=>node===document.activeElement),true,'a toast never steals focus');
+  assert.equal(await newToast.getByRole('link',{name:'Open'}).getAttribute('href'),'/#activity');
+  await capture('notification-toast-dialog',false);
+  await newToast.getByRole('button',{name:/Hide this toast/}).click();
+  await newToast.waitFor({state:'detached'});
+  assert.equal(mutations.length,mutationCount,'hiding a toast does not mark the notification read or dismissed');
+  assert.equal(items[0].read,false);
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'an unchanged revision does not toast again');
+  await page.locator('#close-modal').click();
+
+  items.unshift({id:'5'.repeat(64),revision:1,source:'operations',kind:'attention',subject_type:'job',subject_id:'job-medium',host_id:'',severity:'medium',reason:'Medium notice stays in the bell.',deep_link:'#activity',lifecycle:'active',created:1700000300,read:false,dismissed:false});
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'medium and lower severities do not toast');
+
+  const revised=items.find(item=>item.id===safeId);revised.revision++;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'Patch verification needs review.'}).waitFor();
+  assert.equal(await page.evaluate(()=>document.getElementById('notification-toasts').parentElement===document.body),true);
+  assert.equal(await toasts.count(),1,'a reopened or escalated revision toasts again');
+  await capture('notification-toast-desktop',false);
+
+  for(let n=0;n<4;n++)items.unshift({id:String(6+n).repeat(64),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'burst-'+n,host_id:'',severity:'high',reason:'Burst finding '+n,deep_link:'#activity',lifecycle:'active',created:1700000400+n,read:false,dismissed:false});
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  const summary=toasts.filter({hasText:'4 new high-severity notifications need attention.'});
+  await summary.waitFor();
+  assert.equal(await toasts.count(),1,'a burst collapses into one summary toast');
+  assert.equal(await summary.getByRole('link',{name:'Open notification center'}).getAttribute('href'),'#notifications');
+  await page.setViewportSize({width:390,height:844});
+  const toastBox=await summary.boundingBox();
+  assert.ok(toastBox.x>=0&&toastBox.x+toastBox.width<=390&&toastBox.y+toastBox.height<=844);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.waitForTimeout(300);
+  await capture('notification-toast-mobile',false);
+  await page.setViewportSize({width:1440,height:1000});
+
+  await page.evaluate(()=>window.NotificationShell.reset());
+  assert.equal(await toasts.count(),0,'logout/reset clears toasts');
 };
