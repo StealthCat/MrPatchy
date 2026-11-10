@@ -1,3 +1,8 @@
+## 1.56.4 — 2026-11-10
+
+1. [PR #364](https://github.com/StealthCat/MrPatchy/pull/364): Add `docs/SECRET_CUSTODY.md`, the design inventory and migration contract for external secret custody and recoverable encryption-key rotation. It inventories every consumer of `secret.key`, including Fernet-sealed settings, MFA secrets, release plans, database profile files, the worker preflight key canary and backup bundles, plus the one HKDF-derived subkey. It proposes a provider interface with fail-closed rules, a read-compatible `mp1:<key_id>:` envelope, a resumable rotation, retirement and backup/restore contract, a test matrix and a delivery sequence. At integration the coordinator corrected the inventory to include the worker preflight canary (a fourth independent Fernet construction that workers verify before admitting work) and the legacy `scripts/backup.py` key copy.
+2. Compatibility and limits: design documentation only. No runtime, key-semantics, schema or response-authorization change, and no provider is contacted. This is a partial #346 increment: the provider interface, envelopes, rotation job and an external provider adapter remain unimplemented. This source update does not publish a Docker image.
+
 ## 1.56.3 — 2026-11-10
 
 1. [PR #667](https://github.com/StealthCat/MrPatchy/pull/667): Raise the MySQL test-shard job timeout from 20 to 30 minutes so slow but passing shards are no longer cancelled mid-run, and print the 25 slowest tests in each MySQL shard log. A regression test pins the bounded timeout, the unchanged four-shard matrix, the 5-minute apt setup bound and the unfiltered pytest command. Fixes #666.
