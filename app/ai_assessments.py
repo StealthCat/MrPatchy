@@ -8,7 +8,7 @@ import hashlib
 import json
 import time
 import uuid
-from sqlalchemy import String, Text, Double, JSON, select
+from sqlalchemy import String, Text, Double, JSON, Index, select
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
 
@@ -30,6 +30,12 @@ class Assessment(Base):
     snapshot: Mapped[dict]=mapped_column(JSON)
     inputs: Mapped[list]=mapped_column(JSON,default=list)
     refresh: Mapped[dict]=mapped_column(JSON,default=dict)
+    # Assessments are retained independently of diagnostic pruning. Keep the
+    # exact-state lookup and per-host history bounded as that history grows.
+    __table_args__=(
+        Index('ix_ai_assessments_subject_state_created','subject','state_hash',created.desc(),id.desc()),
+        Index('ix_ai_assessments_subject_host_created','subject','host_id',created.desc(),id.desc()),
+    )
 
 
 class Refresh(Base):
@@ -41,6 +47,20 @@ class Refresh(Base):
     reason: Mapped[str]=mapped_column(Text)
     previous: Mapped[str]=mapped_column(String(36))
     withdrew_approval: Mapped[bool]=mapped_column(default=False)
+
+
+def exact_history_query(subject, state):
+    query=(select(Assessment).where(Assessment.subject==subject,Assessment.state_hash==state)
+        .order_by(Assessment.created.desc(),Assessment.id.desc()))
+    return query.with_hint(Assessment,
+        'FORCE INDEX FOR JOIN (ix_ai_assessments_subject_state_created)',dialect_name='mysql')
+
+
+def subject_history_query(subject, host_id):
+    query=(select(Assessment).where(Assessment.subject==subject,Assessment.host_id==host_id)
+        .order_by(Assessment.created.desc(),Assessment.id.desc()))
+    return query.with_hint(Assessment,
+        'FORCE INDEX FOR JOIN (ix_ai_assessments_subject_host_created)',dialect_name='mysql')
 
 
 def digest(value):
@@ -75,7 +95,7 @@ def queue(s,row,expected,reason,actor,withdraw_approval):
     if s.get(Refresh,row.id):raise ValueError('A re-triage request already exists')
     if row.approved and not withdraw_approval:raise ValueError('Explicitly confirm withdrawal of the current approval before re-triage')
     ai_retry.manual(s,row)
-    saved=s.scalar(select(Assessment).where(Assessment.subject==row.id,Assessment.state_hash==state_hash(row)).order_by(Assessment.created.desc(),Assessment.id.desc()).limit(1))
+    saved=s.scalar(exact_history_query(row.id,state_hash(row)).limit(1))
     if not saved:
         # Preserve only what actually exists; do not invent an old model, run,
         # input binding or assessment timestamp from the current saved settings.
