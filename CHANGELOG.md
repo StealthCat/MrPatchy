@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.55.6 — 2026-11-10
+
+1. [PR #652](https://github.com/StealthCat/MrPatchy/pull/652): Preserve warm update-scoring memo entries at the 256-server cap while evaluating overflow with a bounded pass-local memo. Reclaim slots only after a complete pass confirms retained servers are no longer eligible; early exits preserve unvisited entries. Keep candidate order, score identities, RPM evidence invalidation, provider payloads and pause/lifecycle filters unchanged. No schema, API or settings migration. The selector still walks eligible candidates, and this fixture-based optimization does not establish production throughput or complete the broader #436 performance work. This source update does not publish a Docker image.
+
+## 1.55.5 — 2026-11-10
+
+1. [PR #554](https://github.com/StealthCat/MrPatchy/pull/554): Add a reviewed administrator reset for an active fleet-wide provider Retry-After/transient-failure cooldown in Settings. Show the sanitized reason, failure count, recorded time and next eligibility; require the reviewed-state revision, a meaningful reason and exact confirmation, with a locked recheck that rejects stale or expired state. Clearing sends no provider or target request and releases only the shared provider floor and provider-only waits; local retries, rate/budget, pause, lifecycle, concurrency and authorization controls remain in force. Compatibility: the administrator-only clear endpoint now requires JSON fields `expected_revision`, `reason` and `confirmation`; bodyless calls are rejected, and active status adds `updated_at` and `revision`. No schema or helper upgrade. Does not diagnose provider health, reconcile uncertain billing or complete the broader faster-AI program. This source update does not publish a Docker image.
+
+## 1.55.4 — 2026-11-10
+
+1. [PR #651](https://github.com/StealthCat/MrPatchy/pull/651): Reuse the process-local update-scoring memo when repository-file text, raw APT status, collection time or unrelated OS fields change without changing scoring evidence. Installed RPM records, scoring distribution and package manager still invalidate the memo; exact retained score keys and provider payloads are preserved. No schema or API change. The bounded memo still holds at most 256 hosts, scans eligible candidates and fingerprints the RPM inventory; fleet-capacity handling and production throughput remain open. No roles, provider-call policy or response-authorization changes. This source update does not publish a Docker image.
+
+## 1.55.3 — 2026-11-10
+
+1. [PR #650](https://github.com/StealthCat/MrPatchy/pull/650): Add an idempotently installed purpose/start covering index for administrator AI status and legacy triage and update-scoring counts on SQLite and MySQL. Preserve existing rows and indexes, strict one-hour cutoff, purpose separation, retry times and admission limits. Existing databases create the index at startup, and writes incur index-maintenance cost; fixture measurements do not establish production throughput. No run lifecycle, provider-call, API or authorization behavior change. Broader Roadmap A acceptance remains open. This source update does not publish a Docker image.
+
+## 1.55.2 — 2026-11-10
+
+1. [PR #535](https://github.com/StealthCat/MrPatchy/pull/535): Add the earliest non-expired process-investigation lease expiry to administrator AI status and explain that expiry only permits fenced recovery if renewal stops; it does not prove a provider request stopped or was not billed. The API field is additive, null when no lease is live, and hidden from non-admin status. No schema, admission, scheduling, provider-call or authorization behavior changes. Multi-controller failover and production recovery timing remain unverified. This source update does not publish a Docker image.
+
 ## 1.55.1 — 2026-11-10
 
 1. [PR #648](https://github.com/StealthCat/MrPatchy/pull/648): Add the `ix_behaviors_attempted` covering timestamp index for administrator recent-attempt status and legacy hourly admission reads, and install it idempotently on existing SQLite/MySQL databases without rewriting retained rows. Preserve the strict one-hour cutoff, count, retry time and admission denial; API, policy, provider, UI and authorization behavior do not change. Index maintenance adds timestamp-write cost, and fixture measurements do not establish production throughput. This source update does not publish a Docker image.

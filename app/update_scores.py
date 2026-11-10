@@ -59,7 +59,7 @@ def identity(host,package,index=None):
 
 
 _MEMO = {}
-_MEMO_HOSTS = 256
+_MEMO_HOSTS = 256  # Warm entries stay resident; overflow uses pass-local indexes
 
 
 def _memo(host):
