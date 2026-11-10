@@ -3,7 +3,10 @@
 // permission filtering, unread counts and per-user revision state.
 window.NotificationShell=(()=>{
  const POLL_MS=30000, severityRank={info:0,low:1,medium:2,high:3,critical:4};
- let generation=0,requestRevision=0,centerRequestRevision=0,timer=0,items=[],open=false,started=false,stream=null;
+ let generation=0,requestRevision=0,centerRequestRevision=0,timer=0,items=[],open=false,started=false,stream=null,seen=null;
+ // Live toasts: the first authoritative page after start() is a silent baseline, so
+ // reloads, sign-in and cursor catch-up never replay existing events as toasts.
+ const TOAST_LIMIT=3,TOAST_VISIBLE=4,TOAST_MS=8000,SEEN_LIMIT=1000,STICKY={high:true,critical:true};
  const centerContext={offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''};
  const node=id=>document.getElementById(id);
  const button=()=>node('notification-button'),panel=()=>node('notification-panel');
@@ -44,6 +47,53 @@ window.NotificationShell=(()=>{
    article.append(meta,reason,actions);list.append(article);
   }
  }
+ function toastRegion(){return node('notification-toasts');}
+ function removeToast(toastNode){clearTimeout(toastNode._timer);toastNode.remove();}
+ function removeToastsFor(id){const region=toastRegion();if(region)for(const toastNode of [...region.children])if(toastNode.dataset.eventId===id)removeToast(toastNode);}
+ function armToast(toastNode,sticky){
+  if(sticky)return;
+  const arm=()=>{clearTimeout(toastNode._timer);toastNode._timer=setTimeout(()=>removeToast(toastNode),TOAST_MS);};
+  const hold=()=>clearTimeout(toastNode._timer);
+  toastNode.addEventListener('mouseenter',hold);toastNode.addEventListener('focusin',hold);
+  toastNode.addEventListener('mouseleave',()=>{if(!toastNode.contains(document.activeElement))arm();});
+  toastNode.addEventListener('focusout',event=>{if(!toastNode.contains(event.relatedTarget))arm();});
+  arm();
+ }
+ function pushToast(toastNode,sticky){
+  const region=toastRegion();if(!region)return;
+  const close=element('button','quiet notification-toast-close','×');close.type='button';close.setAttribute('aria-label','Close notification toast');
+  close.addEventListener('click',()=>removeToast(toastNode));toastNode.prepend(close);
+  region.append(toastNode);
+  // Bound the visible stack; the bell and center retain every event.
+  while(region.children.length>TOAST_VISIBLE)removeToast(region.firstElementChild);
+  armToast(toastNode,sticky);
+ }
+ function itemToast(item){
+  const severity=item.severity in severityRank?item.severity:'info';
+  const toastNode=element('article','notification-toast');toastNode.dataset.severity=severity;toastNode.dataset.eventId=item.id;
+  const meta=element('div','notification-meta');meta.append(element('span','notification-severity',severity),element('span','',readableSource(item.source)));
+  if(item.host_id)meta.append(element('span','',typeof hostName==='function'?hostName(item.host_id):'server '+item.host_id));
+  const reason=element('p','notification-reason',item.reason||'Reason unavailable'),link=safeLink(item.deep_link);
+  toastNode.append(meta,reason);
+  if(link){const actions=element('div','notification-actions'),anchor=element('a','button','Open');anchor.href=link;anchor.addEventListener('click',()=>removeToast(toastNode));actions.append(anchor);toastNode.append(actions);}
+  pushToast(toastNode,!!STICKY[severity]);
+ }
+ function summaryToast(extra){
+  const toastNode=element('article','notification-toast');toastNode.dataset.severity='info';
+  const actions=element('div','notification-actions'),anchor=element('a','button','View notification center');anchor.href='#notifications';anchor.addEventListener('click',()=>removeToast(toastNode));actions.append(anchor);
+  toastNode.append(element('p','notification-reason',`${extra} more new notification${extra===1?'':'s'} arrived.`),actions);
+  pushToast(toastNode,false);
+ }
+ function announce(current){
+  const keys=current.map(item=>`${item.id}:${item.revision}`);
+  if(seen===null||seen.size>SEEN_LIMIT){const baseline=seen===null;seen=new Set(keys);if(baseline)return;}
+  const fresh=[];
+  current.forEach((item,index)=>{if(seen.has(keys[index]))return;seen.add(keys[index]);if(!item.read&&!item.dismissed)fresh.push(item);});
+  // Closing or expiring a toast is page-local: it never reads, dismisses, acknowledges or remediates.
+  for(const item of current)if(item.read||item.dismissed)removeToastsFor(item.id);
+  fresh.slice(0,TOAST_LIMIT).forEach(itemToast);
+  if(fresh.length>TOAST_LIMIT)summaryToast(fresh.length-TOAST_LIMIT);
+ }
  function schedule(run=generation){clearTimeout(timer);if(!started||document.hidden)return;timer=setTimeout(()=>{if(run===generation)refresh();},POLL_MS);}
  function connect(run){
   if(typeof EventSource!=='function')return;
@@ -59,7 +109,7 @@ window.NotificationShell=(()=>{
   try{
    const [count,page]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8')]);
    if(run!==generation||request!==requestRevision)return;
-   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();
+   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();announce(items);
    status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
    if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){
@@ -75,7 +125,7 @@ window.NotificationShell=(()=>{
    await api(`/notifications/${encodeURIComponent(item.id)}/${action}`,'POST',{revision:item.revision});
    if(run!==generation||!started)return;
    if(action==='dismiss')items=items.filter(candidate=>candidate!==item);else item.read=true;
-   render();
+   render();removeToastsFor(item.id);
    status(action==='dismiss'?'Notification dismissed for your account.':'Notification marked read for your account.');
    const count=await api('/notifications/unread-count');
    if(run!==generation||!started)return;
@@ -83,16 +133,19 @@ window.NotificationShell=(()=>{
    if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){if(run===generation&&started){status(error.message);if(control.isConnected)control.disabled=false;}}
  }
- function close({focus=false}={}){open=false;panel().hidden=true;button().setAttribute('aria-expanded','false');if(focus)button().focus();}
+ // The open panel already lists every recent event, so the toast stack steps aside.
+ function toastsBehindPanel(value){const region=toastRegion();if(region)region.classList.toggle('is-behind-panel',value);}
+ function close({focus=false}={}){open=false;panel().hidden=true;toastsBehindPanel(false);button().setAttribute('aria-expanded','false');if(focus)button().focus();}
  function toggle(){
   if(open){close();return;}
-  open=true;panel().hidden=false;button().setAttribute('aria-expanded','true');refresh();
+  open=true;panel().hidden=false;toastsBehindPanel(true);button().setAttribute('aria-expanded','true');refresh();
  }
  function reset(){
   generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;
   if(stream){stream.close();stream=null;}
-  panel().hidden=true;button().setAttribute('aria-expanded','false');setCount(null,[]);
-  status('');node('notification-list').replaceChildren();Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});
+  panel().hidden=true;toastsBehindPanel(false);button().setAttribute('aria-expanded','false');setCount(null,[]);
+  status('');node('notification-list').replaceChildren();seen=null;
+  const region=toastRegion();if(region)for(const toastNode of [...region.children])removeToast(toastNode);Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});
  }
  function start(){generation++;requestRevision++;started=true;clearTimeout(timer);connect(generation);refresh();}
  button().addEventListener('click',toggle);node('notification-close').addEventListener('click',()=>close({focus:true}));node('notification-panel').querySelector('.notification-center-link').addEventListener('click',()=>close());
@@ -121,7 +174,7 @@ window.NotificationShell=(()=>{
  }
  async function centerMutate(item,action,control){
   control.disabled=true;
-  try{await api(`/notifications/${encodeURIComponent(item.id)}/${action}`,'POST',{revision:item.revision});await refresh();}
+  try{await api(`/notifications/${encodeURIComponent(item.id)}/${action}`,'POST',{revision:item.revision});removeToastsFor(item.id);await refresh();}
   catch(error){if(control.isConnected)control.disabled=false;toast(error.message);}
  }
  function applyCenterPage(page,preserveFocus=true){
@@ -144,7 +197,7 @@ window.NotificationShell=(()=>{
   const request=++centerRequestRevision,root=node('content'),page=await api('/notifications?'+query());
   if(request!==centerRequestRevision||!currentView(revision,'notifications')||!root.isConnected)return;
   const hostOptions=hosts.map(host=>`<option value="${esc(host.id)}" ${centerContext.hostId===host.id?'selected':''}>${esc(host.name)}</option>`).join('');
-  root.innerHTML=PatchyUI.heading('notifications','Your notification history.','Permission-filtered attention and recovery notes, kept separate from operational acknowledgement.')+`<section class="card notification-center-controls"><form id="notification-filters"><div class="form-grid"><label>Severity<select name="severity"><option value="">All severities</option>${['critical','high','medium','low','info'].map(value=>`<option value="${value}" ${centerContext.severity===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Source<input name="source" value="${esc(centerContext.source)}" maxlength="40" pattern="[a-z0-9][a-z0-9_.-]*" placeholder="All sources"></label><label>Server<select name="host_id"><option value="">All servers</option>${hostOptions}</select></label></div><div class="actions"><label class="check"><input name="unread_only" type="checkbox" ${centerContext.unreadOnly?'checked':''}>Unread only</label><label class="check"><input name="include_dismissed" type="checkbox" ${centerContext.includeDismissed?'checked':''}>Include dismissed</label><button type="submit">Apply filters</button><button type="button" class="quiet" id="notification-filters-clear">Clear</button></div></form><p class="help">Read and dismiss affect only your account. They never acknowledge an alert, resolve an incident, approve AI work or run remediation.</p></section><section id="notification-center-list" aria-label="Notification history"></section><div class="actions notification-center-pages"><button id="notification-center-prev">Previous</button><span class="help" id="notification-center-range"></span><button id="notification-center-next">Next</button></div><p class="help notification-center-coverage">Authenticated server push refreshes this page from durable, permission-filtered history. A 30-second polling fallback remains active; live toasts and complete failover acceptance remain planned.</p>`;
+  root.innerHTML=PatchyUI.heading('notifications','Your notification history.','Permission-filtered attention and recovery notes, kept separate from operational acknowledgement.')+`<section class="card notification-center-controls"><form id="notification-filters"><div class="form-grid"><label>Severity<select name="severity"><option value="">All severities</option>${['critical','high','medium','low','info'].map(value=>`<option value="${value}" ${centerContext.severity===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Source<input name="source" value="${esc(centerContext.source)}" maxlength="40" pattern="[a-z0-9][a-z0-9_.-]*" placeholder="All sources"></label><label>Server<select name="host_id"><option value="">All servers</option>${hostOptions}</select></label></div><div class="actions"><label class="check"><input name="unread_only" type="checkbox" ${centerContext.unreadOnly?'checked':''}>Unread only</label><label class="check"><input name="include_dismissed" type="checkbox" ${centerContext.includeDismissed?'checked':''}>Include dismissed</label><button type="submit">Apply filters</button><button type="button" class="quiet" id="notification-filters-clear">Clear</button></div></form><p class="help">Read and dismiss affect only your account. They never acknowledge an alert, resolve an incident, approve AI work or run remediation.</p></section><section id="notification-center-list" aria-label="Notification history"></section><div class="actions notification-center-pages"><button id="notification-center-prev">Previous</button><span class="help" id="notification-center-range"></span><button id="notification-center-next">Next</button></div><p class="help notification-center-coverage">Authenticated server push refreshes this page from durable, permission-filtered history. New events also appear as brief toasts on any page; closing a toast never marks it read. A 30-second polling fallback remains active; complete failover acceptance remains planned.</p>`;
   applyCenterPage(page,false);
   node('notification-filters').onsubmit=event=>{event.preventDefault();const form=new FormData(event.currentTarget);Object.assign(centerContext,{offset:0,severity:String(form.get('severity')||''),source:String(form.get('source')||'').trim(),hostId:String(form.get('host_id')||''),unreadOnly:form.has('unread_only'),includeDismissed:form.has('include_dismissed')});center(revision).catch(error=>toast(error.message));};
   node('notification-filters-clear').onclick=()=>{Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});center(revision).catch(error=>toast(error.message));};
