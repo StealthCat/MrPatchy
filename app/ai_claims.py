@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
-from sqlalchemy import String, Double, select, func
+from sqlalchemy import String, Double, select, func, union_all
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -55,16 +55,21 @@ def owner_valid(s,owner,admitting=False):
 
 def reconcile(s,now):
     # Called under ai-triage. Never interrupt a different worker's live lease.
-    for claim in s.scalars(select(Claim).where(Claim.expires<=now)):
-        interrupt(s,claim.run_id);s.delete(claim)
+    runs=ai_runs.AIRun
+    expired=select(Claim,runs).outerjoin(runs,runs.id==Claim.run_id).where(Claim.expires<=now)
+    for claim,run in s.execute(expired):
+        _interrupt_run(s,run);s.delete(claim)
     s.flush()
     live=select(Claim.run_id)
-    for run in s.scalars(select(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.state=='running',ai_runs.AIRun.id.not_in(live))):
-        interrupt(s,run.id)
+    for run in s.scalars(select(runs).where(runs.purpose=='triage',runs.state=='running',runs.id.not_in(live))):
+        _interrupt_run(s,run)
 
 
 def interrupt(s,run_id):
-    run=s.get(ai_runs.AIRun,run_id)
+    _interrupt_run(s,s.get(ai_runs.AIRun,run_id))
+
+
+def _interrupt_run(s,run):
     if run and run.state=='running':
         run.state='interrupted';run.finished=time.time();run.stage='interrupted'
         run.message='Investigation lease was lost or expired. No stale result can be accepted; existing retry limits apply and sent calls may still be billable.'
@@ -108,10 +113,22 @@ def acquire(owner=None):
                 .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
             saturated_hosts=[host_id for host_id,count,key,policy in occupancy
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
-            row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
-                Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
+            filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
-                Behavior.verdict.in_(('pending','error')),ai_retry.eligible(signature,now)).order_by(Behavior.first_seen,Behavior.id).limit(1))
+                ai_retry.eligible(signature,now))
+            # Keep each verdict as an equality range so the admission index can
+            # skip retained completed history and satisfy oldest-first ordering.
+            # The oldest member of either range is sufficient to find the same
+            # global oldest pending/error candidate as the former combined scan.
+            oldest=[]
+            for verdict in ('pending','error'):
+                candidate=select(Behavior.id,Behavior.first_seen).outerjoin(
+                    ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                    *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
+                oldest.append(select(candidate.c.id,candidate.c.first_seen))
+            candidates=union_all(*oldest).subquery()
+            row=s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
+                candidates.c.first_seen,candidates.c.id).limit(1))
             if not row:return None
             # Approval writes use this host queue gate. Re-read after acquiring
             # it, including on MySQL repeatable-read connections.
@@ -149,9 +166,14 @@ class Lease:
         self.stopped=threading.Event();self.lost=threading.Event()
 
     def validate(self,s):
-        claim=s.get(Claim,self.subject);row=s.get(Behavior,self.subject)
-        host=s.get(Host,self.host_id)
-        if (self.lost.is_set() or not claim or claim.token!=self.token or claim.expires<=time.time() or
+        if self.lost.is_set():raise Lost()
+        claim=s.get(Claim,self.subject)
+        if not claim or claim.token!=self.token or claim.expires<=time.time():
+            self.lost.set();raise Lost()
+        row=s.get(Behavior,self.subject)
+        host=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==self.host_id)).one_or_none()
+        # Recheck expiry and the heartbeat fence after database I/O.
+        if (self.lost.is_set() or claim.expires<=time.time() or
             not row or row.host_id!=self.host_id or ai_assessments.lease_revision(row)!=claim.revision or
             ai_retry.configuration(s)!=claim.configuration or not owner_valid(s,self.owner) or
             (host is not None and not host_lifecycle.active(host))):

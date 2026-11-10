@@ -49,6 +49,32 @@ def test_unverified_observation_never_seeds_trust(client):
         assert s.scalar(select(func.count()).select_from(file_trust.Trust)) == 0
 
 
+def test_cross_host_rechecks_only_the_requested_origin_path(client, monkeypatch):
+    setup()
+    with Session() as s:
+        file_trust.record_snapshot(s, s.get(Host, 'host-one'))
+        s.commit()
+
+    unrelated = report()
+    unrelated['vendor_manifest']['entries'][0]['path'] = PATH.upper()
+    unrelated['vendor_authentication']['bundle_id'] = 'unrelated'
+    checked = []
+    validate = file_status.vendor.validate_authenticated
+
+    def counted(manifest, proof, receipt):
+        checked.append(proof['bundle_id'])
+        return validate(manifest, proof, receipt)
+
+    monkeypatch.setattr(file_status.vendor, 'validate_authenticated', counted)
+    with Session() as s:
+        s.add(Inspection(id='unrelated', host_id='host-one', created=time.time()+1,
+                         report=unrelated))
+        s.commit()
+        result = file_trust.assess(s, 'second', PATH, HASH, {})
+        assert result['trusted'] and result['method'] == 'known_good_database'
+        assert checked == ['fixture']
+
+
 def test_authenticated_inspection_stores_without_ai(client):
     with Session() as s:
         receipt = report();receipt.update(version=1, state='collected', packages=[], persistence=None)

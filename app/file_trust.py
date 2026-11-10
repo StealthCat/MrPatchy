@@ -79,7 +79,7 @@ def previous(s, path, checksum):
         seen.add(marker)
         origin = row.reference['host_id']
         if origin not in roots:
-            roots[origin] = repositories(s, origin)
+            roots[origin] = repositories(s, origin, path=path)
         match = resolve(path, checksum, roots[origin])
         if (match['status'] == 'verified' and
                 match['reference']['inspection_id'] == row.reference.get('inspection_id')):
@@ -87,10 +87,12 @@ def previous(s, path, checksum):
     return None
 
 
-def assess(s, host_id, path, checksum, proofs, *, persist=True):
-    from .file_status import resolve
+def assess(s, host_id, path, checksum, proofs=None, *, persist=True):
+    from .file_status import repositories, resolve
     if not isinstance(path, str) or not path.startswith('/') or len(path) > 4096:
         return {'status': 'unavailable', 'method': 'none', 'reason': 'No valid file path recorded.'}
+    if proofs is None:
+        proofs = repositories(s, host_id, path=path)
     result = resolve(path, checksum, proofs)
     reference = None
     if result['status'] == 'verified':

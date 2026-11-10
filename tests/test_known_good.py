@@ -1,4 +1,5 @@
 import copy
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import pytest
@@ -696,6 +697,52 @@ def test_changed_or_incomplete_vendor_receipt_is_a_contextual_miss(client,inspec
         bound=known_good.bind_vendor_provenance(s,host,partial(host),100)
     assert 'known_good_context' not in bound['investigation']['details']
     assert 'package_authentication_missing' in bound['investigation']['details']['context']['coverage']['gaps']
+
+
+@pytest.mark.parametrize('state, checksum', [
+    ('matches_artifact_bytes', sha('f')),
+    ('differences', sha('a')),
+    ('incomplete', sha('a')),
+], ids=['different-hash', 'differences', 'incomplete'])
+def test_newer_exact_path_receipt_blocks_older_followup_proof(client, state, checksum):
+    evidence = partial()
+    newer = vendor_report(checksum=checksum, state=state)
+    receipt = newer['vendor_verification']
+    if state == 'differences':
+        receipt['findings'] = [{'path': evidence['executable'], 'status': 'content_differs',
+                               'expected_sha256': checksum, 'observed_sha256': sha('f')}]
+    if state == 'incomplete':
+        receipt.update(examined=0, gaps=['fixture coverage gap'])
+    with Session() as s:
+        s.add_all([
+            Inspection(id='a-older', host_id='one', created=123, report=vendor_report()),
+            Inspection(id='z-newer', host_id='one', created=123, report=newer),
+        ])
+        s.commit()
+        bound = known_good.bind_vendor_provenance(s, 'one', evidence, 100)
+
+    details = json.loads(ai.investigation_payload(bound, 'fixture-model')['input'])['investigation']['details']
+    assert 'known_good_context' not in details
+    assert 'package_authentication_missing' in details['coverage']['gaps']
+    assert bound == evidence
+
+
+def test_unrelated_or_invalid_newer_receipt_does_not_hide_valid_exact_path(client):
+    invalid = vendor_report()
+    invalid['vendor_authentication']['artifact_sha256'] = 'invalid'
+    with Session() as s:
+        s.add_all([
+            Inspection(id='valid', host_id='one', created=123, report=vendor_report()),
+            Inspection(id='unrelated', host_id='one', created=124,
+                       report=vendor_report(path='/usr/bin/FIXTURE')),
+            Inspection(id='invalid', host_id='one', created=125, report=invalid),
+        ])
+        s.commit()
+        bound = known_good.bind_vendor_provenance(s, 'one', partial(), 100)
+
+    context = bound['investigation']['details']['known_good_context']
+    assert context['observation']['vendor_inspection_id'] == 'valid'
+    assert context['provenance']['verified']
 
 
 @pytest.mark.parametrize('details',[None,{},{'version':2,'identity_verified':True,'context':None},

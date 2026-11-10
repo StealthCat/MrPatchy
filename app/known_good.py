@@ -644,6 +644,8 @@ def bind_vendor_provenance(s, host_id, evidence, collected):
         report=row.report if isinstance(row.report,dict) else {}
         try:binding=vendor.known_good_binding(report.get('vendor_manifest'),report.get('vendor_authentication'),report.get('vendor_verification'),path,checksum)
         except (TypeError,ValueError):continue
+        # A valid receipt for this path is authoritative even when its bytes
+        # differ or its verification is incomplete. Older matches stay historical.
         inspection_id=row.id;break
     if binding is None:return value
     artifact,provenance,authenticated_at=binding
