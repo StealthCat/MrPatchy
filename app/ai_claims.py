@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
-from sqlalchemy import String, Double, select, func
+from sqlalchemy import String, Double, select, func, union_all
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -113,10 +113,22 @@ def acquire(owner=None):
                 .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
             saturated_hosts=[host_id for host_id,count,key,policy in occupancy
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
-            row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
-                Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
+            filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
-                Behavior.verdict.in_(('pending','error')),ai_retry.eligible(signature,now)).order_by(Behavior.first_seen,Behavior.id).limit(1))
+                ai_retry.eligible(signature,now))
+            # Keep each verdict as an equality range so the admission index can
+            # skip retained completed history and satisfy oldest-first ordering.
+            # The oldest member of either range is sufficient to find the same
+            # global oldest pending/error candidate as the former combined scan.
+            oldest=[]
+            for verdict in ('pending','error'):
+                candidate=select(Behavior.id,Behavior.first_seen).outerjoin(
+                    ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                    *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
+                oldest.append(select(candidate.c.id,candidate.c.first_seen))
+            candidates=union_all(*oldest).subquery()
+            row=s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
+                candidates.c.first_seen,candidates.c.id).limit(1))
             if not row:return None
             # Approval writes use this host queue gate. Re-read after acquiring
             # it, including on MySQL repeatable-read connections.

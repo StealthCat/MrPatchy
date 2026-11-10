@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.10 — 2026-11-10
+
+1. [PR #600](https://github.com/StealthCat/MrPatchy/pull/600): Add the composite `ix_behaviors_admission (approved, verdict, first_seen, id)` index to accelerate pending/error process-triage admission over retained behavior history. Existing SQLite and MySQL databases add the index idempotently, preserving rows and oldest-eligible selection across both verdict ranges. Existing databases incur ordinary index-build locking and disk use; this is a partial performance milestone, not a production-throughput or full faster-AI completion claim. No API, schema-column or response-authorization changes. This source update does not publish a Docker image.
+
 ## 1.54.9 — 2026-11-10
 
 1. [PR #631](https://github.com/StealthCat/MrPatchy/pull/631): Update SQLAlchemy from 2.1.6 to 2.1.8 in the runtime requirements and hash-pinned lock. No application code, configuration, schema or public API changes are included, with no compatibility impact expected. This source update does not publish a Docker image.
