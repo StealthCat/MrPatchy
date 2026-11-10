@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.55.0 — 2026-11-10
+
+1. [PR #389](https://github.com/StealthCat/MrPatchy/pull/389): Distribute newly admitted process-triage work across eligible servers by live claim count, durable least-recently-admitted turns, then oldest eligible observation; commit a turn only with a successful claim. Add the `ai_triage_host_turns` table at normal startup and preserve it through offline SQLite/MySQL migration and copy. No API, role, audit, provider-payload, target-helper or response-authorization change. Same-server overlap remains available when no less-occupied eligible server waits, and existing lifecycle, capacity, retry and spend fences remain. Indexed election avoids a retained-history scan in SQLite; a dense MySQL fixture showed a higher query median despite indexed access. Production throughput and complete multi-controller failover remain unverified. This source update does not publish a Docker image.
+
 ## 1.54.16 — 2026-11-10
 
 1. [PR #529](https://github.com/StealthCat/MrPatchy/pull/529): Add administrator investigation-status fields for the count and oldest observation age of retry-eligible, unclaimed process-triage work. The same aggregate snapshot counts only active, unpaused observations, excludes blocked, delayed and live-leased work, and leaves expired-lease work visible; empty timestamps are null. This is additive and keeps existing viewer/operator fields and authorization unchanged, with no schema migration, provider call, scheduler or UI change. Shared admission and available worker capacity can still delay dispatch; matched production throughput and broader dashboard work remain open. This source update does not publish a Docker image.
