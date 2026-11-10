@@ -63,9 +63,15 @@ def test_runtime_packages_build_offline_from_hash_verified_downloads():
     download=next(i for i,s in enumerate(steps) if s.startswith('RUN pip download'))
     install=next(i for i,s in enumerate(steps) if '-r requirements.lock' in s and 'pip install' in s)
     strip=next(i for i,s in enumerate(steps) if 'pip uninstall' in s)
+    sdist=next(i for i,s in enumerate(steps) if 'urllib.request' in s)
     assert build_lock<download<install<strip
     assert '--require-hashes --only-binary=:all:' in steps[build_lock]
-    assert '--require-hashes' in steps[download] and '--no-deps' in steps[download]
+    for flag in ('--require-hashes','--no-deps','--only-binary=:all:','-r requirements-wheels.lock'):
+        assert flag in steps[download]
+    assert '--no-build-isolation' not in steps[download]
+    assert download<sdist<install
+    assert 'files.pythonhosted.org/packages/source/z/zstandard/' in steps[sdist]
+    assert 'hashlib.sha256' in steps[sdist] and 'requirements.lock' in steps[sdist]
     assert steps[install].startswith('RUN --network=none pip install')
     for flag in ('--no-index','--find-links /wheelhouse','--no-build-isolation','--require-hashes'):
         assert flag in steps[install]
@@ -75,3 +81,14 @@ def test_runtime_packages_build_offline_from_hash_verified_downloads():
 def test_dependency_audit_covers_build_lock():
     ci=(ROOT/'.github/workflows/ci.yml').read_text()
     assert re.search(r'pip-audit [^\n]*-r requirements\.lock -r requirements-build\.lock',ci)
+
+
+def test_online_steps_never_run_a_build_backend():
+    """Only wheels and raw sdist bytes are fetched with networking; sdist hooks run offline."""
+    builder=(ROOT/'Dockerfile').read_text().split('FROM runtime-base\n',1)[0]
+    online=[s for s in builder.splitlines() if s.startswith('RUN ') and not s.startswith('RUN --network=none')]
+    for step in online:
+        if 'pip download' in step or ('pip install' in step and '-r ' in step):
+            assert '--only-binary=:all:' in step, step
+    split=next(s for s in online if 'requirements-wheels.lock' in s and 'write_text' in s)
+    assert "re.sub(r'(?ms)^zstandard==" in split

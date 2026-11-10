@@ -8,9 +8,13 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 # Build inputs for sdist-only runtime packages come from their own hash-pinned lock.
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-build.lock
-# Fetch every runtime artifact, hash-checked against requirements.lock, then build and
-# install with networking disabled so nothing outside the two locks can be resolved.
-RUN pip download --no-cache-dir --require-hashes --no-deps --no-build-isolation -d /wheelhouse -r requirements.lock
+# Online steps fetch bytes only, so no PEP 517 build hook runs while networking is enabled:
+# every other runtime package as a hash-checked wheel, and the sdist-only zstandard archive
+# as raw bytes checked against its requirements.lock hashes. The offline install below then
+# builds and installs with networking disabled so nothing outside the two locks can be resolved.
+RUN python -c "import pathlib,re; lock=pathlib.Path('requirements.lock').read_text(); pathlib.Path('requirements-wheels.lock').write_text(re.sub(r'(?ms)^zstandard==.*?(?=^\S|\Z)','',lock))"
+RUN pip download --no-cache-dir --require-hashes --no-deps --only-binary=:all: -d /wheelhouse -r requirements-wheels.lock
+RUN python -c "import hashlib,pathlib,re,urllib.request; version,block=re.search(r'(?ms)^zstandard==(\S+)(.*?)(?=^\S|\Z)',pathlib.Path('requirements.lock').read_text()).groups(); data=urllib.request.urlopen(f'https://files.pythonhosted.org/packages/source/z/zstandard/zstandard-{version}.tar.gz').read(); assert hashlib.sha256(data).hexdigest() in re.findall(r'[0-9a-f]{64}',block), 'zstandard sdist hash is not in requirements.lock'; pathlib.Path(f'/wheelhouse/zstandard-{version}.tar.gz').write_bytes(data)"
 RUN --network=none pip install --no-cache-dir --no-index --find-links /wheelhouse --no-build-isolation --require-hashes -r requirements.lock
 # Build-only packages must not reach the runtime image.
 RUN pip uninstall --yes setuptools packaging && ! pip show setuptools packaging
