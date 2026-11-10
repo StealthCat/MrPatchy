@@ -2721,6 +2721,10 @@ hashes, and it never executes or sources anything.
 **Counted only**
 - Environment assignments are counted, and their values are never exported.
 - Malformed lines are counted, not guessed.
+- Lines end only at `\n` and fields split only on spaces and tabs, as cron does. Other control characters are shown escaped (for example `\x0b`), so the displayed command is the text cron passes to the shell. A line containing NUL is counted as unparsed, so it can never make the controller reject the whole inspection receipt.
+- Text after the first unescaped `%` is the job's standard input. It is not stored; the job is only flagged.
+- Redaction is best-effort and pattern-based. It covers key/flag credential forms, URL userinfo, query keys, `Bearer` tokens, `-u`/`--user user:pass`, `-U user\%pass`, `sshpass -p` and MySQL/MariaDB `-p<pass>`. Unusual positional credentials can remain.
+- Job detail is reported only when the controller asks for it (`cron_jobs: true`). Older controllers never ask, so their receipts and incident evidence stay metadata-only after an agent upgrade.
 
 **Limits**
 - At most 64 jobs per file and 256 per inventory.

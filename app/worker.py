@@ -528,7 +528,8 @@ def execute_locked(job_id):
                     policy=monitor_policy(s,h.id)
                     if not policy['enabled'] or policy['revision']!=job.payload['_persistence_policy']:
                         raise ValueError('Persistence monitoring policy changed; scheduled inspection cancelled before remote access')
-                request={'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence']}
+                # Opt in to parsed crontab jobs: controllers that strip them from change evidence ask for them.
+                request={'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence'],'cron_jobs':True}
                 paths=job.payload.get('custom_paths',[])
                 if paths:
                     from target.agent import validate_custom_paths

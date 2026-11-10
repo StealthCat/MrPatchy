@@ -24,8 +24,8 @@ def validate_cron(cron):
     jobs=cron['jobs']
     if not isinstance(jobs,list) or len(jobs)>CRON_FILE_JOBS:raise ValueError('Invalid cron job inventory')
     for job in jobs:
-        if not isinstance(job,dict) or set(job)!={'line','schedule','account','command','redacted','command_truncated'}:raise ValueError('Invalid cron job')
-        if type(job['line']) is not int or job['line']<1 or type(job['redacted']) is not bool or type(job['command_truncated']) is not bool:raise ValueError('Invalid cron job')
+        if not isinstance(job,dict) or set(job)!={'line','schedule','account','command','redacted','command_truncated','stdin'}:raise ValueError('Invalid cron job')
+        if type(job['line']) is not int or job['line']<1 or type(job['redacted']) is not bool or type(job['command_truncated']) is not bool or type(job['stdin']) is not bool:raise ValueError('Invalid cron job')
         if not isinstance(job['schedule'],str) or not 1<=len(job['schedule'])<=400 or not isinstance(job['command'],str) or not 1<=len(job['command'])<=CRON_COMMAND_LIMIT:
             raise ValueError('Invalid cron job')
         if job['account'] is not None and (not isinstance(job['account'],str) or not 1<=len(job['account'])<=33):raise ValueError('Invalid cron job')

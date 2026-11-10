@@ -12,7 +12,7 @@ CATALOG=(
     ('loader','Loader preload configuration','/etc/ld.so.preload'),
 )
 GAPS=[
-    'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Commands are credential-redacted and bounded; environment values are not exported, and run-parts scripts (cron.daily and similar), anacron and at queues are not parsed into jobs.',
+    'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar), anacron and at queues are not parsed into jobs.',
     'Parsed jobs are data from the hashed file only: referenced scripts are not inspected, and cron.d naming rules, PATH/SHELL settings and whether the cron daemon runs are not evaluated.',
     'Vendor/user systemd units, effective precedence, generated/transient units and runtime state are not enumerated.',
     'Anacron/at queues, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',

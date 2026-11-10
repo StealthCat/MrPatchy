@@ -518,11 +518,11 @@ def handle(req):
     if action == 'security-inspect-custom':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_inspect
-        return security_inspect(req.get('packages'),req.get('persistence',True),req.get('custom_paths'))
+        return security_inspect(req.get('packages'),req.get('persistence',True),req.get('custom_paths'),req.get('cron_jobs') is True)
     if action == 'security-inspect':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_inspect
-        return security_inspect(req.get('packages'),req.get('persistence',True))
+        return security_inspect(req.get('packages'),req.get('persistence',True),None,req.get('cron_jobs') is True)
     if action == 'yara-scan':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import security_scan
