@@ -1,3 +1,8 @@
+## 1.56.0 — 2026-11-10
+
+1. [PR #352](https://github.com/StealthCat/MrPatchy/pull/352): Add audited, administrator-managed fleet-wide change freezes through the operations API. Each interval records an owner, reason and offset-aware start and end, and expires automatically. Active freezes take precedence over maintenance windows and urgent bypass when starting patch, repair or release-upgrade jobs. Revision checks reject stale edits.
+2. Existing deployments require no schema migration. With no active freeze, existing dispatch rules apply. Scheduled starts can still expire at their approved deadlines. Per-host scope, holiday calendars, emergency exceptions and UI remain tracked in #340. This source update does not publish a Docker image.
+
 ## 1.55.11 — 2026-11-10
 
 1. [PR #659](https://github.com/StealthCat/MrPatchy/pull/659): Stabilize the Settings browser test after clearing reviewed provider backoff by waiting for the post-clear reload to detach the old control. Test-only; no runtime, API, schema, permission, or configuration change. This source update does not publish a Docker image.

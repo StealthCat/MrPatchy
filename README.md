@@ -239,6 +239,8 @@ Deadlines start at first discovery of an outstanding update and do not reset whe
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
 
+Administrators can configure fleet-wide change freezes through `GET /api/operations/freezes` and `PUT /api/operations/freezes`. Supply start and end timestamps with explicit UTC offsets and a reason for each interval. Include the current `revision` from GET as `expected_revision` when saving. Active freezes block the start of patch, repair and release-upgrade jobs, including urgent jobs with a maintenance-window bypass. Existing schedules still apply their approved start deadlines.
+
 After a reviewed staged rollout is queued, its dialog closes and a confirmation reports the queued server count. Approval is disabled while submission is in flight. Each server job records a `queue patch` audit entry alongside the rollout batch audit. Submission remains one transaction: a server queue at the 50-operation limit rejects the whole rollout without partially queueing it.
 
 ## Update importance, expected installation and package history
