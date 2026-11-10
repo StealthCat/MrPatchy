@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools.compare_ai_benchmarks import compare
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK = ROOT / 'tools' / 'benchmark_ai.py'
@@ -60,13 +62,37 @@ def test_queue_age_is_bounded_before_starting_the_fixture():
         assert '--queue-age-seconds must be between 0 and 86400' in result.stderr
 
 
-def run_benchmark(concurrency, retained_history_rows=0):
+def run_benchmark(concurrency, retained_history_rows=0, *, same_server=False):
+    layout = ['--same-server'] if same_server else []
     result=subprocess.run(
         [sys.executable,str(BENCHMARK),'--runs','4','--concurrency',str(concurrency),
          '--provider-delay-ms','1','--persistence-delay-ms','5',
-         '--retained-history-rows',str(retained_history_rows)],
+         '--retained-history-rows',str(retained_history_rows),*layout],
         cwd=ROOT,capture_output=True,text=True,timeout=60,check=True)
     return json.loads(result.stdout)
+
+
+def test_same_server_serial_and_parallel_preserve_workload():
+    serial = run_benchmark(1, same_server=True)
+    parallel = run_benchmark(4, same_server=True)
+    assert compare(serial, parallel)['capability_equivalent'] is True
+    for report in (serial, parallel):
+        assert report['fixture_hosts'] == 1
+        assert report['single_server_slots'] == 4
+        assert report['completed_subjects'] == 4
+        assert report['approved_subjects'] == 0
+        assert report['provider_calls'] == 6
+        assert report['stages']['ssh_evidence']['count'] == 2
+        assert 1 <= report['peak_provider_requests'] <= report['concurrency']
+
+
+def test_same_server_rejects_threads_above_the_fixture_slot_limit():
+    result = subprocess.run(
+        [sys.executable, str(BENCHMARK), '--same-server', '--concurrency', '5'],
+        capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 2
+    assert '--same-server requires --concurrency at most 4' in result.stderr
 
 
 def test_persistence_delay_is_bounded():

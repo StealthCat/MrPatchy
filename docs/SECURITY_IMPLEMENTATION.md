@@ -2384,6 +2384,29 @@ Use the same history size, run count and delays for a serial/parallel pair.
 The fixture still checks the same provider, SSH evidence and completion workload.
 Native MySQL and production throughput acceptance remain open.
 
+### Same-server process-triage benchmark (issue #654)
+
+The disposable benchmark can seed distinct process observations on one server.
+The fixture uses the runtime's maximum supported per-server slot limit for both
+executions and rejects a requested thread count above that limit. For example:
+
+```bash
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
+python tools/compare_ai_benchmarks.py serial.json parallel.json
+```
+
+The benchmark checks that every persisted run belongs to the expected subject
+and server, with a receipt for every provider call. Reports record the observed
+server count, the single-server slot limit, and peak simultaneous loopback
+provider handling. The comparator requires the same server count and slot limit
+in addition to matching observed evidence, calls, and sample counts. Older
+reports without topology fields retain their one-server-per-subject meaning.
+
+This measures the existing claim and request path on disposable SQLite with
+synthetic provider and SSH delays. Matched production measurements and a MySQL
+benchmark remain open.
+
 ### Retained process-triage timing sample — worker checkpoint #522
 
 The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
