@@ -679,7 +679,6 @@ def test_unrelated_or_invalid_newer_receipt_does_not_hide_valid_exact_path(clien
                        report=vendor_report(path='/usr/bin/FIXTURE')),
             Inspection(id='invalid', host_id='one', created=125, report=invalid),
         ])
-        s.add_all if False else None
         s.commit()
         bound = known_good.bind_vendor_provenance(s, 'one', partial(), 100)
 
