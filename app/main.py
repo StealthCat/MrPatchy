@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION = "1.55.4"
+APP_VERSION = "1.55.5"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1135,12 +1135,19 @@ def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
     return save_settings_section(body.model_dump(),'history')
 
+class ProviderBackoffClearInput(BaseModel):
+    model_config={'extra':'forbid','str_strip_whitespace':True}
+    expected_revision:str=Field(min_length=64,max_length=64,pattern=r'^[0-9a-f]{64}$')
+    reason:str=Field(min_length=10,max_length=1000)
+    confirmation:str=Field(pattern=r'^CLEAR BACKOFF$')
+
 @app.post('/api/ai/provider-backoff/clear')
-def clear_provider_backoff(user=Depends(admin_user)):
+def clear_provider_backoff(body:ProviderBackoffClearInput,user=Depends(admin_user)):
     from . import ai_provider_backoff
-    active=ai_provider_backoff.clear()
+    try:active=ai_provider_backoff.clear(expected_revision=body.expected_revision)
+    except ai_provider_backoff.ReviewConflict as error:raise HTTPException(409,str(error)) from error
     with Session() as s:
-        audit(s,'clear AI provider backoff',user['username']+(' cleared an active floor' if active else ' (no active floor)'));s.commit()
+        audit(s,'clear AI provider backoff',user['username']+' cleared reviewed active floor: '+body.reason.strip());s.commit()
     return {'cleared':active}
 
 class AITestInput(BaseModel):

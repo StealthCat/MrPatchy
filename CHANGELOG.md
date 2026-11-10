@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.55.5 — 2026-11-10
+
+1. [PR #554](https://github.com/StealthCat/MrPatchy/pull/554): Add a reviewed administrator reset for an active fleet-wide provider Retry-After/transient-failure cooldown in Settings. Show the sanitized reason, failure count, recorded time and next eligibility; require the reviewed-state revision, a meaningful reason and exact confirmation, with a locked recheck that rejects stale or expired state. Clearing sends no provider or target request and releases only the shared provider floor and provider-only waits; local retries, rate/budget, pause, lifecycle, concurrency and authorization controls remain in force. Compatibility: the administrator-only clear endpoint now requires JSON fields `expected_revision`, `reason` and `confirmation`; bodyless calls are rejected, and active status adds `updated_at` and `revision`. No schema or helper upgrade. Does not diagnose provider health, reconcile uncertain billing or complete the broader faster-AI program. This source update does not publish a Docker image.
+
 ## 1.55.4 — 2026-11-10
 
 1. [PR #651](https://github.com/StealthCat/MrPatchy/pull/651): Reuse the process-local update-scoring memo when repository-file text, raw APT status, collection time or unrelated OS fields change without changing scoring evidence. Installed RPM records, scoring distribution and package manager still invalidate the memo; exact retained score keys and provider payloads are preserved. No schema or API change. The bounded memo still holds at most 256 hosts, scans eligible candidates and fingerprints the RPM inventory; fleet-capacity handling and production throughput remain open. No roles, provider-call policy or response-authorization changes. This source update does not publish a Docker image.

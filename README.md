@@ -700,6 +700,8 @@ A confirmed local HTTP connection-pool timeout receives a short local retry dela
 without creating or changing the fleet-wide provider backoff. Provider and ambiguous
 network timeouts still apply the shared cooldown and conservative spend accounting.
 
+While an active shared cooldown is in effect, an administrator can review its sanitized reason, consecutive-failure count, recorded time and next eligibility in **Settings → AI**. Clearing requires confirming `CLEAR BACKOFF` and entering an audit reason; a stale or expired review is rejected instead of erasing a newer cooldown. The action sends no provider or target request and does not bypass local retries, rate/budget limits, pause, lifecycle or concurrency controls.
+
 The shared OpenAI Responses API client validates outgoing JSON against a
 2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
 requests receive a redacted local error without contacting the provider.
