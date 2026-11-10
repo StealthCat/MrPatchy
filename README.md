@@ -486,6 +486,7 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 - [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)
 - [Database settings and offline SQLite/MySQL migration](docs/DATABASE_MIGRATION.md)
 - [Distribution release upgrades](docs/RELEASE_UPGRADES.md)
+- [Current capability and delivery-status matrix](docs/CAPABILITY_MATRIX.md)
 - [Post-review fixes](docs/REVIEW_FIXES.md)
 - [Latest code and interactive browser review](docs/FULL_REVIEW_2026-10-25.md)
 - [Historical reviews](docs/COMPLETION_REVIEW.md) and [expansion checkpoint](docs/OPERATIONS_EXPANSION.md)

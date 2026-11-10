@@ -1,3 +1,8 @@
+## 1.56.2 — 2026-11-10
+
+1. [PR #349](https://github.com/StealthCat/MrPatchy/pull/349): Add `docs/CAPABILITY_MATRIX.md`, a current capability and delivery-status index that links each tracked capability to its merged PRs, open PRs and remaining acceptance. It separates open issues, unmerged PRs and synthetic validation from delivered, real-target-verified behavior. At integration the coordinator reconciled the rows, written against v1.37.10, to current main: #202 and #318 are delivered, and merged slices for #96/#305, #108, #189, #190, #201, #341, #342, #343, #344 and #345 are listed. Issues #334–#347 now show their merged or in-review first slices instead of appearing unclaimed.
+2. Compatibility and limits: documentation only, with no code, API, schema, role or response-authorization change. The matrix indexes the reconciled set and #334–#347 only; later roadmap issues are not yet indexed. Rows go stale unless updated with each integration. This is a partial #347 increment: coordinator-checklist maintenance remains open. This source update does not publish a Docker image.
+
 ## 1.56.1 — 2026-11-10
 
 1. [PR #363](https://github.com/StealthCat/MrPatchy/pull/363): Add administrator-only incident case ownership and investigator notes for scanner incidents. `GET /api/hosts/{host_id}/security/incidents/{incident_id}/case` returns the current owner and ownership revision. `PUT …/owner` assigns or clears an enabled administrator owner and requires the expected revision and a 10–4000 character reason; stale revisions return HTTP 409. `POST …/notes` appends a note of up to 4000 characters. Both are host-scoped, audited and recorded as `assign`/`note` events on the incident timeline.
