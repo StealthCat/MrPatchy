@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.55.2 — 2026-11-10
+
+1. [PR #535](https://github.com/StealthCat/MrPatchy/pull/535): Add the earliest non-expired process-investigation lease expiry to administrator AI status and explain that expiry only permits fenced recovery if renewal stops; it does not prove a provider request stopped or was not billed. The API field is additive, null when no lease is live, and hidden from non-admin status. No schema, admission, scheduling, provider-call or authorization behavior changes. Multi-controller failover and production recovery timing remain unverified. This source update does not publish a Docker image.
+
 ## 1.55.1 — 2026-11-10
 
 1. [PR #648](https://github.com/StealthCat/MrPatchy/pull/648): Add the `ix_behaviors_attempted` covering timestamp index for administrator recent-attempt status and legacy hourly admission reads, and install it idempotently on existing SQLite/MySQL databases without rewriting retained rows. Preserve the strict one-hour cutoff, count, retry time and admission denial; API, policy, provider, UI and authorization behavior do not change. Index maintenance adds timestamp-write cost, and fixture measurements do not establish production throughput. This source update does not publish a Docker image.
