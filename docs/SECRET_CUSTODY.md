@@ -19,10 +19,12 @@ One local key file, `DATA_DIR/secret.key`, holds a Fernet key. It is created wit
 | Local MFA secret (active and pending) | user columns `otp_secret`, `otp_pending` | `app/main.py` | `app/identity.py` |
 | Release-upgrade plan bodies | release table column `encrypted` (+ `digest` of the canonical plan) | `app/releases.py:store` | `app/releases.py:body` |
 | Database profiles (including MySQL password) | `DATA_DIR/database-<name>.json` → `{'encrypted': …}` | `app/database_config.py` | `database_config.py`, `scripts/recovery.py` |
+| Worker controller-state key canary | `Setting` `controller-state-v1` → `{'format': 1, 'version': …, 'encrypted': …}` (a fixed marker) | `app/worker_preflight.py:publish` (controller startup) | `app/worker_preflight.py:verify` (every worker before admitting work) |
 
 Notes:
 
-- Database profiles live in files, not in the database. They are read with a **second, separate** Fernet construction (`database_config.read_profile`, `scripts/recovery.py`) that opens `secret.key` directly and bypasses `app/security.py`. Any change to key semantics must touch these call sites too.
+- Database profiles live in files, not in the database. They are read with a **separate** Fernet construction (`database_config.read_profile`, `scripts/recovery.py`) that opens `secret.key` directly and bypasses `app/security.py`. Any change to key semantics must touch these call sites too.
+- `app/worker_preflight.py:local_cipher` is another direct construction. It opens `secret.key` with `O_NOFOLLOW`, requires a private regular file owned by the runtime user and exactly 44 bytes long, and builds its own Fernet. The controller publishes the encrypted canary once and deliberately never repairs a mismatch, and workers refuse all work when the canary does not decrypt. Rotation must therefore re-encrypt the canary deliberately, and an external provider must replace the 44-byte local-file check.
 - Rows are not tagged with the key that sealed them, so a row cannot be told apart from one sealed by an older key without trying to decrypt it.
 
 ### 1.2 Consumers of derived subkeys
@@ -35,14 +37,14 @@ Authenticated browser sessions are server-side rows (`session:<token hash>`), no
 
 ### 1.3 Backup and recovery
 
-`scripts/recovery.py` copies `secret.key` into every backup bundle beside the database dump and requires it on restore (`Missing or unsafe secret.key`). A backup is therefore only restorable together with the key that sealed its contents. The existing threat model (docs/SECURITY_IMPLEMENTATION.md, "Password hashes and secret-key handling") already records that `secret.key` shares a volume with the database, so at-rest encryption mainly helps when only the database is leaked.
+`scripts/recovery.py` copies `secret.key` into every backup bundle beside the database dump and requires it on restore (`Missing or unsafe secret.key`). The older SQLite-only `scripts/backup.py` export also copies `secret.key`. A backup is therefore only restorable together with the key that sealed its contents. The existing threat model (docs/SECURITY_IMPLEMENTATION.md, "Password hashes and secret-key handling") already records that `secret.key` shares a volume with the database, so at-rest encryption mainly helps when only the database is leaked.
 
 ### 1.4 Gaps this design addresses
 
 - No key identifier, so no staged or resumable rotation and no mixed-version detection.
 - No supported way to keep the key off the data volume.
 - Rotation today would be a manual all-or-nothing file swap that would orphan every existing ciphertext.
-- Three code paths build Fernet independently.
+- Four code paths build Fernet independently: `app/security.py`, `app/database_config.py`, `app/worker_preflight.py` and `scripts/recovery.py`.
 
 ## 2. Goals and non-goals
 
@@ -86,7 +88,7 @@ This makes the first release of the format **read-compatible with all existing d
 
 ### 4.3 Consumers to convert
 
-All rows in table 1.1, through one `seal`/`unseal` path. The database-profile files and `scripts/recovery.py` are converted to the same path. Each consumer needs an enumerate-and-rewrite hook (section 5.2), so a new consumer cannot be added without being covered by rotation. A test must fail if any module outside `app/security.py` imports `Fernet`.
+All rows in table 1.1, through one `seal`/`unseal` path. The database-profile files, `scripts/recovery.py` and the worker preflight canary are converted to the same path. Each consumer needs an enumerate-and-rewrite hook (section 5.2), so a new consumer cannot be added without being covered by rotation. A test must fail if any module outside `app/security.py` imports `Fernet`.
 
 ### 4.4 Derived subkeys
 
@@ -142,7 +144,7 @@ Local fixtures validate the interface and local-file mode only. They do not demo
 ## 8. Suggested delivery sequence
 
 1. This document (inventory and contract).
-2. Refactor: route `database_config.py` and `scripts/recovery.py` through `app/security.py`; add the static no-stray-Fernet test. No format change.
+2. Refactor: route `database_config.py`, `worker_preflight.py` and `scripts/recovery.py` through `app/security.py`; add the static no-stray-Fernet test. No format change.
 3. Read-side envelope support plus version heartbeat (still writes legacy tokens).
 4. Write-side envelopes, rotation job, retirement scan, backup manifest key ids; local-file provider only.
 5. One external provider adapter, rehearsed rotation and restore.
