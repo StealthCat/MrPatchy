@@ -55,16 +55,21 @@ def owner_valid(s,owner,admitting=False):
 
 def reconcile(s,now):
     # Called under ai-triage. Never interrupt a different worker's live lease.
-    for claim in s.scalars(select(Claim).where(Claim.expires<=now)):
-        interrupt(s,claim.run_id);s.delete(claim)
+    runs=ai_runs.AIRun
+    expired=select(Claim,runs).outerjoin(runs,runs.id==Claim.run_id).where(Claim.expires<=now)
+    for claim,run in s.execute(expired):
+        _interrupt_run(s,run);s.delete(claim)
     s.flush()
     live=select(Claim.run_id)
-    for run in s.scalars(select(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.state=='running',ai_runs.AIRun.id.not_in(live))):
-        interrupt(s,run.id)
+    for run in s.scalars(select(runs).where(runs.purpose=='triage',runs.state=='running',runs.id.not_in(live))):
+        _interrupt_run(s,run)
 
 
 def interrupt(s,run_id):
-    run=s.get(ai_runs.AIRun,run_id)
+    _interrupt_run(s,s.get(ai_runs.AIRun,run_id))
+
+
+def _interrupt_run(s,run):
     if run and run.state=='running':
         run.state='interrupted';run.finished=time.time();run.stage='interrupted'
         run.message='Investigation lease was lost or expired. No stale result can be accepted; existing retry limits apply and sent calls may still be billable.'
@@ -149,9 +154,14 @@ class Lease:
         self.stopped=threading.Event();self.lost=threading.Event()
 
     def validate(self,s):
-        claim=s.get(Claim,self.subject);row=s.get(Behavior,self.subject)
-        host=s.get(Host,self.host_id)
-        if (self.lost.is_set() or not claim or claim.token!=self.token or claim.expires<=time.time() or
+        if self.lost.is_set():raise Lost()
+        claim=s.get(Claim,self.subject)
+        if not claim or claim.token!=self.token or claim.expires<=time.time():
+            self.lost.set();raise Lost()
+        row=s.get(Behavior,self.subject)
+        host=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==self.host_id)).one_or_none()
+        # Recheck expiry and the heartbeat fence after database I/O.
+        if (self.lost.is_set() or claim.expires<=time.time() or
             not row or row.host_id!=self.host_id or ai_assessments.lease_revision(row)!=claim.revision or
             ai_retry.configuration(s)!=claim.configuration or not owner_valid(s,self.owner) or
             (host is not None and not host_lifecycle.active(host))):
