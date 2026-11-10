@@ -6391,6 +6391,16 @@ separate unfinished work. Acceptance includes durable/idempotent writes, prior
 cross-server matches, newer mismatches, deleted origins, cache revocation and
 unchanged administrator boundaries, with native SQLite/MySQL CI required.
 
+### Exact-path triage file provenance — worker checkpoint #643
+
+Single-executable triage and cross-server byte-trust rechecks resolve one path
+from the retained controller receipts. They skip manifests without that exact
+path and stop at the newest fully revalidated receipt that contains it, including
+receipts that report a mismatch. This reduces repeated validation and file-map
+construction. Inventory and bulk assessment still build the complete map.
+Misses can still scan retained history. Production latency and the broader
+known-good cache acceptance remain open.
+
 
 The controller checks retained authenticated Debian/RPM artifact manifests against
 recorded SHA-256 values before exact known-good behavior lookup and optional AI.
