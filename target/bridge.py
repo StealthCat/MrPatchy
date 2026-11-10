@@ -397,6 +397,66 @@ def agent_status():
             'active':active_code==0 and active=='active','enabled':enabled_code==0 and enabled=='enabled',
             'unit_path':values.get('FragmentPath'),'dropins':values.get('DropInPaths','').split()}
 
+def spool_configuration(path):
+    sys.path.insert(0, '/usr/local/lib/mrpatchy')
+    try:
+        from agent import DEFAULT_SPOOL_BATCH_BYTES, read_spool_config
+    except ImportError:
+        from target.agent import DEFAULT_SPOOL_BATCH_BYTES, read_spool_config
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None, DEFAULT_SPOOL_BATCH_BYTES
+    return read_spool_config(path, info)
+
+def spool_service_active():
+    state, diagnostics = bounded(
+        ['systemctl', 'show', '--property=ActiveState', '--value', 'mrpatchy-agent'],
+        timeout=5, limit=32000,
+    )
+    state = state.strip()
+    if diagnostics or state not in ('active', 'inactive', 'failed'):
+        raise RuntimeError('Collector running state could not be verified')
+    return state == 'active'
+
+def spool_config_status():
+    _, limit = spool_configuration(ROOT / 'spool.json')
+    return {'version': 1, 'batch_limit_bytes': limit, 'active': spool_service_active()}
+
+def configure_spool(batch_limit_bytes):
+    if type(batch_limit_bytes) is not int or not 16*1024<=batch_limit_bytes<=1024*1024:
+        raise ValueError('Spool batch limit must be an integer from 16384 through 1048576 bytes')
+    config={'version':1,'batch_limit_bytes':batch_limit_bytes}
+    path = ROOT / 'spool.json'
+    previous, _ = spool_configuration(path)
+    was_active = spool_service_active()
+    restart_attempted = False
+    try:
+        atomic(path, json.dumps(config, separators=(',', ':'), sort_keys=True).encode(), 0o600)
+        restart_attempted = True
+        run(['systemctl', 'restart', 'mrpatchy-agent'], timeout=15)
+        if not spool_service_active():
+            raise RuntimeError('Collector is inactive after restart')
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        try:
+            if previous is None:
+                path.unlink(missing_ok=True)
+                fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+            else:
+                atomic(path, previous, 0o600)
+            if restart_attempted:
+                run(['systemctl', 'restart' if was_active else 'stop', 'mrpatchy-agent'], timeout=15)
+            if spool_configuration(path)[0] != previous or spool_service_active() != was_active:
+                raise RuntimeError('Unexpected collector state after restoration')
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+            raise RuntimeError('Spool configuration failed and recovery could not be verified') from None
+        raise RuntimeError('Spool configuration failed: previous configuration and service state restored') from None
+    return {'configured':True,**config}
+
 def handle(req):
     action = req.get('action')
     if isinstance(action,str) and action.startswith('release-'):
@@ -477,6 +537,8 @@ def handle(req):
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:return {'busy':True}
             return {'busy':False}
+    if action == 'spool-config':return configure_spool(req.get('batch_limit_bytes'))
+    if action == 'spool-config-status':return spool_config_status()
     if action == 'observability':
         if type(req.get('ebpf')) is not bool:raise ValueError('Boolean eBPF setting required')
         atomic(ROOT/'observability.json',json.dumps({'ebpf':req['ebpf']}).encode())

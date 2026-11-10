@@ -27,8 +27,13 @@ jobs:
           node-version: '26'
       - name: Source version and changelog consistency
         env:
-          VERSION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          VERSION_BASE: ${{ github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git fetch --no-tags --depth=1 origin "refs/heads/$BASE_REF"
+            VERSION_BASE="$(git rev-parse FETCH_HEAD)"
+          fi
           if [ -n "$VERSION_BASE" ] && [ "$VERSION_BASE" != "0000000000000000000000000000000000000000" ]; then
             git fetch --no-tags --depth=1 origin "$VERSION_BASE"
             version_args=(--base-ref "$VERSION_BASE")
@@ -78,10 +83,11 @@ jobs:
           python-version: '3.15'
       - name: Coordinator version and PR traceability
         env:
-          VERSION_BASE: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git fetch --no-tags --depth=1 origin "$VERSION_BASE"
+          git fetch --no-tags --depth=1 origin "refs/heads/$BASE_REF"
+          VERSION_BASE="$(git rev-parse FETCH_HEAD)"
           python tools/check_version.py --base-ref "$VERSION_BASE" --pr-number "$PR_NUMBER"
 
   tests:
