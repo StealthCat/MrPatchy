@@ -1014,9 +1014,13 @@ _CRON_REDACTIONS = (
     (re.compile(r'(?<=://)[^/\s:@]+:[^/\s@]+@'),'[REDACTED]@'),
     (re.compile(r'(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+'),r'\1[REDACTED]'),
     (re.compile(r'(?i)([?&](?:[\w.-]*'+_CRON_SECRET_WORDS+r'[\w.-]*|key|sig|signature)=)[^&\s\'"#;|]+'),r'\1[REDACTED]'),
+    # Authorization headers: the credential follows the scheme word (Basic, Digest, ...).
+    (re.compile(r'(?i)(\b(?:proxy-)?authorization\s*:\s*)(?:(?:basic|digest|bearer|token|negotiate|ntlm|hoba|mutual|vapid|aws4-hmac-sha256|scram-sha-\d+)\s+)?(?:\[REDACTED\]|[^\s\'"]+)'),r'\1[REDACTED]'),
     (re.compile(r'(?i)(\b[\w.-]*'+_CRON_SECRET_WORDS+r'[\w.-]*\s*[=:]\s*)'+_CRON_VALUE),r'\1[REDACTED]'),
     (re.compile(r'(?i)((?<!\S)--?[\w.-]*'+_CRON_SECRET_WORDS+r'[\w.-]*\s+)("[^"]*"|\'[^\']*\'|[^\s;&|\'"-][^\s;&|\'"]*)'),r'\1[REDACTED]'),
     # user:password and user%password credential arguments (curl/wget -u/--user, smbclient -U).
+    # A quoted value is consumed up to its closing quote so a password with spaces is not split.
+    (re.compile(r'((?<!\S)(?:-u|-U|--user|--proxy-user)(?:\s+|=)?(["\'])[^\s:%\'"]*(?::|\\?%))(?:(?!\2).)+(?=\2)'),r'\1[REDACTED]'),
     (re.compile(r'((?<!\S)(?:-u|-U|--user|--proxy-user)(?:\s+|=)?["\']?[^\s:%\'"]*(?::|\\?%))[^\s\'"]+'),r'\1[REDACTED]'),
     (re.compile(r'(\bsshpass\b[^;&|]*?(?<!\S)-p\s*)("[^"]*"|\'[^\']*\'|\S+)'),r'\1[REDACTED]'),
     (re.compile(r'(?i)(\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^;&|]*?(?<!\S)-p)(?=\S)("[^"]*"|\'[^\']*\'|\S+)'),r'\1[REDACTED]'),
@@ -1043,9 +1047,15 @@ def redact_cron_command(command):
 def cron_command(text):
     """Split a crontab command field at cron's first unescaped percent sign. The remainder
     is the job's standard input, which is data rather than command text, so it is only flagged."""
-    match=re.search(r'(?<!\\)%',text)
-    command=(text[:match.start()] if match else text).rstrip(' \t')
-    return _CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),command),match is not None
+    # Like cronie's do_command, each backslash escapes the next character, so an even run of
+    # backslashes before a percent sign leaves that percent sign unescaped.
+    split=None;escaped=False
+    for index,char in enumerate(text):
+        if escaped:escaped=False
+        elif char=='\\':escaped=True
+        elif char=='%':split=index;break
+    command=(text if split is None else text[:split]).rstrip(' \t')
+    return _CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),command),split is not None
 
 
 def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):

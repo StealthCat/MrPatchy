@@ -229,3 +229,34 @@ def test_job_detail_is_only_reported_when_the_controller_asks(tmp_path,monkeypat
     assert 'CANARY' not in json.dumps(agent.persistence_inventory(time.monotonic()+5))
     assert 'CANARY' not in json.dumps(agent.security_inspect([],True))
     assert 'CANARY' in json.dumps(agent.security_inspect([],True,None,True))
+
+
+@pytest.mark.parametrize('command,secret',[
+    ('curl -H "Authorization: Basic YWRtaW46aHVudGVyMg==" https://x/','YWRtaW46aHVudGVyMg=='),
+    ('curl -H "Proxy-Authorization: Basic Zm9vOmJhcg==" https://x/','Zm9vOmJhcg=='),
+    ('wget --header="Authorization: Basic Zm9vOmJhcg==" https://x/','Zm9vOmJhcg=='),
+    ("curl -H 'authorization: Digest c2VjcmV0dmFsdWU=' https://x/",'c2VjcmV0dmFsdWU='),
+    ('curl -H "Authorization: Bearer abc.def" https://x/','abc.def'),
+    ('curl -u "admin:hunter 2" https://x/','hunter'),
+    ("curl --user='admin:hunter 2' https://x/",'hunter'),
+])
+def test_authorization_schemes_and_quoted_user_values_are_redacted(command,secret):
+    job=agent.parse_cron(('* * * * * root '+command+'\n').encode(),'system')['jobs'][0]
+    assert secret not in job['command'] and job['redacted']
+    # A quoted value is redacted up to its closing quote, not just to the first space.
+    assert ' 2' not in job['command']
+    # Quotes stay balanced so the rest of the command is shown as cron passes it to the shell.
+    assert job['command'].count('"')%2==0 and job['command'].count("'")%2==0
+    assert job['command'].endswith(' https://x/')
+
+
+def test_percent_escape_follows_cron_backslash_parity():
+    # Cronie toggles escape state per backslash: an even run leaves the percent unescaped.
+    data=(b'* * * * * root /bin/echo a\\\\%CANARY-EVEN\n'
+          b'* * * * * root /bin/echo b\\%kept\n'
+          b'* * * * * root /bin/echo c\\\\\\%kept-odd\n')
+    jobs=agent.parse_cron(data,'system')['jobs']
+    assert jobs[0]['command']=='/bin/echo a\\\\' and jobs[0]['stdin'] is True
+    assert 'CANARY-EVEN' not in json.dumps(jobs)
+    assert jobs[1]['command']=='/bin/echo b\\%kept' and jobs[1]['stdin'] is False
+    assert jobs[2]['command']=='/bin/echo c\\\\\\%kept-odd' and jobs[2]['stdin'] is False
