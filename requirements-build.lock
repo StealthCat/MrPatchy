@@ -1,0 +1,15 @@
+# Hash-pinned build closure for runtime packages that ship only as sdists on the
+# container's Python (zstandard 0.25.0 on CPython 3.15). Its [build-system].requires
+# is cffi>=2.0.0b, packaging and setuptools>=77; cffi adds pycparser.
+# cffi and pycparser must stay at the requirements.lock versions and hashes.
+# Installed binary-only in the Dockerfile dependency stage, then setuptools and
+# packaging are removed before the venv is copied into the runtime image.
+cffi==2.1.1 \
+    --hash=sha256:507a24c282e0f42f8ed737cf048572cbf580468da5555764a8331735e9c736b6 \
+    --hash=sha256:aeae0e330c9f6acd681f647d46cefd30c29f93e3392882e792e82080c9691399
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pycparser==3.12 \
+    --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e
+setuptools==84.2.1 \
+    --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2

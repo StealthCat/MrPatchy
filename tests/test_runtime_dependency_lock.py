@@ -50,9 +50,9 @@ def test_runtime_lock_covers_direct_and_transitive_dependencies_with_hashes():
 
 def test_container_install_enforces_runtime_lock_hashes():
     dockerfile = (ROOT / "Dockerfile").read_text()
-    assert "COPY requirements.txt requirements.lock ./" in dockerfile
+    assert "COPY requirements.txt requirements.lock" in dockerfile
     assert re.search(
-        r"RUN pip install\s+--no-cache-dir\s+--require-hashes\s+-r requirements\.lock$",
+        r"RUN (?:--network=none )?pip install\s+--no-cache-dir\s+(?:--no-index --find-links /wheelhouse --no-build-isolation\s+)?--require-hashes\s+-r requirements\.lock$",
         dockerfile,
         re.M,
     )

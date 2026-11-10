@@ -3,10 +3,17 @@ FROM python:3.15-slim-bookworm@sha256:4e03260adeeebafccd084f3584e6b84823aba5651c
 FROM runtime-base AS dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential libffi-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY requirements.txt requirements.lock ./
+COPY requirements.txt requirements.lock requirements-build.lock ./
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+# Build inputs for sdist-only runtime packages come from their own hash-pinned lock.
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-build.lock
+# Fetch every runtime artifact, hash-checked against requirements.lock, then build and
+# install with networking disabled so nothing outside the two locks can be resolved.
+RUN pip download --no-cache-dir --require-hashes --no-deps --no-build-isolation -d /wheelhouse -r requirements.lock
+RUN --network=none pip install --no-cache-dir --no-index --find-links /wheelhouse --no-build-isolation --require-hashes -r requirements.lock
+# Build-only packages must not reach the runtime image.
+RUN pip uninstall --yes setuptools packaging && ! pip show setuptools packaging
 
 FROM runtime-base
 LABEL org.opencontainers.image.licenses="LicenseRef-MrPatchy-Personal-Commercial-1.1"

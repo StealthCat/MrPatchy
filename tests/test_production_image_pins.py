@@ -22,6 +22,7 @@ def test_compiler_stays_in_dependency_stage_and_final_image_uses_its_venv():
     builder,runtime=dockerfile.split('FROM runtime-base\n',1)
     assert 'build-essential libffi-dev' in builder
     assert '--require-hashes -r requirements.lock' in builder
+    assert 'requirements-build.lock' not in runtime
     assert 'COPY --from=dependencies /opt/venv /opt/venv' in runtime
     assert 'build-essential' not in runtime and 'libffi-dev' not in runtime
 
@@ -34,3 +35,43 @@ def test_adapter_fixture_uses_the_deployed_caddy_image():
     fixture = re.search(r'docker create --name mrpatchy-caddy-adapter (\S+)',
                         (ROOT / '.github/workflows/ci.yml').read_text()).group(1)
     assert fixture == caddy_image(), 'Adapter validation must exercise the deployed Caddy reference'
+
+
+def _locked(path):
+    pins={}
+    for name,version,hashes in re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)((?:\s*\\\n\s+--hash=sha256:[0-9a-f]{64})+)',
+                                         (ROOT/path).read_text(),re.M):
+        pins[name.lower()]=(version,set(re.findall(r'[0-9a-f]{64}',hashes)))
+    return pins
+
+
+def test_sdist_build_inputs_are_hash_locked_and_consistent_with_runtime_lock():
+    build=_locked('requirements-build.lock')
+    runtime=_locked('requirements.lock')
+    assert set(build)=={'cffi','packaging','pycparser','setuptools'}
+    assert all(hashes for _,hashes in build.values())
+    for name in ('cffi','pycparser'):
+        assert build[name][0]==runtime[name][0], f'{name} build pin must match the runtime lock'
+        assert build[name][1]<=runtime[name][1], f'{name} build hashes must be runtime-locked artifacts'
+    assert 'setuptools' not in runtime and 'packaging' not in runtime
+
+
+def test_runtime_packages_build_offline_from_hash_verified_downloads():
+    builder=(ROOT/'Dockerfile').read_text().split('FROM runtime-base\n',1)[0]
+    steps=[line for line in builder.splitlines() if line.startswith('RUN ')]
+    build_lock=next(i for i,s in enumerate(steps) if '-r requirements-build.lock' in s)
+    download=next(i for i,s in enumerate(steps) if s.startswith('RUN pip download'))
+    install=next(i for i,s in enumerate(steps) if '-r requirements.lock' in s and 'pip install' in s)
+    strip=next(i for i,s in enumerate(steps) if 'pip uninstall' in s)
+    assert build_lock<download<install<strip
+    assert '--require-hashes --only-binary=:all:' in steps[build_lock]
+    assert '--require-hashes' in steps[download] and '--no-deps' in steps[download]
+    assert steps[install].startswith('RUN --network=none pip install')
+    for flag in ('--no-index','--find-links /wheelhouse','--no-build-isolation','--require-hashes'):
+        assert flag in steps[install]
+    assert 'setuptools packaging' in steps[strip] and '! pip show setuptools packaging' in steps[strip]
+
+
+def test_dependency_audit_covers_build_lock():
+    ci=(ROOT/'.github/workflows/ci.yml').read_text()
+    assert re.search(r'pip-audit [^\n]*-r requirements\.lock -r requirements-build\.lock',ci)
