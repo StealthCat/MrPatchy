@@ -156,6 +156,8 @@ def init():
             for index in model.__table__.indexes:
                 index.create(connection,checkfirst=True)
         ACTIVE_RUN_INDEX.create(connection,checkfirst=True)
+        from .update_scores import SCORE_HISTORY_INDEX
+        SCORE_HISTORY_INDEX.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):
