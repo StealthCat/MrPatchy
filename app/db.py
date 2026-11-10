@@ -127,7 +127,7 @@ def register_models():
 def init():
     register_models()
     from .ai_assessments import Assessment
-    from .ai_runs import ACTIVE_RUN_INDEX
+    from .ai_runs import ACTIVE_RUN_INDEX, RECENT_RUN_INDEX
     # Reflection and DDL must share a connection. SQLite PRAGMA reflection can
     # otherwise observe an old per-connection schema after another pooled
     # connection changed it. An actual catalog query refreshes the schema view.
@@ -157,6 +157,7 @@ def init():
             for index in model.__table__.indexes:
                 index.create(connection,checkfirst=True)
         ACTIVE_RUN_INDEX.create(connection,checkfirst=True)
+        RECENT_RUN_INDEX.create(connection,checkfirst=True)
         from .update_scores import SCORE_HISTORY_INDEX
         SCORE_HISTORY_INDEX.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.

@@ -32,6 +32,7 @@ class AIRun(Base):
 
 
 ACTIVE_RUN_INDEX = Index('ix_ai_runs_purpose_state_started', AIRun.purpose, AIRun.state, AIRun.started)
+RECENT_RUN_INDEX = Index('ix_ai_runs_purpose_started', AIRun.purpose, AIRun.started)
 
 
 class AIEvent(Base):

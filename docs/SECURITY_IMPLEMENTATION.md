@@ -2206,6 +2206,15 @@ existing databases and keeps retained scores and existing indexes. A fixture wit
 results. This is partial scoring performance work. Idle candidate hashing and
 end-to-end production throughput acceptance remain open.
 
+Worker checkpoint #649 indexes run purpose and start time for the administrator
+status aggregate and legacy triage and scoring counts. The index is installed
+during startup for new and existing databases. Focused tests verify the three
+real query plans, the strict hourly cutoff, unchanged admission and retry
+behavior, and idempotent index creation on SQLite and MySQL. The index adds
+maintenance to run inserts and retains the existing running-state index.
+Local query measurements do not establish production throughput or complete
+the faster-AI milestone.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.
