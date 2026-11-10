@@ -632,6 +632,13 @@ function incidentRelatedEvidence(root,hostId,incidentId){
 
 async function renderServerAIPolicy(panel,hostId,deleted=false){
  const base='/hosts/'+hostId+'/security/ai-policy';let policy=await api(base);
+ const saveDone=async(saved,revision,message)=>{
+  if(modalRevision!==revision)return;
+  policy=saved;$('#modal').close();
+  if(panel.isConnected)show();
+  else{const live=$('#server-ai-policy');if(live&&live!==panel)await renderServerAIPolicy(live,hostId,deleted).catch(error=>{if(live.isConnected)live.innerHTML=PatchyUI.error('Unable to load server policy',esc(error.message));});}
+  if(modalRevision===revision)toast(message);
+ };
  const show=()=>{
   if(!panel.isConnected)return;
   const limit=Number.isSafeInteger(policy.concurrency_limit)?policy.concurrency_limit:2;
@@ -644,7 +651,7 @@ async function renderServerAIPolicy(panel,hostId,deleted=false){
    const form=$('#server-ai-form'),revision=modalRevision;
    form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button');button.disabled=true;try{
     const saved=await api(base,'PUT',{paused:!policy.paused,concurrency_limit:limit,expected_revision:policy.revision,reason:new FormData(form).get('reason')});
-    if(modalRevision!==revision||!panel.isConnected)return;policy=saved;$('#modal').close();show();toast('Server AI state saved');
+    await saveDone(saved,revision,'Server AI state saved');
    }catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
   };
   panel.querySelector('#server-ai-capacity').onclick=()=>{
@@ -652,7 +659,7 @@ async function renderServerAIPolicy(panel,hostId,deleted=false){
    const form=$('#server-ai-capacity-form'),revision=modalRevision;
    form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button');button.disabled=true;try{
     const data=new FormData(form);const saved=await api(base,'PUT',{paused:policy.paused,concurrency_limit:Number(data.get('limit')),expected_revision:policy.revision,reason:data.get('reason')});
-    if(modalRevision!==revision||!panel.isConnected)return;policy=saved;$('#modal').close();show();toast('Server AI capacity saved');
+    await saveDone(saved,revision,'Server AI capacity saved');
    }catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
   };
  };show();
