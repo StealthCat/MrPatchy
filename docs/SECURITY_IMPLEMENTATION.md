@@ -3037,6 +3037,31 @@ milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client a
 connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
 two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
 
+Implementation checkpoint (issue #660): the authenticated shell now shows live,
+non-modal toasts for newly arrived notifications. Toasts are derived only from the
+existing permission-filtered recent page, so they need no new API, schema or payload.
+The first authoritative page after sign-in, reload or account change is a silent
+baseline, so existing events and cursor catch-up are never replayed as toasts. After
+that, an unseen `id:revision` that is still unread and undismissed toasts once. A
+re-delivered revision stays quiet; an escalated or reopened revision toasts again.
+Each refresh shows at most three event toasts plus one summary that links to the
+center, and at most four toasts are visible. Toasts render escaped text with the same
+revalidated same-origin link check as the bell. They sit in a polite live region,
+never take focus and step aside while the bell panel is open. Info/low/medium toasts
+expire after eight seconds (paused on hover or focus), while high/critical toasts stay
+until closed. Closing or expiring a toast is page-local: it never marks read,
+dismisses, acknowledges, resolves, approves or remediates, and every event remains in
+the bell and center. Reading or dismissing an event removes its toast. Logout, expiry
+and reset clear toasts and the baseline. Reduced motion, reduced transparency and
+forced colors reuse the existing global rules. The focused browser regression covers
+the baseline, once-only delivery, revision escalation, focus and form preservation,
+escaping, unsafe-link omission, burst bounding, expiry, the hidden-under-panel state,
+390/768/1440 layout and reset clearing. Toasts raised while a modal dialog is open sit
+behind the dialog's inert backdrop; expiring ones may never be seen, but they stay in
+the bell and center. Per-tab baselines mean each open tab toasts independently.
+Multi-tab read synchronization, slow-client/failover drills and complete two-browser
+SQLite/MySQL acceptance remain milestone 4.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
