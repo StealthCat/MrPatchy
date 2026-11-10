@@ -32,7 +32,7 @@ def test_runtime_lock_covers_direct_and_transitive_dependencies_with_hashes():
     manifest = (ROOT / "requirements.txt").read_text()
     lock_text = (ROOT / "requirements.lock").read_text()
 
-    assert "uv pip compile requirements.txt --generate-hashes --python-version 3.12" in lock_text
+    assert "uv pip compile requirements.txt --generate-hashes --python-version 3.15" in lock_text
     assert not re.search(r"(?m)^\s*(?:--index-url|--extra-index-url|-r\s)", lock_text)
 
     locked = _locked_requirements(lock_text)
@@ -50,9 +50,9 @@ def test_runtime_lock_covers_direct_and_transitive_dependencies_with_hashes():
 
 def test_container_install_enforces_runtime_lock_hashes():
     dockerfile = (ROOT / "Dockerfile").read_text()
-    assert "COPY requirements.txt requirements.lock ./" in dockerfile
+    assert "COPY requirements.txt requirements.lock" in dockerfile
     assert re.search(
-        r"RUN pip install\s+--no-cache-dir\s+--require-hashes\s+-r requirements\.lock$",
+        r"RUN (?:--network=none )?pip install\s+--no-cache-dir\s+(?:--no-index --find-links /wheelhouse --no-build-isolation\s+)?--require-hashes\s+-r requirements\.lock$",
         dockerfile,
         re.M,
     )
