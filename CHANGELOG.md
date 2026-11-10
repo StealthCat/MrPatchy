@@ -1,3 +1,7 @@
+## 1.55.12 — 2026-11-10
+
+1. [PR #541](https://github.com/StealthCat/MrPatchy/pull/541): Filter retained AI spend windows by their recorded IANA budget timezone in AI Settings. The optional administrator-only API filter runs before grouping and the result limit; clearing restores all timezones, and unsaved budget settings are preserved. Existing calls and response shape are unchanged; no schema or accounting-policy change. This bounded dashboard increment does not establish production faster-AI performance or provider invoices. This source update does not publish a Docker image.
+
 ## 1.55.11 — 2026-11-10
 
 1. [PR #659](https://github.com/StealthCat/MrPatchy/pull/659): Stabilize the Settings browser test after clearing reviewed provider backoff by waiting for the post-clear reload to detach the old control. Test-only; no runtime, API, schema, permission, or configuration change. This source update does not publish a Docker image.

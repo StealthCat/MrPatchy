@@ -32,9 +32,11 @@ module.exports=async(page,capture)=>{
  await page.route('**/api/ai/provider-backoff/clear',clearHandler);
  const spendReads=[];
  await page.route('**/api/settings/ai-spend-history?*',route=>{
-  const days=Number(new URL(route.request().url()).searchParams.get('days'));spendReads.push(days);
+  const params=new URL(route.request().url()).searchParams;
+  const days=Number(params.get('days')),timezone=params.get('timezone');
+  spendReads.push({days,timezone});
   if(days===90)return route.fulfill({status:503,json:{detail:'History fixture temporarily unavailable.'}});
-  const windows=days===7?[]:[{timezone:'UTC<img src=x onerror=window.__spendInjected=true>',window_start:1793404800,reset_at:1793491200,call_count:3,settled_usd:'0.01',reserved_usd:'0.02',sent_usd:'0.03',uncertain_usd:'0.04',other_usd:'0.05',counted_usd:'0.15'}];
+  const windows=days===7?[]:[{timezone:timezone||'UTC<img src=x onerror=window.__spendInjected=true>',window_start:1793404800,reset_at:1793491200,call_count:3,settled_usd:'0.01',reserved_usd:'0.02',sent_usd:'0.03',uncertain_usd:'0.04',other_usd:'0.05',counted_usd:'0.15'}];
   return route.fulfill({json:{days,generated_at:1793404800,cutoff:1793404800-days*86400,max_windows:days*4,truncated:false,windows}});
  });
  await page.locator('[href="#settings/ai"]').first().click();await page.locator('#ai-settings-form').waitFor();
@@ -59,7 +61,21 @@ module.exports=async(page,capture)=>{
  await page.locator('#ai-spend-history-days').selectOption('90');await page.getByRole('alert').filter({hasText:'History fixture temporarily unavailable'}).waitFor();
  assert.match(await page.locator('#ai-spend-history .error-state img').getAttribute('src'),/mr-patchy-error\.webp$/);
  await page.locator('#ai-spend-history-days').selectOption('30');await page.locator('#ai-spend-history table').waitFor();
- assert.deepEqual(spendReads.slice(-4),[30,7,90,30]);
+ assert.deepEqual(spendReads.slice(-4),[30,7,90,30].map(days=>({days,timezone:null})));
+ const timezoneFilter=page.locator('#ai-spend-history-timezone');
+ const budgetTimezone=page.locator('[name=ai_budget_timezone]');
+ const savedTimezone=await budgetTimezone.inputValue();
+ await budgetTimezone.fill('Europe/London');
+ await timezoneFilter.fill('America/New_York');
+ await timezoneFilter.press('Enter');
+ await page.locator('#ai-spend-history table').getByText('America/New_York',{exact:false}).waitFor();
+ assert.deepEqual(spendReads.at(-1),{days:30,timezone:'America/New_York'});
+ assert.equal(await budgetTimezone.inputValue(),'Europe/London');
+ await timezoneFilter.fill('');
+ await page.getByRole('button',{name:'Apply timezone filter'}).click();
+ await page.locator('#ai-spend-history table').getByText('UTC<img',{exact:false}).waitFor();
+ assert.deepEqual(spendReads.at(-1),{days:30,timezone:null});
+ await budgetTimezone.fill(savedTimezone);
  // Exercise the omitted-cap API default and its real rendered budget summary.
  const defaultCap=await page.evaluate(async()=>{
   const response=await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_control_mode:'daily_cap'})});
