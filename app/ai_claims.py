@@ -130,17 +130,22 @@ def acquire(owner=None):
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
             # Balance live occupancy first. Ties use the durable least-recent
             # host turn; a host with no turn sorts ahead of one already served.
-            host_id=s.scalar(select(Behavior.host_id).outerjoin(
-                ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).outerjoin(
-                live_counts,live_counts.c.host_id==Behavior.host_id).outerjoin(
-                HostTurn,HostTurn.host_id==Behavior.host_id).where(
-                Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
+            # Project each eligible verdict as its own equality range so host
+            # election reads the admission index instead of scanning retained
+            # completed history through the host index; the union keeps every
+            # input to each host's oldest eligible first_seen.
+            election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
-                Behavior.id.not_in(select(Claim.subject)),Behavior.verdict.in_(('pending','error')),
-                ai_retry.eligible(signature,now)).group_by(
-                Behavior.host_id,live_counts.c.live_count,HostTurn.last_turn).order_by(
+                Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
+            eligible=union_all(*(select(Behavior.host_id,Behavior.first_seen).outerjoin(
+                ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                *election_filters,Behavior.verdict==verdict) for verdict in ('pending','error'))).subquery()
+            host_id=s.scalar(select(eligible.c.host_id).outerjoin(
+                live_counts,live_counts.c.host_id==eligible.c.host_id).outerjoin(
+                HostTurn,HostTurn.host_id==eligible.c.host_id).group_by(
+                eligible.c.host_id,live_counts.c.live_count,HostTurn.last_turn).order_by(
                 func.coalesce(live_counts.c.live_count,0),func.coalesce(HostTurn.last_turn,0),
-                func.min(Behavior.first_seen),Behavior.host_id).limit(1))
+                func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
             if not host_id:return None
             # Within the elected host, keep each verdict as an equality range so
             # the admission index can skip retained completed history and
