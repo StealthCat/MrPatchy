@@ -92,6 +92,41 @@ def test_refused_admission_lock_does_not_mutate_work(admin,monkeypatch):
         assert not list(s.scalars(select(ai_runs.AIRun)))
 
 
+def test_admission_balances_live_occupancy_before_another_same_host_slot(admin):
+    seed(count=2)
+    with Session() as s:
+        s.get(Behavior,'subject-0').first_seen=1
+        s.get(Behavior,'subject-1').first_seen=100
+        s.add(Behavior(id='subject-0b',host_id='host-0',first_seen=2,
+            evidence={'executable':'/srv/fixture-0b','sha256':'b'*64,'uid':'1000','identity_verified':True}))
+        s.commit()
+    first=ai_claims.acquire();second=ai_claims.acquire()
+    assert first.host_id=='host-0'
+    assert second.host_id=='host-1'
+    with first,second:pass
+
+
+def test_least_recent_host_turn_survives_claim_release(admin):
+    seed(count=2)
+    with Session() as s:
+        s.get(Behavior,'subject-0').first_seen=1
+        s.get(Behavior,'subject-1').first_seen=100
+        s.add(Behavior(id='subject-0b',host_id='host-0',first_seen=2,
+            evidence={'executable':'/srv/fixture-0b','sha256':'b'*64,'uid':'1000','identity_verified':True}))
+        s.commit()
+    first=ai_claims.acquire();assert first.host_id=='host-0'
+    with first:pass
+    # No process-local scheduler state is retained. The next acquisition reads
+    # the committed turn and serves the never-admitted host before host-0 again.
+    second=ai_claims.acquire();assert second.host_id=='host-1'
+    with second:pass
+    third=ai_claims.acquire();assert third.host_id=='host-0'
+    with Session() as s:
+        assert s.get(ai_claims.HostTurn,'host-0').last_turn==3
+        assert s.get(ai_claims.HostTurn,'host-1').last_turn==2
+    with third:pass
+
+
 def test_successful_claim_retains_monotonic_lock_wait(admin,monkeypatch):
     seed(count=1)
     ticks=iter((40.0,40.125))
@@ -211,6 +246,7 @@ def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeyp
     with Session() as s:
         assert s.get(Behavior,'subject-0').attempted==0
         assert not list(s.scalars(select(ai_claims.Claim)))
+        assert not list(s.scalars(select(ai_claims.HostTurn)))
 
 
 def test_new_pid_refresh_does_not_fence_in_flight_triage(admin,monkeypatch):

@@ -38,7 +38,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Distribution upgrades | Report-only Debian upgrade-availability badges; adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
-| Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
+| Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, live lease expiry with recovery and billing caveats, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
 | Fleet analysis | API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
 | Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
@@ -634,7 +634,7 @@ configured bound is reached. Lowering the bound preserves live leases and blocks
 admission until occupancy falls below it. Policy pause/resume
 and server lifecycle changes reject live claims, and delayed admission rechecks the
 current lifecycle before starting. Existing hourly/rate/spend admission and
-ownership/evidence checks still apply before calls and acceptance. The coordinator
+ownership/evidence checks still apply before calls and acceptance. Newly admitted process-triage work favors the eligible server with fewer live claims, then the durable least-recently admitted server turn, before choosing the oldest eligible observation. Same-server slots remain available when no less-occupied eligible server is waiting. The coordinator
 schedules update scoring, alternating purposes even with one AI slot. Claims expire
 after 120 seconds without renewal; interrupted attempts retain the existing recovery
 delay and finite retry limits. A lease cannot cancel an already sent request or

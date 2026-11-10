@@ -2199,6 +2199,14 @@ pause, lifecycle, capacity and oldest-first eligibility checks. This is a partia
 database performance increment; production throughput and full faster-AI
 acceptance remain open.
 
+Worker checkpoint #647 adds a covering index on the attempt timestamp used by
+the administrator's recent-attempt status and the legacy hourly admission gate.
+Startup adds it to existing behavior tables without rewriting retained rows.
+The focused acceptance checks both real query plans, the strict one-hour cutoff,
+the displayed retry time and idempotent index installation on SQLite and MySQL.
+The index incurs timestamp-write maintenance. Fixture measurements do not
+establish production throughput or complete the faster-AI milestone.
+
 Worker checkpoint #603 adds a server/package/state/candidate index for exact
 score history and deferred scoring lookups. Startup creates it idempotently on
 existing databases and keeps retained scores and existing indexes. A fixture with
@@ -2430,6 +2438,31 @@ state. This depends on #379 / PR #380 and does not complete cross-purpose priori
 aging, provider-specific quotas, native complete-context collection, full supported
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
+
+
+### Durable cross-server process-triage fairness — worker checkpoint #388
+
+Process-triage admission now balances eligible servers by live leased occupancy before
+using another slot on the same server. Ties use a durable monotonically ordered server
+turn. A never-admitted eligible server sorts before one already served, and releasing
+a claim does not erase its turn, so worker or controller restarts cannot reset the
+order and let one deep queue repeatedly win on an older observation timestamp.
+
+The host choice remains inside the existing short distributed triage admission lock.
+Only a successfully committed subject claim records the next turn; refused locks,
+lifecycle changes and ineligible work do not consume one. The scheduler uses bounded
+SQL grouping and ordering rather than materializing the pending queue. A server may
+still fill its configured occupancy when no less-occupied eligible server is waiting.
+Subject exclusivity, per-server and fleet capacity, retry eligibility, pause/lifecycle,
+rate/spend/provider admission, evidence revisions and stale-result fencing remain
+authoritative.
+
+Focused acceptance covers live-occupancy balancing, persisted least-recent turns,
+same-server fallback and failed-admission non-consumption, plus offline database-copy
+retention. This stacked increment depends on #383 and does not complete cross-purpose
+priority/aging, provider-specific quotas, native complete-context collection, complete
+multi-controller failover acceptance or the overall faster-AI program. Exact-head
+SQLite/MySQL/full-suite and coordinator integration checks remain required.
 
 
 ## Portable per-server scanner records
@@ -6639,7 +6672,6 @@ threaded investigations, fair scheduling, shared accounting across every billabl
 path, production throughput acceptance or the remaining SQLite/MySQL failover and
 reset milestones. Coordinator integration, exact-head full-suite/SQLite/MySQL checks
 and fresh code scanning remain required before delivery.
-
 
 ### Newest authenticated receipt for AI follow-up (issue #645)
 
