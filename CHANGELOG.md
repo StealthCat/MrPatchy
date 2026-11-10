@@ -1,3 +1,11 @@
+## 1.55.9 — 2026-11-10
+
+1. [PR #287](https://github.com/StealthCat/MrPatchy/pull/287): Move the digest-pinned container runtime and backend CI to Python 3.15, regenerate the hash-locked runtime dependency target, and add a separate hash-pinned build-input lock for sdist-only zstandard. Networked build steps fetch verified bytes only; compilation and installation run offline in a compiler-only stage, and build tools are removed from the final image. Add the test compatibility shim for Python 3.13+ PGPy imports. Container rebuild required; image builds require BuildKit. No schema, API or application configuration change. This closes the Python 3.13+ test/runtime CI gap tracked in #445. This source update does not publish a Docker image.
+
+## 1.55.8 — 2026-11-10
+
+1. [PR #655](https://github.com/StealthCat/MrPatchy/pull/655): Add an opt-in same-server layout to the disposable AI investigation benchmark, report fixture topology, supported slots and observed peak provider overlap, and reject comparisons with mismatched layout or slot limits while retaining legacy report interpretation. No application API, schema or runtime configuration change. The CLI measures synthetic SQLite fixtures and does not establish production or MySQL throughput. This source update does not publish a Docker image.
+
 ## 1.55.7 — 2026-11-10
 
 1. [PR #653](https://github.com/StealthCat/MrPatchy/pull/653): Release raw host inventory after preparing bounded update-scoring batches, retaining only scoring context and indexed RPM versions while preserving score identities, candidate order, outbound evidence, and fresh-inventory persistence checks. No schema, API or configuration migration. Compact per-host state still scales with the eligible fleet; synthetic allocation results do not establish production throughput or complete #436. This source update does not publish a Docker image.
