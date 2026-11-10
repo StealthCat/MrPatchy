@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.15 — 2026-11-10
+
+1. [PR #646](https://github.com/StealthCat/MrPatchy/pull/646): In AI follow-up, let the newest validated authenticated vendor receipt for the exact executable path govern provenance. A mismatched hash, observed difference or incomplete verification keeps the package-authentication gap and prevents fallback to older matching proof; invalid receipts and unrelated paths remain skippable. No schema, configuration, API or authorization changes; the existing bounded receipt search remains. This is a partial provenance milestone and does not complete fleet-wide known-good reuse. This source update does not publish a Docker image.
+
 ## 1.54.14 — 2026-11-10
 
 1. [PR #608](https://github.com/StealthCat/MrPatchy/pull/608): Add composite indexes for retained AI assessment exact-state Re-triage preservation and subject/host history, with idempotent startup reconciliation and SQLite/MySQL query-plan coverage. Existing rows, retention, newest-first ordering, query/API behavior, roles, provider behavior and response authorization remain unchanged. Existing databases incur ordinary index-build locking, time and disk costs; this is a bounded persistence/query-performance increment, not a production throughput or full faster-AI completion claim. This source update does not publish a Docker image.

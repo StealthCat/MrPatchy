@@ -6627,3 +6627,16 @@ threaded investigations, fair scheduling, shared accounting across every billabl
 path, production throughput acceptance or the remaining SQLite/MySQL failover and
 reset milestones. Coordinator integration, exact-head full-suite/SQLite/MySQL checks
 and fresh code scanning remain required before delivery.
+
+
+### Newest authenticated receipt for AI follow-up (issue #645)
+
+Within the retained inspection search, the newest validated vendor receipt that
+names the exact executable path governs provenance. A different hash, an observed
+difference, or incomplete verification leaves the package evidence gap in place.
+Invalid receipts and receipts for unrelated paths do not mask valid evidence.
+
+This slice covers follow-up provenance binding. Roadmap B remains incomplete.
+Fleet-wide reuse still requires end-to-end acceptance of complete evidence,
+zero-call cross-host hits, invalidation, Re-triage, and role isolation on SQLite
+and MySQL.
