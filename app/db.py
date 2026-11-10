@@ -68,7 +68,10 @@ class Behavior(Base):
     attempted: Mapped[float] = mapped_column(Double, default=0)
     # Admission repeatedly filters the small pending/error tail out of retained
     # completed behavior history, then applies retry/policy joins and ordering.
-    __table_args__=(Index('ix_behaviors_admission','approved','verdict','first_seen','id'),)
+    __table_args__=(
+        Index('ix_behaviors_admission','approved','verdict','first_seen','id'),
+        Index('ix_behaviors_attempted','attempted'),
+    )
 class Job(Base):
     __tablename__ = 'jobs'
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
