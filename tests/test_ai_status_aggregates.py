@@ -70,7 +70,8 @@ def test_status_counts_share_one_snapshot_under_concurrent_insert(admin):
     finally:event.remove(engine,'after_cursor_execute',insert_after_first_count)
     assert inserted
     assert status['paused']==0
-    assert status['pending']==status['ready']==status['queued'] and status['blocked']==0
+    assert status['pending']==status['ready']==status['queued']==status['eligible_unclaimed'] and status['blocked']==0
+    assert status['oldest_eligible_unclaimed_observation_at']==pytest.approx(now-10)
 
 
 @pytest.mark.parametrize('marker', [True,False,1,1.0,'true',None,[],{}])
@@ -87,3 +88,49 @@ def test_deferred_plan_counts_only_native_json_true(admin,marker):
     assert (status['plan_next_at'] is not None)==bool(expected)
     response=admin.get('/api/jobs/marker-job',params={'host_id':'marker-host'})
     assert response.status_code==200 and response.json()['ai_deferred']==bool(expected)
+
+
+def test_admin_status_reports_eligible_unclaimed_observations(admin):
+    from app.ai_claims import Claim
+
+    now=time.time()
+    with Session() as s:
+        for host_id in ('active','paused','disabled'):
+            s.add(Host(id=host_id,name=host_id,address='192.0.2.1',fingerprint='',enabled=host_id!='disabled'))
+        s.flush()
+        s.add(Setting(key='server-ai:paused',value={'paused':True}))
+        observations=(
+            ('delayed','active',100),
+            ('blocked','active',90),
+            ('leased','active',80),
+            ('paused','paused',70),
+            ('disabled','disabled',60),
+            ('expired','active',30),
+            ('waiting','active',20),
+        )
+        for subject,host_id,age in observations:
+            s.add(Behavior(id=subject,host_id=host_id,first_seen=now-age,attempted=0,evidence={}))
+        signature=ai_retry.configuration(s)
+        s.add_all((
+            ai_retry.TriageRetry(subject='delayed',configuration=signature,state='deferred',next_at=now+600),
+            ai_retry.TriageRetry(subject='blocked',configuration=signature,state='blocked'),
+        ))
+        for subject,expires in (('leased',now+600),('expired',now-1)):
+            s.add(Claim(subject=subject,host_id='active',token=subject,worker_id='fixture',boot_id='fixture',
+                run_id=subject,revision='fixture',configuration=signature,created=now-60,renewed=now-60,expires=expires))
+        s.commit()
+
+    response=admin.get('/api/investigation-status')
+    assert response.status_code==200
+    status=response.json()
+    assert status['oldest']==pytest.approx(now-100)
+    assert status['eligible_unclaimed']==2
+    assert status['oldest_eligible_unclaimed_observation_at']==pytest.approx(now-30)
+
+    with Session() as s:
+        for subject in ('expired','waiting'):
+            s.get(Behavior,subject).approved=True
+        s.commit()
+    status=admin.get('/api/investigation-status').json()
+    assert status['eligible_unclaimed']==0
+    assert status['oldest_eligible_unclaimed_observation_at'] is None
