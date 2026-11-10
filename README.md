@@ -634,7 +634,7 @@ configured bound is reached. Lowering the bound preserves live leases and blocks
 admission until occupancy falls below it. Policy pause/resume
 and server lifecycle changes reject live claims, and delayed admission rechecks the
 current lifecycle before starting. Existing hourly/rate/spend admission and
-ownership/evidence checks still apply before calls and acceptance. The coordinator
+ownership/evidence checks still apply before calls and acceptance. Newly admitted process-triage work favors the eligible server with fewer live claims, then the durable least-recently admitted server turn, before choosing the oldest eligible observation. Same-server slots remain available when no less-occupied eligible server is waiting. The coordinator
 schedules update scoring, alternating purposes even with one AI slot. Claims expire
 after 120 seconds without renewal; interrupted attempts retain the existing recovery
 delay and finite retry limits. A lease cannot cancel an already sent request or

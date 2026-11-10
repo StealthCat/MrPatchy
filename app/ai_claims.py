@@ -39,6 +39,13 @@ class Claim(Base):
     expires: Mapped[float]=mapped_column(Double,index=True)
 
 
+class HostTurn(Base):
+    """Durable cross-worker order for fair process-investigation admission."""
+    __tablename__='ai_triage_host_turns'
+    host_id: Mapped[str]=mapped_column(String(36),primary_key=True)
+    last_turn: Mapped[int]=mapped_column(index=True)
+
+
 class Lost(ai.AIError):
     def __init__(self):
         super().__init__('Investigation ownership, evidence, approval or configuration changed; no stale result was accepted. A sent request may still be billable.')
@@ -84,6 +91,14 @@ def abandon_owner(owner):
         s.commit()
 
 
+def record_turn(s,host_id):
+    """Assign the next durable turn while the distributed admission lock is held."""
+    turn=(s.scalar(select(func.max(HostTurn.last_turn))) or 0)+1
+    row=s.get(HostTurn,host_id)
+    if row:row.last_turn=turn
+    else:s.add(HostTurn(host_id=host_id,last_turn=turn))
+
+
 def acquire(owner=None):
     lock=Lock('ai-triage')
     lock_started=perf_counter()
@@ -113,13 +128,31 @@ def acquire(owner=None):
                 .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
             saturated_hosts=[host_id for host_id,count,key,policy in occupancy
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
-            filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
+            # Balance live occupancy first. Ties use the durable least-recent
+            # host turn; a host with no turn sorts ahead of one already served.
+            # Project each eligible verdict as its own equality range so host
+            # election reads the admission index instead of scanning retained
+            # completed history through the host index; the union keeps every
+            # input to each host's oldest eligible first_seen.
+            election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
-                ai_retry.eligible(signature,now))
-            # Keep each verdict as an equality range so the admission index can
-            # skip retained completed history and satisfy oldest-first ordering.
-            # The oldest member of either range is sufficient to find the same
-            # global oldest pending/error candidate as the former combined scan.
+                Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
+            eligible=union_all(*(select(Behavior.host_id,Behavior.first_seen).outerjoin(
+                ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                *election_filters,Behavior.verdict==verdict) for verdict in ('pending','error'))).subquery()
+            host_id=s.scalar(select(eligible.c.host_id).outerjoin(
+                live_counts,live_counts.c.host_id==eligible.c.host_id).outerjoin(
+                HostTurn,HostTurn.host_id==eligible.c.host_id).group_by(
+                eligible.c.host_id,live_counts.c.live_count,HostTurn.last_turn).order_by(
+                func.coalesce(live_counts.c.live_count,0),func.coalesce(HostTurn.last_turn,0),
+                func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
+            if not host_id:return None
+            # Within the elected host, keep each verdict as an equality range so
+            # the admission index can skip retained completed history and
+            # satisfy oldest-first ordering; the oldest member of either range is
+            # the host's oldest eligible pending/error candidate.
+            filters=(Behavior.host_id==host_id,Behavior.approved==False,
+                Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
             oldest=[]
             for verdict in ('pending','error'):
                 candidate=select(Behavior.id,Behavior.first_seen).outerjoin(
@@ -151,7 +184,7 @@ def acquire(owner=None):
                     claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
                         boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.lease_revision(row),
                         configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
-                    s.add(claim);s.commit()
+                    s.add(claim);record_turn(s,host_id);s.commit()
                     work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
                     return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
             except host_lifecycle.Inactive:return None
