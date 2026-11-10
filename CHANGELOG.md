@@ -1,3 +1,7 @@
+## 1.55.7 — 2026-11-10
+
+1. [PR #653](https://github.com/StealthCat/MrPatchy/pull/653): Release raw host inventory after preparing bounded update-scoring batches, retaining only scoring context and indexed RPM versions while preserving score identities, candidate order, outbound evidence, and fresh-inventory persistence checks. No schema, API or configuration migration. Compact per-host state still scales with the eligible fleet; synthetic allocation results do not establish production throughput or complete #436. This source update does not publish a Docker image.
+
 # Changelog
 
 ## 1.55.6 — 2026-11-10
