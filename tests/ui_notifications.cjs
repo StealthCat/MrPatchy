@@ -224,4 +224,24 @@ module.exports=async(page,capture)=>{
   await toasts.filter({hasText:'Newest backlog critical'}).waitFor();
   assert.equal(await toasts.count(),1);
   await page.evaluate(()=>window.NotificationShell.reset());
+
+  // Seen-revision eviction never forgets an event still in a complete urgent window.
+  items.splice(0,items.length);
+  items.push({...critical(0x3000,1700500000,'Long-lived high notice'),severity:'high'});
+  unread=1;
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0);
+  const longLived=toasts.filter({hasText:'Long-lived high notice'});
+  for(let burst=0;burst<5;burst++){
+   for(const item of items)if(item.severity==='critical')item.read=true;
+   for(let n=1;n<=100;n++)items.unshift(critical(0x4000+burst*0x100+n,1700600000+burst*1000+n,'Burst '+burst+' critical '+n));
+   await page.evaluate(()=>window.NotificationShell.refresh());
+   assert.equal(await longLived.count(),0);
+  }
+  for(const item of items)if(item.severity==='critical')item.read=true;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await longLived.count(),0,'an unchanged high event that stayed in its complete window does not toast after 500 other revisions were seen');
+  await page.evaluate(()=>window.NotificationShell.reset());
 };

@@ -116,7 +116,12 @@ window.NotificationShell=(()=>{
    const last=win.items.at(-1);
    toastSeen.windows.set(win.severity,{more:win.more,cutoff:last?{created:Number(last.created)||0,id:String(last.id)}:null});
   }
-  while(toastSeen.revisions.size>TOAST_SEEN_LIMIT)toastSeen.revisions.delete(toastSeen.revisions.keys().next().value);
+  // Evict the oldest seen revisions, but never one still in a current urgent window:
+  // forgetting it would make the complete-window branch replay it as new.
+  if(toastSeen.revisions.size>TOAST_SEEN_LIMIT){
+   const live=new Set(windows.flatMap(win=>win.items.map(item=>item.id)));
+   for(const id of [...toastSeen.revisions.keys()]){if(toastSeen.revisions.size<=TOAST_SEEN_LIMIT)break;if(!live.has(id))toastSeen.revisions.delete(id);}
+  }
   if(first)return;
   fresh.sort((a,b)=>(Number(b.created)||0)-(Number(a.created)||0)||(String(a.id)<String(b.id)?-1:1));
   const stack=toastStack();

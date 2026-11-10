@@ -3049,7 +3049,9 @@ previous window was complete or the event sorts ahead of that window's last
 event, so an old event that slides into view after another session dismisses one
 never toasts, and a new event with a lagging producer timestamp still toasts
 while fewer than 100 newer unread events of its severity exist (beyond that the
-unread badge still updates). At most three toasts are visible; a larger burst
+unread badge still updates). The bounded 500-entry seen-revision memory never
+evicts an event still present in a current urgent window, so a long-lived unread
+event is not replayed after many other revisions. At most three toasts are visible; a larger burst
 collapses into one summary that links to the notification center. Toasts use a polite live
 region, render text nodes only, revalidate same-origin links, never take focus,
 pause their ten-second auto-hide on hover or focus, and mount inside an open modal
