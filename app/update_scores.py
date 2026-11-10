@@ -3,14 +3,14 @@ import hashlib
 import json
 import math
 import time
-from sqlalchemy import String, Text, Integer, Double, select, func, tuple_, and_, or_
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_
+from sqlalchemy.orm import Mapped, load_only, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy
 from .coordination import Lock
 from .security import unseal
-from .package_history import versions
+from .package_history import versions, version_index
 
 class UpdateScore(Base):
     __tablename__='update_scores'
@@ -31,18 +31,59 @@ class UpdateScore(Base):
     run_id: Mapped[str]=mapped_column(String(36),default='')
 
 
-def evidence(host, package):
+SCORE_HISTORY_INDEX = Index('ix_update_scores_host_name_state_candidate',
+    UpdateScore.host_id, UpdateScore.name, UpdateScore.state, UpdateScore.candidate)
+
+
+def _inventory_scoring_context(inventory):
+    distribution = {}
+    for line in str(inventory.get('os', '')).splitlines():
+        key, separator, value = line.partition('=')
+        if separator and key in ('ID', 'VERSION_ID', 'PRETTY_NAME'):
+            distribution[key] = value.strip('"')[:200]
+    return {'distribution': distribution, 'package_manager': inventory.get('package_manager', 'apt')}
+
+
+def evidence(host, package, index=None):
     # No host addresses, repository credentials, source files or process evidence.
     # Classification is a signal, never a claimed CVE/changelog verification.
-    return {'package':package.name,'installed':versions(host.inventory,package.name,package.installed),
-            'candidate':package.candidate,'distribution':{line.split('=',1)[0]:line.split('=',1)[1].strip('"')[:200] for line in str(host.inventory.get('os','')).splitlines() if '=' in line and line.split('=',1)[0] in ('ID','VERSION_ID','PRETTY_NAME')},
-            'package_manager':host.inventory.get('package_manager','apt'),'priority_signal':package.priority,'priority_source':'manual override' if package.priority_manual else 'repository classification',
+    return {'package':package.name,'installed':versions(host.inventory,package.name,package.installed,index),
+            'candidate':package.candidate,**_inventory_scoring_context(host.inventory),
+            'priority_signal':package.priority,'priority_source':'manual override' if package.priority_manual else 'repository classification',
             'held':package.held,'package_state':package.dpkg_state,
             'evidence_limit':'Repository classification and versions only. No candidate changelog, CVE fix status, exploitability or service exposure has been verified.'}
 
 
-def identity(host,package):
-    return hashlib.sha256((host.id+json.dumps(evidence(host,package),sort_keys=True)).encode()).hexdigest()
+def identity(host,package,index=None):
+    return hashlib.sha256((host.id+json.dumps(evidence(host,package,index),sort_keys=True)).encode()).hexdigest()
+
+
+_MEMO={};_MEMO_HOSTS=256  # FIFO bound: fleets above 256 hosts rebuild indexes each pass
+
+
+def _memo(host):
+    """Reuse the per-host memo while the inventory inputs to scoring stay stable."""
+    inventory = host.inventory
+    context = _inventory_scoring_context(inventory)
+    # RPM versions come from installed records. APT uses the package-row
+    # fallback, which is already part of the per-package memo key.
+    if context['package_manager'] == 'rpm':
+        context['rpm_packages'] = inventory.get('rpm_packages', [])
+    fp = hashlib.sha256(json.dumps(context, sort_keys=True, default=str).encode()).hexdigest()
+    entry=_MEMO.get(host.id)
+    if entry is None or entry[0]!=fp:
+        if len(_MEMO)>=_MEMO_HOSTS and host.id not in _MEMO:_MEMO.pop(next(iter(_MEMO)),None)
+        entry=_MEMO[host.id]=(fp,version_index(inventory),{})
+    return entry
+
+
+def cached_identity(host,package,memo):
+    key=(package.name,package.installed,package.candidate,package.priority,bool(package.priority_manual),package.held,package.dpkg_state)
+    found=memo[2].get(key)
+    if found is None:
+        if len(memo[2])>=20000:memo[2].clear()
+        found=memo[2][key]=identity(host,package,memo[1])
+    return found
 
 
 def public(row,enabled=True):
@@ -63,7 +104,7 @@ def scoring_candidates(s):
     interleave them with an open unbuffered result. Keyset paging keeps the
     existing oldest-first order without repeatedly skipping earlier rows.
     """
-    cursor=None;hosts={}
+    cursor=None;hosts={};indexes={}
     while True:
         query=select(Package).where(Package.candidate!='',Package.host_id.not_in(ai_policy.paused_ids()),
             Package.host_id.in_(host_lifecycle.active_ids()))
@@ -75,16 +116,25 @@ def scoring_candidates(s):
         cursor=(packages[-1].available_since,packages[-1].id)
         missing={p.host_id for p in packages if p.host_id not in hosts}
         if missing:
-            hosts.update({h.id:h for h in s.scalars(select(Host).where(Host.id.in_(missing)))})
-        current=[(p,hosts[p.host_id],identity(hosts[p.host_id],p)) for p in packages if p.host_id in hosts]
+            rows=s.execute(select(Host.id,Host.inventory).where(Host.id.in_(missing)))
+            hosts.update({row.id:row for row in rows})
+        for p in packages:
+            if p.host_id in hosts and p.host_id not in indexes:indexes[p.host_id]=_memo(hosts[p.host_id])
+        current=[(p,hosts[p.host_id],cached_identity(hosts[p.host_id],p,indexes[p.host_id])) for p in packages if p.host_id in hosts]
         if not current:continue
-        scores={r.id:r for r in s.scalars(select(UpdateScore).where(UpdateScore.id.in_([key for _,_,key in current])))}
+        score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
+            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,raiseload=True))
+        scores={r.id:r for r in s.scalars(score_state.where(UpdateScore.id.in_([key for _,_,key in current])))}
         scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
-        for row in s.scalars(select(UpdateScore).where(UpdateScore.state=='deferred',
+        for row in s.scalars(score_state.where(UpdateScore.state=='deferred',
                 tuple_(UpdateScore.host_id,UpdateScore.name).in_(scopes))):
             deferred.setdefault((row.host_id,row.name),[]).append(row)
         for package,host,key in current:
             yield package,host,key,scores.get(key),deferred.get((host.id,package.name),())
+
+
+def _batch_scores(s, ids):
+    return {row.id:row for row in s.scalars(select(UpdateScore).where(UpdateScore.id.in_(ids)))}
 
 
 def run_one():
@@ -127,7 +177,8 @@ def run_one():
                 with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
                     key=unseal(encrypted)
                     with Session() as s:
-                        for identifier in ids:s.get(UpdateScore,identifier).run_id=run_id
+                        scores=_batch_scores(s,ids)
+                        for identifier in ids:scores[identifier].run_id=run_id
                         s.commit()
                     result=ai.request({'model':cfg['ai_model'],'store':False,'max_output_tokens':4000,'instructions':INSTRUCTIONS,
                         'input':json.dumps(batch),'text':{'format':{'type':'json_schema','name':'update_importance','strict':True,'schema':SCHEMA}}},key)
@@ -139,8 +190,9 @@ def run_one():
                             any(not isinstance(row.get(k),str) or not 1<=len(row[k])<=4000 for k in ('explanation','limitations'))):
                             raise ai.AIError('Update scoring returned invalid scores or explanations; no assessment accepted.')
                     with Session() as s:
+                        scores=_batch_scores(s,ids)
                         for item in rows:
-                            row=s.get(UpdateScore,item['id']);package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
+                            row=scores[item['id']];package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
                             if not package or not host or not package.candidate or identity(host,package)!=row.id:
                                 row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
                             row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()
@@ -151,8 +203,9 @@ def run_one():
                 (error.policy_wait or error.transient))
             next_at=time.time()+delay if deferred else 0
             with Session() as s:
+                scores=_batch_scores(s,ids)
                 for identifier in ids:
-                    row=s.get(UpdateScore,identifier)
+                    row=scores[identifier]
                     row.state='deferred' if deferred else 'error';row.next_at=next_at
                     row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else ai_runs.safe_error(error))
                 s.commit()

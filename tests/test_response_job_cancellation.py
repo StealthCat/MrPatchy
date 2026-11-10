@@ -199,3 +199,17 @@ def test_linked_unstarted_security_records_cancel_locally_and_keep_other_holds(a
         if action=='evidence-acquire':assert s.scalar(select(ArchiveObservation).where(ArchiveObservation.archive_id=='linked',ArchiveObservation.state=='rejected'))
         if action=='trusted-repair-prepare':assert row.finished
         if action=='trusted-repair-publish':assert not row.hold and row.report['not_requested']
+
+
+def test_failed_evidence_preserve_rejects_queued_copy_so_it_can_be_reprepared(admin,monkeypatch):
+    from app.evidence_vault import EvidenceCopy
+    with Session() as s:
+        s.add(Host(id=HOST,name=HOST,address='192.0.2.1',fingerprint='fixture'))
+        s.add(EvidenceCopy(id='linked',host_id=HOST,incident_id='incident',evidence_digest='a'*64,state='queued',expires=time.time()-1))
+        s.add(Job(id='expired-preserve',host_id=HOST,action='evidence-preserve',payload={'copy_id':'linked'}));s.commit()
+    monkeypatch.setattr(worker.ssh,'call',lambda *a,**kw:pytest.fail('An expired approval must not contact the target'))
+    worker.execute('expired-preserve')
+    with Session() as s:
+        job=s.get(Job,'expired-preserve');copy=s.get(EvidenceCopy,'linked')
+        assert job.state=='failed'
+        assert copy.state=='rejected' and copy.expires==0

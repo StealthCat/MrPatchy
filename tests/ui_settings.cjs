@@ -53,7 +53,8 @@ module.exports=async(page,capture)=>{
  assert.match(await page.locator('#ai-spend-history').textContent(),/local public-price estimates.*not provider invoices/s);
  assert.equal(await page.locator('#ai-spend-history img[src=x]').count(),0);assert.equal(await page.evaluate(()=>window.__spendInjected),undefined);
  await page.locator('#ai-spend-history-days').selectOption('7');await page.getByRole('status').filter({hasText:'No retained billable AI calls'}).waitFor();
- await page.locator('#ai-spend-history-days').selectOption('90');await page.getByRole('status').filter({hasText:'History fixture temporarily unavailable'}).waitFor();
+ await page.locator('#ai-spend-history-days').selectOption('90');await page.getByRole('alert').filter({hasText:'History fixture temporarily unavailable'}).waitFor();
+ assert.match(await page.locator('#ai-spend-history .error-state img').getAttribute('src'),/mr-patchy-error\.webp$/);
  await page.locator('#ai-spend-history-days').selectOption('30');await page.locator('#ai-spend-history table').waitFor();
  assert.deepEqual(spendReads.slice(-4),[30,7,90,30]);
  // Exercise the omitted-cap API default and its real rendered budget summary.

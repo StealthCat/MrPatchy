@@ -88,6 +88,8 @@ def save_inventory(s,h,inv):
     if previous!=current or not s.scalar(select(InventoryRevision.id).where(InventoryRevision.host_id==h.id).limit(1)):
         s.add(InventoryRevision(id=uuid.uuid4().hex,host_id=h.id,inventory=inv))
     h.inventory=inv
+    from . import os_upgrade
+    os_upgrade.store(s,h,inv)
     changed=[(item,old[item['name']]) for item in items if item['name'] in old and old[item['name']].candidate]
     newer=package_backend.newer_flags(inv,[(p.candidate,item['installed']) for item,p in changed])
     still_newer={item['name']:flag for (item,_),flag in zip(changed,newer)}
@@ -265,6 +267,8 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
+    from .file_trust import record_snapshot
+    record_snapshot(s,h)
     s.commit()
     return ids
 
@@ -667,6 +671,10 @@ def execute_locked(job_id):
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
+            if job.action=='evidence-preserve':
+                from .evidence_vault import EvidenceCopy
+                copy=s.get(EvidenceCopy,job.payload.get('copy_id'))
+                if copy and copy.host_id==job.host_id and copy.state=='queued':copy.state='rejected';copy.expires=0
             if job.action=='evidence-acquire':
                 from . import evidence_archive
                 from .evidence_vault import EvidenceArchive
@@ -724,6 +732,7 @@ def investigate_one(owner=None):
         row=lease.work
         try:
             with ai_runs.track('triage',lease.cfg['ai_model'],row.host_id,row.id,run_id=lease.run_id):
+                ai_runs.timing('claim_lock',lease.claim_lock_wait)
                 lease.check()
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
                 ai_runs.timing('queue_age',time.time()-row.first_seen)
@@ -757,15 +766,29 @@ def _assess_active_behavior(s,row,cfg,secret):
     policy=ai.investigation_policy()
     policy_hashes=[ai_assessments.digest([policy]),ai_assessments.digest([policy,policy])]
 
+    # Resolve authenticated file provenance before cache lookup or provider input.
+    # This never approves a behavior: authentic programs can be abused.
+    from . import file_status
+    if lease:
+        with lease.mutation() as (write,saved):
+            saved.evidence=file_status.before_ai(write,saved)
+        row.evidence=copy.deepcopy(saved.evidence)
+    else:
+        row.evidence=file_status.before_ai(s,row)
+        s.commit()
+
     def reuse(write,saved):
         hit=known_good.lookup(write,saved.evidence,cfg['ai_model'],policy_hashes,
-            bypass=bool(write.get(ai_assessments.Refresh,saved.id)))
+            bypass=bool(write.get(ai_assessments.Refresh,saved.id)) or
+                saved.evidence.get('file_assessment',{}).get('status')=='changed')
         if not hit:return False
         result=hit['result']
         saved.verdict='low'
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
         assessment=ai_assessments.record_reuse(write,saved,hit)
         known_good.link_reuse(write,assessment,hit)
+        from .file_trust import record_reuse
+        record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)
         return True
 
@@ -867,7 +890,18 @@ def _loop(reporter):
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
-            if shutting_down and not active_jobs and not ai_tasks and all(future.done() for future in active_polls.values()) and (notification_task is None or notification_task.done()):break
+            # Finished observation/delivery futures must be consumed even when
+            # this tick satisfies the terminal shutdown condition.
+            for host_id,future in list(active_polls.items()):
+                if future.done() and not getattr(future,'_mp_reaped',False):
+                    future._mp_reaped=True
+                    try: future.result()
+                    except Exception: log.exception('Host poll failed outside its handler')
+            if notification_task is not None and notification_task.done() and not getattr(notification_task,'_mp_reaped',False):
+                notification_task._mp_reaped=True
+                try: notification_task.result()
+                except Exception: log.exception('Notification delivery failed outside its handler')
+            if shutting_down and not active_jobs and not ai_tasks and all(getattr(future,'_mp_reaped',False) for future in active_polls.values()) and (notification_task is None or getattr(notification_task,'_mp_reaped',False)):break
             if shutting_down:time.sleep(.25)
             reporter.stopping=shutting_down
             try:

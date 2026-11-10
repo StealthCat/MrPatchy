@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, select, func, and_, or_, case
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, func, and_, or_, case, literal
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -29,6 +29,11 @@ class AIRun(Base):
     started: Mapped[float] = mapped_column(Double, default=time.time, index=True)
     finished: Mapped[float] = mapped_column(Double, default=0)
     calls: Mapped[int] = mapped_column(Integer, default=0)
+
+
+ACTIVE_RUN_INDEX = Index('ix_ai_runs_purpose_state_started', AIRun.purpose, AIRun.state, AIRun.started)
+RECENT_RUN_INDEX = Index('ix_ai_runs_purpose_started', AIRun.purpose, AIRun.started)
+
 
 class AIEvent(Base):
     __tablename__ = 'ai_events'
@@ -77,7 +82,62 @@ def run_hosts(s, run_ids):
 # cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
 TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
                  'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age',
-                 'known_good_lookup'}
+                 'known_good_lookup','claim_lock'}
+
+
+TIMING_SUMMARY_RUN_LIMIT = 100
+TIMING_SUMMARY_EVENT_LIMIT = 2048
+_TIMING_MESSAGE = re.compile(r'([a-z ]{1,32}): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
+
+
+def triage_timing_summary(s, limit):
+    """Summarize a bounded sample of retained process-triage timing events."""
+    run_ids = list(s.scalars(
+        select(AIRun.id)
+        .where(AIRun.purpose == 'triage', AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
+        .order_by(AIRun.started.desc(), AIRun.id)
+        .limit(limit)
+    ))
+    stage_names = {'timing_' + stage: stage for stage in sorted(TIMING_STAGES)}
+    rows = []
+    if run_ids:
+        rows = s.execute(
+            select(AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96))
+            .where(AIEvent.run_id.in_(run_ids),
+                   AIEvent.stage.in_(tuple(stage_names)))
+            .order_by(AIEvent.id.desc())
+            .limit(TIMING_SUMMARY_EVENT_LIMIT + 1)
+        ).all()
+
+    timings = {stage: [] for stage in stage_names.values()}
+    errors = dict.fromkeys(timings, 0)
+    covered_runs = set()
+    discarded = 0
+    for run_id, event_stage, message in rows[:TIMING_SUMMARY_EVENT_LIMIT]:
+        stage = stage_names.get(event_stage)
+        match = _TIMING_MESSAGE.fullmatch(message) if isinstance(message, str) else None
+        if stage is None or not match or match[1] != stage.replace('_', ' '):
+            discarded += 1
+            continue
+        timings[stage].append(float(match[2]))
+        errors[stage] += match[3] == 'error'
+        covered_runs.add(run_id)
+
+    stages = {}
+    for stage, samples in timings.items():
+        samples.sort()
+        size = len(samples)
+        stages[stage] = {
+            'samples': size, 'errors': errors[stage],
+            'p50_ms': samples[(size * 50 + 99) // 100 - 1] if size else None,
+            'p95_ms': samples[(size * 95 + 99) // 100 - 1] if size else None,
+        }
+    return {
+        'run_limit': limit, 'event_limit': TIMING_SUMMARY_EVENT_LIMIT,
+        'sampled_runs': len(run_ids), 'runs_without_samples': len(run_ids) - len(covered_runs),
+        'discarded_events': discarded, 'events_truncated': len(rows) > TIMING_SUMMARY_EVENT_LIMIT,
+        'stages': stages,
+    }
 
 
 def timing(stage, seconds, outcome='complete'):
@@ -170,14 +230,13 @@ def safe_error(error):
     return 'Internal '+kind+' during AI processing. Check worker/database health; no provider result was accepted.'
 
 
-def event(stage, message, *, state=None, call=False):
+def event(stage, message, *, state=None):
     run_id = active.get()
     if not run_id: return
     with Session() as s:
         row = s.get(AIRun, run_id)
         if not row or row.state!='running': return
         row.stage = stage; row.message = message[:2000]
-        if call: row.calls += 1
         if state: row.state = state; row.finished = time.time()
         s.add(AIEvent(run_id=run_id, stage=stage, message=message[:2000])); s.commit()
     log.info('AI run=%s stage=%s %s', run_id, stage, message[:2000])
@@ -260,6 +319,21 @@ def task_failure(error):
     log.error('AI worker task failed: %s',message)
 
 
+def _status_run_details(s):
+    # Select each newest row before combining them so each branch stays bounded.
+    latest = select(literal('latest').label('kind'), AIRun.id,
+        case((AIRun.state.in_(('error','interrupted')), AIRun.message), else_='').label('detail')).where(
+        AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1).subquery()
+    running = select(literal('running').label('kind'), literal(None).label('id'), AIRun.stage.label('detail')).where(
+        AIRun.purpose=='triage', AIRun.state=='running').order_by(AIRun.started.desc()).limit(1).subquery()
+    rows = s.execute(select(latest).union_all(select(running)))
+    details = {kind:(identifier,detail) for kind,identifier,detail in rows}
+    _,running_stage = details.get('running',(None,None))
+    last_run,last_error = details.get('latest',(None,''))
+    return running_stage,last_run,last_error
+
+
+
 def status(s):
     from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,ai_provider_backoff,worker_registry
     from .update_scores import UpdateScore
@@ -269,26 +343,31 @@ def status(s):
     pending_where=(Behavior.approved==False,Behavior.verdict.in_(('pending','error')),Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
     unpaused=Behavior.host_id.not_in(ai_policy.paused_ids())
     ready_sql=ai_retry.eligible(signature,now)
+    claim=ai_claims.Claim
+    eligible_unclaimed=and_(unpaused,ready_sql,Behavior.host_id.in_(host_lifecycle.active_ids()),claim.subject.is_(None))
     blocked_sql=and_(TR.subject.is_not(None),or_(TR.state=='blocked',and_(TR.state=='interrupted',TR.attempts>=ai_retry.MAX_ATTEMPTS)),~ready_sql)
     wake=case((TR.subject.is_(None),Behavior.attempted+3600),(TR.next_at!=0,TR.next_at),else_=TR.provider_until)
     def counted(condition):return func.count(case((condition,1)))
     # One statement keeps the triage counts and minima on a single snapshot:
     # separate reads let a concurrent insert make `paused` negative.
-    pending_count,oldest,unpaused_count,ready,blocked,retry=s.execute(select(
+    pending_count,oldest,unpaused_count,ready,blocked,retry,waiting,oldest_waiting=s.execute(select(
         func.count(),func.min(Behavior.first_seen),counted(unpaused),counted(and_(unpaused,ready_sql)),
         counted(and_(unpaused,blocked_sql)),func.min(case((and_(unpaused,~blocked_sql,wake>now),wake))),
-    ).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id).where(*pending_where)).one()
+        counted(eligible_unclaimed),func.min(case((eligible_unclaimed,Behavior.first_seen))),
+    ).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id)
+        .outerjoin(claim,and_(claim.subject==Behavior.id,claim.expires>now)).where(*pending_where)).one()
     paused=pending_count-unpaused_count
     recent_count,recent_min=s.execute(select(func.count(),func.min(Behavior.attempted)).where(Behavior.attempted>now-3600)).one()
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
-    running=s.scalar(select(AIRun).where(AIRun.purpose=='triage',AIRun.state=='running').order_by(AIRun.started.desc()).limit(1))
-    active_count=s.scalar(select(func.count()).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now))
+    running_stage,last_run,last_error=_status_run_details(s)
+    active_count,active_lease_expires=s.execute(select(
+        func.count(),func.min(ai_claims.Claim.expires),
+    ).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now)).one()
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
-    latest=s.scalar(select(AIRun).where(AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1))
-    run_count=s.scalar(select(func.count()).select_from(AIRun).where(AIRun.purpose=='triage',AIRun.started>now-3600))
+    run_count,oldest_run=s.execute(select(func.count(),func.min(AIRun.started)).where(
+        AIRun.purpose=='triage',AIRun.started>now-3600)).one()
     used=max(recent_count,run_count)
-    oldest_run=s.scalar(select(func.min(AIRun.started)).where(AIRun.purpose=='triage',AIRun.started>now-3600))
     admission=ai_admission.status(s)
     budget=ai_budget.status(s,now)
     provider_backoff=ai_provider_backoff.status(s,now)
@@ -296,8 +375,8 @@ def status(s):
         UpdateScore.installed==Package.installed,UpdateScore.candidate==Package.candidate)
     scoring_where=(UpdateScore.state=='deferred',Package.candidate!='',
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
-    scoring_deferred=s.scalar(select(func.count()).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
-    scoring_next=s.scalar(select(func.min(UpdateScore.next_at)).select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where))
+    scoring_deferred,scoring_next=s.execute(select(func.count(),func.min(UpdateScore.next_at))
+        .select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where)).one()
     # JSON numeric 1 compares equal to true after scalar extraction on SQLite.
     # Retained malformed markers must match the public API's `is True` contract.
     marker_type=(func.json_type(Job.payload,'$._ai_deferred')=='true' if s.get_bind().dialect.name=='sqlite' else
@@ -315,7 +394,7 @@ def status(s):
     if not cfg['ai_enabled']: reason='disabled'; message='Automatic AI triage is disabled in Settings.'
     elif not cfg['ai_model'] or not s.get(Setting,'openai_key'): reason='configuration'; message='Save a model ID and API key in Settings.'
     elif not seen or now-seen>90: reason='worker_unavailable'; message='No recent scheduler heartbeat. Check app/worker container logs and DISABLE_SCHEDULER.'
-    elif running: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running.stage
+    elif running_stage is not None: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running_stage
     elif provider_backoff['blocked']:reason='backoff';message='Shared provider backoff is waiting for retry eligibility after a transient failure.'
     elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min([v for v in (recent_min,oldest_run) if v is not None])+3600
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
@@ -332,10 +411,12 @@ def status(s):
     return {'pending':pending_count,'oldest':oldest,'hourly_limit':cfg['ai_hourly_limit'],
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
-            'active':active_count,'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,
+            'eligible_unclaimed':waiting,'oldest_eligible_unclaimed_observation_at':oldest_waiting,
+            'active':active_count,'active_lease_expires_at':active_lease_expires,
+            'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,
             'per_server_limit':ai_policy.DEFAULT_CONCURRENCY,
             'per_server_limit_min':ai_policy.MIN_CONCURRENCY,'per_server_limit_max':ai_policy.MAX_CONCURRENCY,
-            'recent_attempts':used,'last_error':latest.message if latest and latest.state in ('error','interrupted') else '',
-            'last_run':latest.id if latest else None,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
+            'recent_attempts':used,'last_error':last_error,
+            'last_run':last_run,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
             'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next}

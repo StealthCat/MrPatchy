@@ -63,7 +63,6 @@ def test_large_snapshot_is_split_without_loss(tmp_path,monkeypatch):
 
 def test_capacity_eviction_has_a_distinct_loss_reason(tmp_path,monkeypatch):
     monkeypatch.setattr(agent,'ROOT',tmp_path)
-    monkeypatch.setattr(agent,'SPOOL_BATCH_BYTES',400)
     monkeypatch.setattr(agent,'SPOOL_CAPACITY_BYTES',500)
     for pid in range(3):agent.spool([{'pid':pid,'evidence':'x'*240}],time.time())
     spool=agent.pending_events()['spool']
