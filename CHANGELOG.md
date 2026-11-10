@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.13 — 2026-11-10
+
+1. [PR #644](https://github.com/StealthCat/MrPatchy/pull/644): Reduce repeated authenticated file-receipt validation during single-executable triage and cross-server byte-trust rechecks while preserving exact case-sensitive path matching, newest mismatch precedence, full validation of selected receipts and complete inventory maps. No schema, public API, trust-policy or authorization changes. Misses may still scan retained history; database-driver buffering and native runtime latency are outside this fixture-validated increment, and broader known-good-cache/production performance work remains open. This source update does not publish a Docker image.
+
 ## 1.54.12 — 2026-11-10
 
 1. [PR #604](https://github.com/StealthCat/MrPatchy/pull/604): Add the idempotent `ix_update_scores_host_name_state_candidate` index for exact package score history and deferred AI scoring lookups on new and existing SQLite/MySQL databases. Retained scores and existing indexes remain intact; existing databases incur ordinary index-build locking and disk use. Query results, ordering, APIs, roles, provider behavior and response authorization are unchanged. This is a partial scoring-performance increment; repeated idle hashing and production throughput remain open. This source update does not publish a Docker image.
