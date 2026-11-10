@@ -2160,6 +2160,16 @@ server records. Existing pause and lifecycle filters still govern eligibility.
 This reduces data fetched per scoring pass. Candidate hashing and measured
 production throughput remain open.
 
+The update-scoring memo uses the distribution and package-manager fields
+shared with the scoring payload, plus installed RPM inventory when applicable.
+Repository file text, raw APT status and unrelated OS fields no longer evict
+identities when the stored inventory refreshes. SQLite and MySQL regression
+coverage checks retained APT/RPM score matches across refreshes and misses
+after relevant version, distribution or package-manager changes. Existing
+score keys and provider payloads are preserved. The worker still reads stored
+inventory, fingerprints the RPM list and walks eligible candidates. Production
+throughput and the broader parallel-scoring milestone remain open.
+
 ### Parallel execution and latency work
 
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run

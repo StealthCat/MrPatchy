@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.55.4 — 2026-11-10
+
+1. [PR #651](https://github.com/StealthCat/MrPatchy/pull/651): Reuse the process-local update-scoring memo when repository-file text, raw APT status, collection time or unrelated OS fields change without changing scoring evidence. Installed RPM records, scoring distribution and package manager still invalidate the memo; exact retained score keys and provider payloads are preserved. No schema or API change. The bounded memo still holds at most 256 hosts, scans eligible candidates and fingerprints the RPM inventory; fleet-capacity handling and production throughput remain open. No roles, provider-call policy or response-authorization changes. This source update does not publish a Docker image.
+
 ## 1.55.3 — 2026-11-10
 
 1. [PR #650](https://github.com/StealthCat/MrPatchy/pull/650): Add an idempotently installed purpose/start covering index for administrator AI status and legacy triage and update-scoring counts on SQLite and MySQL. Preserve existing rows and indexes, strict one-hour cutoff, purpose separation, retry times and admission limits. Existing databases create the index at startup, and writes incur index-maintenance cost; fixture measurements do not establish production throughput. No run lifecycle, provider-call, API or authorization behavior change. Broader Roadmap A acceptance remains open. This source update does not publish a Docker image.
