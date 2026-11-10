@@ -2160,6 +2160,25 @@ server records. Existing pause and lifecycle filters still govern eligibility.
 This reduces data fetched per scoring pass. Candidate hashing and measured
 production throughput remain open.
 
+The update-scoring memo uses the distribution and package-manager fields
+shared with the scoring payload, plus installed RPM inventory when applicable.
+Repository file text, raw APT status and unrelated OS fields no longer evict
+identities when the stored inventory refreshes. SQLite and MySQL regression
+coverage checks retained APT/RPM score matches across refreshes and misses
+after relevant version, distribution or package-manager changes. Existing
+score keys and provider payloads are preserved. The worker still reads stored
+inventory, fingerprints the RPM list and walks eligible candidates. Production
+throughput and the broader parallel-scoring milestone remain open.
+
+At the 256-server memo bound, overflow servers use a pass-local memo and
+retained servers stay warm across scoring passes. An exhausted pass releases
+entries for absent eligible servers. A pass that stops after selecting a
+provider batch keeps entries for servers it has yet to visit. The regression
+checks overflow, early exit, slot reclaim and the exact completed-score matches
+on both database engines. The candidate walk and pass-local state still scale
+with the eligible fleet. Production throughput and parallel scoring remain
+open.
+
 ### Parallel execution and latency work
 
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run
@@ -2199,12 +2218,29 @@ pause, lifecycle, capacity and oldest-first eligibility checks. This is a partia
 database performance increment; production throughput and full faster-AI
 acceptance remain open.
 
+Worker checkpoint #647 adds a covering index on the attempt timestamp used by
+the administrator's recent-attempt status and the legacy hourly admission gate.
+Startup adds it to existing behavior tables without rewriting retained rows.
+The focused acceptance checks both real query plans, the strict one-hour cutoff,
+the displayed retry time and idempotent index installation on SQLite and MySQL.
+The index incurs timestamp-write maintenance. Fixture measurements do not
+establish production throughput or complete the faster-AI milestone.
+
 Worker checkpoint #603 adds a server/package/state/candidate index for exact
 score history and deferred scoring lookups. Startup creates it idempotently on
 existing databases and keeps retained scores and existing indexes. A fixture with
 5,000 unrelated scores on one server verifies the actual query plans and retained
 results. This is partial scoring performance work. Idle candidate hashing and
 end-to-end production throughput acceptance remain open.
+
+Worker checkpoint #649 indexes run purpose and start time for the administrator
+status aggregate and legacy triage and scoring counts. The index is installed
+during startup for new and existing databases. Focused tests verify the three
+real query plans, the strict hourly cutoff, unchanged admission and retry
+behavior, and idempotent index creation on SQLite and MySQL. The index adds
+maintenance to run inserts and retains the existing running-state index.
+Local query measurements do not establish production throughput or complete
+the faster-AI milestone.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2215,6 +2251,18 @@ end-to-end production throughput acceptance remain open.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
 
+### Live process-triage lease telemetry
+
+The administrator investigation status API reports
+`active_lease_expires_at`, the earliest expiry among currently live process
+investigation claims, or null when no claim is live. Expired claims are
+excluded. The AI worker status displays this boundary with the active count so
+an administrator can tell when an unrenewed slot becomes eligible for fenced
+recovery. Expiry does not prove a provider request stopped or was not billed.
+This telemetry is read-only: it does not renew, reconcile, cancel, retry or
+otherwise alter a claim. Full multi-controller failover and production
+recovery acceptance remain open.
+
 ### Update-scoring schedule-state reads
 
 The scheduler reads only identity, state and eligibility fields from retained
@@ -2223,6 +2271,15 @@ other detail fields are loaded by their existing detail and completion paths.
 Regression coverage checks the scheduling queries across batches, including
 durable deferral, stale-state updates and the existing assessment identity.
 Candidate hashing and production throughput validation remain open.
+
+Scoring prepares the operating-system fields, package manager and installed RPM
+version index as each bounded host batch is read. Raw inventory is released
+with that batch. The pass keeps the prepared inputs in first-candidate order
+and uses the same installed versions in the outbound evidence. Result
+persistence still rechecks live inventory. Focused SQLite and MySQL tests
+cover exact score identities, multi-version and multi-architecture RPM payloads,
+and superseding a result after a committed inventory change. Compact per-host
+state still scales with the eligible fleet. Production throughput remains open.
 
 ### Fleet-wide exact-match known-good cache
 
@@ -2418,6 +2475,52 @@ state. This depends on #379 / PR #380 and does not complete cross-purpose priori
 aging, provider-specific quotas, native complete-context collection, full supported
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
+
+### Reviewed shared provider-backoff reset — worker checkpoint #552
+
+AI Settings exposes an active shared provider Retry-After/transient-failure floor with
+its sanitized reason, consecutive-failure count, recorded time and next eligibility.
+An administrator may clear the reviewed floor with an exact confirmation phrase and
+meaningful audited reason. The request carries an opaque digest of the durable state;
+the controller rechecks it under the provider-backoff lock and preserves a newer or
+already expired floor instead of applying a stale browser action.
+
+Resetting sends no provider or target request. It releases only the shared provider
+floor and provider-only item waits; local retry deadlines, attempt limits, smooth-rate
+and daily-budget admission, pause, lifecycle and concurrency controls stay
+authoritative. Status exposes no provider body, prompt, evidence, credential or raw
+error. No schema or target-helper upgrade is required.
+
+Focused acceptance covers active reset, changed/expired conflicts, required review
+fields, role/CSRF boundaries, audit evidence and responsive Settings behavior. This
+does not diagnose provider availability, reconcile uncertain charges, bypass provider
+limits or complete the broader shared-controls/faster-AI program. Exact-head
+SQLite/MySQL, browser, full-suite and coordinator integration checks remain required.
+
+
+### Durable cross-server process-triage fairness — worker checkpoint #388
+
+Process-triage admission now balances eligible servers by live leased occupancy before
+using another slot on the same server. Ties use a durable monotonically ordered server
+turn. A never-admitted eligible server sorts before one already served, and releasing
+a claim does not erase its turn, so worker or controller restarts cannot reset the
+order and let one deep queue repeatedly win on an older observation timestamp.
+
+The host choice remains inside the existing short distributed triage admission lock.
+Only a successfully committed subject claim records the next turn; refused locks,
+lifecycle changes and ineligible work do not consume one. The scheduler uses bounded
+SQL grouping and ordering rather than materializing the pending queue. A server may
+still fill its configured occupancy when no less-occupied eligible server is waiting.
+Subject exclusivity, per-server and fleet capacity, retry eligibility, pause/lifecycle,
+rate/spend/provider admission, evidence revisions and stale-result fencing remain
+authoritative.
+
+Focused acceptance covers live-occupancy balancing, persisted least-recent turns,
+same-server fallback and failed-admission non-consumption, plus offline database-copy
+retention. This stacked increment depends on #383 and does not complete cross-purpose
+priority/aging, provider-specific quotas, native complete-context collection, complete
+multi-controller failover acceptance or the overall faster-AI program. Exact-head
+SQLite/MySQL/full-suite and coordinator integration checks remain required.
 
 
 ## Portable per-server scanner records
@@ -6627,7 +6730,6 @@ threaded investigations, fair scheduling, shared accounting across every billabl
 path, production throughput acceptance or the remaining SQLite/MySQL failover and
 reset milestones. Coordinator integration, exact-head full-suite/SQLite/MySQL checks
 and fresh code scanning remain required before delivery.
-
 
 ### Newest authenticated receipt for AI follow-up (issue #645)
 
