@@ -27,8 +27,13 @@ jobs:
           node-version: '26'
       - name: Source version and changelog consistency
         env:
-          VERSION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          VERSION_BASE: ${{ github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git fetch --no-tags --depth=1 origin "refs/heads/$BASE_REF"
+            VERSION_BASE="$(git rev-parse FETCH_HEAD)"
+          fi
           if [ -n "$VERSION_BASE" ] && [ "$VERSION_BASE" != "0000000000000000000000000000000000000000" ]; then
             git fetch --no-tags --depth=1 origin "$VERSION_BASE"
             version_args=(--base-ref "$VERSION_BASE")
@@ -78,15 +83,18 @@ jobs:
           python-version: '3.12'
       - name: Coordinator version and PR traceability
         env:
-          VERSION_BASE: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git fetch --no-tags --depth=1 origin "$VERSION_BASE"
+          git fetch --no-tags --depth=1 origin "refs/heads/$BASE_REF"
+          VERSION_BASE="$(git rev-parse FETCH_HEAD)"
           python tools/check_version.py --base-ref "$VERSION_BASE" --pr-number "$PR_NUMBER"
 
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The full SQLite suite can take 28 minutes; leave time for the Docker/TLS
+    # smoke checks that follow instead of cancelling a successful test run.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7

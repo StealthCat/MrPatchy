@@ -184,6 +184,8 @@ def expected_files(host):
     if optional in host.baseline:files[optional]=host.baseline[optional]
     return files
 
+TARGET_PYTHON_TOO_OLD='Mr Patchy target helpers require Python 3.8 or newer at /usr/bin/python3 (EL8 ships 3.6 by default). The target refused the deployment before replacing any helper. Install a newer python3 and finish installation again.'
+
 def deploy(host):
     from target.bridge import UNIT
     code=(TARGET/'agent.py').read_bytes()
@@ -194,10 +196,19 @@ def deploy(host):
     payload={'action':'deploy','rpm_support':base64.b64encode(rpm_code).decode(),'rpm_sha256':expected['rpm_sha256'],'agent':base64.b64encode(code).decode(),'sha256':expected['deployed'],
                       'bridge':base64.b64encode(bridge).decode(),'bridge_sha256':expected['bridge_sha256'],
                       'unit':UNIT,'unit_sha256':expected['unit_sha256'],'release':base64.b64encode(release).decode(),'release_sha256':expected['release_sha256']}
-    result=call(host,payload)
+    def send():
+        try:return call(host,payload)
+        except RuntimeError as error:
+            # The central agent.py always compiles on Python >=3.8, so a target-side
+            # syntax rejection of it means the target interpreter is older. Bridges
+            # compile every payload before replacing any file, so nothing was written.
+            if 'invalid syntax (agent.py' not in str(error):raise
+            refused=RuntimeError(TARGET_PYTHON_TOO_OLD);refused.remote_started=getattr(error,'remote_started',True)
+            raise refused from error
+    result=send()
     if result.get('bridge_sha256')==expected['bridge_sha256'] and ('release_sha256' not in result or 'rpm_sha256' not in result):
         # Older bridges accept their own replacement before understanding runner deployment.
-        result=call(host,payload)
+        result=send()
     if result.get('bridge_sha256') is None:
         raise RuntimeError('Target uses the legacy bootstrap bridge. Download and rerun its installer through a trusted console, then finish installation again.')
     if any(result.get(key)!=value for key,value in expected.items()):
@@ -213,6 +224,7 @@ set -euo pipefail
 for command in python3 sshd ssh-keygen sudo visudo useradd sha256sum openssl; do
   command -v "$command" >/dev/null || {{ echo "Missing prerequisite: $command. Install python3 openssh-server sudo first."; exit 1; }}
 done
+/usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || {{ echo 'Mr Patchy target helpers require Python 3.8 or newer at /usr/bin/python3 (EL8 ships 3.6 by default). Install a newer python3 first.'; exit 1; }}
 if [ ! -f /var/lib/dpkg/status ]; then
   /usr/bin/python3 -c 'import dnf,rpm' || {{ echo 'RPM targets require Python 3 with python3-dnf and python3-rpm installed first (DNF4 bindings, including on DNF5 systems).'; exit 1; }}
 fi

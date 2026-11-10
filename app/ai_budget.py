@@ -92,10 +92,10 @@ def _state(session,cfg,now):
     return enabled,name,start,reset,groups,counted,cap
 
 
-def waiting(session,now,payload=None):
+def waiting(session,now,payload=None,*,settings=None):
     """Read-only preflight; final atomic reserve still owns spending authority."""
-    cfg=config(session)
-    enabled,_name,_start,reset,_groups,counted,cap=_state(session,cfg,now)
+    if settings is None:settings=config(session)
+    enabled,_name,_start,reset,_groups,counted,cap=_state(session,settings,now)
     if not enabled:return 0
     if counted>=cap:return reset
     if payload is not None:
@@ -107,11 +107,16 @@ def waiting(session,now,payload=None):
 def reserve(payload):
     """Atomically retain a conservative per-call amount before rate admission."""
     from .ai import AIError
-    quote=ai_pricing.reservation(payload)
+    with Session() as session:
+        if config(session)['ai_control_mode'] not in ai_pricing.CAP_MODES:
+            return None
+
     with Lock('ai-shared-budget'):
+        # Read again after waiting: the preflight does not authorize a capped reservation.
         with Session() as session:
             cfg=config(session)
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
+            quote=ai_pricing.reservation(payload)
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
             now=time.time();enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
@@ -137,12 +142,18 @@ def mark_sent(identifier,call_id):
             session.commit()
 
 
-def release_unsent(identifier,reason):
+def release_unsent(identifier,reason,*,pool_timeout_call_id=None):
+    """Release before transmission, or after a matching pool acquisition failure."""
     if not identifier:return
     with Lock('ai-shared-budget'):
         with Session() as session:
             row=session.get(BudgetEntry,identifier)
-            if row and row.status=='reserved':
+            if not row:return
+            if pool_timeout_call_id is None:
+                unsent=row.status=='reserved'
+            else:
+                unsent=row.status=='sent' and row.call_id==pool_timeout_call_id
+            if unsent:
                 row.status='released';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
 
 

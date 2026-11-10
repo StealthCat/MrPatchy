@@ -17,6 +17,45 @@ module.exports=async(page,capture)=>{
  assert.equal(await page.locator('#database-form [name=password]').inputValue(),'');
  assert.match(await page.locator('#database-settings').textContent(),/Active: SQLite/);
  await capture('database-settings');
+ // Test connection: button is separate from Save, reports an aria-live result and discards stale results on edit.
+ let tested=0,releaseTest,releaseFailure;
+ const testWait=new Promise(resolve=>releaseTest=resolve),failureWait=new Promise(resolve=>releaseFailure=resolve);
+ const testHandler=async route=>{
+  tested++;
+  if(tested===1)await testWait;
+  if(tested===2){await failureWait;return route.fulfill({status:503,json:{detail:'Synthetic delayed failure'}});}
+  await route.fulfill({json:{ok:true,elapsed_ms:12,detail:'Connected and ran a read-only query.',scope:'Checked from this controller only.'}});
+ };
+ await page.route('**/api/settings/database/test',testHandler);
+ try{
+  const testButton=page.getByRole('button',{name:'Test connection',exact:true});
+  const status=page.getByRole('status').and(page.locator('#database-test-result'));
+  await testButton.focus();
+  await page.keyboard.press('Enter');
+  await status.filter({hasText:'Testing connection'}).waitFor();
+  assert.equal(await testButton.getAttribute('aria-disabled'),'true');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'database-test');
+  await page.keyboard.press('Enter');
+  releaseTest();
+  await status.filter({hasText:'Success (12 ms)'}).waitFor();
+  assert.equal(await status.getAttribute('aria-live'),'polite');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'database-test');
+  assert.equal(tested,1);
+  await capture('database-settings-test-desktop');
+  await page.keyboard.press('Enter');
+  await status.filter({hasText:'Testing connection'}).waitFor();
+  await page.locator('#database-form [name=host]').fill('other.example.test');
+  releaseFailure();
+  await page.locator('#database-test:not([aria-disabled])').waitFor();
+  assert.equal(await status.textContent(),'');
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  await testButton.click();
+  await page.locator('#database-test-result').filter({hasText:'Success'}).waitFor();
+  await capture('database-settings-test-mobile');
+  await page.setViewportSize({width:1440,height:1000});
+  await page.locator('#database-form [name=host]').fill('mysql.example.test');
+ }finally{releaseTest();releaseFailure();await page.unroute('**/api/settings/database/test',testHandler);}
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
  await page.setViewportSize({width:1440,height:1000});
