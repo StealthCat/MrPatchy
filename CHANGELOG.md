@@ -2,7 +2,7 @@
 
 ## 1.54.11 — 2026-11-10
 
-1. [PR #642](https://github.com/StealthCat/MrPatchy/pull/642): Add a bounded `--retained-history-rows` control (0–50,000) to the disposable SQLite AI-triage benchmark, report the seeded count, and require matched history sizes when comparing serial and parallel runs; older reports default to zero. This is benchmark tooling only and does not change application runtime, schema, provider behavior or response authorization. Synthetic SQLite measurements do not establish MySQL, endpoint or production throughput. This source update does not publish a Docker image.
+1. [PR #642](https://github.com/StealthCat/MrPatchy/pull/642): Add a bounded `--retained-history-rows` control (0–50,000) to the disposable SQLite AI-triage benchmark, report the seeded count, and require matched history sizes when comparing serial and parallel runs; older reports default to zero. This is benchmark tooling only and does not change application runtime, schema, provider behavior or response authorization. Synthetic SQLite measurements do not establish MySQL, endpoint or production throughput. PR version checks now resolve the target branch tip when they run, avoiding stale base snapshots after integration preparation; this does not change runtime behavior. This source update does not publish a Docker image.
 
 ## 1.54.10 — 2026-11-10
 
