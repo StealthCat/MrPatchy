@@ -2183,6 +2183,13 @@ triage or worker diagnostic in one database snapshot, projecting only the fields
 used by the status response. This reduces a polling round trip. Production
 throughput and the full faster-AI acceptance milestones remain open.
 
+Investigation lease validation checks the current claim before fetching host or
+behavior evidence. A live lease reads only the host lifecycle fields and still
+checks the full behavior evidence, owner, configuration and expiry. Focused
+regressions verify the reduced SQL and continued refusal after lifecycle or
+evidence changes. This limits recurring lease-check I/O. Production throughput
+and the wider parallel-investigation acceptance remain open.
+
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
 - Support concurrent investigations across servers and independent subjects on one server where safe. Preserve locks for conflicting target mutations and evidence collection. Replace the all-exclusive per-server provider gate with concurrency-safe in-flight admission that still serializes pause changes against new calls, rechecks policy before every call and never sends paused-server evidence. A pause cannot retract an already sent request.

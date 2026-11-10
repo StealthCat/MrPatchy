@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.54.9 — 2026-11-10
+
+1. [PR #631](https://github.com/StealthCat/MrPatchy/pull/631): Update SQLAlchemy from 2.1.6 to 2.1.8 in the runtime requirements and hash-pinned lock. No application code, configuration, schema or public API changes are included, with no compatibility impact expected. This source update does not publish a Docker image.
+
+## 1.54.8 — 2026-11-10
+
+1. [PR #630](https://github.com/StealthCat/MrPatchy/pull/630): Upgrade the hash-pinned Authlib runtime dependency from 1.9.1 to 1.9.4, including upstream OAuth ID-JAG scope and issuer/subject user-resolution fixes. Application OAuth configuration, schema and public API remain unchanged; existing integrations gain these upstream fixes where ID-JAG is used, with no expected compatibility impact. This source update does not publish a Docker image.
+
+## 1.54.7 — 2026-11-09
+
+1. [PR #629](https://github.com/StealthCat/MrPatchy/pull/629): Update python-multipart from 0.0.32 to 0.0.33 in the runtime requirements and hash-pinned lock for upstream parser, upload and decoding fixes. Upstream drops Python 3.10; the application image uses Python 3.12, so its supported runtime is unaffected. Target-agent Python requirements are unchanged. Upstream URL-encoded field caps are opt-in and this update does not enable them. No application code, configuration, schema or public API changes. This source update does not publish a Docker image.
+
+## 1.54.6 — 2026-11-09
+
+1. [PR #576](https://github.com/StealthCat/MrPatchy/pull/576): Reduce database reads during investigation lease validation by rejecting lost, replaced and expired claims before fetching behavior evidence, then selecting only the host lifecycle fields (`enabled` and `deleted_at`) needed for valid leases. Preserve the evidence, owner, configuration, expiry, heartbeat, disabled/deleted-host and mutation fences. Compatibility and limits: no schema, public API, locking, lease lifetime, provider policy or response-authorization change; production throughput remains unverified. This source bump does not publish a Docker image.
+
 ## 1.54.5 — 2026-11-09
 
 1. [PR #581](https://github.com/StealthCat/MrPatchy/pull/581): Join expired AI lease claims to their retained run rows in one bounded read, followed by the existing bounded orphan scan. Preserve live leases, completed runs, interruption events, provider receipts, idempotent recovery and the admission lock. Compatibility and limits: no schema, API, queue-policy, retry or response-authorization change; production throughput remains unverified. This source bump does not publish a Docker image.
