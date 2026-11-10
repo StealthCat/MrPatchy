@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.55.1 — 2026-11-10
+
+1. [PR #648](https://github.com/StealthCat/MrPatchy/pull/648): Add the `ix_behaviors_attempted` covering timestamp index for administrator recent-attempt status and legacy hourly admission reads, and install it idempotently on existing SQLite/MySQL databases without rewriting retained rows. Preserve the strict one-hour cutoff, count, retry time and admission denial; API, policy, provider, UI and authorization behavior do not change. Index maintenance adds timestamp-write cost, and fixture measurements do not establish production throughput. This source update does not publish a Docker image.
+
 ## 1.55.0 — 2026-11-10
 
 1. [PR #389](https://github.com/StealthCat/MrPatchy/pull/389): Distribute newly admitted process-triage work across eligible servers by live claim count, durable least-recently-admitted turns, then oldest eligible observation; commit a turn only with a successful claim. Add the `ai_triage_host_turns` table at normal startup and preserve it through offline SQLite/MySQL migration and copy. No API, role, audit, provider-payload, target-helper or response-authorization change. Same-server overlap remains available when no less-occupied eligible server waits, and existing lifecycle, capacity, retry and spend fences remain. Indexed election avoids a retained-history scan in SQLite; a dense MySQL fixture showed a higher query median despite indexed access. Production throughput and complete multi-controller failover remain unverified. This source update does not publish a Docker image.
