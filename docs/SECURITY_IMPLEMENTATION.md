@@ -2199,6 +2199,14 @@ pause, lifecycle, capacity and oldest-first eligibility checks. This is a partia
 database performance increment; production throughput and full faster-AI
 acceptance remain open.
 
+Worker checkpoint #647 adds a covering index on the attempt timestamp used by
+the administrator's recent-attempt status and the legacy hourly admission gate.
+Startup adds it to existing behavior tables without rewriting retained rows.
+The focused acceptance checks both real query plans, the strict one-hour cutoff,
+the displayed retry time and idempotent index installation on SQLite and MySQL.
+The index incurs timestamp-write maintenance. Fixture measurements do not
+establish production throughput or complete the faster-AI milestone.
+
 Worker checkpoint #603 adds a server/package/state/candidate index for exact
 score history and deferred scoring lookups. Startup creates it idempotently on
 existing databases and keeps retained scores and existing indexes. A fixture with
@@ -2214,6 +2222,18 @@ end-to-end production throughput acceptance remain open.
 - Reuse lifecycle-managed HTTP clients/connection pools with bounded pool/connect/read deadlines and safe per-request credentials; close them on drain/shutdown. Keep slow provider/SSH operations outside database transactions wherever possible. Measure candidate-query/index and repeated evidence-collection costs before optimizing them.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
+
+### Live process-triage lease telemetry
+
+The administrator investigation status API reports
+`active_lease_expires_at`, the earliest expiry among currently live process
+investigation claims, or null when no claim is live. Expired claims are
+excluded. The AI worker status displays this boundary with the active count so
+an administrator can tell when an unrenewed slot becomes eligible for fenced
+recovery. Expiry does not prove a provider request stopped or was not billed.
+This telemetry is read-only: it does not renew, reconcile, cancel, retry or
+otherwise alter a claim. Full multi-controller failover and production
+recovery acceptance remain open.
 
 ### Update-scoring schedule-state reads
 

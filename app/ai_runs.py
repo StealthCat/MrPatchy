@@ -359,7 +359,9 @@ def status(s):
     recent_count,recent_min=s.execute(select(func.count(),func.min(Behavior.attempted)).where(Behavior.attempted>now-3600)).one()
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
     running_stage,last_run,last_error=_status_run_details(s)
-    active_count=s.scalar(select(func.count()).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now))
+    active_count,active_lease_expires=s.execute(select(
+        func.count(),func.min(ai_claims.Claim.expires),
+    ).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now)).one()
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
     run_count,oldest_run=s.execute(select(func.count(),func.min(AIRun.started)).where(
@@ -409,7 +411,8 @@ def status(s):
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
             'eligible_unclaimed':waiting,'oldest_eligible_unclaimed_observation_at':oldest_waiting,
-            'active':active_count,'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,
+            'active':active_count,'active_lease_expires_at':active_lease_expires,
+            'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,
             'per_server_limit':ai_policy.DEFAULT_CONCURRENCY,
             'per_server_limit_min':ai_policy.MIN_CONCURRENCY,'per_server_limit_max':ai_policy.MAX_CONCURRENCY,
             'recent_attempts':used,'last_error':last_error,
