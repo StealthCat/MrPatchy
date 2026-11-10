@@ -200,6 +200,11 @@ def _validate(report, label):
     else:
         persistence_delay = 0
         persistence_delay_source = 'legacy zero default'
+    # Older fixtures seeded only the subjects they investigated.
+    retained_history_rows = _integer(report.get('retained_history_rows', 0),
+                                     f'{label}.retained_history_rows')
+    if retained_history_rows > 50_000:
+        raise ComparisonError(f'{label}.retained_history_rows must be between 0 and 50000')
     return {
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
@@ -207,6 +212,7 @@ def _validate(report, label):
         'persistence_delay_ms': persistence_delay,
         'persistence_delay_source': persistence_delay_source,
         'queue_age_seconds': queue_age, 'queue_age_source': queue_age_source,
+        'retained_history_rows': retained_history_rows,
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
         'output_tokens': output_tokens, 'errors': errors,
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
@@ -236,7 +242,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         raise ComparisonError('candidate must use a distinct execution configuration')
     controls = (
         'runs', 'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
-        'queue_age_seconds',
+        'queue_age_seconds', 'retained_history_rows',
         'provider_calls', 'input_tokens', 'output_tokens',
     )
     for field in controls:
@@ -261,6 +267,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'persistence_delay_source': base['persistence_delay_source'],
             'queue_age_seconds': base['queue_age_seconds'],
             'queue_age_source': base['queue_age_source'],
+            'retained_history_rows': base['retained_history_rows'],
             'cost_status': base['cost_status'],
         },
         'candidate': {
@@ -273,6 +280,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'persistence_delay_source': current['persistence_delay_source'],
             'queue_age_seconds': current['queue_age_seconds'],
             'queue_age_source': current['queue_age_source'],
+            'retained_history_rows': current['retained_history_rows'],
             'cost_status': current['cost_status'],
         },
         'capability': {

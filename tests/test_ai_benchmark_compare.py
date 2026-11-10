@@ -104,6 +104,37 @@ def test_malformed_persistence_delay_is_refused(value):
         compare_ai_benchmarks.compare(report(), candidate)
 
 
+@pytest.mark.parametrize('count', [0, 5000])
+def test_matching_retained_history_is_accepted(count):
+    baseline = report()
+    candidate = report('parallel', 4)
+    if count:
+        baseline['retained_history_rows'] = count
+    candidate['retained_history_rows'] = count
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['baseline']['retained_history_rows'] == count
+    assert result['candidate']['retained_history_rows'] == count
+
+
+@pytest.mark.parametrize('baseline_count', [None, 0, 1000])
+def test_mismatched_retained_history_is_refused(baseline_count):
+    baseline = report()
+    candidate = report('parallel', 4)
+    if baseline_count is not None:
+        baseline['retained_history_rows'] = baseline_count
+    candidate['retained_history_rows'] = 5000
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='retained_history_rows differs'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
+@pytest.mark.parametrize('count', [-1, 50001, True, '5000', None, 1.5])
+def test_malformed_retained_history_is_refused(count):
+    candidate = report('parallel', 4)
+    candidate['retained_history_rows'] = count
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.retained_history_rows'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
 def test_legacy_reports_use_fixed_two_second_queue_age():
     baseline = report()
     candidate = report('parallel', 4)
