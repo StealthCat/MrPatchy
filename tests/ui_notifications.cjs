@@ -11,7 +11,7 @@ module.exports=async(page,capture)=>{
     {id:unsafeId,revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'scan-9',host_id:'',severity:'high',reason:'<img src=x onerror="window.notificationInjected=true"> Untrusted finding',deep_link:'https://attacker.invalid/',lifecycle:'active',created:1699999000,read:false,dismissed:false},
   ];
   await page.route('**/api/notifications/unread-count',route=>route.fulfill({json:{unread}}));
-  await page.route(/\/api\/notifications\?/,route=>{const url=new URL(route.request().url());listRequests.push(url.search);let visible=items.filter(item=>url.searchParams.get('include_dismissed')==='true'||!item.dismissed);if(url.searchParams.get('unread_only')==='true')visible=visible.filter(item=>!item.read);for(const key of ['severity','source']){const value=url.searchParams.get(key);if(value)visible=visible.filter(item=>item[key]===value);}const host=url.searchParams.get('host_id');if(host)visible=visible.filter(item=>item.host_id===host);const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||8),total=visible.length;visible=visible.slice(offset,offset+limit);return route.fulfill({json:{items:visible,offset,limit,total,more:offset+visible.length<total}});});
+  await page.route(/\/api\/notifications\?/,route=>{const url=new URL(route.request().url());listRequests.push(url.search);let visible=items.filter(item=>url.searchParams.get('include_dismissed')==='true'||!item.dismissed);if(url.searchParams.get('unread_only')==='true')visible=visible.filter(item=>!item.read);for(const key of ['severity','source']){const value=url.searchParams.get(key);if(value)visible=visible.filter(item=>item[key]===value);}const host=url.searchParams.get('host_id');if(host)visible=visible.filter(item=>item.host_id===host);if(url.searchParams.get('severity'))visible=[...visible].sort((a,b)=>b.created-a.created||(a.id<b.id?-1:1));const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||8),total=visible.length;visible=visible.slice(offset,offset+limit);return route.fulfill({json:{items:visible,offset,limit,total,more:offset+visible.length<total}});});
   await page.route(/\/api\/notifications\/[0-9a-f]{64}\/(read|dismiss)$/,route=>{
     const url=route.request().url(),body=route.request().postDataJSON(),id=url.split('/').at(-2),item=items.find(candidate=>candidate.id===id);
     mutations.push({url,body});
@@ -189,4 +189,39 @@ module.exports=async(page,capture)=>{
 
   await page.evaluate(()=>window.NotificationShell.reset());
   assert.equal(await toasts.count(),0,'logout/reset clears toasts');
+
+  // Toast admission is independent of the bell's eight-item recent window.
+  const critical=(n,created,reason)=>({id:n.toString(16).padStart(64,'0'),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'window-'+n,host_id:'',severity:'critical',reason,deep_link:'#activity',lifecycle:'active',created,read:false,dismissed:false});
+  items.splice(0,items.length);
+  for(let n=1;n<=9;n++)items.unshift(critical(0x100+n,1700100000+n,'Pre-existing critical '+n));
+  unread=9;
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'nine pre-existing urgent events stay a silent baseline');
+  items[0].dismissed=true;items[0].read=true;unread=8;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'an unchanged event sliding into the bell window after another session dismisses one does not toast');
+  for(let n=1;n<=8;n++)items.unshift({...critical(0x200+n,1700200000+n,'Informational '+n),severity:'info'});
+  items.push(critical(0x300,1690000000,'Lagging producer critical'));unread=17;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal((await page.evaluate(()=>[...document.querySelectorAll('#notification-list .notification-reason')].map(node=>node.textContent))).includes('Lagging producer critical'),false,'the new critical event is outside the bell window');
+  await toasts.filter({hasText:'Lagging producer critical'}).waitFor();
+  assert.equal(await toasts.count(),1,'a genuinely new urgent event outside the bell window toasts; informational events do not');
+
+  // A full admission window: events entering from below it are not new.
+  await page.evaluate(()=>window.NotificationShell.reset());
+  items.splice(0,items.length);
+  for(let n=1;n<=105;n++)items.unshift(critical(0x1000+n,1700300000+n,'Large backlog '+n));
+  unread=105;
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0);
+  for(let n=0;n<5;n++){items[n].dismissed=true;items[n].read=true;}
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'events below a full admission window that slide into it do not toast');
+  items.unshift(critical(0x2000,1700400000,'Newest backlog critical'));
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'Newest backlog critical'}).waitFor();
+  assert.equal(await toasts.count(),1);
+  await page.evaluate(()=>window.NotificationShell.reset());
 };

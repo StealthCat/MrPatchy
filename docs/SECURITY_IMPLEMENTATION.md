@@ -3042,8 +3042,15 @@ toasts. After the first successful refresh following sign-in or page load, the
 shell records the visible event revisions as a baseline, so reloads, reconnects
 and catch-up never replay old events as toasts. A later refresh shows a toast only
 for a new or higher-revision unread, undismissed, unresolved `high` or `critical`
-notification. At most three toasts are visible; a larger burst collapses into
-one summary that links to the notification center. Toasts use a polite live
+notification. Toast admission does not depend on the bell's eight-item recent
+list: each refresh also reads a bounded, permission-filtered unread window of up
+to 100 events per urgent severity. An unknown event is admitted only when the
+previous window was complete or the event sorts ahead of that window's last
+event, so an old event that slides into view after another session dismisses one
+never toasts, and a new event with a lagging producer timestamp still toasts
+while fewer than 100 newer unread events of its severity exist (beyond that the
+unread badge still updates). At most three toasts are visible; a larger burst
+collapses into one summary that links to the notification center. Toasts use a polite live
 region, render text nodes only, revalidate same-origin links, never take focus,
 pause their ten-second auto-hide on hover or focus, and mount inside an open modal
 so they stay usable above it. Hiding a toast is local to the tab and does not mark
