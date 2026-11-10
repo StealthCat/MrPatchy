@@ -1,5 +1,6 @@
 import time
 from types import SimpleNamespace
+import pytest
 from sqlalchemy import select
 from app.main import app
 from app.db import Session,Host,Job,Setting
@@ -23,8 +24,9 @@ def test_viewer_cannot_mutate_or_read_installer(client):
     assert client.get('/api/hosts').status_code==200
     assert client.get('/api/settings').status_code==403
 
-def test_viewer_investigation_status_hides_ai_telemetry(client):
-    login_as(client,'reader','viewer')
+@pytest.mark.parametrize('role', ['viewer','operator'])
+def test_nonadmin_investigation_status_hides_ai_telemetry(client,role):
+    login_as(client,'reader',role)
     r=client.get('/api/investigation-status');assert r.status_code==200
     assert set(r.json())=={'pending','oldest','enabled'}
     for key in ('budget','admission','provider_backoff','last_error','reported_capacity','worker_seen'): assert key not in r.json()
