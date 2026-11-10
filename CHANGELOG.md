@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.11 — 2026-11-10
+
+1. [PR #642](https://github.com/StealthCat/MrPatchy/pull/642): Add a bounded `--retained-history-rows` control (0–50,000) to the disposable SQLite AI-triage benchmark, report the seeded count, and require matched history sizes when comparing serial and parallel runs; older reports default to zero. This is benchmark tooling only and does not change application runtime, schema, provider behavior or response authorization. Synthetic SQLite measurements do not establish MySQL, endpoint or production throughput. PR version checks now resolve the target branch tip when they run, avoiding stale base snapshots after integration preparation; this does not change runtime behavior. This source update does not publish a Docker image.
+
 ## 1.54.10 — 2026-11-10
 
 1. [PR #600](https://github.com/StealthCat/MrPatchy/pull/600): Add the composite `ix_behaviors_admission (approved, verdict, first_seen, id)` index to accelerate pending/error process-triage admission over retained behavior history. Existing SQLite and MySQL databases add the index idempotently, preserving rows and oldest-eligible selection across both verdict ranges. Existing databases incur ordinary index-build locking and disk use; this is a partial performance milestone, not a production-throughput or full faster-AI completion claim. No API, schema-column or response-authorization changes. This source update does not publish a Docker image.

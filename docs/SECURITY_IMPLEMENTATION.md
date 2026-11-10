@@ -2328,6 +2328,16 @@ two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
 
+### Retained behavior history in the triage benchmark — worker checkpoint #641
+
+Use `--retained-history-rows` to seed 0–50,000 older completed observations in
+the disposable SQLite fixture before the timed investigations. The default is
+zero. The JSON report records the count, and the comparator requires equal
+counts across both reports. It interprets reports from older fixtures as zero.
+Use the same history size, run count and delays for a serial/parallel pair.
+The fixture still checks the same provider, SSH evidence and completion workload.
+Native MySQL and production throughput acceptance remain open.
+
 ### Retained process-triage timing sample — worker checkpoint #522
 
 The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
