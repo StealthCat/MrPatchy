@@ -1,3 +1,7 @@
+## 1.55.10 — 2026-11-10
+
+1. [PR #657](https://github.com/StealthCat/MrPatchy/pull/657): Fix server AI capacity and Pause/Resume saves so a still-current dialog closes and shows the persisted policy even when a background refresh replaces the panel and its older policy read completes afterward. Preserve navigation and dialog revision guards, role/CSRF checks, required reason, and existing conflict behavior. No API, schema, permission, or configuration change. This source update does not publish a Docker image.
+
 ## 1.55.9 — 2026-11-10
 
 1. [PR #287](https://github.com/StealthCat/MrPatchy/pull/287): Move the digest-pinned container runtime and backend CI to Python 3.15, regenerate the hash-locked runtime dependency target, and add a separate hash-pinned build-input lock for sdist-only zstandard. Networked build steps fetch verified bytes only; compilation and installation run offline in a compiler-only stage, and build tools are removed from the final image. Add the test compatibility shim for Python 3.13+ PGPy imports. Container rebuild required; image builds require BuildKit. No schema, API or application configuration change. This closes the Python 3.13+ test/runtime CI gap tracked in #445. This source update does not publish a Docker image.
