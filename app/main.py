@@ -61,7 +61,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.20"
+APP_VERSION = "1.59.22"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1161,6 +1161,14 @@ def settings(user=Depends(admin_user)):
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+
+@app.get('/api/settings/ai-connections')
+def ai_connection_inventory(user=Depends(admin_user)):
+    from .ai_connection_inventory import inventory
+
+    with Session() as session:
+        credential_saved = session.scalar(select(Setting.key).where(Setting.key == 'openai_key')) is not None
+        return inventory(config(session), credential_saved)
 
 @app.get('/api/settings/ai-spend-history')
 def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)):
