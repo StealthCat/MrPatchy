@@ -165,6 +165,7 @@ EXPECTED_ROLES = {
     ('POST','/api/logout'):'self-service',
     ('GET','/api/metrics'):'viewer',
     ('GET','/api/notifications'):'self-service',
+    ('GET','/api/notifications/arrivals'):'self-service',
     ('GET','/api/notifications/stream'):'self-service',
     ('GET','/api/notifications/unread-count'):'self-service',
     ('POST','/api/notifications/{event_id}/dismiss'):'self-service',

@@ -1,3 +1,7 @@
+## 1.58.0 — 2026-11-11
+
+1. [PR #669](https://github.com/StealthCat/MrPatchy/pull/669): Add `GET /api/notifications/arrivals` with a durable cursor for newly committed, current-role-visible revisions, independent of producer timestamps and the bounded history list. Sequence numbers are assigned after producer commits so slow or rolled-back writes cannot be skipped or replayed; baselines cover all prior arrivals, with bounded pagination and cursor reset handling. Additive `notification_arrivals` and `notification_arrival_head` tables are created automatically. Existing notification list/count, SSE, read/dismiss, authorization and response behavior remain unchanged. Arrival retention/pruning, client adoption for live toasts (#662/#663) and multi-controller acceptance remain open. This source update does not publish a Docker image.
+
 ## 1.57.2 — 2026-11-11
 
 1. [PR #392](https://github.com/StealthCat/MrPatchy/pull/392): Add a pure rollout-ring planner (`app/rollout_rings.py`). It validates reusable ring definitions, computes the exact approved target set with a digest, and makes a deterministic batch-admission decision under parallelism, soak-time, failure-threshold and per-service or per-site availability limits. Availability membership for the bounded fleet is bound into the plan digest, so unavailable hosts outside the rollout's target set still consume a shared service or site budget. Missing membership for a limited scope, observed hosts outside the inventory, unknown fields, newline names and non-finite soak or current times all fail closed.
