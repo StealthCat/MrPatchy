@@ -2638,6 +2638,46 @@ until the corresponding detection and response milestones are completed.
 - Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
 - Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
 
+### Applicability and exposure-window contract — worker checkpoint #672
+
+The first bounded increment adds the pure `app/cve_exposure.py` contract. It has
+no schema, route, UI, producer, AI or response changes, so runtime behavior is
+unchanged.
+
+- **Applicability:** `classify()` reads only the OSV entries for the endpoint's
+  exact ecosystem (for example `Debian:12`) and source package. It applies the
+  OSV ECOSYSTEM range algorithm (`introduced`/`fixed`/`last_affected`) and the
+  explicit `versions` lists through an injected comparator; production uses
+  native `dpkg --compare-versions`, so epochs, tildes and distribution backports
+  follow vendor ordering. Each result is `affected` (with the next fixed version,
+  or no fix published yet), `fixed`, `unaffected` or `uncertain`. The following
+  all yield `uncertain` rather than `unaffected`:
+  - another release's or upstream ecosystem's entry;
+  - GIT/SEMVER-only or `limit` ranges;
+  - malformed or oversized data;
+  - an unknown installed version;
+  - a comparator failure.
+
+  An affected range wins over an unevaluable sibling, but a `fixed` result is
+  only reported when every range was evaluated.
+- **Exposure window:** `exposure_window()` computes `not_applicable`, `open`,
+  `pending_activation` or `closed` from recorded applicability, fix-availability,
+  install, activation and reintroduction events. The window starts at publication.
+  - Only a verified installation closes it. A failed, partial or unverified
+    install does not.
+  - A required restart or reboot keeps it in `pending_activation` until a later
+    activation is recorded.
+  - Rollback or reintroduction reopens it, and the reopen is counted.
+  - Late enrollment, missing monitoring and offline periods inside the window are
+    returned as explicit gaps, and future-dated or malformed timestamps are
+    rejected.
+
+This does not complete requirement D. Advisory ingestion for every supported
+distribution, stored per-endpoint exposure records and producers, CVE-specific
+exploitation detectors, typed automatic containment, server/fleet views,
+notifications and real-target acceptance remain planned. A vulnerable version, an
+advisory match or AI output still authorizes no containment.
+
 
 ## Planned: known and unknown malware detection with automatic response
 
