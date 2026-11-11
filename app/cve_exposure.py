@@ -37,7 +37,8 @@ def native_compare(left, right):
 
 
 def _cve_ids(vuln):
-    ids = [vuln.get('id')] + list(vuln.get('aliases') or [])
+    aliases = vuln.get('aliases')
+    ids = [vuln.get('id')] + (list(aliases) if isinstance(aliases, (list, tuple)) else [])
     return sorted({value for value in ids if isinstance(value, str) and value.startswith('CVE-')})
 
 
@@ -117,7 +118,16 @@ def classify(vuln, ecosystem, package, installed_version, compare=native_compare
     distribution's range data, a generic upstream range or a CVE ID alone never
     establishes applicability. Every unsupported, malformed or uncomparable input
     yields UNCERTAIN, which callers must not treat as UNAFFECTED.
+
+    For an AFFECTED result, ``fixed_version`` names the lowest published fix that
+    the complete matching vendor data classifies as FIXED or UNAFFECTED. A fix
+    that ends one matching range but sits inside another (overlapping ranges, an
+    explicit affected version or an unevaluable sibling) is never reported.
     """
+    return _classify(vuln, ecosystem, package, installed_version, compare, resolve_fix=True)
+
+
+def _classify(vuln, ecosystem, package, installed_version, compare, resolve_fix):
     if not isinstance(vuln, dict):
         return _result({}, UNCERTAIN, 'Advisory record is malformed')
     if not isinstance(installed_version, str) or not installed_version:
@@ -132,7 +142,8 @@ def classify(vuln, ecosystem, package, installed_version, compare=native_compare
     ]
     if not entries:
         return _result(vuln, UNCERTAIN, 'Advisory has no vendor data for this distribution release and package')
-    affected_fixes = []
+    is_affected = False
+    fix_candidates = []
     fixed_by = []
     problems = []
     for entry in entries:
@@ -141,6 +152,8 @@ def classify(vuln, ecosystem, package, installed_version, compare=native_compare
         if versions is not None and not isinstance(versions, list):
             problems.append('explicit version list is malformed')
             versions = None
+        if versions and not all(isinstance(value, str) and value for value in versions):
+            problems.append('explicit version list contains non-string entries')
         if ranges is not None and not isinstance(ranges, list):
             problems.append('range list is malformed')
             ranges = None
@@ -148,34 +161,34 @@ def classify(vuln, ecosystem, package, installed_version, compare=native_compare
             problems.append('vendor entry lists no versions or ranges')
             continue
         if versions and installed_version in versions:
-            affected_fixes.append(None)
+            is_affected = True
         for item in ranges or []:
             if not isinstance(item, dict) or item.get('type') != 'ECOSYSTEM':
                 problems.append('unsupported range type for distribution version ordering')
                 continue
             try:
-                status, fixed_version = _evaluate_range(_parse_events(item.get('events')), installed_version, compare)
+                parsed = _parse_events(item.get('events'))
+                status, fixed_version = _evaluate_range(parsed, installed_version, compare)
+                later_fixes = [value for key, value in parsed if key == 'fixed' and compare(value, installed_version) > 0]
             except (ValueError, TypeError, OSError) as exc:
                 problems.append(str(exc) or 'version comparison failed')
                 continue
             except Exception:  # noqa: BLE001 - an unknown comparator failure is uncertainty, never safety
                 problems.append('version comparison failed')
                 continue
+            fix_candidates.extend(later_fixes)
             if status == AFFECTED:
-                affected_fixes.append(fixed_version)
+                is_affected = True
             elif status == FIXED:
                 fixed_by.append(fixed_version)
-    if affected_fixes:
-        known = [value for value in affected_fixes if value is not None]
-        fix = None
-        if known:
-            try:
-                fix = sorted(known, key=cmp_to_key(compare))[0]
-            except Exception:  # noqa: BLE001
-                fix = None
+    if is_affected:
+        fix = _complete_fix(vuln, ecosystem, package, fix_candidates, compare) if resolve_fix else None
         reason = 'Installed version is inside a vendor-listed affected range'
-        if fix is None:
-            reason += '; no fixed version is published for this release'
+        if fix is None and resolve_fix:
+            if fix_candidates:
+                reason += '; no published fixed version clears every matching vendor range'
+            else:
+                reason += '; no fixed version is published for this release'
         return _result(vuln, AFFECTED, reason, fix)
     if problems:
         return _result(vuln, UNCERTAIN, 'Applicability could not be established: ' + '; '.join(sorted(set(problems))))
@@ -188,21 +201,70 @@ def classify(vuln, ecosystem, package, installed_version, compare=native_compare
     return _result(vuln, UNAFFECTED, 'Installed version is outside every vendor-listed affected range')
 
 
+def _complete_fix(vuln, ecosystem, package, candidates, compare):
+    """Return the lowest candidate fix that the whole matching record clears, else None."""
+    try:
+        ordered = sorted(set(candidates), key=cmp_to_key(compare))
+    except Exception:  # noqa: BLE001 - uncomparable fixes are never reported
+        return None
+    for candidate in ordered:
+        status = _classify(vuln, ecosystem, package, candidate, compare, resolve_fix=False)['status']
+        if status in (FIXED, UNAFFECTED):
+            return candidate
+    return None
+
+
 def _timestamp(value, name):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise ValueError(name + ' must be a finite non-negative timestamp')
     return float(value)
 
 
+def _coverage_gaps(published, monitoring_started_at, offline_periods):
+    """Return unclipped coverage gaps from publication onward as (kind, start, end|None)."""
+    gaps = []
+    if monitoring_started_at is None:
+        gaps.append(('no_monitoring', published, None))
+    else:
+        started = _timestamp(monitoring_started_at, 'monitoring_started_at')
+        if started > published:
+            gaps.append(('late_enrollment', published, started))
+    for period in offline_periods or ():
+        if not isinstance(period, (list, tuple)) or len(period) != 2:
+            raise ValueError('offline period must be a (start, end) pair')
+        begin = _timestamp(period[0], 'offline start')
+        stop = _timestamp(period[1], 'offline end')
+        if stop < begin:
+            raise ValueError('offline period ends before it starts')
+        begin = max(begin, published)
+        if stop > begin:
+            gaps.append(('offline', begin, stop))
+    return gaps
+
+
 def exposure_window(published_at, events, now, monitoring_started_at=None, offline_periods=()):
-    """Compute one endpoint's exposure window for one CVE from recorded evidence.
+    """Compute one endpoint's exposure history for one CVE from recorded evidence.
 
     ``events`` are dictionaries with ``kind`` (see ``EVENT_KINDS``) and ``at``.
     ``fix_installed`` events close the window only when ``verified`` is true;
     when ``activation_required`` is true the window stays ``pending_activation``
-    until a later ``activated`` event records the restart or reboot. Rollback or
-    reinstallation of an affected version (``reintroduced``) reopens a closed or
-    pending window. Monitoring gaps are disclosed and never imply coverage.
+    until a later ``activated`` event records the restart or reboot.
+
+    Exposure is reported as explicit ``intervals``; ``duration_seconds`` is their
+    sum, so a verified-fixed period between a closure and a reopen is never
+    counted, and every earlier closure is retained in its interval. Rollback or
+    reinstallation of an affected version reopens a closed window. Producers
+    should emit ``reintroduced`` for that, but an ``applicable`` event recorded
+    after a closure is treated the same way, so a producer that only re-reports
+    applicability can never hide renewed exposure.
+
+    Exposure starts at the first ``applicable`` observation only when monitoring
+    covered the whole interval from publication to that observation without a
+    gap (``start_basis`` = ``first_observed``). Otherwise the earlier state is
+    unknown and exposure conservatively starts at publication (``publication``),
+    as it also does when applicability was recorded at or before publication.
+    Coverage gaps are clipped to the exposed intervals, disclosed, and never
+    imply coverage.
     """
     published = _timestamp(published_at, 'published_at')
     current = _timestamp(now, 'now')
@@ -219,23 +281,54 @@ def exposure_window(published_at, events, now, monitoring_started_at=None, offli
             raise ValueError('event time is after now')
         ordered.append((at, index, event))
     ordered.sort(key=lambda item: (item[0], item[1]))
+    raw_gaps = _coverage_gaps(published, monitoring_started_at, offline_periods)
 
     result = {
-        'state': NOT_APPLICABLE, 'published_at': published, 'applicable_at': None,
+        'state': NOT_APPLICABLE, 'published_at': published, 'applicable_at': None, 'start_basis': None,
         'fix_available_at': None, 'fix_installed_at': None, 'effective_at': None,
-        'closed_at': None, 'reopened': 0, 'duration_seconds': None, 'gaps': [], 'notes': [],
+        'closed_at': None, 'reopened': 0, 'intervals': [], 'duration_seconds': None, 'gaps': [], 'notes': [],
         'monitoring_complete': None,
     }
+    intervals = result['intervals']
+
+    def begin(at):
+        intervals.append({'start': at, 'end': None, 'state': OPEN,
+                          'fix_installed_at': None, 'effective_at': None, 'closed_at': None})
+
+    def close(at):
+        window = intervals[-1]
+        window['state'] = CLOSED
+        window['end'] = window['effective_at'] = window['closed_at'] = at
+
+    def reopen(at, note):
+        result['reopened'] += 1
+        result['notes'].append(note)
+        begin(at)
+
     state = NOT_APPLICABLE
     for at, _, event in ordered:
         kind = event['kind']
         if kind == 'applicable':
-            if result['applicable_at'] is None:
-                result['applicable_at'] = at
-                if at < published:
-                    result['notes'].append('Applicability was recorded before publication; exposure starts at publication')
             if state == NOT_APPLICABLE:
+                result['applicable_at'] = at
+                if at <= published:
+                    result['start_basis'] = 'publication'
+                    if at < published:
+                        result['notes'].append('Applicability was recorded before publication; exposure starts at publication')
+                    begin(published)
+                elif any(gap_start < at for _, gap_start, _ in raw_gaps):
+                    result['start_basis'] = 'publication'
+                    result['notes'].append(
+                        'Monitoring did not cover the whole interval from publication to the first applicability '
+                        'observation; exposure conservatively starts at publication')
+                    begin(published)
+                else:
+                    result['start_basis'] = 'first_observed'
+                    begin(at)
                 state = OPEN
+            elif state == CLOSED:
+                state = OPEN
+                reopen(max(at, published), 'Applicability was observed again after a verified fix; the exposure window reopened')
         elif kind == 'fix_available':
             if result['fix_available_at'] is None:
                 result['fix_available_at'] = at
@@ -250,45 +343,41 @@ def exposure_window(published_at, events, now, monitoring_started_at=None, offli
             if event.get('verified') is not True:
                 result['notes'].append('An unverified or partial fix installation does not close the window')
                 continue
-            result['fix_installed_at'] = at
+            intervals[-1]['fix_installed_at'] = at
             if event.get('activation_required') is True:
-                state = PENDING_ACTIVATION
+                state = intervals[-1]['state'] = PENDING_ACTIVATION
             else:
                 state = CLOSED
-                result['effective_at'] = result['closed_at'] = at
+                close(max(at, intervals[-1]['start']))
         elif kind == 'activated':
             if state == PENDING_ACTIVATION:
                 state = CLOSED
-                result['effective_at'] = result['closed_at'] = at
+                close(max(at, intervals[-1]['start']))
         elif kind == 'reintroduced':
-            if state in (CLOSED, PENDING_ACTIVATION):
-                if state == CLOSED:
-                    result['reopened'] += 1
+            if state == CLOSED:
                 state = OPEN
-                result['fix_installed_at'] = result['effective_at'] = result['closed_at'] = None
-                result['notes'].append('An affected version was reintroduced; the exposure window reopened')
+                reopen(max(at, published), 'An affected version was reintroduced; the exposure window reopened')
+            elif state == PENDING_ACTIVATION:
+                state = intervals[-1]['state'] = OPEN
+                intervals[-1]['fix_installed_at'] = None
+                result['notes'].append('An affected version was reintroduced before the fix took effect; the window stays open')
     result['state'] = state
     if state == NOT_APPLICABLE:
         return result
 
-    end = result['closed_at'] if state == CLOSED else current
-    result['duration_seconds'] = max(0.0, end - published)
-    if monitoring_started_at is None:
-        result['gaps'].append({'kind': 'no_monitoring', 'start': published, 'end': end})
-    else:
-        started = _timestamp(monitoring_started_at, 'monitoring_started_at')
-        if started > published:
-            result['gaps'].append({'kind': 'late_enrollment', 'start': published, 'end': min(started, end)})
-    for period in offline_periods or ():
-        if not isinstance(period, (list, tuple)) or len(period) != 2:
-            raise ValueError('offline period must be a (start, end) pair')
-        start = _timestamp(period[0], 'offline start')
-        stop = _timestamp(period[1], 'offline end')
-        if stop < start:
-            raise ValueError('offline period ends before it starts')
-        start, stop = max(start, published), min(stop, end)
-        if stop > start:
-            result['gaps'].append({'kind': 'offline', 'start': start, 'end': stop})
+    latest = intervals[-1]
+    for key in ('fix_installed_at', 'effective_at', 'closed_at'):
+        result[key] = latest[key]
+    total = 0.0
+    for window in intervals:
+        end = current if window['end'] is None else window['end']
+        total += max(0.0, end - window['start'])
+        for kind, gap_start, gap_end in raw_gaps:
+            clipped_start = max(gap_start, window['start'])
+            clipped_end = min(end if gap_end is None else gap_end, end)
+            if clipped_end > clipped_start:
+                result['gaps'].append({'kind': kind, 'start': clipped_start, 'end': clipped_end})
+    result['duration_seconds'] = total
     result['gaps'].sort(key=lambda gap: (gap['start'], gap['end'], gap['kind']))
-    result['monitoring_complete'] = not result['gaps']
+    result['monitoring_complete'] = not result['gaps'] and monitoring_started_at is not None
     return result

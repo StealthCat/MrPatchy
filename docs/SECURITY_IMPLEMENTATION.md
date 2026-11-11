@@ -2649,12 +2649,15 @@ unchanged.
   OSV ECOSYSTEM range algorithm (`introduced`/`fixed`/`last_affected`) and the
   explicit `versions` lists through an injected comparator; production uses
   native `dpkg --compare-versions`, so epochs, tildes and distribution backports
-  follow vendor ordering. Each result is `affected` (with the next fixed version,
-  or no fix published yet), `fixed`, `unaffected` or `uncertain`. The following
+  follow vendor ordering. Each result is `affected`, `fixed`, `unaffected` or
+  `uncertain`. An `affected` result names a fixed version only when the complete
+  matching vendor data classifies that version as `fixed` or `unaffected`, so a
+  fix that ends one range but sits inside an overlapping range, an explicit
+  affected version or an unevaluable sibling is never reported. The following
   all yield `uncertain` rather than `unaffected`:
   - another release's or upstream ecosystem's entry;
   - GIT/SEMVER-only or `limit` ranges;
-  - malformed or oversized data;
+  - malformed or oversized data, including non-string explicit versions;
   - an unknown installed version;
   - a comparator failure.
 
@@ -2662,15 +2665,25 @@ unchanged.
   only reported when every range was evaluated.
 - **Exposure window:** `exposure_window()` computes `not_applicable`, `open`,
   `pending_activation` or `closed` from recorded applicability, fix-availability,
-  install, activation and reintroduction events. The window starts at publication.
+  install, activation and reintroduction events. Exposure is returned as explicit
+  intervals, each keeping its own closure, and the duration is their sum, so a
+  verified-fixed period before a reopen is never counted.
+  - Exposure starts at the first applicability observation only when monitoring
+    covered the whole interval since publication without a gap
+    (`start_basis: first_observed`). Otherwise it conservatively starts at
+    publication (`start_basis: publication`) with a note.
   - Only a verified installation closes it. A failed, partial or unverified
     install does not.
   - A required restart or reboot keeps it in `pending_activation` until a later
     activation is recorded.
-  - Rollback or reintroduction reopens it, and the reopen is counted.
-  - Late enrollment, missing monitoring and offline periods inside the window are
-    returned as explicit gaps, and future-dated or malformed timestamps are
-    rejected.
+  - Rollback or reintroduction reopens it, and the reopen is counted. Producers
+    should emit `reintroduced`, but a post-closure `applicable` event also
+    reopens the window, so a producer that only re-reports applicability cannot
+    hide renewed exposure.
+  - Late enrollment, missing monitoring and offline periods are clipped to the
+    exposed intervals and returned as explicit gaps; a gap inside a
+    verified-fixed period is not an exposure gap. Future-dated or malformed
+    timestamps are rejected.
 
 This does not complete requirement D. Advisory ingestion for every supported
 distribution, stored per-endpoint exposure records and producers, CVE-specific
