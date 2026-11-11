@@ -694,6 +694,12 @@ Unknown models, tiers, tool fees, output bounds or long-context pricing fail clo
 they are never admitted as free. Rate-plus-cap work reserves budget before consuming
 a smooth-rate start.
 
+Changes to the admission mode, shared rate, daily cap, reset timezone, legacy hourly
+limits and update-scoring opt-in are revision-checked. A save made from a stale Settings
+view is refused with a conflict, and the entered values stay in the form, instead of
+overwriting another administrator's change. Partial `PUT /api/settings/ai` requests
+keep omitted stored values rather than resetting them to defaults.
+
 Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
 without reliable pricing or usage—including timeouts and interrupted workers—keep the
 full ceiling counted. Unsent failures release their reservation, including a confirmed
