@@ -36,12 +36,12 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Package management | Installed/held/broken inventory, select-all reviewed batches, explained AI importance scores, expected start times, per-package change history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair and priority policies |
 | Repositories | Central native APT/DNF verification; `.list`, Deb822 `.sources` and RPM `.repo`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
 | Distribution upgrades | Report-only Debian upgrade-availability badges; adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
-| Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
+| Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed loopback application probes that gate rollout stages, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, live lease expiry with recovery and billing caveats, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
 | Fleet analysis | API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
-| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
+| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; durable signed-in arrival cursor for newly committed visible revisions; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
 [Quick start](#quick-start) · [Enrollment](#enroll-a-server-in-three-steps) · [Release upgrades](#distribution-release-upgrades) · [Recovery](#workers-databases-and-backups) · [Documentation](#documentation)
@@ -462,7 +462,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. It also runs `pip-audit` against the hash-locked Python runtime requirements and rejects vulnerabilities without an active owner/reason/expiry exception; this needs the PyPI advisory service and does not cover npm tooling, base-image packages or live GitHub alert state. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
+CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. It also runs `pip-audit` against the hash-locked Python runtime requirements and rejects vulnerabilities without an active owner/reason/expiry exception; this needs the PyPI advisory service and does not cover npm tooling, base-image packages or live GitHub alert state. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs, each limited to 30 minutes and reporting its 25 slowest tests; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
 
 Repository, trust and schedule dialog submissions are one-shot while pending. Opening another dialog keeps it intact; an earlier result is shown globally for the same signed-in session and is suppressed after sign-out. Closing a dialog does not cancel the submitted operation.
 
@@ -484,8 +484,10 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 - [AI diagnostics, update scores, expected installation and package history](docs/AI_AND_PACKAGE_HISTORY.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)
+- [Secret custody inventory and key-rotation design](docs/SECRET_CUSTODY.md) (design only; not implemented)
 - [Database settings and offline SQLite/MySQL migration](docs/DATABASE_MIGRATION.md)
 - [Distribution release upgrades](docs/RELEASE_UPGRADES.md)
+- [Current capability and delivery-status matrix](docs/CAPABILITY_MATRIX.md)
 - [Post-review fixes](docs/REVIEW_FIXES.md)
 - [Latest code and interactive browser review](docs/FULL_REVIEW_2026-10-25.md)
 - [Historical reviews](docs/COMPLETION_REVIEW.md) and [expansion checkpoint](docs/OPERATIONS_EXPANSION.md)
@@ -518,6 +520,8 @@ process, startup/custom-file and package-integrity records on that server. Exact
 hash matches, path-only matches and changed bytes are labeled separately. Searches
 are bounded and paginated; matches do not establish causation or authorize response.
 See [the implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md#cross-source-incident-evidence-pivots).
+
+Administrators can assign a scanner incident to an enabled administrator and append investigator notes through the API: `GET /api/hosts/{host_id}/security/incidents/{incident_id}/case`, `PUT …/owner` and `POST …/notes`. Assignment needs the current ownership revision and a 10–4000 character reason. Both actions are audited and appear on the incident timeline. They never change incident state, evidence or plans, or authorize a response, and they return HTTP 409 while the server has an active operation. There is no UI for them yet.
 
 Each server workspace includes an administrator **AI integration** pause/resume control.
 Pausing blocks new provider calls for that server, including queued security proposals,
@@ -722,7 +726,7 @@ are excluded. The report contains bounded aggregate windows only, never provider
 model, credential, prompt, evidence or response details. At most four reset/timezone
 groups per requested day are returned, with an explicit truncation notice if heavier
 configuration churn exceeds that bound. These local public-price estimates are not
-provider invoices.
+provider invoices. Administrators can filter them by the exact IANA timezone recorded with each ledger window. Filtering occurs before grouping and the window limit; clearing restores the all-timezone report without changing current or unsaved budget settings.
 
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary

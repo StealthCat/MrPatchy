@@ -195,7 +195,7 @@ def status(session,now=None):
         'pricing_catalog':ai_pricing.catalog_status(now)}
 
 
-def history(session,days=30,now=None):
+def history(session,days=30,now=None,*,timezone_name=None):
     """Return bounded aggregate spend windows from the retained accounting ledger."""
     if isinstance(days,bool) or not isinstance(days,int) or not 1<=days<=90:
         raise ValueError('AI spend history must cover 1 to 90 days')
@@ -211,11 +211,15 @@ def history(session,days=30,now=None):
         return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
     recognized=('reserved','sent','settled','uncertain')
     other=_aggregate(session,case((~BudgetEntry.status.in_(recognized),amount),else_=zero))
+    filters=[BudgetEntry.reset_at>cutoff,BudgetEntry.created<=now,BudgetEntry.status!='released']
+    if timezone_name is not None:
+        # Compare encoded bytes so MySQL's text collation cannot fold case.
+        filters.append(func.hex(BudgetEntry.timezone)==timezone_name.encode('utf-8').hex().upper())
     query=(select(BudgetEntry.timezone,BudgetEntry.reset_at,func.count(BudgetEntry.id).label('call_count'),
         bucket('settled').label('settled_usd'),bucket('reserved').label('reserved_usd'),
         bucket('sent').label('sent_usd'),bucket('uncertain').label('uncertain_usd'),
         other.label('other_usd'),_aggregate(session,amount).label('counted_usd'))
-        .where(BudgetEntry.reset_at>cutoff,BudgetEntry.created<=now,BudgetEntry.status!='released')
+        .where(*filters)
         .group_by(BudgetEntry.timezone,BudgetEntry.reset_at)
         .order_by(BudgetEntry.reset_at.desc(),BudgetEntry.timezone.asc()).limit(max_windows+1))
     rows=session.execute(query).mappings().all()

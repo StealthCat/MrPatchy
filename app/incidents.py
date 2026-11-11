@@ -206,6 +206,36 @@ def review(s,row,state,reason,actor,expected_updated):
     audit(s,'security incident reviewed',row.id+' '+actor+' '+state)
 
 
+def case_state(s,row):
+    """Case ownership derived from the append-only timeline; revision counts owner changes."""
+    owner='';revision=0
+    for e in s.scalars(select(IncidentEvent).where(IncidentEvent.incident_id==row.id,IncidentEvent.kind=='assign').order_by(IncidentEvent.created,IncidentEvent.id)):
+        owner=e.details.get('to','');revision+=1
+    return {'owner':owner,'revision':revision}
+
+
+def assign(s,row,owner,reason,actor,expected_revision):
+    """Record the responsible administrator. Never changes state, evidence, plans or `updated`."""
+    from .identity import User
+    current=case_state(s,row)
+    if current['revision']!=expected_revision:raise ValueError('Case ownership changed; refresh before assigning')
+    owner=owner.strip();reason=reason.strip()
+    if not 10<=len(reason)<=4000:raise ValueError('Provide an assignment reason of 10–4000 characters')
+    if owner==current['owner']:raise ValueError('Incident already has this owner')
+    if owner:
+        user=s.get(User,owner)
+        if not user or not user.enabled or user.role!='admin':raise ValueError('Owner must be an enabled administrator')
+    event(s,row.id,actor,'assign',{'from':current['owner'],'to':owner,'reason':reason})
+    audit(s,'security incident assigned',row.id+' '+actor+' '+(owner or 'unassigned'))
+
+
+def add_note(s,row,note,actor):
+    note=note.strip()
+    if not 1<=len(note)<=4000:raise ValueError('Provide a note of 1–4000 characters')
+    event(s,row.id,actor,'note',{'note':note})
+    audit(s,'security incident note added',row.id+' '+actor)
+
+
 def auto_plan_tick(now=None):
     """Opt-in proposals only. One automatic attempt per incident evidence revision."""
     from .coordination import Lock
