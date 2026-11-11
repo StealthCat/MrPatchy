@@ -2820,6 +2820,22 @@ and the shared-local-volume deployment are prerequisites. Deliver deployment
 separation and supported remote-worker setup as one coherent feature, with
 incremental milestones where needed.
 
+### Fixed role Compose files — worker checkpoint #676
+
+`compose.controller.yaml` (app and Caddy, extending the `compose.yaml` services) and
+`compose.worker.yaml` (workers only) now exist next to the unchanged complete
+`compose.yaml`. The worker file has no local app dependency, web/TLS mount, port or
+fixed container name. It uses the controller project's existing data volume through
+the required, external `MRPATCHY_CONTROLLER_DATA_VOLUME`, and keeps fail-closed
+controller-state preflight. It supports replicas on the controller's Docker host.
+`tests/test_compose_roles.py` keeps the worker definition in sync with `compose.yaml`
+and compares the rendered hardening, environment, networks and volumes through
+`docker compose config`. CI renders both files.
+
+Still open for this requirement: remote-machine provisioning of keys, SSH identities,
+artifacts and locking state; installer modes; split files combined with the GCP
+override; and multi-host MySQL, drain, failure and recovery acceptance.
+
 ### Deployment files and runtime roles
 
 | File | Supported deployment |
