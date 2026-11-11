@@ -7,7 +7,7 @@ PR and remaining acceptance. Historical review documents (for example
 their text unchanged as checkpoints. Where they list a capability as unfinished,
 this matrix states the current position.
 
-Status as of v1.56.4, 2026-11-10. First written against
+Status as of v1.57.0, 2026-11-11. First written against
 `3ac8f68` (v1.37.10) and reconciled by the coordinator at integration. Tracks
 issue [#347](https://github.com/StealthCat/MrPatchy/issues/347).
 
@@ -61,7 +61,7 @@ each issue stays open for its remaining acceptance.
 | [#335](https://github.com/StealthCat/MrPatchy/issues/335) | Read-only security posture and configuration compliance | In review | [PR #386](https://github.com/StealthCat/MrPatchy/pull/386): versioned read-only SSH posture rule evaluation. |
 | [#336](https://github.com/StealthCat/MrPatchy/issues/336) | Container and application dependency inventory with workload attribution | In review | [PR #394](https://github.com/StealthCat/MrPatchy/pull/394): container workload inventory contract. |
 | [#337](https://github.com/StealthCat/MrPatchy/issues/337) | Scoped service credentials and reliable external integrations | In review | [PR #494](https://github.com/StealthCat/MrPatchy/pull/494): pure idempotency-key contract. |
-| [#338](https://github.com/StealthCat/MrPatchy/issues/338) | Application-aware health gates for patch and reboot workflows | In review | [PR #382](https://github.com/StealthCat/MrPatchy/pull/382): reviewed loopback application probes for rollout health gates. |
+| [#338](https://github.com/StealthCat/MrPatchy/issues/338) | Application-aware health gates for patch and reboot workflows | Partial | [PR #382](https://github.com/StealthCat/MrPatchy/pull/382) (v1.57.0): reviewed loopback HTTP/TCP probes that gate rollout patch stages. Replication/workload adapters, dependency groups, non-rollout patches and a probe editor UI remain. |
 | [#339](https://github.com/StealthCat/MrPatchy/issues/339) | Rollout rings, soak gates and service availability limits | In review | [PR #392](https://github.com/StealthCat/MrPatchy/pull/392): pure rollout ring planner. |
 | [#340](https://github.com/StealthCat/MrPatchy/issues/340) | Change freezes, holiday calendars and expiring patch exceptions | In review | [PR #352](https://github.com/StealthCat/MrPatchy/pull/352): administrator-managed change freezes in dispatch eligibility. |
 | [#341](https://github.com/StealthCat/MrPatchy/issues/341) | Verified OS support lifecycle and migration planning queue | Partial | [PR #393](https://github.com/StealthCat/MrPatchy/pull/393) (v1.54.0): vendor-sourced lifecycle status on the server Overview. Migration queue, plans, fleet reports and alerts remain. |

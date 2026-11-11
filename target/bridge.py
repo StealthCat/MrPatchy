@@ -383,6 +383,37 @@ def agent_file_status(path):
         if file_fd is not None:os.close(file_fd)
         os.close(fd)
 
+def app_probe(probes):
+    """Fixed loopback HTTP/TCP adapter: no commands, no redirects, no response bodies."""
+    import http.client,socket
+    if not isinstance(probes,list) or len(probes)>16:raise ValueError('Invalid probe list')
+    results=[];names=set()
+    for probe in probes:
+        name=probe.get('name') if isinstance(probe,dict) else None
+        port=probe.get('port') if isinstance(probe,dict) else None
+        timeout=probe.get('timeout') if isinstance(probe,dict) else None
+        if not isinstance(name,str) or not re.fullmatch(r'[a-z0-9][a-z0-9_.-]{0,39}',name) or name in names:raise ValueError('Invalid probe name')
+        names.add(name)
+        if probe.get('kind') not in ('http','tcp') or type(port) is not int or not 1<=port<=65535 or type(timeout) is not int or not 1<=timeout<=10:raise ValueError('Invalid probe')
+        try:
+            if probe['kind']=='tcp':
+                socket.create_connection(('127.0.0.1',port),timeout=timeout).close();ok,detail=True,'connected'
+            else:
+                path=probe.get('path');expected=probe.get('expect_status')
+                if not isinstance(path,str) or not re.fullmatch(r"/[A-Za-z0-9/_.~%:@!$&'()*+,;=?-]{0,199}",path) or type(expected) is not int:raise ValueError('Invalid probe')
+                connection=http.client.HTTPConnection('127.0.0.1',port,timeout=timeout)
+                try:
+                    connection.request('GET',path,headers={'Connection':'close','User-Agent':'mrpatchy-probe'})
+                    status=connection.getresponse().status
+                finally:connection.close()
+                ok,detail=status==expected,'status '+str(status)
+        except ValueError:raise
+        except socket.timeout:ok,detail=False,'timeout'
+        except OSError as error:ok,detail=False,type(error).__name__
+        except http.client.HTTPException as error:ok,detail=False,type(error).__name__
+        results.append({'name':name,'ok':ok,'detail':detail})
+    return {'results':results}
+
 def agent_status():
     files={path:agent_file_status(path) for path in (*AGENT_FILES,AGENT_DROPIN)}
     def systemctl(*args):
@@ -490,6 +521,7 @@ def handle(req):
         from agent import process_prepare,process_response
         if action=='process-prepare':return process_prepare(req.get('quarantine_id'),req.get('quarantine_plan'),req.get('expected'),req.get('boot_id'),req.get('pid_namespace'))
         return process_response(req.get('id'),req.get('plan'),req.get('approval'),status_only=action=='process-status',resume=action=='process-resume')
+    if action=='app-probe':return app_probe(req.get('probes'))
     if action=='response-service-health':
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         from agent import response_service_health
