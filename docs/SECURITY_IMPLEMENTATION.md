@@ -2375,6 +2375,16 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### Active admission control in the investigations queue notice — worker checkpoint #685
+
+The administrator's Investigations queue notice now names the admission control
+that actually gates new AI work, reusing the AI worker status card's wording:
+shared starts/hour (with the daily spend cap when combined), daily spend cap,
+unthrottled by Mr Patchy, or legacy attempts against the legacy hourly limit.
+Previously it always advertised the legacy investigation limit, which only
+applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
+and authorization behavior are unchanged. A browser regression covers every mode.
+
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
 `tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
