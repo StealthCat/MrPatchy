@@ -9,9 +9,10 @@ module.exports=async(page,capture)=>{
  const rows=route=>route.fulfill({json:[]});
  await page.route('**/api/investigation-status',status);await page.route('**/api/investigations?*',rows);
  try{
-  await page.goto(new URL('/#investigations',page.url()).href);
+  // A same-hash goto does not re-render; reload so this fixture is what is shown.
+  await page.goto(new URL('/#investigations',page.url()).href);await page.reload();
   const card=page.locator('#content .card').filter({has:page.getByRole('heading',{name:'AI worker status',exact:true})});
-  await card.getByText('eligible, unclaimed',{exact:false}).waitFor();
+  await card.getByText('5 pending',{exact:false}).waitFor();
   assert.match(await card.locator('.status-facts').innerText(),/3\s+eligible, unclaimed/);
   const oldest=card.locator('p.help').filter({hasText:'Oldest eligible unclaimed observation:'});
   await oldest.waitFor();
@@ -25,11 +26,11 @@ module.exports=async(page,capture)=>{
   }
   await page.setViewportSize({width:1440,height:1000});
   mode='empty';await page.reload();
-  await card.getByText('eligible, unclaimed',{exact:false}).waitFor();
+  await card.getByText('0 eligible, unclaimed',{exact:false}).waitFor();
   assert.match(await card.locator('.status-facts').innerText(),/0\s+eligible, unclaimed/);
   assert.equal(await card.getByText('Oldest eligible unclaimed observation:',{exact:false}).count(),0);
   mode='malformed';await page.reload();
-  await card.getByText('eligible, unclaimed',{exact:false}).waitFor();
+  await card.getByText('Unavailable eligible, unclaimed',{exact:false}).waitFor();
   assert.match(await card.locator('.status-facts').innerText(),/Unavailable\s+eligible, unclaimed/);
   assert.equal(await card.getByText('Oldest eligible unclaimed observation:',{exact:false}).count(),0);
   assert.equal(await page.locator('#content img[src=x]').count(),0);
