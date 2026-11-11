@@ -218,7 +218,7 @@ bearer tokens; preparation does not prove completed delivery or execution.
 
 The web UI reports readable HTTP-status errors when a proxy or server returns an empty or non-JSON error body. Empty successful responses are accepted; stale-session responses are still discarded.
 
-Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
+Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. On the hub, **Find a setting** filters the sections as you type. Every typed term must match a section name, description or keyword, such as API key, repository checks, certificate, MySQL or retention. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
 
 ## Review and install updates
 

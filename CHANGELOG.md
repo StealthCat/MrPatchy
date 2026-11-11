@@ -1,3 +1,8 @@
+## 1.59.21 — 2026-11-11
+
+1. [PR #518](https://github.com/StealthCat/MrPatchy/pull/518): Add a labelled **Find a setting** search to the Settings hub. As you type, the section cards are filtered. Every typed term must match a section name, description or keyword list, such as API key, repository checks, certificate, MySQL or retention. Results are announced through a polite live region, and an empty result suggests example terms.
+2. Compatibility and limits: routes, section navigation, `#settings/<section>` deep links, saves and role checks are unchanged, and there are no API changes. This is the first slice of #513: section splits, save-feedback consistency and visual review remain open. This source update does not publish a Docker image.
+
 ## 1.59.20 — 2026-11-11
 
 1. [PR #508](https://github.com/StealthCat/MrPatchy/pull/508): Add a pure controller membership and serving-role admission contract (`app/controller_membership.py`). It validates member records and heartbeat freshness; future or stale heartbeats are not healthy. Registration rejects identity collisions and stale boot generations, and it reports a shared failure domain. It checks protocol and schema compatibility and standby readiness. A member whose desired role is draining is never promoted, even while it reports a ready standby. The single-serving-controller decision is keep, promote or hold. Split brain and missing evidence hold, and stale or incompatible serving claimants are quarantined. The decision is kept separate from scheduler leadership. Expected but missing members are reported.
