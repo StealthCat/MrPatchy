@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, freezes
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION = "1.56.0"
+APP_VERSION = "1.57.2"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -593,6 +593,23 @@ def host_spool_health(host_id:str,user=Depends(viewer_user)):
         h=host_or_404(s,host_id);require_host_read(s,host_id,user)
         return agent_spool_health.health(h)
 
+RECOVERY_RECEIPTS='recovery-receipts'
+@app.get('/api/recovery/readiness')
+def recovery_readiness_status(user=Depends(admin_user)):
+    with Session() as s:
+        row=s.get(Setting,RECOVERY_RECEIPTS)
+        return recovery_readiness.readiness((row.value or {}).get('items',[]) if row else [])
+
+@app.post('/api/recovery/receipts')
+def record_recovery_receipt(body:dict,user=Depends(admin_user)):
+    with worker.Lock('recovery-receipts'),Session() as s:
+        row=s.get(Setting,RECOVERY_RECEIPTS)
+        try:items,item=recovery_readiness.add((row.value or {}).get('items',[]) if row else [],body)
+        except ValueError as e:raise HTTPException(400,str(e))
+        s.merge(Setting(key=RECOVERY_RECEIPTS,value={'items':items}))
+        audit(s,'record recovery receipt',f"{item['stage']} {item['result']} {item['id']}");s.commit()
+        return {'receipt':item,'readiness':recovery_readiness.readiness(items)}
+
 @app.get('/api/hosts/{host_id}/snapshot')
 def host_snapshot(host_id:str,user=Depends(admin_user)):
     with Session() as s:
@@ -1016,10 +1033,12 @@ def settings(user=Depends(admin_user)):
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
 
 @app.get('/api/settings/ai-spend-history')
-def ai_spend_history(days:int=30,user=Depends(admin_user)):
+def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)):
     from . import ai_budget
     if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
-    with Session() as s:return ai_budget.history(s,days)
+    if timezone is not None and not ai_budget.valid_timezone(timezone):
+        raise HTTPException(400,'Select a valid IANA budget timezone.')
+    with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
 
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
@@ -1769,6 +1788,26 @@ def recovery_policy(host_id:str,body:RecoveryPolicy,user=Depends(admin_user)):
         if body.reboot and not status['systemd']:raise HTTPException(409,'Automatic reboot requires systemd')
         s.merge(Setting(key='recovery:'+host_id,value=body.model_dump()));audit(s,'set recovery policy',host_id);s.commit()
     return {'ok':True,'capabilities':status}
+
+class ProbeInput(BaseModel): probes:list[dict]
+@app.get('/api/operations/{host_id}/probes')
+def probe_list(host_id:str,user=Depends(viewer_user)):
+    from . import app_probes
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.get(Setting,app_probes.key(host_id))
+        return {'probes':app_probes.load(s,host_id),'reviewed_by':row.value.get('reviewed_by') if row else None}
+@app.put('/api/operations/{host_id}/probes')
+def probe_save(host_id:str,body:ProbeInput,user=Depends(admin_user)):
+    """Reviewed loopback HTTP/TCP probes that gate rollout stages; definitions only, never commands."""
+    from . import app_probes
+    try:probes=app_probes.normalize(body.probes)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with host_change(host_id),Session() as s:
+        host_or_404(s,host_id)
+        s.merge(Setting(key=app_probes.key(host_id),value={'probes':probes,'reviewed_by':user['username']}))
+        audit(s,'set application probes',host_id+' '+', '.join(p['name'] for p in probes)[:500]);s.commit()
+    return {'probes':probes}
 
 class ObservabilityInput(BaseModel): ebpf:bool=False
 @app.put('/api/operations/{host_id}/observability')
@@ -2840,6 +2879,41 @@ def security_incident_review(host_id:str,incident_id:str,body:IncidentReview,use
             if row.updated!=body.expected_updated:raise HTTPException(409,'Incident changed; refresh before reviewing')
             incidents.review(s,row,body.state,body.reason,user['username'],body.expected_updated)
             s.commit();return object_dict(row)
+
+class IncidentOwner(BaseModel):
+    owner:str=Field(max_length=64)
+    reason:str=Field(min_length=10,max_length=4000)
+    expected_revision:int=Field(ge=0)
+
+class IncidentNote(BaseModel):
+    note:str=Field(min_length=1,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/case')
+def security_incident_case(host_id:str,incident_id:str,user=Depends(admin_user)):
+    with Session() as s:
+        row=s.get(incidents.Incident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+        return incidents.case_state(s,row)
+
+@app.put('/api/hosts/{host_id}/security/incidents/{incident_id}/owner')
+def security_incident_owner(host_id:str,incident_id:str,body:IncidentOwner,user=Depends(admin_user)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            try:incidents.assign(s,row,body.owner,body.reason,user['username'],body.expected_revision)
+            except ValueError as e:raise HTTPException(409 if 'changed' in str(e) else 422,str(e))
+            s.commit();return incidents.case_state(s,row)
+
+@app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/notes')
+def security_incident_note(host_id:str,incident_id:str,body:IncidentNote,user=Depends(admin_user)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            try:incidents.add_note(s,row,body.note,user['username'])
+            except ValueError as e:raise HTTPException(422,str(e))
+            s.commit();return {'recorded':True}
 
 @app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/related')
 def security_related_evidence(host_id:str,incident_id:str,offset:int=0,as_of:float|None=None,expected_digest:str='',user=Depends(admin_user)):

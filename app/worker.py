@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle,response_status,worker_health
+from . import host_lifecycle,response_status,worker_health, app_probes
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -605,6 +605,13 @@ def execute_locked(job_id):
                     if any(policy.values()) and existing:
                         raise ValueError('Pre-patch health failed: automatic reboot/rollback requires clean service health; no package changes attempted: '+json.dumps(sorted(existing)))
                     job.payload={**job.payload,'_health_before':health_before};s.commit()
+                probes=app_probes.load(s,h.id) if job.action=='patch' and '_depends_on' in job.payload else []
+                if probes:
+                    # Reviewed application probes: a baseline that cannot be collected stops the rollout before any package change.
+                    probes_before=ssh.call(h,app_probes.request(probes),timeout=200)
+                    if not app_probes.baseline_trusted(probes,probes_before):
+                        raise ValueError('Pre-patch application probe baseline is incomplete or malformed; no package changes attempted')
+                    job.payload={**job.payload,'_probes_before':probes_before};s.commit()
                 use_protection=job.action=='patch' and any(policy.values())
                 request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
                 if use_protection:
@@ -634,6 +641,10 @@ def execute_locked(job_id):
                     comparison=operations.patch_health_comparison(health_before,health)
                     if not comparison['passed']:raise RuntimeError('Post-patch service health regressed; rollout stopped: '+json.dumps(comparison))
                     job.output+='\nPost-patch health comparison: '+json.dumps(comparison)
+                    if probes:
+                        probe_comparison=app_probes.comparison(probes,job.payload.get('_probes_before'),ssh.call(h,app_probes.request(probes),timeout=200))
+                        if not probe_comparison['passed']:raise RuntimeError('Post-patch application probes regressed; rollout stopped: '+json.dumps(probe_comparison))
+                        job.output+='\nPost-patch application probe comparison: '+json.dumps(probe_comparison)
             else: raise ValueError('Unsupported job')
             job.output=job.output.encode()[:48000].decode(errors='ignore')
             job.state='failed' if result.get('outcome') in ('rolled_back','response_incomplete') else 'complete'

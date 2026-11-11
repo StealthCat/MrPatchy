@@ -8,13 +8,15 @@ module.exports=async(page)=>{
   if(url.pathname.endsWith('/security/baseline/history')){const offset=Number(url.searchParams.get('offset')||0);offsets.push(offset);return route.fulfill({json:{items:offset?[row(21)]:Array.from({length:20},(_,i)=>row(i+1)),more:!offset}});}
   if(url.pathname.endsWith('/security/baseline')&&route.request().method()==='GET')return route.fulfill({json:{state:'not_configured',baseline:null,eligible:true,latest:{id:'inspection-job',created:Date.now()/1000,digest:'c'.repeat(64),inventory:{scope:['/etc/cron.d'],entries:[],missing_roots:[]}},comparison:{state:'unavailable',changes:[]}}});
   if(url.pathname.endsWith('/security/inspections'))return route.fulfill({json:{items:[],more:false}});
-  if(url.pathname.endsWith('/security/execution-scans')&&route.request().method()==='GET')return route.fulfill({json:{policy:{enabled:false,paths:['/srv/app'],debounce_seconds:30,cooldown_minutes:15,max_per_hour:4,revision:'',activated:0},state:'disabled',limited:false,counts:{},coverage:{},last_seen:Date.now()/1000,collector_issues:[],items:[],more:false}});
+  if(url.pathname.endsWith('/security/execution-scans')&&route.request().method()==='GET'){await new Promise(r=>setTimeout(r,750));return route.fulfill({json:{policy:{enabled:false,paths:['/srv/app'],debounce_seconds:30,cooldown_minutes:15,max_per_hour:4,revision:'',activated:0},state:'disabled',limited:false,counts:{},coverage:{},last_seen:Date.now()/1000,collector_issues:[],items:[],more:false}});}
   return route.fallback();
  };
  await page.route('**/api/**',handler);
  try{
   await page.goto(new URL('/#activity',page.url()).href);await page.goto(new URL('/#servers/'+host.id+'/security',page.url()).href);await page.reload();
   await page.getByRole('heading',{name:'Execution-triggered scans',exact:true}).waitFor();
+  // The heading renders with a loading placeholder; wait for the policy-backed form before reading the header.
+  await page.locator('#execution-scan-panel #execution-scan-form').waitFor();
   const header=await page.locator('#execution-scan-panel p').first().innerText();
   assert.ok(!header.includes('{'),header);assert.ok(header.includes('No triggers recorded'),header);
   await page.goto(new URL('/#servers/'+host.id+'/integrity',page.url()).href);
