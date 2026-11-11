@@ -12,6 +12,20 @@ module.exports=async(page,capture)=>{
   ];
   await page.route('**/api/notifications/unread-count',route=>route.fulfill({json:{unread}}));
   await page.route(/\/api\/notifications\?/,route=>{const url=new URL(route.request().url());listRequests.push(url.search);let visible=items.filter(item=>url.searchParams.get('include_dismissed')==='true'||!item.dismissed);if(url.searchParams.get('unread_only')==='true')visible=visible.filter(item=>!item.read);for(const key of ['severity','source']){const value=url.searchParams.get(key);if(value)visible=visible.filter(item=>item[key]===value);}const host=url.searchParams.get('host_id');if(host)visible=visible.filter(item=>item.host_id===host);if(url.searchParams.get('severity'))visible=[...visible].sort((a,b)=>b.created-a.created||(a.id<b.id?-1:1));const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||8),total=visible.length;visible=visible.slice(offset,offset+limit);return route.fulfill({json:{items:visible,offset,limit,total,more:offset+visible.length<total}});});
+  // Arrival-cursor mock mirroring the server: each newly observed (id, revision) is
+  // sequenced once, in commit order, independent of `created`; only current
+  // revisions are returned, with live read/dismissed state.
+  const arrivalLog=[],arrivalKeys=new Set(),arrivalRequests=[];
+  const sequenceArrivals=()=>{for(const item of items){const key=item.id+'@'+item.revision;if(!arrivalKeys.has(key)){arrivalKeys.add(key);arrivalLog.push({id:item.id,revision:item.revision});}}};
+  await page.route(/\/api\/notifications\/arrivals(\?|$)/,route=>{
+    const url=new URL(route.request().url());arrivalRequests.push(url.search);sequenceArrivals();
+    const head=arrivalLog.length,raw=url.searchParams.get('after'),limit=Number(url.searchParams.get('limit')||50);
+    if(raw===null||Number(raw)>head)return route.fulfill({json:{items:[],cursor:head,more:false,reset:raw!==null}});
+    const found=[];
+    for(let seq=Number(raw)+1;seq<=head;seq++){const entry=arrivalLog[seq-1],item=items.find(candidate=>candidate.id===entry.id);if(item&&item.revision===entry.revision)found.push({...item,arrival:seq});if(found.length>limit)break;}
+    if(found.length>limit)return route.fulfill({json:{items:found.slice(0,limit),cursor:found[limit-1].arrival,more:true,reset:false}});
+    return route.fulfill({json:{items:found,cursor:head,more:false,reset:false}});
+  });
   await page.route(/\/api\/notifications\/[0-9a-f]{64}\/(read|dismiss)$/,route=>{
     const url=route.request().url(),body=route.request().postDataJSON(),id=url.split('/').at(-2),item=items.find(candidate=>candidate.id===id);
     mutations.push({url,body});
@@ -208,7 +222,9 @@ module.exports=async(page,capture)=>{
   await toasts.filter({hasText:'Lagging producer critical'}).waitFor();
   assert.equal(await toasts.count(),1,'a genuinely new urgent event outside the bell window toasts; informational events do not');
 
-  // A full admission window: events entering from below it are not new.
+  // A large urgent backlog: unchanged events never toast, and a new event behind
+  // 100 or more newer unread events of its severity still does (formerly the
+  // documented coverage limit of the bounded admission window).
   await page.evaluate(()=>window.NotificationShell.reset());
   items.splice(0,items.length);
   for(let n=1;n<=105;n++)items.unshift(critical(0x1000+n,1700300000+n,'Large backlog '+n));
@@ -216,13 +232,33 @@ module.exports=async(page,capture)=>{
   await page.evaluate(()=>window.NotificationShell.start());
   await page.evaluate(()=>window.NotificationShell.refresh());
   assert.equal(await toasts.count(),0);
+  assert.ok(arrivalRequests.includes(''),'the first refresh takes an arrival baseline');
   for(let n=0;n<5;n++){items[n].dismissed=true;items[n].read=true;}
   await page.evaluate(()=>window.NotificationShell.refresh());
-  assert.equal(await toasts.count(),0,'events below a full admission window that slide into it do not toast');
+  assert.equal(await toasts.count(),0,'dismissing events in another session never toasts unchanged events');
+  items.push(critical(0x2001,1600000000,'Lagging critical behind a large backlog'));unread=101;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'Lagging critical behind a large backlog'}).waitFor();
+  assert.equal(await toasts.count(),1,'a new urgent event behind 100 newer unread events of its severity toasts');
   items.unshift(critical(0x2000,1700400000,'Newest backlog critical'));
   await page.evaluate(()=>window.NotificationShell.refresh());
   await toasts.filter({hasText:'Newest backlog critical'}).waitFor();
-  assert.equal(await toasts.count(),1);
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.filter({hasText:'Newest backlog critical'}).count(),1,'an arrival toasts once');
+
+  // Catch-up pages through more than one arrival page and summarizes the burst.
+  for(let n=1;n<=150;n++)items.unshift(critical(0x5000+n,1700450000+n,'Paged arrival '+n));
+  const pagedBefore=arrivalRequests.length;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'150 new critical or high-severity notifications need attention.'}).waitFor();
+  assert.ok(arrivalRequests.slice(pagedBefore).filter(search=>search.includes('after=')).length>=2,'catch-up follows the more flag');
+
+  // A cursor the server no longer retains re-baselines silently.
+  arrivalLog.splice(0,arrivalLog.length);
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  items.unshift(critical(0x6000,1700500000,'After reset baseline'));
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'After reset baseline'}).waitFor();
   await page.evaluate(()=>window.NotificationShell.reset());
 
   // Seen-revision eviction never forgets an event still in a complete urgent window.

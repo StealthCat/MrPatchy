@@ -3082,19 +3082,20 @@ do arrival retention/pruning and multi-controller acceptance.
 
 Implementation checkpoint (issue #661): a bounded milestone-3 increment adds live
 toasts. After the first successful refresh following sign-in or page load, the
-shell records the visible event revisions as a baseline, so reloads, reconnects
+shell records a durable arrival-cursor baseline, so reloads, reconnects
 and catch-up never replay old events as toasts. A later refresh shows a toast only
 for a new or higher-revision unread, undismissed, unresolved `high` or `critical`
-notification. Toast admission does not depend on the bell's eight-item recent
-list: each refresh also reads a bounded, permission-filtered unread window of up
-to 100 events per urgent severity. An unknown event is admitted only when the
-previous window was complete or the event sorts ahead of that window's last
-event, so an old event that slides into view after another session dismisses one
-never toasts, and a new event with a lagging producer timestamp still toasts
-while fewer than 100 newer unread events of its severity exist (beyond that the
-unread badge still updates). The bounded 500-entry seen-revision memory never
-evicts an event still present in a current urgent window, so a long-lived unread
-event is not replayed after many other revisions. At most three toasts are visible; a larger burst
+notification. Toast admission does not depend on the bell's recent list or any
+bounded unread window. It consumes the durable #668 arrival cursor: the first
+successful refresh takes a baseline from `GET /api/notifications/arrivals`, and each
+later refresh pages, in commit order, the visible current revisions committed after
+that cursor (up to five 100-item pages per refresh, with the rest picked up on the
+next one). An old event that slides into view after another session dismisses one
+therefore never toasts. A new event still toasts when its producer timestamp lags
+or when 100 or more newer unread events of its severity exist, which closes the
+coverage limit of the earlier bounded-window admission. A failed arrival read keeps
+the cursor for the next refresh, and a cursor the server no longer retains
+re-baselines silently. At most three toasts are visible; a larger burst
 collapses into one summary that links to the notification center. Toasts use a polite live
 region, render text nodes only, revalidate same-origin links, never take focus,
 pause their ten-second auto-hide on hover or focus, and mount inside an open modal

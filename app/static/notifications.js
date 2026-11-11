@@ -83,49 +83,50 @@ window.NotificationShell=(()=>{
   card.append(head,element('p','notification-reason',reason),actions);return card;
  }
  function clearToasts(){const stack=node('notification-toasts');if(!stack)return;for(const card of [...stack.children])clearTimeout(card._timer);stack.replaceChildren();showStack(stack);}
- // Toast admission is separate from the bell's eight-item recent list. It reads
- // a bounded unread window per urgent severity (server-ordered newest first,
- // permission-filtered). An event is admitted only when it is unknown and could
- // not have been inside the previous window, or when its revision increased, so
- // an old event that slides into view after another is dismissed never toasts and
- // a new event with an older producer timestamp still toasts.
- const TOAST_WINDOW=100;
- const toastKeyBefore=(item,cutoff)=>{const created=Number(item.created)||0;return created>cutoff.created||(created===cutoff.created&&String(item.id)<cutoff.id);};
- async function toastWindows(){
-  const pages=await Promise.all([...toastSeverities].map(severity=>api(`/notifications?unread_only=true&severity=${severity}&limit=${TOAST_WINDOW}`).then(page=>[severity,page])));
-  return pages.map(([severity,page])=>({severity,items:Array.isArray(page.items)?page.items.slice(0,TOAST_WINDOW):[],more:!!page.more}));
+ // Toast admission reads the durable arrival cursor (GET /notifications/arrivals),
+ // not the bell's recent list or any bounded unread window. The first successful
+ // refresh takes a baseline cursor, so events present at sign-in, reload or
+ // reconnect never toast. Later refreshes receive, in commit order, each visible
+ // current revision committed after the cursor, independent of producer
+ // timestamps and of how many older unread events exist. Items are filtered by
+ // the server to the caller's current role.
+ const TOAST_ARRIVAL_PAGE=100,TOAST_ARRIVAL_PAGES=5;
+ async function toastArrivals(){
+  const from=toastSeen?toastSeen.cursor:null;
+  if(from===null){const page=await api('/notifications/arrivals');return {from,cursor:arrivalCursor(page),items:[],baseline:true};}
+  let cursor=from;const found=[];
+  // Bounded catch-up per refresh; anything beyond it is picked up on the next one.
+  for(let pageNo=0;pageNo<TOAST_ARRIVAL_PAGES;pageNo++){
+   const page=await api(`/notifications/arrivals?after=${cursor}&limit=${TOAST_ARRIVAL_PAGE}`);
+   // A cursor beyond the retained sequence is reset to a fresh baseline.
+   if(page.reset)return {from,cursor:arrivalCursor(page),items:[],baseline:true};
+   found.push(...(Array.isArray(page.items)?page.items:[]));cursor=arrivalCursor(page);
+   if(!page.more)break;
+  }
+  return {from,cursor,items:found,baseline:false};
  }
- function noteToasts(current,windows){
-  if(!windows)return;
-  const first=toastSeen===null;
-  if(first)toastSeen={revisions:new Map(),windows:new Map()};
+ function arrivalCursor(page){if(!Number.isInteger(page?.cursor)||page.cursor<0)throw new Error('Notification arrival cursor unavailable');return page.cursor;}
+ function noteToasts(current,arrivals){
+  // Without a fresh arrival result the bell still updates; existing toasts are
+  // pruned but nothing new is admitted and the cursor is kept for a retry.
   const fresh=[];
-  for(const win of windows){
-   const previous=toastSeen.windows.get(win.severity);
-   for(const item of win.items){
+  if(arrivals&&(toastSeen?toastSeen.cursor:null)===arrivals.from){
+   const first=toastSeen===null;
+   toastSeen={cursor:arrivals.cursor,revisions:toastSeen?.revisions||new Map()};
+   if(!first&&!arrivals.baseline)for(const item of arrivals.items){
+    // Arrivals are delivered once per revision; the bounded memory only guards
+    // against duplicate items inside one catch-up.
     const revision=Number(item.revision)||0,known=toastSeen.revisions.get(item.id);
     if(known!==undefined&&known>=revision)continue;
     toastSeen.revisions.delete(item.id);toastSeen.revisions.set(item.id,revision);
-    if(first)continue;
-    // Unknown event: if the previous window was complete it must be new; if it
-    // was full, admit it only when it sorts ahead of the previous window's last
-    // event (otherwise it may simply have been below the window before).
-    if(known===undefined&&previous&&previous.more&&!(previous.cutoff&&toastKeyBefore(item,previous.cutoff)))continue;
     if(!item.read&&!item.dismissed&&item.lifecycle!=='resolved'&&toastSeverities.has(item.severity))fresh.push(item);
    }
-   const last=win.items.at(-1);
-   toastSeen.windows.set(win.severity,{more:win.more,cutoff:last?{created:Number(last.created)||0,id:String(last.id)}:null});
+   while(toastSeen.revisions.size>TOAST_SEEN_LIMIT)toastSeen.revisions.delete(toastSeen.revisions.keys().next().value);
   }
-  // Evict the oldest seen revisions, but never one still in a current urgent window:
-  // forgetting it would make the complete-window branch replay it as new.
-  if(toastSeen.revisions.size>TOAST_SEEN_LIMIT){
-   const live=new Set(windows.flatMap(win=>win.items.map(item=>item.id)));
-   for(const id of [...toastSeen.revisions.keys()]){if(toastSeen.revisions.size<=TOAST_SEEN_LIMIT)break;if(!live.has(id))toastSeen.revisions.delete(id);}
-  }
-  if(first)return;
+  if(!toastSeen)return;
   fresh.sort((a,b)=>(Number(b.created)||0)-(Number(a.created)||0)||(String(a.id)<String(b.id)?-1:1));
   const stack=toastStack();
-  for(const card of [...stack.querySelectorAll('[data-event-id]')]){const item=current.find(candidate=>candidate.id===card.dataset.eventId);const win=windows.find(candidate=>candidate.severity===card.dataset.severity),gone=!!win&&!win.more&&!win.items.some(candidate=>candidate.id===card.dataset.eventId);if((item&&(item.read||item.dismissed))||gone)removeToast(card);}
+  for(const card of [...stack.querySelectorAll('[data-event-id]')]){const item=current.find(candidate=>candidate.id===card.dataset.eventId);if(item&&(item.read||item.dismissed))removeToast(card);}
   if(!fresh.length){showStack(stack);return;}
   if(fresh.length>TOAST_LIMIT){
    clearToasts();
@@ -155,9 +156,9 @@ window.NotificationShell=(()=>{
   if(!started||document.hidden)return;
   const run=generation,request=++requestRevision;
   try{
-   const [count,page,windows]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8'),toastWindows().catch(()=>null)]);
+   const [count,page,arrivals]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8'),toastArrivals().catch(()=>null)]);
    if(run!==generation||request!==requestRevision)return;
-   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();noteToasts(items,windows);
+   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();noteToasts(items,arrivals);
    status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
    if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){
