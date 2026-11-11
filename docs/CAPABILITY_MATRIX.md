@@ -7,7 +7,7 @@ PR and remaining acceptance. Historical review documents (for example
 their text unchanged as checkpoints. Where they list a capability as unfinished,
 this matrix states the current position.
 
-Status as of v1.59.1, 2026-11-11. First written against
+Status as of v1.59.2, 2026-11-11. First written against
 `3ac8f68` (v1.37.10) and reconciled by the coordinator at integration. Tracks
 issue [#347](https://github.com/StealthCat/MrPatchy/issues/347).
 
@@ -47,7 +47,7 @@ Nothing in this file authorizes a runtime response action.
 | Duplicated AI pricing, plan generation and response logic | [#189](https://github.com/StealthCat/MrPatchy/issues/189) | Partial | [PR #301](https://github.com/StealthCat/MrPatchy/pull/301) (v1.35.94): behavior-preserving consolidation. [PR #283](https://github.com/StealthCat/MrPatchy/pull/283) (v1.43.2): one shared tier-multiplier table. | The duplicated advisory-plan generator, response failure and latest-record helpers, the original-file stub and gpgv validation. Intentional scanner/startup differences are preserved. | Refactor only. No behavior change claimed. |
 | Enrollment throttling and route-error headers | [#202](https://github.com/StealthCat/MrPatchy/issues/202) | Delivered | [PR #313](https://github.com/StealthCat/MrPatchy/pull/313) (v1.35.100): bounded, retry-preserving enrollment preparation quota. [PR #264](https://github.com/StealthCat/MrPatchy/pull/264) (v1.37.6): security headers on unhandled route errors. The coordinator verified both against source and closed the issue as completed on 2026-11-03. | None. | Shared NAT and proxy-trust limits on the quota remain documented. Preparing an enrollment link is not proof that it was downloaded or run. |
 | Bug priority-label policy (P1–P3) | [#318](https://github.com/StealthCat/MrPatchy/issues/318) | Delivered | [PR #319](https://github.com/StealthCat/MrPatchy/pull/319) (v1.37.13): `AGENTS.md` priority-label policy. The issue is closed as completed. | None for the policy. Labeling individual bugs remains a triage task. | Policy document only. |
-| Device health: root filesystem, pressure and expiry signals | [#342](https://github.com/StealthCat/MrPatchy/issues/342) | Partial | [PR #348](https://github.com/StealthCat/MrPatchy/pull/348) (v1.37.12): root filesystem byte and inode telemetry. | CPU/memory pressure and memory availability in open [PR #391](https://github.com/StealthCat/MrPatchy/pull/391) (**In review**). Time sync, certificate expiry, history, alerts, UI and patch preflight remain. | Telemetry only. Unit tests only. |
+| Device health: root filesystem, pressure and expiry signals | [#342](https://github.com/StealthCat/MrPatchy/issues/342) | Partial | [PR #348](https://github.com/StealthCat/MrPatchy/pull/348) (v1.37.12): root filesystem byte and inode telemetry. [PR #391](https://github.com/StealthCat/MrPatchy/pull/391) (v1.59.2): CPU/memory pressure (PSI) and memory availability telemetry. | Time sync, certificate expiry, history, alerts, UI and patch preflight remain. | Telemetry only. Unit tests only. |
 | Incident review state versus deferred security plans | [#103](https://github.com/StealthCat/MrPatchy/issues/103) | Blocked | None. | Reproduced again on 2026-11-10 on SQLite and MySQL: a deferred manual plan completes and can be approved after its incident closes. A maintainer must choose whether to allow retrospective plans or bind the plan to incident state. | Reproduced on disposable synthetic data. This is a policy decision, not a defect fix. |
 
 ## Improvement issues #334–#347
