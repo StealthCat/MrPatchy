@@ -79,8 +79,13 @@ def compatible(deployment, member):
 
 
 def standby_ready(deployment, member, now, ttl=HEARTBEAT_TTL):
-    """A standby is promotable only if fresh, compatible, caught up and not draining."""
-    return (member_valid(member) and member['observed'] == 'standby' and member['ready']
+    """A standby is promotable only if fresh, compatible, caught up and not draining.
+
+    Both roles count: a member the operator has selected for drain (``desired == 'draining'``) is
+    never a promotion target, even while it still reports ``observed == 'standby'`` and ready.
+    """
+    return (member_valid(member) and member['observed'] == 'standby' and member['desired'] != 'draining'
+            and member['ready']
             and is_fresh(member, now, ttl) and compatible(deployment, member))
 
 

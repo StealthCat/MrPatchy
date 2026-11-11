@@ -81,3 +81,14 @@ def test_bad_input_holds():
 def test_missing_expected_members():
     assert cm.missing_expected(['a', 'b', 'c'], [m('a')]) == ['b', 'c']
     assert cm.missing_expected(None, []) is None
+
+def test_desired_draining_standby_is_never_promoted():
+    # Coordinator review on #508: a member selected for drain must not become the promotion target
+    # even while it still reports observed standby, ready and fresh.
+    draining = m('a', desired='draining', observed='standby')
+    assert not cm.standby_ready(DEP, draining, NOW)
+    r = cm.serving_decision(DEP, [m('old', observed='serving', heartbeat=NOW - 100), draining], NOW)
+    assert r['action'] == 'hold' and r['serving'] is None and r['reason'] == 'no_eligible_standby'
+    assert r['quarantine'] == ['old']
+    r = cm.serving_decision(DEP, [draining, m('b')], NOW)
+    assert r['action'] == 'promote' and r['serving'] == 'b'
