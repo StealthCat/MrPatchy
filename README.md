@@ -484,6 +484,7 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 - [AI diagnostics, update scores, expected installation and package history](docs/AI_AND_PACKAGE_HISTORY.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)
+- [Secret custody inventory and key-rotation design](docs/SECRET_CUSTODY.md) (design only; not implemented)
 - [Database settings and offline SQLite/MySQL migration](docs/DATABASE_MIGRATION.md)
 - [Distribution release upgrades](docs/RELEASE_UPGRADES.md)
 - [Current capability and delivery-status matrix](docs/CAPABILITY_MATRIX.md)
@@ -725,7 +726,7 @@ are excluded. The report contains bounded aggregate windows only, never provider
 model, credential, prompt, evidence or response details. At most four reset/timezone
 groups per requested day are returned, with an explicit truncation notice if heavier
 configuration churn exceeds that bound. These local public-price estimates are not
-provider invoices.
+provider invoices. Administrators can filter them by the exact IANA timezone recorded with each ledger window. Filtering occurs before grouping and the window limit; clearing restores the all-timezone report without changing current or unsaved budget settings.
 
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary

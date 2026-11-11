@@ -6499,6 +6499,12 @@ and an explicit truncation flag discloses heavier configuration churn. AI Settin
 offers 7-, 30- and 90-day views with loading, empty, error and truncation states and
 states plainly that local public-price estimates are not provider invoices.
 
+AI Settings can filter this history by an exact IANA timezone recorded with the
+ledger window. The administrator API applies the optional timezone before
+grouping and limiting so other timezones cannot hide matching windows.
+Clearing the filter restores the all-timezone report. Applying a filter
+does not change budget settings or their unsaved edits.
+
 This checkpoint changes no admission, provider-call, pause, response-authorization or
 ledger-retention behavior. Provider-invoice reconciliation, signed/automated pricing
 catalog lifecycle and complete multi-controller failover/reset acceptance remain
