@@ -1,11 +1,19 @@
 /* Separate settings routes. Persistence never depends on a provider test. */
 const SETTINGS_SECTIONS={
- ai:['AI & models','Save your API key, choose a model, and test it.'],
- patching:['Patch policy','Repository checks and priority deadlines.'],
- database:['Database','MySQL connection details and offline migrations.'],
- https:['HTTPS & certificates','Internal and external TLS profiles.'],
- history:['History retention','Observation and inventory retention.']
+ ai:['AI & models','Save your API key, choose a model, and test it.','openai api key model investigations budget spend rate limit scoring'],
+ patching:['Patch policy','Repository checks and priority deadlines.','repository checks interval deadlines critical high normal low priority overdue'],
+ database:['Database','MySQL connection details and offline migrations.','mysql sqlite connection migration host port password'],
+ https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
+ history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup']
 };
+function settingsMatches(query,sections=SETTINGS_SECTIONS){
+ const terms=String(query||'').toLowerCase().split(/\s+/).filter(Boolean);
+ return Object.entries(sections).filter(([,[name,detail,keywords='']])=>{const text=(name+' '+detail+' '+keywords).toLowerCase();return terms.every(t=>text.includes(t));}).map(([key])=>key);
+}
+function settingsHubCards(query){
+ const keys=settingsMatches(query);
+ return keys.map(key=>{const [name,detail]=SETTINGS_SECTIONS[key];return `<a class="card settings-link" href="#settings/${key}"><h2>${esc(name)} <span aria-hidden="true">↗</span></h2><p class="help">${esc(detail)}</p></a>`;}).join('')||'<p class="help">No settings match. Try “API key”, “certificate”, “MySQL” or “retention”.</p>';
+}
 function settingsNav(section){
  return `<div class="settings-nav" role="navigation" aria-label="Settings sections">${[['','All settings'],...Object.entries(SETTINGS_SECTIONS).map(([key,value])=>[key,value[0]])].map(([key,label])=>`<a href="#settings${key?'/'+key:''}" ${key===section?'aria-current="page" class="active"':''}>${esc(label)}</a>`).join('')}</div>`;
 }
@@ -18,8 +26,10 @@ async function settings(revision=renderRevision){
  $('#content').innerHTML=heading(title,section?SETTINGS_SECTIONS[section][1]:'Choose a settings section. Each has its own controls and save action.')+settingsNav(section)+'<section id="settings-section" class="settings-section"></section>';
  const container=$('#settings-section');
  if(!section){
-  container.classList.add('settings-hub');
-  container.innerHTML=Object.entries(SETTINGS_SECTIONS).map(([key,[name,detail]])=>`<a class="card settings-link" href="#settings/${key}"><h2>${esc(name)} <span aria-hidden="true">↗</span></h2><p class="help">${esc(detail)}</p></a>`).join('');return;
+  container.innerHTML='<label class="settings-search">Find a setting<input type="search" id="settings-search" placeholder="API key, certificate, MySQL, retention…" autocomplete="off"></label><div class="settings-hub" id="settings-hub" role="region" aria-label="Settings sections" aria-live="polite"></div>';
+  const hub=$('#settings-hub'),input=$('#settings-search');
+  const draw=()=>{hub.innerHTML=settingsHubCards(input.value);};
+  input.oninput=draw;draw();return;
  }
  if(section==='ai'){renderAISettings(data,revision,container);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
