@@ -1,3 +1,8 @@
+## 1.57.2 — 2026-11-11
+
+1. [PR #392](https://github.com/StealthCat/MrPatchy/pull/392): Add a pure rollout-ring planner (`app/rollout_rings.py`). It validates reusable ring definitions, computes the exact approved target set with a digest, and makes a deterministic batch-admission decision under parallelism, soak-time, failure-threshold and per-service or per-site availability limits. Availability membership for the bounded fleet is bound into the plan digest, so unavailable hosts outside the rollout's target set still consume a shared service or site budget. Missing membership for a limited scope, observed hosts outside the inventory, unknown fields, newline names and non-finite soak or current times all fail closed.
+2. Compatibility and limits: an unwired planning contract only. No scheduler, database, API, UI, target or response-authorization behavior changes, and the decision is advisory and never overrides approvals or holds. This is a partial #339 increment: runtime ring execution, soak enforcement and service drain/rejoin remain open. This source update does not publish a Docker image.
+
 ## 1.57.1 — 2026-11-11
 
 1. [PR #671](https://github.com/StealthCat/MrPatchy/pull/671): Make the baseline-history browser regression wait for the policy-backed execution-scan form before reading its panel, and delay the mocked policy response so the loading race is exercised on every run. Test-only; no runtime, API, schema, authorization or compatibility change.
