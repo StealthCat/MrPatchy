@@ -3080,6 +3080,29 @@ semantics and response authorization are unchanged. Client adoption by the live
 toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
 do arrival retention/pruning and multi-controller acceptance.
 
+Worker checkpoint (issue #687): a bounded milestone-2 increment retains arrival
+records for the existing `history_days` setting. The leader's hourly cleanup calls
+`prune_arrivals`, which deletes only the oldest contiguous prefix of sequenced
+arrivals older than the cutoff. It works in short batches of at most 5,000 rows,
+each committed separately. Two rules keep the sequence safe:
+
+- Pruning stops at the first arrival still inside the retention window. A later
+  arrival with a lagging controller clock therefore never leaves a hole below
+  newer retained rows.
+- Unsequenced rows are never removed.
+
+The cursor head now comes from the durable `notification_arrival_head` row rather
+than `max(seq)`, so pruning never moves it back or resets a current cursor. A
+cursor older than the oldest retained arrival receives a fresh baseline with
+`reset: true` and `reset_reason: "pruned"`, rather than silently skipping pruned
+revisions. A cursor beyond the head reports `reset_reason: "ahead"`. On either
+reset the client resynchronizes from the authoritative list and count APIs.
+
+Notification events, revisions, per-user state, list/count/SSE APIs,
+acknowledgement and response authorization are unchanged. Retention of events and
+revisions, client gap disclosure in the toast UI, and multi-controller acceptance
+remain open.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
