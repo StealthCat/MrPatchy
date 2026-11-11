@@ -73,3 +73,33 @@ def test_telemetry_snapshot_includes_pressure_and_survives_failure():
     broken = {k: OSError('x') for k in healthy()}
     result = agent.telemetry_snapshot(5, {}, {}, [], [], lambda: 20, fs, lambda collected=None: agent.resource_pressure(reader(broken), collected))
     assert result['resource_pressure']['applicability'] == 'unknown'
+
+
+def test_present_but_malformed_cpu_full_line_is_unknown_with_gap():
+    files = healthy(); files['/proc/pressure/cpu'] = 'some avg10=1 avg60=1 avg300=1 total=1\nfull avg10=500 avg60=0 avg300=0 total=1\n'
+    result = agent.resource_pressure(reader(files), 1)
+    assert result['cpu'] == {'state': 'unknown', 'unit': 'percent-stalled'}
+    assert {'signal': 'cpu-pressure', 'reason': 'unavailable-or-malformed'} in result['gaps']
+    assert result['applicability'] == 'partial'
+
+
+def test_non_kernel_pressure_records_are_rejected():
+    some = 'some avg10=1 avg60=1 avg300=1 total=1\n'
+    for text in ('some avg10=1_0 avg60=1 avg300=1 total=1\n',   # digit separator accepted by float()
+                 'some avg10=1 avg60=1 avg300=1 avg10=99 total=1\n',  # duplicate key
+                 some + some,                                  # duplicate record
+                 'some avg10=nan avg60=1 avg300=1 total=1\n',
+                 'some avg10=1 avg60=1 avg300=1 total=1.5\n',
+                 'some avg10=1 avg60=1 avg300=1 total\n'):
+        files = healthy(); files['/proc/pressure/memory'] = text + PSI.splitlines()[1] + '\n'
+        result = agent.resource_pressure(reader(files), 1)
+        assert result['memory'] == {'state': 'unknown', 'unit': 'percent-stalled'}, text
+        assert {'signal': 'memory-pressure', 'reason': 'unavailable-or-malformed'} in result['gaps']
+
+
+def test_duplicate_or_malformed_meminfo_keys_are_unknown():
+    for text in ('MemTotal: 10 kB\nMemAvailable: 5 kB\nMemTotal: 99999 kB\n', 'MemTotal: 10 MB\nMemAvailable: 5 kB\n', 'MemTotal: ١٠ kB\nMemAvailable: 5 kB\n'):
+        files = healthy(); files['/proc/meminfo'] = text
+        result = agent.resource_pressure(reader(files), 1)
+        assert result['memory_capacity'] == {'state': 'unknown', 'unit': 'bytes'}, text
+        assert {'signal': 'memory-capacity', 'reason': 'unavailable-or-malformed'} in result['gaps']

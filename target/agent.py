@@ -208,14 +208,26 @@ def root_filesystem_health(statvfs=os.statvfs,collected=None):
     return {**base,'applicability':'unknown','bytes':unknown,'inodes':unknown_inodes,'gaps':[{'signal':'filesystem-capacity','reason':reason}]}
 
 PRESSURE_FILES={'cpu':'/proc/pressure/cpu','memory':'/proc/pressure/memory'}
+_PSI_VALUE=re.compile(r'[0-9]+(?:\.[0-9]+)?')
+_PSI_TOTAL=re.compile(r'[0-9]+')
+class MissingPressureLine(ValueError):
+    """The requested PSI record is absent (distinct from a present but malformed one)."""
 def _pressure_line(text,kind):
+    found=None
     for line in text.splitlines():
         parts=line.split()
         if parts and parts[0]==kind:
-            values={k:float(v) for k,v in (item.split('=',1) for item in parts[1:] if item.partition('=')[0] in ('avg10','avg60','avg300'))}
-            if set(values)!={'avg10','avg60','avg300'} or any(not 0<=v<=100 for v in values.values()):raise ValueError('malformed pressure line')
-            return values
-    raise ValueError('missing pressure line')
+            if found is not None:raise ValueError('duplicate pressure line')
+            values={}
+            for item in parts[1:]:
+                key,sep,raw=item.partition('=')
+                if not sep or key in values:raise ValueError('malformed pressure line')
+                if (key in ('avg10','avg60','avg300') and not _PSI_VALUE.fullmatch(raw)) or (key=='total' and not _PSI_TOTAL.fullmatch(raw)):raise ValueError('malformed pressure line')
+                values[key]=raw
+            found={k:float(values[k]) for k in ('avg10','avg60','avg300') if k in values}
+            if set(found)!={'avg10','avg60','avg300'} or any(not 0<=v<=100 for v in found.values()):raise ValueError('malformed pressure line')
+    if found is None:raise MissingPressureLine('missing pressure line')
+    return found
 
 def resource_pressure(read=lambda path:Path(path).read_text(),collected=None):
     """Collect bounded CPU/memory pressure (PSI) and memory availability; absent sources stay unknown."""
@@ -228,8 +240,8 @@ def resource_pressure(read=lambda path:Path(path).read_text(),collected=None):
             if not isinstance(text,str) or len(text)>4096:raise ValueError('invalid pressure data')
             entry={'state':'collected','unit':'percent-stalled','some':_pressure_line(text,'some')}
             try:entry['full']=_pressure_line(text,'full')
-            except ValueError:
-                if name!='cpu':raise # only CPU "full" is absent on older kernels
+            except MissingPressureLine:
+                if name!='cpu':raise # only a missing CPU "full" record is tolerated (older kernels); a malformed one is not
             result[name]=entry
         except (OSError,ValueError,TypeError) as error:
             result[name]={'state':'unknown','unit':'percent-stalled'}
@@ -240,7 +252,9 @@ def resource_pressure(read=lambda path:Path(path).read_text(),collected=None):
         info={}
         for line in text.splitlines():
             key,_,rest=line.partition(':');fields=rest.split()
-            if key in ('MemTotal','MemAvailable') and len(fields)==2 and fields[1]=='kB' and fields[0].isdigit():info[key]=int(fields[0])*1024
+            if key in ('MemTotal','MemAvailable'):
+                if key in info or len(fields)!=2 or fields[1]!='kB' or not (fields[0].isascii() and fields[0].isdigit()):raise ValueError('malformed memory field')
+                info[key]=int(fields[0])*1024
         if set(info)!={'MemTotal','MemAvailable'} or info['MemTotal']<=0 or info['MemTotal']>2**63-1:raise ValueError('missing memory fields')
         result['memory_capacity']={'state':'collected','unit':'bytes','total':info['MemTotal'],'available':min(info['MemAvailable'],info['MemTotal'])}
     except (OSError,ValueError,TypeError) as error:
