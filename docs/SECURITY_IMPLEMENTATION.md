@@ -3100,9 +3100,11 @@ The significance policy is explicit and advisory:
 - `unknown` leaves the event unchanged.
 
 Payloads carry fixed text only. Executable paths and model output stay on the
-escaped Investigations page. Read/dismiss, approval, acknowledgement and response
-authorization are unchanged. Behavior approval and deletion do not yet resolve the
-event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
+escaped Investigations page. Read/dismiss, approval semantics, acknowledgement and
+response authorization are unchanged. An administrator approval resolves an active
+event in the approval's own transaction, and revoking it while the verdict is still
+medium/high re-publishes the event as active; the notification never grants or
+withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
