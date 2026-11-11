@@ -2668,6 +2668,32 @@ signature or an active CVE exposure window, and continue after patch installatio
 - Deliver maintained known-malware detection, cross-source AI triage, general automatic response and recovery/UI integration as tracked milestones. Update this checkpoint with implemented scope and remaining limitations after each milestone.
 - Validate known-malware fixtures, controlled unknown-behavior simulations and benign administrative lookalikes, false-positive restoration, AI outages/pause and prompt-injection attempts, evidence changes, process reuse, file replacement, concurrent/replayed detections and partial response failures. Include supported-platform real-target response drills; document measured detection limits without claiming universal detection or a clean endpoint.
 
+### In-app malware-detection notifications — worker checkpoint #700
+
+A scan finding that creates a security incident now publishes one durable,
+admin-only in-app notification. Signature scans, YARA scans and
+execution-triggered scoped scans all count. The notification has source
+`security-scan`, kind `malware-detection`, severity `high` and a deep link to the
+server's Security tab. The reason is fixed text: endpoint-supplied paths, rule
+names and engine output never reach the bell.
+
+How the notification follows the incident:
+
+- **Repeat detections.** Repeat detections of an open or acknowledged incident
+  add no revision.
+- **Recurrence.** A recurrence after `resolved` or `false_positive`, or an
+  administrator review back to `open`, adds an active, unread revision.
+- **Closing.** Closing the incident adds one `resolved` revision. Acknowledging
+  it changes nothing.
+- **Server deletion.** Deleting a server resolves its active detection
+  notifications. The incident record itself is retained.
+
+Incidents recorded before this change gain no retroactive events. The
+notification is advisory only: it does not acknowledge or transition incidents,
+and it does not approve, contain or remediate. SMTP and webhook delivery are
+unchanged. Known-versus-AI-discovered classification, automatic response and
+the remaining delivery and acceptance items above remain open.
+
 
 ## Planned: comprehensive startup and scheduled-task awareness
 

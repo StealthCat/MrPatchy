@@ -46,6 +46,50 @@ class Plan(Base):
     expires:Mapped[float]=mapped_column(Double,default=0)
 
 
+# In-app notification for the scanner incident lifecycle. Reasons are fixed text:
+# endpoint-supplied paths, rule names and engine output never reach the bell.
+NOTIFICATION_SOURCE='security-scan'
+NOTIFICATION_KIND='malware-detection'
+NOTIFICATION_SUBJECT='incident'
+CLOSED_STATES=('resolved','false_positive')
+NOTIFICATION_REASONS={
+    'opened':'A malware scan matched a file on this server. Review the incident evidence and coverage before choosing any response.',
+    'reopened':'A previously closed malware detection on this server matched again. Review the incident evidence and coverage before choosing any response.',
+    'review-reopened':'An administrator reopened a malware detection on this server. Review the incident evidence and coverage before choosing any response.',
+    'resolved':'This malware detection was closed by administrator review.',
+}
+
+
+def notify(s,row,change,revision):
+    """Publish one durable, admin-only notification revision for an incident.
+
+    Advisory only: it never acknowledges, transitions, contains or remediates.
+    Closing an incident that never published (legacy history) adds nothing.
+    """
+    from . import notifications
+    closing=change=='resolved'
+    if closing and not s.get(notifications.NotificationEvent,notifications._event_id(
+            NOTIFICATION_SOURCE,NOTIFICATION_KIND,NOTIFICATION_SUBJECT,row.id,row.host_id)):return
+    notifications.publish(s,source=NOTIFICATION_SOURCE,kind=NOTIFICATION_KIND,
+        subject_type=NOTIFICATION_SUBJECT,subject_id=row.id,host_id=row.host_id,
+        subject_revision=change+':'+revision,severity='info' if closing else 'high',
+        reason=NOTIFICATION_REASONS[change],deep_link='#servers/'+row.host_id+'/security',
+        minimum_role='admin',lifecycle='resolved' if closing else 'active')
+
+
+def resolve_host_notifications(s,host_id,reason='The server was deleted; its malware detection no longer needs attention here.'):
+    """Resolve active incident notifications for a deleted server."""
+    from . import notifications
+    N=notifications.NotificationEvent;R=notifications.NotificationRevision
+    rows=s.execute(select(N.subject_id).join(R,(R.event_id==N.id)&(R.revision==N.revision)).where(
+        N.source==NOTIFICATION_SOURCE,N.kind==NOTIFICATION_KIND,N.host_id==host_id,R.lifecycle=='active')).scalars().all()
+    for incident_id in rows:
+        notifications.publish(s,source=NOTIFICATION_SOURCE,kind=NOTIFICATION_KIND,
+            subject_type=NOTIFICATION_SUBJECT,subject_id=incident_id,host_id=host_id,
+            subject_revision='server-deleted',severity='info',reason=reason,
+            deep_link='#servers/'+host_id+'/security',minimum_role='admin',lifecycle='resolved')
+
+
 def digest(evidence):return hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
@@ -97,8 +141,11 @@ def record(s,host_id,job_id,report,*,rules_provenance=None):
         if row:
             row.updated=time.time();row.scan_id=job_id;row.evidence=finding;row.state='open'
             for plan in s.scalars(select(Plan).where(Plan.incident_id==identifier,Plan.state.in_(['draft','approved']))):plan.state='superseded'
-        else:s.add(Incident(id=identifier,host_id=host_id,scan_id=job_id,evidence=finding))
+        else:row=Incident(id=identifier,host_id=host_id,scan_id=job_id,evidence=finding);s.add(row)
         event(s,identifier,'scanner','detection',{'scan_id':job_id,'previous_state':previous,'state':'open'})
+        # Repeat detections of an open/acknowledged incident are unchanged observations.
+        if previous is None:notify(s,row,'opened',job_id)
+        elif previous in CLOSED_STATES:notify(s,row,'reopened',job_id)
     audit(s,'security scan receipt',host_id+' '+job_id)
 
 ACTIONS=('preserve_evidence','isolate_host','quarantine_file','restore_trusted_package','remove_persistence','rotate_credentials','rebuild_host','rescan','verify_services')
@@ -203,6 +250,10 @@ def review(s,row,state,reason,actor,expected_updated):
     previous=row.state;row.state=state;row.updated=max(time.time(),row.updated+0.000001)
     for plan in s.scalars(select(Plan).where(Plan.incident_id==row.id,Plan.state.in_(['draft','approved']))):plan.state='superseded'
     event(s,row.id,actor,'review',{'from':previous,'to':state,'reason':reason,'scan_id':row.scan_id,'verification':'manual_review'})
+    # Acknowledgement is not read/dismiss and leaves the notification unchanged.
+    revision=repr(row.updated)
+    if state in CLOSED_STATES and previous not in CLOSED_STATES:notify(s,row,'resolved',revision)
+    elif state=='open' and previous in CLOSED_STATES:notify(s,row,'review-reopened',revision)
     audit(s,'security incident reviewed',row.id+' '+actor+' '+state)
 
 
