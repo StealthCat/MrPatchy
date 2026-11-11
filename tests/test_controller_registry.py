@@ -142,3 +142,50 @@ def test_pagination_roles_and_no_network(admin, monkeypatch):
             s.get(User, 'admin').role = role
             s.commit()
         assert admin.get('/api/operations/controllers').status_code == 403
+
+
+def test_truncated_scan_keeps_this_and_expected_controllers(admin, monkeypatch):
+    # Review finding: the key-ordered bounded scan is a pseudo-random subset of history, so once retained
+    # registrations exceed SCAN_LIMIT the live controller answering the page could disappear.
+    import time
+    monkeypatch.setattr(registry, 'SCAN_LIMIT', 20)
+    now = time.time()
+    with Session() as s:
+        for n in range(400):
+            s.add(Setting(key=registry.record_key('old%d' % n), value={'id': 'old%d' % n, 'heartbeat': now - 86400, 'state': 'stopped', 'version': APP_VERSION}))
+        s.add(Setting(key=registry.record_key('east'), value={'id': 'east', 'heartbeat': now - 1, 'state': 'reporting', 'version': APP_VERSION}))
+        s.commit()
+    monkeypatch.setenv('MRPATCHY_EXPECTED_CONTROLLER_IDS', 'east')
+    local = registry._local
+    assert local
+    for _ in range(3):
+        data = rows(admin)
+        assert data['truncated']
+        reporting = {r['id'] for r in data['items'] if r['state'] == 'reporting'}
+        assert reporting == {local, 'east'}
+        assert {r['id'] for r in data['items'][:2]} == {local, 'east'}
+
+
+def test_prune_removes_only_history_older_than_retention(admin, monkeypatch):
+    now = 10_000_000
+    old = now - registry.RETAIN_SECONDS - 1
+    values = {
+        'old-stopped': {'heartbeat': old, 'state': 'stopped'},
+        'old-stale': {'heartbeat': old, 'state': 'reporting'},
+        'recent-stopped': {'heartbeat': now - 86400, 'state': 'stopped'},
+        'invalid': {'heartbeat': 'bad', 'state': 'stopped'},
+        'expected-old': {'heartbeat': old, 'state': 'stopped'},
+        'self-old': {'heartbeat': old, 'state': 'stopped'},
+    }
+    with Session() as s:
+        for key, value in values.items():
+            s.add(Setting(key=registry.record_key(key), value={**value, 'id': key, 'version': APP_VERSION}))
+        s.commit()
+    monkeypatch.setenv('MRPATCHY_EXPECTED_CONTROLLER_IDS', 'expected-old')
+    assert registry.prune('self-old', now=now) == 2
+    with Session() as s:
+        left = {key for key in values if s.get(Setting, registry.record_key(key))}
+        actions = [a.action for a in s.scalars(select(Audit))]
+    assert left == {'recent-stopped', 'invalid', 'expected-old', 'self-old'}
+    assert 'controller history pruned' in actions
+    assert registry.prune('self-old', now=now) == 0

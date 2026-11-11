@@ -20,11 +20,15 @@ log = logging.getLogger(__name__)
 PREFIX = 'controller-node:'  # 16 + 64 hex fits settings.key String(80)
 INTERVAL = 15
 SCAN_LIMIT = 2000  # bounded registration scan for newest-first ordering
+RETAIN_SECONDS = 7 * 86400  # stopped/stale registration history kept for display
+PRUNE_SCAN = 20000  # rows examined per startup retention pass
+_local = None  # identity registered by this process, always listed even when the scan is truncated
 IDENTITY = r'[A-Za-z0-9_.:-]{1,48}'
 GAPS = [
     'Controller web instances self-report that they reached the shared database. HTTP serving, TLS/Caddy routing, readiness and load-balancer membership are not assessed.',
     'Expected controller identities come from MRPATCHY_EXPECTED_CONTROLLER_IDS on the instance answering this page; unconfigured controllers appear only after they register.',
     'Endpoint agents and GCP integration nodes are not inventoried here. A controller record carries no serving, failover or response authority.',
+    'Registrations whose last report is more than 7 days old are removed when a controller starts; expected controllers and the starting instance are kept.',
 ]
 
 
@@ -79,11 +83,22 @@ class Presence:
         except Exception:
             self.lock.release()
             raise
+        global _local
+        if _local is None:
+            _local = self.id
+        try:
+            prune(self.id)
+        except Exception:
+            # Retention is housekeeping; it must never stop the web process from starting.
+            log.warning('Unable to prune retained controller registrations')
         self.thread = threading.Thread(target=self.loop, name='controller-registry', daemon=True)
         self.thread.start()
         return self
 
     def close(self):
+        global _local
+        if _local == self.id:
+            _local = None
         self.stop.set()
         if self.thread:
             self.thread.join(5)
@@ -96,6 +111,45 @@ class Presence:
                 self.lock.release()
             except Exception:
                 log.warning('Unable to release controller identity lock')
+
+
+def prune(keep, now=None):
+    """Delete registration history whose last heartbeat is older than RETAIN_SECONDS.
+
+    Default installs register a new random identity on every start, so without retention the history grows
+    by one row per restart and a bounded page scan stops covering live controllers. Rows for this process
+    and configured expected identities are kept; only history whose last heartbeat is older than the
+    retention window is removed. Returns the number of removed rows.
+    """
+    now = time.time() if now is None else now
+    protected = {record_key(keep)} | {record_key(v) for v in _expected_identities()}
+    removed, last, examined = 0, PREFIX, 0
+    with Session() as s:
+        while examined < PRUNE_SCAN:
+            batch = list(s.scalars(select(Setting).where(Setting.key.startswith(PREFIX), Setting.key > last)
+                                   .order_by(Setting.key).limit(min(500, PRUNE_SCAN - examined))))
+            if not batch:
+                break
+            examined += len(batch)
+            last = batch[-1].key
+            for row in batch:
+                data = row.value if isinstance(row.value, dict) else {}
+                heartbeat = _number(data.get('heartbeat'))
+                # Older than the retention window is necessarily stopped or stale; invalid heartbeats are kept
+                # so the page can keep reporting them as unknown.
+                if row.key not in protected and heartbeat is not None and heartbeat < now - RETAIN_SECONDS:
+                    s.delete(row)
+                    removed += 1
+        if removed:
+            audit(s, 'controller history pruned', '%d registrations older than %d days' % (removed, RETAIN_SECONDS // 86400))
+        s.commit()
+    return removed
+
+
+def _expected_identities():
+    raw = os.getenv('MRPATCHY_EXPECTED_CONTROLLER_IDS', '')
+    values = [value.strip() for value in raw.split(',')] if raw.strip() else []
+    return [v for v in values[:100] if re.fullmatch(IDENTITY, v)]
 
 
 def _number(value):
@@ -135,7 +189,17 @@ def page(offset=0, now=None):
         # live in JSON, so sort a bounded scan in Python; a future or invalid heartbeat ranks last.
         scanned = list(s.scalars(select(Setting).where(Setting.key.startswith(PREFIX)).order_by(Setting.key).limit(SCAN_LIMIT + 1)))
         truncated = len(scanned) > SCAN_LIMIT
-        scanned = sorted(scanned[:SCAN_LIMIT], key=lambda row: (-_rank(row.value, now), row.key))
+        scanned = scanned[:SCAN_LIMIT]
+        if truncated:
+            # The key-ordered scan is a pseudo-random subset of history; always include the instance answering
+            # this page and configured expected controllers so they cannot fall outside it.
+            seen = {row.key for row in scanned}
+            for identity in ([_local] if _local else []) + _expected_identities():
+                row = s.get(Setting, record_key(identity))
+                if row is not None and row.key not in seen:
+                    seen.add(row.key)
+                    scanned.append(row)
+        scanned = sorted(scanned, key=lambda row: (-_rank(row.value, now), row.key))
         rows = scanned[offset:offset + 51]
         items = []
         for row in rows[:50]:
