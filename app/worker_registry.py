@@ -213,15 +213,12 @@ PROCESS_STARTED=time.time()
 
 
 def _active_worker_events(s):
+    # Filter on the current revision's lifecycle so retained resolved history never crowds out active events.
     from . import notifications
-    events=s.scalars(select(notifications.NotificationEvent).where(
-        notifications.NotificationEvent.source==NOTIFY_SOURCE,
-        notifications.NotificationEvent.kind.in_((NOTIFY_KIND,NOTIFY_CONFIG_KIND))).limit(500))
-    active={}
-    for event in events:
-        revision=s.get(notifications.NotificationRevision,(event.id,event.revision))
-        if revision is not None and revision.lifecycle=='active':active[(event.kind,event.subject_id)]=revision
-    return active
+    Event,Revision=notifications.NotificationEvent,notifications.NotificationRevision
+    rows=s.execute(select(Event.kind,Event.subject_id).join(Revision,(Revision.event_id==Event.id)&(Revision.revision==Event.revision)).where(
+        Event.source==NOTIFY_SOURCE,Event.kind.in_((NOTIFY_KIND,NOTIFY_CONFIG_KIND)),Revision.lifecycle=='active').limit(500))
+    return {(kind,subject) for kind,subject in rows}
 
 
 def publish_notifications(now=None,started=None):
@@ -262,7 +259,7 @@ def publish_notifications(now=None,started=None):
                     emit(NOTIFY_KIND,'worker',identity,state,NOTIFY_SEVERITY[state],'Expected worker '+identity+' '+NOTIFY_TEXT[state])
                 elif key in active:
                     emit(NOTIFY_KIND,'worker',identity,'resolved:'+state,'info',
-                         'Expected worker '+identity+' is '+state.replace('_',' ')+' again; it no longer needs attention.',lifecycle='resolved')
+                         'Expected worker '+identity+' is now '+state.replace('_',' ')+'; it no longer needs attention.',lifecycle='resolved')
             # An invalid configuration leaves earlier events untouched: removal is unknown.
             for kind,identity in active:
                 if kind==NOTIFY_KIND and identity not in seen:

@@ -141,3 +141,19 @@ def test_coordinator_tick_failure_is_contained(admin, monkeypatch):
     call = source.index('worker_registry.publish_notifications()')
     assert source.index('operations.collect_alerts()') < call
     assert 'except Exception:log.exception' in source[call:call + 200]
+
+
+def test_resolved_history_does_not_hide_an_active_event(admin, monkeypatch):
+    with Session() as s:
+        for n in range(520):
+            notifications.publish(s, source='deployment', kind='worker-health', subject_type='worker',
+                                  subject_id='old-' + str(n), subject_revision='resolved:reporting', severity='info',
+                                  reason='Retained history.', deep_link='#activity/workers', minimum_role='admin',
+                                  lifecycle='resolved', now=1)
+        s.commit()
+    monkeypatch.setenv('MRPATCHY_EXPECTED_WORKER_IDS', 'zz-late')
+    report('zz-late', heartbeat=NOW - registry.FRESH_SECONDS - 1)
+    assert publish() == 1
+    report('zz-late')
+    assert publish() == 1 and events()[('worker-health', 'zz-late')]['lifecycle'] == 'resolved'
+    assert 'is now reporting' in events()[('worker-health', 'zz-late')]['reason']
