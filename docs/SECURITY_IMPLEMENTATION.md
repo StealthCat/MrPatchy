@@ -2538,7 +2538,10 @@ event linked to AI Settings in two cases:
 
 A single short transient backoff stays silent. The payload is fixed text keyed only
 by that state, so further failures within one episode add no revision. Escalating
-from sustained to capped adds one revision.
+from sustained to capped adds one revision. A later shorter transient failure
+never lowers the floor, so while the capped floor still dominates it keeps the
+capped reason (and the `high` event and AI Settings review cue) until it lifts or is
+cleared.
 
 The event gets one `resolved` revision in any of these cases: a successful provider
 response, an administrator Clear, the episode going idle past the reset window, or AI

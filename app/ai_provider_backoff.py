@@ -77,6 +77,10 @@ def failed(error,now=None):
             provider=min(provider,MAX_PROVIDER_DELAY)
             error.provider_retry_after=provider
             delay=provider if provider>0 else random.uniform(30,min(1800,60*2**(row.failures-1)))
+            # A shorter failure never lowers the floor, so while an earlier
+            # capped floor still dominates it keeps its capped reason; otherwise
+            # the administrator review cue and notification would be lost.
+            capped=capped or (row.reason==CAPPED_REASON and (row.blocked_until or 0)>now+delay)
             row.blocked_until=max(row.blocked_until or 0,now+delay)
             row.updated=now
             row.reason=(CAPPED_REASON if capped else

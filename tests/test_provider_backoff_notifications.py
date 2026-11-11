@@ -113,6 +113,32 @@ def test_capped_retry_after_is_high_and_escalates_a_sustained_event(admin):
     assert revision.lifecycle == 'active' and 'AI Settings' in revision.reason
 
 
+@pytest.mark.parametrize('retry_after', [0, 120])
+def test_later_short_failure_keeps_an_active_capped_floor_high(admin, retry_after):
+    configure()
+    fail(T0, retry_after=200_000)
+    operations.collect_alerts(T0 + 1)
+    event, revision = event_and_revision()
+    assert revision.severity == 'high' and revision.subject_revision == 'capped'
+
+    # A request admitted before the floor was recorded fails afterwards.
+    fail(T0 + 5, retry_after=retry_after)
+    operations.collect_alerts(T0 + 6)
+    event, revision = event_and_revision()
+    assert event.revision == 1
+    assert revision.severity == 'high' and revision.lifecycle == 'active'
+    with Session() as session:
+        status = ai_provider_backoff.status(session, T0 + 6)
+        assert status['blocked'] and status['next_at'] == T0 + ai_provider_backoff.MAX_PROVIDER_DELAY
+        assert status['reason'] == ai_provider_backoff.CAPPED_REASON
+
+    # Once the capped floor lifts, a new short failure is no longer capped.
+    after = T0 + ai_provider_backoff.MAX_PROVIDER_DELAY + 1
+    fail(after, retry_after=60)
+    with Session() as session:
+        assert ai_provider_backoff.status(session, after + 1)['reason'] == 'Provider Retry-After floor is active.'
+
+
 def test_capped_first_failure_publishes_and_administrator_clear_resolves(admin):
     configure()
     fail(T0, retry_after=200_000)
