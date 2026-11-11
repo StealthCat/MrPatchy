@@ -2679,9 +2679,10 @@ storage or executor. Nothing calls it yet, so runtime behavior is unchanged.
   - `known_malware`: an authenticated, fresh ClamAV, YARA or hash-indicator match
     bound to the exact artifact sha256;
   - `evidence_supported_unknown_malware`: an AI `malicious` verdict at or above the
-    policy confidence. The verdict must be bound to the same server and evidence
-    revision, with at least two (or the policy minimum) distinct corroborating
-    evidence kinds from the same revision;
+    policy confidence. The verdict must be bound to the same server, evidence
+    revision and artifact sha256, with at least two (or the policy minimum)
+    distinct corroborating evidence kinds bound to that same server, revision and
+    artifact. Corroboration bound elsewhere is ignored and reported as a coverage gap;
   - `suspected`, `unknown`, `unverified_signature` or `invalid`.
 
   A bare model verdict never authorizes an action, and neither a known signature
@@ -2690,7 +2691,12 @@ storage or executor. Nothing calls it yet, so runtime behavior is unchanged.
   - Quarantine requires a complete, hash-matched file identity (path, sha256,
     device, inode) outside pseudo-filesystems and policy exclusions.
   - Termination requires a hash-matched process identity (pid ≥ 2, start ticks,
-    PID namespace, boot ID, executable sha256).
+    PID namespace, boot ID, executable sha256 and verified executable path).
+    Policy path exclusions are checked against the executable path and any file
+    identity, so a process-only detection cannot bypass an exclusion.
+  - Known-signature detections need no extra corroboration: the authenticated,
+    fresh, artifact-hash-bound signature is the corroborating deterministic
+    evidence. Only AI-discovered classifications need corroborating observations.
   - Each action states what it does not achieve.
 - `disabled` mode authorizes nothing, and `monitor_only` reports the would-be
   actions without authorizing them. `enforce` authorizes only actions in that
