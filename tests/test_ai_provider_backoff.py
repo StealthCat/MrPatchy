@@ -1,14 +1,16 @@
 import json
+from contextlib import contextmanager
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app import ai, ai_admission, ai_provider_backoff, ai_runs
-from app.db import Session, Setting
+from app.db import Session, Setting, engine
 
 
 def configure(mode='unthrottled'):
@@ -102,6 +104,73 @@ def test_older_parallel_success_does_not_clear_a_newer_failure(admin):
         assert row.failures==0 and row.blocked_until==0
 
 
+@pytest.mark.parametrize('state', ['absent', 'clear', 'newer'])
+def test_healthy_completion_skips_global_lock_and_update(admin, monkeypatch, state):
+    configure()
+    if state != 'absent':
+        with Session() as session:
+            active = state == 'newer'
+            session.add(ai_provider_backoff.ProviderBackoff(
+                id='global', updated=101, failures=int(active),
+                blocked_until=221 if active else 0,
+                reason='Provider Retry-After floor is active.' if active else ''))
+            session.commit()
+
+    locks, updates = [], []
+    original_lock = ai_provider_backoff.Lock
+
+    def record_lock(name):
+        locks.append(name)
+        return original_lock(name)
+
+    def record_sql(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith('update ai_provider_backoff'):
+            updates.append(statement)
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', record_lock)
+    event.listen(engine, 'before_cursor_execute', record_sql)
+    try:
+        for _ in range(3):
+            ai_provider_backoff.succeeded(request_started=100, now=102)
+        # A clear row should be a no-op even for requests newer than the row.
+        if state == 'clear':
+            ai_provider_backoff.succeeded(request_started=102, now=103)
+    finally:
+        event.remove(engine, 'before_cursor_execute', record_sql)
+
+    assert (len(locks), len(updates)) == (0, 0)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        if state == 'absent':
+            assert row is None
+        else:
+            assert row.updated == 101
+            assert row.failures == int(state == 'newer')
+            assert row.blocked_until == (221 if state == 'newer' else 0)
+
+
+def test_eligible_reset_rechecks_after_concurrent_failure(admin, monkeypatch):
+    configure()
+    first = ai.AIError('provider wait', transient=True, retry_after=30)
+    ai_provider_backoff.failed(first, now=100)
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def concurrent_failure(name):
+        with monkeypatch.context() as inner:
+            inner.setattr(ai_provider_backoff, 'Lock', original_lock)
+            later = ai.AIError('provider wait', transient=True, retry_after=120)
+            ai_provider_backoff.failed(later, now=102)
+        with original_lock(name):
+            yield
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', concurrent_failure)
+    ai_provider_backoff.succeeded(request_started=101, now=103)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.failures, row.blocked_until, row.updated) == (2, 222, 102)
+
+
 def test_nontransient_provider_error_does_not_create_global_backoff(admin, monkeypatch):
     configure();ai_provider_backoff.failed(ai.AIError('transient',transient=True,retry_after=5))
     with Session() as session:
@@ -124,13 +193,18 @@ def test_huge_retry_after_is_capped_and_admin_can_clear_it_with_audit(admin, mon
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff, 'global')
         assert cap-5 < row.blocked_until-time.time() <= cap
-        assert 'capped' in ai_provider_backoff.status(session)['reason']
-    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': True}
+        status=ai_provider_backoff.status(session)
+        assert 'capped' in status['reason']
+        assert status['revision'] and status['updated_at']==row.updated
+    body={'expected_revision':status['revision'],'reason':'Reviewed provider status and current quota.',
+          'confirmation':'CLEAR BACKOFF'}
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).json()=={'cleared': True}
     with Session() as session:
         assert not ai_provider_backoff.status(session)['blocked']
         from app.db import Audit
-        assert any(a.action=='clear AI provider backoff' for a in session.scalars(select(Audit)))
-    assert admin.post('/api/ai/provider-backoff/clear').json()=={'cleared': False}
+        record=next(a for a in session.scalars(select(Audit)) if a.action=='clear AI provider backoff')
+        assert 'Reviewed provider status' in record.detail and 'admin' in record.detail
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==409
 
 
 def test_internal_backoff_is_not_stored_as_provider_retry_after(admin, monkeypatch):
@@ -142,7 +216,80 @@ def test_internal_backoff_is_not_stored_as_provider_retry_after(admin, monkeypat
 
 
 def test_clear_provider_backoff_requires_admin(client):
-    assert client.post('/api/ai/provider-backoff/clear').status_code in (401, 403)
+    body={'expected_revision':'a'*64,'reason':'Reviewed current provider status.',
+          'confirmation':'CLEAR BACKOFF'}
+    assert client.post('/api/ai/provider-backoff/clear',json=body).status_code in (401, 403)
+
+
+def test_clear_provider_backoff_requires_csrf(admin):
+    token=admin.headers.pop('X-CSRF-Token')
+    try:
+        body={'expected_revision':'a'*64,'reason':'Reviewed current provider status.',
+              'confirmation':'CLEAR BACKOFF'}
+        assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==403
+    finally:admin.headers['X-CSRF-Token']=token
+
+
+def test_admin_clear_rejects_changed_or_expired_backoff(admin):
+    configure();now=time.time()
+    ai_provider_backoff.failed(ai.AIError('first',transient=True,retry_after=120),now=now)
+    with Session() as session:first=ai_provider_backoff.status(session)
+    ai_provider_backoff.failed(ai.AIError('newer',transient=True,retry_after=240),now=now+1)
+    body={'expected_revision':first['revision'],'reason':'Reviewed the older provider failure.',
+          'confirmation':'CLEAR BACKOFF'}
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==409
+    with Session() as session:
+        current=ai_provider_backoff.status(session)
+        assert current['blocked'] and current['failures']==2 and current['revision']!=first['revision']
+        session.get(ai_provider_backoff.ProviderBackoff,'global').blocked_until=now-1;session.commit()
+    body['expected_revision']=current['revision']
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==409
+    with Session() as session:
+        row=session.get(ai_provider_backoff.ProviderBackoff,'global')
+        assert row.failures==2  # an expired reviewed floor is not rewritten by the stale action
+
+
+def test_admin_clear_rejects_backoff_expiring_during_lock_wait(admin, monkeypatch):
+    from app.db import Audit
+
+    with Session.begin() as session:
+        session.add(ai_provider_backoff.ProviderBackoff(
+            id='global', blocked_until=110, failures=1, updated=95, reason='fixture backoff',
+        ))
+    with Session() as session:
+        reviewed = ai_provider_backoff.status(session, now=100)
+
+    clock = SimpleNamespace(now=100)
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def delayed_lock(name):
+        with original_lock(name):
+            clock.now = 111
+            yield
+
+    monkeypatch.setattr(ai_provider_backoff, 'time', SimpleNamespace(time=lambda: clock.now))
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', delayed_lock)
+    result = admin.post('/api/ai/provider-backoff/clear', json={
+        'expected_revision': reviewed['revision'], 'reason': 'Reviewed the fleet provider backoff.',
+        'confirmation': 'CLEAR BACKOFF',
+    })
+
+    assert result.status_code == 409
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.blocked_until, row.failures, row.updated, row.reason) == (110, 1, 95, 'fixture backoff')
+        assert session.scalar(select(Audit.id).where(Audit.action == 'clear AI provider backoff')) is None
+
+
+@pytest.mark.parametrize('body',[
+    {},
+    {'expected_revision':'a'*64,'reason':'too short','confirmation':'CLEAR BACKOFF'},
+    {'expected_revision':'a'*64,'reason':'            ','confirmation':'CLEAR BACKOFF'},
+    {'expected_revision':'a'*64,'reason':'Reviewed current provider status.','confirmation':'CLEAR'},
+])
+def test_admin_clear_requires_review_fields(admin,body):
+    assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==422
 
 
 def test_clear_revokes_provider_only_item_waits_but_keeps_attempts(admin):
@@ -206,3 +353,62 @@ def test_clear_releases_provider_policy_wait_after_admission_race(admin,failure_
         assert retry.provider_until<=now+failure_delay+1 and retry.next_at<=now+failure_delay+1
         if failure_delay<120:assert retry.provider_until==0
         assert retry.state=='deferred' and retry.attempts==0
+
+
+def test_local_pool_timeout_keeps_other_provider_work_eligible(admin, monkeypatch):
+    configure()
+
+    def pool_timeout(*args, **kwargs):
+        raise httpx.PoolTimeout('raw transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', pool_timeout)
+    with pytest.raises(ai.AIError) as failed:
+        ai.request(payload(), 'fixture-key')
+    with Session() as session:
+        assert session.get(ai_provider_backoff.ProviderBackoff, 'global') is None
+
+    error = failed.value
+    assert error.transient and error.provider_retry_after == 0
+    assert ai.defer_until(error, now=1000) == 1005
+    assert 'local AI connection pool' in error.diagnostic
+    assert 'raw transport detail' not in error.diagnostic
+
+    monkeypatch.setattr(ai.transport, 'post', lambda *args, **kwargs: success())
+    with ai_runs.track('connection_test', 'fixture-model'):
+        assert ai.request(payload(), 'fixture-key') == {}
+
+
+def test_local_pool_timeout_preserves_a_concurrent_provider_floor(admin, monkeypatch):
+    configure()
+    now = time.time()
+
+    def concurrent_provider_failure(*args, **kwargs):
+        error = ai.AIError('provider wait', transient=True, retry_after=120)
+        ai_provider_backoff.failed(error, now=now)
+        raise httpx.PoolTimeout('local contention')
+
+    monkeypatch.setattr(ai.transport, 'post', concurrent_provider_failure)
+    with pytest.raises(ai.AIError):
+        ai.request(payload(), 'fixture-key')
+
+    with Session() as session:
+        status = ai_provider_backoff.status(session, now=now)
+        assert status['blocked'] and status['failures'] == 1
+        assert status['next_at'] == now + 120
+        assert status['reason'] == 'Provider Retry-After floor is active.'
+
+
+def test_ambiguous_read_timeout_still_creates_shared_backoff(admin, monkeypatch):
+    configure()
+
+    def read_timeout(*args, **kwargs):
+        raise httpx.ReadTimeout('raw transport detail')
+
+    monkeypatch.setattr(ai.transport, 'post', read_timeout)
+    with pytest.raises(ai.AIError, match='OpenAI API request timed out') as failed:
+        ai.request(payload(), 'fixture-key')
+    assert failed.value.transient and failed.value.retry_after >= 30
+
+    with Session() as session:
+        status = ai_provider_backoff.status(session)
+        assert status['blocked'] and status['failures'] == 1

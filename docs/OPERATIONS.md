@@ -62,13 +62,15 @@ Recreate the deployment with matching volumes and database, then check host fing
 
 ## Password reset
 
-There is no unauthenticated password-reset endpoint. With trusted shell access to the Docker host:
+There is no unauthenticated password-reset endpoint. With trusted shell access to the Docker host, from the deployment directory, use the supported helper (it takes the maintenance lock, syncs the legacy `Setting("admin")` hash, revokes the account's sessions and audits the change):
 
 ```bash
-docker compose exec -u mrpatchy app python -c 'import getpass; from app.db import Session,audit; from app.identity import User; from app.security import password_hash; p=getpass.getpass("New administrator password: "); assert len(p)>=12; s=Session(); u=s.get(User,"admin"); assert u is not None; u.password=password_hash(p); u.generation+=1; audit(s,"console password reset","admin"); s.commit(); s.close()'
+./reset-admin-password.sh                       # default administrator "admin"
+./reset-admin-password.sh --username alice      # another existing administrator
+./reset-admin-password.sh --username alice --reset-mfa --enable   # explicit MFA/disabled-state recovery
 ```
 
-This resets the named account and invalidates its existing sessions. It retains MFA. If MFA recovery is needed, use a separate trusted-console procedure to clear that account’s OTP fields and increment its session generation; changing the legacy `Setting("admin")` hash does not reset a named user.
+MFA and disabled status are preserved unless `--reset-mfa` / `--enable` are given. See "Reset an administrator password locally" in the README for `--password-stdin`, `MRPATCHY_PROJECT_DIR` and direct (non-Docker) installations (`python -m app.admin_reset`).
 
 ## Remove a target's access
 
@@ -113,3 +115,9 @@ The comparison records pre-existing, remaining, new and recovered units; the ori
 Automatic reboot/rollback workflows retain the stricter requirement for clean service health. Both controller preflight and the updated target helper check it before package changes. Controller preflight failures are ordinary failed jobs, not uncertain patch transactions; the target's check happens before creating its transaction journal. Post-mutation disconnects and recovery failures retain their existing reconciliation requirements. Release upgrades and rollback verification keep their existing strict health checks. Single-server on-demand patches without automatic recovery retain their existing behavior; this change fixes the gates used by scheduled/multi-server rollouts.
 
 Redeploy target helpers through **Finish / verify installation** after updating the controller to obtain the target-side preflight and complete, bounded failed-unit output. Older helpers still support the controller's legacy table parser, but their output may be truncated on hosts with unusually many failed units. Previously failed jobs are not automatically rerun or reclassified.
+
+## Application probes for rollout health gates
+
+Administrators can review loopback application probes per server (`GET`/`PUT /api/operations/{host_id}/probes`, audited). A probe is data, never a command: the target bridge runs a fixed adapter that opens a TCP connection or sends one `GET` to `127.0.0.1:<port><path>` with a 1–10 s timeout, follows no redirects, reads no response body and reports only `ok` plus a short status such as `status 503` or `timeout`. Each probe records a name, port, optional path and expected status, whether it is required, and why. At most 16 probes per server.
+
+For ordinary patch jobs that belong to a rollout (`_depends_on`), the worker collects a probe baseline before any package change and again afterwards, next to the failed-unit comparison. A baseline that cannot be collected stops the job before packages change. Afterwards, a required probe that was healthy and is not now stops the rollout; probes that were already failing are reported as pre-existing and do not. Missing, duplicated, malformed, timed-out or unavailable results are never healthy. A failing probe never starts a rollback or reboot, and recovery-required holds and approvals are unchanged. Servers with no probes behave exactly as before; targets whose helpers predate this action fail the baseline and need the helper upgrade first.

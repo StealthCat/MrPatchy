@@ -18,10 +18,61 @@ from types import SimpleNamespace
 import uuid
 import re
 
+# Deployment guard (#425): bridges compile this file before replacing any managed
+# helper. The assignment expression is Python 3.8+ syntax, so even an older
+# forced-command bridge on Python <3.8 rejects the deployment before any write.
+PYTHON_MINIMUM = (_python_minimum := (3, 8))
+
 ROOT = Path('/opt/drpatch')
 SERVICE_PROPERTIES = ('Id','LoadState','ActiveState','SubState','Result','ExecMainCode','ExecMainStatus','MainPID','NRestarts','InvocationID','FragmentPath','UnitFileState')
-SPOOL_BATCH_BYTES = 256*1024
+DEFAULT_SPOOL_BATCH_BYTES = 256*1024
+MIN_SPOOL_BATCH_BYTES = 16*1024
+MAX_SPOOL_BATCH_BYTES = 1024*1024
 SPOOL_CAPACITY_BYTES = 48_000_000
+SPOOL_CONFIG_CACHE = {'identity':object(),'batch_limit_bytes':DEFAULT_SPOOL_BATCH_BYTES}
+SPOOL_CONFIG_LOCK = threading.Lock()
+
+def read_spool_config(path, info):
+    """Return verified configuration bytes and cap from a bounded file read."""
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077 or info.st_size > 1024):
+        raise ValueError('Unsafe agent spool configuration')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        data = os.read(fd, 1025)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    expected = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    opened = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    finished = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    if len(data) > 1024 or expected != opened or opened != finished:
+        raise ValueError('Agent spool configuration changed while reading')
+    try:
+        config = json.loads(data)
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError('Invalid agent spool configuration') from None
+    if (not isinstance(config, dict) or set(config) != {'version', 'batch_limit_bytes'}
+            or type(config['version']) is not int or config['version'] != 1):
+        raise ValueError('Invalid agent spool configuration')
+    value = config['batch_limit_bytes']
+    if type(value) is not int or not MIN_SPOOL_BATCH_BYTES <= value <= MAX_SPOOL_BATCH_BYTES:
+        raise ValueError('Invalid agent spool batch limit')
+    return data, value
+
+def spool_batch_limit():
+    """Read the root-owned, bridge-written batch cap without per-event file reads."""
+    path=ROOT/'spool.json'
+    try:info=path.lstat();identity=(str(path),info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+    except FileNotFoundError:identity=(str(path),None)
+    with SPOOL_CONFIG_LOCK:
+        if SPOOL_CONFIG_CACHE['identity']==identity:return SPOOL_CONFIG_CACHE['batch_limit_bytes']
+        if identity[1] is None:value=DEFAULT_SPOOL_BATCH_BYTES
+        else:
+            _, value = read_spool_config(path, info)
+        SPOOL_CONFIG_CACHE.update(identity=identity,batch_limit_bytes=value)
+        return value
 
 def response_service_units(units):
     if (not isinstance(units,list) or not 1<=len(units)<=16 or
@@ -262,20 +313,22 @@ def spool_drop(db,reason,batches,observations):
     spool_counter(db,'dropped_'+reason+'_batches',batches)
     spool_counter(db,'dropped_'+reason+'_observations',observations)
 
-def spool_payloads(processes):
+def spool_payloads(processes,batch_limit_bytes=None):
     """Split one observation snapshot without splitting or silently losing records."""
     if not isinstance(processes,list):raise ValueError('Invalid spool process batch')
+    batch_limit_bytes=spool_batch_limit() if batch_limit_bytes is None else batch_limit_bytes
+    if type(batch_limit_bytes) is not int or not MIN_SPOOL_BATCH_BYTES<=batch_limit_bytes<=MAX_SPOOL_BATCH_BYTES:raise ValueError('Invalid agent spool batch limit')
     prefix='{"processes":[';suffix=']}'
     batches=[];current=[];size=len(prefix.encode())+len(suffix.encode())
     oversize=0
     for process in processes:
         encoded=json.dumps(process,separators=(',',':'))
         encoded_size=len(encoded.encode())
-        if len(prefix.encode())+encoded_size+len(suffix.encode())>SPOOL_BATCH_BYTES:
+        if len(prefix.encode())+encoded_size+len(suffix.encode())>batch_limit_bytes:
             oversize+=1
             continue
         separator=1 if current else 0
-        if current and size+separator+encoded_size>SPOOL_BATCH_BYTES:
+        if current and size+separator+encoded_size>batch_limit_bytes:
             batches.append(prefix+','.join(current)+suffix);current=[];size=len(prefix.encode())+len(suffix.encode());separator=0
         current.append(encoded);size+=separator+encoded_size
     if current or not processes:batches.append(prefix+','.join(current)+suffix)
@@ -299,6 +352,7 @@ def spool(processes, observed):
                        [('queued_bytes',size),('queued_count',count)])
 
 def pending_events():
+    batch_limit_bytes=spool_batch_limit()
     with spool_db() as db:
         rows=db.execute('SELECT id,observed,payload FROM events ORDER BY rowid LIMIT 8').fetchall()
         counters=dict(db.execute('SELECT name,value FROM counters').fetchall())
@@ -307,7 +361,7 @@ def pending_events():
     dropped=counters.get('dropped',0)
     return {'events':[{'id':r[0],'observed':r[1],**json.loads(r[2])} for r in rows],
             'spool':{'pending':count,'queued_bytes':queued_bytes,'capacity_bytes':SPOOL_CAPACITY_BYTES,
-                     'batch_limit_bytes':SPOOL_BATCH_BYTES,'dropped':dropped,
+                     'batch_limit_bytes':batch_limit_bytes,'dropped':dropped,
                      'dropped_observations':counters.get('dropped_oversize_observations',0)+counters.get('dropped_capacity_observations',0),
                      'drop_reasons':{'oversize':{'batches':oversize_batches,'observations':counters.get('dropped_oversize_observations',0)},
                                      'capacity':{'batches':capacity_batches,'observations':counters.get('dropped_capacity_observations',0)},
@@ -441,7 +495,17 @@ def decode_bpf_events(pending,chunk):
     """Frame pipe reads without losing buffered events or splitting UTF-8 characters."""
     lines=(pending+chunk).split(b'\n')
     if any(len(line)>65536 for line in lines):raise ValueError('Oversized bpftrace event')
-    return [json.loads(line) for line in lines[:-1] if line],lines[-1]
+    events=[];bad=0
+    for line in lines[:-1]:
+        if not line:continue
+        try:
+            # surrogateescape matches os.readlink(), so non-UTF-8 paths still compare equal.
+            event=json.loads(line.decode('utf-8','surrogateescape'))
+        except ValueError:bad+=1;continue
+        if isinstance(event,dict):events.append(event)
+        else:bad+=1
+    if bad:events.append({'type':'malformed','count':bad})
+    return events,lines[-1]
 
 EBPF_HASH_CACHE_LIMIT=4096
 
@@ -524,9 +588,15 @@ def ebpf_loop():
                     if not chunk:ended=True;break
                     events,pending=decode_bpf_events(pending,chunk)
                     for event in events:
+                        if event.get('type')=='malformed':
+                            record_ebpf_diagnostic(instance,('Skipped %d malformed bpftrace line(s)'%event['count']).encode());continue
                         if event.get('type')!='printf':continue
-                        event_process=ebpf_process(event['data'],cache=hash_cache)
-                        spool([event_process],time.time())
+                        try:
+                            event_process=ebpf_process(event['data'],cache=hash_cache)
+                            spool([event_process],time.time())
+                        except Exception as error:
+                            # One bad record must not discard its siblings or restart the collector.
+                            record_ebpf_diagnostic(instance,('Skipped bpftrace event: '+type(error).__name__).encode());continue
                         with EBPF_DIAGNOSTIC_LOCK:
                             # The first delivered event proves this run recovered; earlier
                             # warnings become history, later ones remain current.
@@ -1024,14 +1094,14 @@ def persistence_inventory(deadline,custom_paths=None):
 def security_inspect(packages,persistence=True,custom_paths=None):
     """Local database comparison and metadata-only startup inventory; no remediation."""
     validate_inspection(packages,persistence,custom_paths)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
+    try:from bridge import bounded,rpm_backend
+    except ImportError:from target.bridge import bounded,rpm_backend
     report={'version':1,'started':time.time(),'state':'incomplete','trust_basis':'target_local_package_database',
             'packages':[],'gaps':[],'persistence':None,
             'limitations':['Local package metadata is not an independent trusted vendor baseline.',
                           'Differences may be legitimate configuration changes; they are not malware verdicts.',
                           'No differences does not establish complete file coverage or a clean host.']}
-    rpm=not Path('/var/lib/dpkg/status').exists()
+    rpm=rpm_backend()
     report['package_manager']='rpm' if rpm else 'dpkg'
     deadline=time.monotonic()+180
     def command(args,allowed=(0,)):
@@ -1462,7 +1532,14 @@ def response_status_open(directory,identifier,plan,facts=None):
         review=response_json(directory,'restore-intent.json')
         if review.get('id')!=identifier or review.get('plan')!=plan:raise ValueError('Restoration intent does not bind approved evidence')
     path=Path(plan['file']['path']);mode=stat.S_IMODE(plan['file']['identity']['mode'])
-    with response_parent(path.parent) as (parent,chain):
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        try:parent,chain=stack.enter_context(response_parent(path.parent))
+        except FileNotFoundError:
+            # A removed ancestor (at this single parent open) is a changed parent, not a missing vault record; the held file stays verifiable.
+            facts['parents_match']=False;held=response_present(directory,'held');facts['held_present']=held
+            if held:os.close(response_file(directory,'held',plan,(0o600,mode)));facts['held_verified']=True
+            return result
         facts['parents_match']=chain==plan['ancestors']
         if chain!=plan['ancestors']:return result
         held=response_present(directory,'held');source=response_present(parent,path.name)

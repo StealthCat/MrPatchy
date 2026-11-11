@@ -46,6 +46,174 @@ def capture_assessments(monkeypatch):
     return sent
 
 
+def test_candidate_host_reads_only_load_scoring_inputs(admin):
+    expected_order=seed(450,completed=0)
+    with Session() as s:
+        host=s.get(Host,'bulk-1')
+        host.inventory={'package_manager':'rpm','os':'ID=almalinux\nVERSION_ID=9',
+            'rpm_packages':[{'name':'pkg0000','arch':'x86_64','evr':'0:1-1'}],
+            'files':{'/etc/yum.repos.d/example.repo':'[example]\n'}}
+        package=s.get(Package,'bulk-1:pkg0000')
+        package.name='pkg0000:x86_64'
+        package.id='bulk-1:'+package.name
+        expected_order[1]=package.id
+        s.commit()
+
+    host_selects=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):
+        if statement.startswith('SELECT hosts.'):
+            host_selects.append(statement.partition('\n')[0].strip())
+
+    with Session() as s:
+        event.listen(engine,'before_cursor_execute',observe)
+        try:
+            candidates=list(update_scores.scoring_candidates(s))
+        finally:
+            event.remove(engine,'before_cursor_execute',observe)
+        assert host_selects==['SELECT hosts.id, hosts.inventory'],host_selects
+        assert [package.id for package,*_ in candidates]==expected_order
+        full_hosts={host.id:host for host in s.scalars(select(Host))}
+        for package,host,key,score,deferred in candidates:
+            full_host=full_hosts[package.host_id]
+            assert host.inventory == {field: full_host.inventory[field]
+                                      for field in ('os', 'package_manager')
+                                      if field in full_host.inventory}
+            assert update_scores.evidence(host,package)==update_scores.evidence(full_host,package)
+            assert key==update_scores.identity(full_host,package)
+            assert score is None and not deferred
+        rpm_package,rpm_host,*_=candidates[1]
+        assert update_scores.evidence(rpm_host,rpm_package)['installed']==['0:1-1']
+
+
+def test_scoring_memo_survives_unrelated_inventory_refresh(admin, monkeypatch):
+    seed(2, completed=0)
+    with Session() as session:
+        rpm_host = session.get(Host, 'bulk-1')
+        rpm_host.inventory = {
+            'package_manager': 'rpm',
+            'os': 'ID=almalinux\nVERSION_ID=9',
+            'rpm_packages': [{'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1-1'}],
+            'files': {'/etc/yum.repos.d/example.repo': '[example]\n'},
+            'collected': 1,
+        }
+        rpm_package = session.get(Package, 'bulk-1:pkg0000')
+        rpm_package.name = 'pkg0000:x86_64'
+        rpm_package.id = 'bulk-1:' + rpm_package.name
+        for package in session.scalars(select(Package)):
+            host = session.get(Host, package.host_id)
+            session.add(update_scores.UpdateScore(
+                id=update_scores.identity(host, package), host_id=host.id,
+                name=package.name, installed=package.installed,
+                candidate=package.candidate, state='complete', score=50,
+            ))
+        session.commit()
+
+    def candidates():
+        with Session() as session:
+            return {host.id: (key, score.state if score else None)
+                    for _, host, key, score, _ in update_scores.scoring_candidates(session)}
+
+    monkeypatch.setattr(update_scores, '_MEMO', {})
+    original = candidates()
+    assert set(original) == {'bulk-0', 'bulk-1'}
+    assert all(state == 'complete' for _, state in original.values())
+    memo = update_scores._MEMO.copy()
+    with Session() as session:
+        rpm_host = session.get(Host, 'bulk-1')
+        rpm_host.inventory = {
+            **rpm_host.inventory,
+            'files': {'/etc/yum.repos.d/example.repo': '[example]\n# refreshed\n'},
+            'os': rpm_host.inventory['os'] + '\nUNUSED_FIELD=ignored',
+            'collected': 2,
+        }
+        apt_host = session.get(Host, 'bulk-0')
+        apt_host.inventory = {**apt_host.inventory, 'status': 'unrelated dpkg data', 'collected': 2}
+        session.commit()
+
+    with monkeypatch.context() as patch:
+        def unexpected(*args):
+            pytest.fail('Unrelated inventory changes must reuse the warm scoring memo')
+
+        patch.setattr(update_scores, 'identity', unexpected)
+        patch.setattr(update_scores, 'version_index', unexpected)
+        assert candidates() == original
+        assert all(update_scores._MEMO[host_id] is entry for host_id, entry in memo.items())
+
+    for changes in (
+        {'rpm_packages': [{'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1-2'}]},
+        {'os': 'ID=almalinux\nVERSION_ID=10'},
+        {'package_manager': 'apt'},
+    ):
+        with Session() as session:
+            host = session.get(Host, 'bulk-1')
+            before = host.inventory
+            host.inventory = {**before, **changes}
+            expected = update_scores.identity(host, session.get(Package, 'bulk-1:pkg0000:x86_64'))
+            session.commit()
+        current = candidates()
+        assert expected != original['bulk-1'][0]
+        assert current == {**original, 'bulk-1': (expected, None)}
+        with Session() as session:
+            session.get(Host, 'bulk-1').inventory = before
+            session.commit()
+        assert candidates() == original
+
+
+def test_scoring_memo_retains_warm_hosts_above_capacity(admin, monkeypatch):
+    seed(402)
+    monkeypatch.setattr(update_scores, '_MEMO', {})
+    monkeypatch.setattr(update_scores, '_MEMO_HOSTS', 1)
+    original_index = update_scores.version_index
+    builds = 0
+
+    def version_index(inventory):
+        nonlocal builds
+        builds += 1
+        return original_index(inventory)
+
+    monkeypatch.setattr(update_scores, 'version_index', version_index)
+
+    def candidates():
+        with Session() as session:
+            rows = list(update_scores.scoring_candidates(session))
+            assert all(score and score.state == 'complete' for _, _, _, score, _ in rows)
+            return {package.id: key for package, _, key, _, _ in rows}
+
+    original = candidates()
+    assert len(original) == 402
+    builds = 0
+    assert candidates() == original
+    assert builds == 1
+    assert set(update_scores._MEMO) == {'bulk-0'}
+    warm = update_scores._MEMO['bulk-0']
+
+    with Session() as session:
+        for package in session.scalars(select(Package).where(Package.host_id == 'bulk-1')):
+            package.available_since = 1
+        session.commit()
+        # The first chunk contains only the overflow host. Closing the iterator
+        # here must not drop the retained host that is still eligible.
+        partial = update_scores.scoring_candidates(session)
+        assert next(partial)[1].id == 'bulk-1'
+        partial.close()
+    assert update_scores._MEMO['bulk-0'] is warm
+
+    with Session() as session:
+        session.get(Host, 'bulk-0').enabled = False
+        session.commit()
+    remaining = {package_id: key for package_id, key in original.items()
+                 if package_id.startswith('bulk-1:')}
+    assert candidates() == remaining
+    assert not update_scores._MEMO
+
+    builds = 0
+    assert candidates() == remaining
+    assert set(update_scores._MEMO) == {'bulk-1'}
+    assert builds == 1
+    assert candidates() == remaining
+    assert builds == 1
+
+
 @pytest.mark.parametrize('count',[100,1000])
 @pytest.mark.parametrize('state',['complete','deferred'])
 def test_idle_fleet_selects_scale_by_chunks_not_packages(admin,monkeypatch,count,state):
@@ -74,6 +242,26 @@ def test_complete_current_scores_still_supersede_changed_deferred_history(admin,
         assert sum(r.state=='superseded' and r.next_at==0 for r in rows)==450
 
 
+def test_scoring_candidate_queries_only_load_scheduling_fields(admin):
+    seed(450)
+    score_reads=[]
+    def observe(conn,cursor,statement,parameters,context,executemany):
+        if statement.startswith('SELECT update_scores.'):
+            score_reads.append(statement.partition('\n')[0].strip())
+
+    with Session() as s:
+        event.listen(engine,'before_cursor_execute',observe)
+        try:
+            candidates=list(update_scores.scoring_candidates(s))
+        finally:
+            event.remove(engine,'before_cursor_execute',observe)
+        assert len(score_reads)==6,score_reads
+        fields=('id','host_id','name','state','attempted','next_at')
+        projection='SELECT '+', '.join('update_scores.'+field for field in fields)
+        assert all(statement==projection for statement in score_reads),score_reads[0]
+        assert len(candidates)==450 and all(row.state=='complete' for _,_,_,row,_ in candidates)
+
+
 @pytest.mark.parametrize('count,completed',[(513,505),(1000,0)])
 def test_new_candidates_after_multiple_completed_chunks_keep_oldest_order_and_batch_limit(admin,monkeypatch,count,completed):
     ids=seed(count,completed=completed);sent=capture_assessments(monkeypatch)
@@ -97,6 +285,58 @@ def test_due_deferred_items_across_chunk_boundaries_are_not_starved(admin,monkey
     assert [row['id'] for row in sent]==expected
     with Session() as s:
         assert sum(row.state=='deferred' for row in s.scalars(select(update_scores.UpdateScore)))==508
+
+
+@pytest.mark.parametrize('outcome', ['complete', 'superseded', 'deferred', 'error'])
+def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, monkeypatch, outcome):
+    seed(5, completed=0)
+    if outcome in ('complete', 'superseded'):
+        capture_assessments(monkeypatch)
+        if outcome == 'superseded':
+            assess = ai.request
+
+            def replace_candidates(*args, **kwargs):
+                with Session() as session:
+                    for package in session.scalars(select(Package)):
+                        package.candidate = '3'
+                    session.commit()
+                return assess(*args, **kwargs)
+
+            monkeypatch.setattr(ai, 'request', replace_candidates)
+    else:
+        def reject(*args, **kwargs):
+            if outcome == 'deferred':
+                raise ai.AIError('Fixture wait', policy_wait=True, retry_after=600)
+            raise ai.AIError('Fixture provider error')
+
+        monkeypatch.setattr(ai, 'request', reject)
+
+    score_reads = []
+
+    def observe(conn, cursor, statement, parameters, context, executemany):
+        query = statement.lower()
+        if 'from update_scores' in query and 'where update_scores.id ' in query:
+            score_reads.append(query)
+
+    event.listen(engine, 'before_cursor_execute', observe)
+    try:
+        update_scores.run_one()
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe)
+
+    with Session() as session:
+        run = session.scalars(select(ai_runs.AIRun)).one()
+        rows = session.scalars(select(update_scores.UpdateScore)).all()
+        assert run.state == ('complete' if outcome == 'superseded' else outcome)
+        assert len(rows) == 5
+        assert {row.run_id for row in rows} == {run.id}
+        assert {row.state for row in rows} == {outcome}
+        assert {row.score for row in rows} == ({50} if outcome == 'complete' else {None})
+        assert all((row.next_at > time.time()) == (outcome == 'deferred') for row in rows)
+
+    # Candidate identity and persisted host scope are still read separately.
+    assert len(score_reads) == 4
+    assert all('where update_scores.id in (' in query for query in score_reads)
 
 
 def test_equal_age_candidates_keep_id_tiebreak_order_across_chunks(admin,monkeypatch):
@@ -124,3 +364,53 @@ def test_paused_and_inactive_hosts_stay_out_of_scoring_and_stale_supersession(ad
     with Session() as s:
         assert all(r.state=='deferred' for r in s.scalars(select(update_scores.UpdateScore)))
         assert ai_policy.status(s,'bulk-0')['paused']
+
+
+@pytest.mark.parametrize("evidence_changed", [False, True])
+def test_scoring_sends_indexed_rpm_versions_and_rechecks_live_inventory(admin, monkeypatch, evidence_changed):
+    seed(2, completed=0)
+    with Session() as session:
+        host = session.get(Host, "bulk-1")
+        host.inventory = {
+            "package_manager": "rpm",
+            "os": 'ID=almalinux\nVERSION_ID="9"\nPRETTY_NAME="Fixture"\nID=almalinux',
+            "files": {"/etc/example.repo": "private fixture marker"},
+            "rpm_packages": [
+                {"name": "pkg0000", "arch": "x86_64", "evr": "0:1.1-1"},
+                {"name": "pkg0000", "arch": "aarch64", "evr": "0:0.1-1"},
+                {"name": "pkg0000", "arch": "x86_64", "evr": "0:1.0-1"},
+                {"name": "pkg0000", "arch": "x86_64", "evr": "0:1.1-1"},
+            ],
+        }
+        package = session.get(Package, "bulk-1:pkg0000")
+        package.name = "pkg0000:x86_64"
+        package.id = "bulk-1:" + package.name
+        expected_key = update_scores.identity(host, package)
+        expected = {"id": expected_key, **update_scores.evidence(host, package)}
+        assert expected["installed"] == ["0:1.0-1", "0:1.1-1"]
+        session.commit()
+
+    sent = capture_assessments(monkeypatch)
+    if evidence_changed:
+        provider = ai.request
+
+        def change_inventory(*args, **kwargs):
+            with Session() as session:
+                host = session.get(Host, "bulk-1")
+                records = host.inventory["rpm_packages"]
+                host.inventory = {
+                    **host.inventory, "rpm_packages": [
+                        {**records[0], "evr": "0:1.2-1"}, *records[1:],
+                    ],
+                }
+                session.commit()
+            return provider(*args, **kwargs)
+
+        monkeypatch.setattr(ai, "request", change_inventory)
+
+    update_scores.run_one()
+    actual, = [item for item in sent if item["package"] == "pkg0000:x86_64"]
+    assert actual == expected
+    with Session() as session:
+        score = session.get(update_scores.UpdateScore, expected_key)
+        assert score.state == ("superseded" if evidence_changed else "complete")

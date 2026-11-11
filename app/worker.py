@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle,response_status,worker_health
+from . import host_lifecycle,response_status,worker_health, app_probes
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -88,6 +88,8 @@ def save_inventory(s,h,inv):
     if previous!=current or not s.scalar(select(InventoryRevision.id).where(InventoryRevision.host_id==h.id).limit(1)):
         s.add(InventoryRevision(id=uuid.uuid4().hex,host_id=h.id,inventory=inv))
     h.inventory=inv
+    from . import os_upgrade
+    os_upgrade.store(s,h,inv)
     changed=[(item,old[item['name']]) for item in items if item['name'] in old and old[item['name']].candidate]
     newer=package_backend.newer_flags(inv,[(p.candidate,item['installed']) for item,p in changed])
     still_newer={item['name']:flag for (item,_),flag in zip(changed,newer)}
@@ -95,13 +97,14 @@ def save_inventory(s,h,inv):
     for item in items:
         names.add(item['name']); p=old.get(item['name'])
         if not p:
-            p=Package(id=h.id+':'+item['name'],host_id=h.id,**item); s.add(p)
+            p=Package(id=h.id+':'+item['name'],host_id=h.id,repository_priority=item.get('priority','') if item.get('candidate') else '',**item); s.add(p)
             if old: audit(s,'package installed',h.name+' '+item['name']+' '+item['installed'])
         else:
             if p.installed!=item['installed']: audit(s,'package version changed',h.name+' '+p.name+' '+p.installed+' → '+item['installed'])
             p.installed=item['installed']; p.held=item['held']; p.dpkg_state=item['dpkg_state']
             if p.candidate and not still_newer.get(item['name'],False):
-                p.candidate=''; p.available_since=0
+                # The cached repository classification belongs to the cleared candidate.
+                p.candidate=''; p.available_since=0; p.repository_priority=''
     for name,p in old.items():
         if name not in names:
             audit(s,'package removed',h.name+' '+p.name+' '+p.installed); s.delete(p)
@@ -127,6 +130,9 @@ def update_repos(s,h):
         if not item['candidate']: p.available_since=0
         elif not p.candidate or not p.available_since: p.available_since=time.time()
         for key in ['candidate','origin']: setattr(p,key,item[key])
+        # Remember the repository classification even under a manual override so
+        # resetting to auto can restore it (RPM severity is not derivable from origin).
+        p.repository_priority=item['priority']
         if not p.priority_manual: p.priority=item['priority']
     h.last_repo=time.time(); h.repo_error=''; s.commit(); return output
 
@@ -261,6 +267,8 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
+    from .file_trust import record_snapshot
+    record_snapshot(s,h)
     s.commit()
     return ids
 
@@ -450,7 +458,11 @@ def execute_locked(job_id):
             health=s.get(Setting,'agent-status:'+h.id)
             # File responses perform a mandatory fresh independent check before
             # importing a helper. Let that check recover a stale cached outage.
-            if not resuming and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status',*quarantine.ACTIONS):
+            # A journaled rotation interrupted after writing [old,new] leaves only authorized_keys
+            # drifting from the baseline; let the retry finish it instead of requiring a reinstall.
+            rotation_retry=bool(health and job.action=='rotate-key' and health.value.get('state') in ('blocked','drifted') and ssh.rotation_resumable(h)
+                and health.value.get('issues') and all(i.get('path')=='/opt/drpatch/.ssh/authorized_keys' for i in health.value['issues']))
+            if not resuming and not rotation_retry and health and health.value.get('state') in ('blocked','drifted','unavailable') and job.action not in ('agent-check','agent-update','deploy','security-plan','startup-plan','evidence-archive-status',*quarantine.ACTIONS):
                 raise ValueError('Agent verification failed; review Agent health before executing remote operations')
             if job.action=='release-plan':result=releases.build(s,h,job.payload['plan_id']);job.output=json.dumps(result)
             elif job.action=='release-upgrade':
@@ -593,9 +605,16 @@ def execute_locked(job_id):
                     if any(policy.values()) and existing:
                         raise ValueError('Pre-patch health failed: automatic reboot/rollback requires clean service health; no package changes attempted: '+json.dumps(sorted(existing)))
                     job.payload={**job.payload,'_health_before':health_before};s.commit()
-                protected=job.action=='patch' and any(policy.values())
+                probes=app_probes.load(s,h.id) if job.action=='patch' and '_depends_on' in job.payload else []
+                if probes:
+                    # Reviewed application probes: a baseline that cannot be collected stops the rollout before any package change.
+                    probes_before=ssh.call(h,app_probes.request(probes),timeout=200)
+                    if not app_probes.baseline_trusted(probes,probes_before):
+                        raise ValueError('Pre-patch application probe baseline is incomplete or malformed; no package changes attempted')
+                    job.payload={**job.payload,'_probes_before':probes_before};s.commit()
+                use_protection=job.action=='patch' and any(policy.values())
                 request={'action':job.action,**{k:v for k,v in job.payload.items() if not k.startswith('_')}}
-                if protected:
+                if use_protection:
                     if policy.get('rollback'):
                         original=ssh.call(h,{'action':'patch-inspect'},timeout=120)
                         if original.get('version')!=1 or not original.get('configs'):
@@ -605,6 +624,8 @@ def execute_locked(job_id):
                         job.payload={**job.payload,'_patch_original':original};s.commit()
                         request['original']=original
                     request.update(action='protected-patch',job_id=job.id,policy=policy)
+                    # Failures before this point (read-only inspect, helper check) changed nothing
+                    protected=True
                 tracked_mutation=not protected
                 if tracked_mutation:mutation_stage='sent'
                 result=ssh.call(h,request,timeout=7500 if protected else 3700)
@@ -620,6 +641,10 @@ def execute_locked(job_id):
                     comparison=operations.patch_health_comparison(health_before,health)
                     if not comparison['passed']:raise RuntimeError('Post-patch service health regressed; rollout stopped: '+json.dumps(comparison))
                     job.output+='\nPost-patch health comparison: '+json.dumps(comparison)
+                    if probes:
+                        probe_comparison=app_probes.comparison(probes,job.payload.get('_probes_before'),ssh.call(h,app_probes.request(probes),timeout=200))
+                        if not probe_comparison['passed']:raise RuntimeError('Post-patch application probes regressed; rollout stopped: '+json.dumps(probe_comparison))
+                        job.output+='\nPost-patch application probe comparison: '+json.dumps(probe_comparison)
             else: raise ValueError('Unsupported job')
             job.output=job.output.encode()[:48000].decode(errors='ignore')
             job.state='failed' if result.get('outcome') in ('rolled_back','response_incomplete') else 'complete'
@@ -638,7 +663,7 @@ def execute_locked(job_id):
                 audit(s,'deferred '+job.action,job.host_id+' controlled AI wait')
                 s.commit();return
             uncertain=mutation_outcome_uncertain(mutation_stage,e)
-            job.state='recovery_required' if protected or uncertain else 'failed'
+            job.state='failed' if isinstance(e,releases.Refused) else 'recovery_required' if protected or uncertain else 'failed'
             if job.action in ('release-plan','security-plan','startup-plan'):
                 job.next_at=0;job.payload={key:value for key,value in job.payload.items() if key!='_ai_deferred'}
             if job.action in ('quarantine-apply','quarantine-restore'):quarantine.reject_unstarted(s,job)
@@ -657,6 +682,10 @@ def execute_locked(job_id):
             if job.action=='execution-scan':
                 from . import execution_scans
                 execution_scans.finish(s,job,'failed','Execution scan failed; review the operation and scanner coverage')
+            if job.action=='evidence-preserve':
+                from .evidence_vault import EvidenceCopy
+                copy=s.get(EvidenceCopy,job.payload.get('copy_id'))
+                if copy and copy.host_id==job.host_id and copy.state=='queued':copy.state='rejected';copy.expires=0
             if job.action=='evidence-acquire':
                 from . import evidence_archive
                 from .evidence_vault import EvidenceArchive
@@ -714,6 +743,7 @@ def investigate_one(owner=None):
         row=lease.work
         try:
             with ai_runs.track('triage',lease.cfg['ai_model'],row.host_id,row.id,run_id=lease.run_id):
+                ai_runs.timing('claim_lock',lease.claim_lock_wait)
                 lease.check()
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
                 ai_runs.timing('queue_age',time.time()-row.first_seen)
@@ -747,15 +777,29 @@ def _assess_active_behavior(s,row,cfg,secret):
     policy=ai.investigation_policy()
     policy_hashes=[ai_assessments.digest([policy]),ai_assessments.digest([policy,policy])]
 
+    # Resolve authenticated file provenance before cache lookup or provider input.
+    # This never approves a behavior: authentic programs can be abused.
+    from . import file_status
+    if lease:
+        with lease.mutation() as (write,saved):
+            saved.evidence=file_status.before_ai(write,saved)
+        row.evidence=copy.deepcopy(saved.evidence)
+    else:
+        row.evidence=file_status.before_ai(s,row)
+        s.commit()
+
     def reuse(write,saved):
         hit=known_good.lookup(write,saved.evidence,cfg['ai_model'],policy_hashes,
-            bypass=bool(write.get(ai_assessments.Refresh,saved.id)))
+            bypass=bool(write.get(ai_assessments.Refresh,saved.id)) or
+                saved.evidence.get('file_assessment',{}).get('status')=='changed')
         if not hit:return False
         result=hit['result']
         saved.verdict='low'
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
         assessment=ai_assessments.record_reuse(write,saved,hit)
         known_good.link_reuse(write,assessment,hit)
+        from .file_trust import record_reuse
+        record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)
         return True
 
@@ -790,7 +834,15 @@ def _assess_active_behavior(s,row,cfg,secret):
             from . import known_good
             with Session() as provenance_read:updated=known_good.bind_vendor_provenance(provenance_read,row.host_id,updated,collected)
             if lease:
-                with lease.mutation() as (write,saved):saved.evidence=updated
+                with lease.mutation() as (write,saved):
+                    # The lease ignores the observation-only process identity, so a
+                    # respawn may have refreshed it since this local copy was taken.
+                    # Keep the latest observation; the remote details stay bound to
+                    # the identity they were collected for.
+                    updated=copy.deepcopy(updated)
+                    if 'process_identity' in (saved.evidence or {}):updated['process_identity']=copy.deepcopy(saved.evidence['process_identity'])
+                    else:updated.pop('process_identity',None)
+                    saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
         result=assess(row.evidence)
@@ -804,6 +856,11 @@ def _assess_active_behavior(s,row,cfg,secret):
         if lease:
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
+
+def ai_plan_waiting(s,job):
+    """True for queued AI planning jobs that must wait for AI to be enabled/resumed (no retry time)."""
+    return job.action in ('release-plan','security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,job.host_id)['paused'])
+
 
 def loop(role="embedded"):
     from .worker_registry import Registration
@@ -844,7 +901,18 @@ def _loop(reporter):
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
-            if shutting_down and not active_jobs and not ai_tasks and all(future.done() for future in active_polls.values()) and (notification_task is None or notification_task.done()):break
+            # Finished observation/delivery futures must be consumed even when
+            # this tick satisfies the terminal shutdown condition.
+            for host_id,future in list(active_polls.items()):
+                if future.done() and not getattr(future,'_mp_reaped',False):
+                    future._mp_reaped=True
+                    try: future.result()
+                    except Exception: log.exception('Host poll failed outside its handler')
+            if notification_task is not None and notification_task.done() and not getattr(notification_task,'_mp_reaped',False):
+                notification_task._mp_reaped=True
+                try: notification_task.result()
+                except Exception: log.exception('Notification delivery failed outside its handler')
+            if shutting_down and not active_jobs and not ai_tasks and all(getattr(future,'_mp_reaped',False) for future in active_polls.values()) and (notification_task is None or getattr(notification_task,'_mp_reaped',False)):break
             if shutting_down:time.sleep(.25)
             reporter.stopping=shutting_down
             try:
@@ -890,7 +958,10 @@ def _loop(reporter):
                                 existing=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh',Job.state.in_(['queued','running'])))
                                 # Failure backoff is independent of last successful refresh.
                                 latest=s.scalar(select(Job).where(Job.host_id==h.id,Job.action=='refresh').order_by(Job.created.desc()))
-                                if not existing and (not latest or now-latest.created>300): enqueue(s,h.id,'refresh')
+                                if not existing and (not latest or now-latest.created>300):
+                                    # A full per-server queue must not abort the fleet-wide tick.
+                                    try:enqueue(s,h.id,'refresh')
+                                    except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
                         operations.collect_alerts()
                     # Resume observation, never the package transaction, after worker loss.
@@ -903,7 +974,7 @@ def _loop(reporter):
                         if len(active_jobs)>=capacity['jobs']: break
                         if j.host_id in busy_hosts:continue
                         if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
-                        if j.action in ('security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,j.host_id)['paused']):continue
+                        if ai_plan_waiting(s,j):continue
                         scope=response_hold_scope(j)
                         hold_scope=(j.host_id,*scope.values())
                         if hold_scope not in hold_cache:

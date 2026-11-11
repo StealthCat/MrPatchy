@@ -92,6 +92,49 @@ def test_refused_admission_lock_does_not_mutate_work(admin,monkeypatch):
         assert not list(s.scalars(select(ai_runs.AIRun)))
 
 
+def test_admission_balances_live_occupancy_before_another_same_host_slot(admin):
+    seed(count=2)
+    with Session() as s:
+        s.get(Behavior,'subject-0').first_seen=1
+        s.get(Behavior,'subject-1').first_seen=100
+        s.add(Behavior(id='subject-0b',host_id='host-0',first_seen=2,
+            evidence={'executable':'/srv/fixture-0b','sha256':'b'*64,'uid':'1000','identity_verified':True}))
+        s.commit()
+    first=ai_claims.acquire();second=ai_claims.acquire()
+    assert first.host_id=='host-0'
+    assert second.host_id=='host-1'
+    with first,second:pass
+
+
+def test_least_recent_host_turn_survives_claim_release(admin):
+    seed(count=2)
+    with Session() as s:
+        s.get(Behavior,'subject-0').first_seen=1
+        s.get(Behavior,'subject-1').first_seen=100
+        s.add(Behavior(id='subject-0b',host_id='host-0',first_seen=2,
+            evidence={'executable':'/srv/fixture-0b','sha256':'b'*64,'uid':'1000','identity_verified':True}))
+        s.commit()
+    first=ai_claims.acquire();assert first.host_id=='host-0'
+    with first:pass
+    # No process-local scheduler state is retained. The next acquisition reads
+    # the committed turn and serves the never-admitted host before host-0 again.
+    second=ai_claims.acquire();assert second.host_id=='host-1'
+    with second:pass
+    third=ai_claims.acquire();assert third.host_id=='host-0'
+    with Session() as s:
+        assert s.get(ai_claims.HostTurn,'host-0').last_turn==3
+        assert s.get(ai_claims.HostTurn,'host-1').last_turn==2
+    with third:pass
+
+
+def test_successful_claim_retains_monotonic_lock_wait(admin,monkeypatch):
+    seed(count=1)
+    ticks=iter((40.0,40.125))
+    monkeypatch.setattr(ai_claims,'perf_counter',lambda:next(ticks),raising=False)
+    lease=ai_claims.acquire()
+    assert lease and lease.claim_lock_wait==pytest.approx(.125)
+    with lease:pass
+
 def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
     seed(count=4,same_host=True);started=threading.Event();release=threading.Event();sent=[];guard=threading.Lock()
     def post(*a,**k):
@@ -113,6 +156,62 @@ def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
             with host_lifecycle.changing('host-0'):pass
         release.set()
         for future in running:future.result(15)
+
+
+def test_status_reports_earliest_live_lease_expiry(admin):
+    seed(count=2)
+    first=ai_claims.acquire();second=ai_claims.acquire()
+    assert first and second
+    now=time.time()
+    with Session() as s:
+        s.get(ai_claims.Claim,first.subject).expires=now+45
+        s.get(ai_claims.Claim,second.subject).expires=now+90
+        s.commit()
+
+    status=admin.get('/api/investigation-status').json()
+    assert status['active']==2
+    assert status['active_lease_expires_at']==pytest.approx(now+45)
+
+    with Session() as s:
+        s.get(ai_claims.Claim,first.subject).expires=now-1
+        s.commit()
+    status=admin.get('/api/investigation-status').json()
+    assert status['active']==1
+    assert status['active_lease_expires_at']==pytest.approx(now+90)
+
+    with Session() as s:
+        s.get(ai_claims.Claim,second.subject).expires=now-1
+        s.commit()
+    status=admin.get('/api/investigation-status').json()
+    assert status['active']==0
+    assert status['active_lease_expires_at'] is None
+
+
+def test_lowered_server_limit_preserves_live_leases_and_blocks_later_admission(admin):
+    seed(count=4,same_host=True)
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    configured=admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':False,'concurrency_limit':3,'expected_revision':current['revision'],
+        'reason':'Allow three reviewed investigations for this server',
+    })
+    assert configured.status_code==200
+    leases=[ai_claims.acquire() for _ in range(3)]
+    assert all(leases) and ai_claims.acquire() is None
+
+    current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    lowered=admin.put('/api/hosts/host-0/security/ai-policy',json={
+        'paused':False,'concurrency_limit':1,'expected_revision':current['revision'],
+        'reason':'Return this server to serial investigation capacity',
+    })
+    assert lowered.status_code==200 and lowered.json()['concurrency_limit']==1
+    for lease in leases:lease.check()
+    assert ai_claims.acquire() is None
+    with leases.pop():pass
+    assert ai_claims.acquire() is None
+    while leases:
+        with leases.pop():pass
+    replacement=ai_claims.acquire();assert replacement
+    with replacement:pass
 
 
 def pause_policy(admin):
@@ -146,6 +245,56 @@ def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeyp
         if queue is not None:queue.release()
     with Session() as s:
         assert s.get(Behavior,'subject-0').attempted==0
+        assert not list(s.scalars(select(ai_claims.Claim)))
+        assert not list(s.scalars(select(ai_claims.HostTurn)))
+
+
+def test_new_pid_refresh_does_not_fence_in_flight_triage(admin,monkeypatch):
+    seed(count=1)
+    identity=lambda pid:{'pid':pid,'start_ticks':5,'pid_namespace':1,'boot_id':'a'*8+'-aaaa-aaaa-aaaa-'+'a'*12,'proc_device':1,'proc_inode':2}
+    with Session() as s:
+        row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(10)};s.commit()
+    def post(*a,**k):
+        with Session() as s:  # the same behavior re-spawns under a new PID
+            row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(11)};s.commit()
+        return result()
+    monkeypatch.setattr(ai.transport,'post',post)
+    worker.investigate_one()
+    with Session() as s:
+        row=s.get(Behavior,'subject-0')
+        assert row.verdict=='low' and row.evidence['process_identity']['pid']==11
+        assert len(list(s.scalars(select(ai_assessments.Assessment))))==1
+        assert not list(s.scalars(select(ai_claims.Claim)))
+
+
+@pytest.mark.parametrize('respawn',['first_call','evidence','second_call'])
+def test_new_pid_refresh_survives_followup_persistence(admin,monkeypatch,respawn):
+    seed(count=1);sent=[];requests=[]
+    identity=lambda pid:{'pid':pid,'start_ticks':5,'pid_namespace':1,'boot_id':'a'*8+'-aaaa-aaaa-aaaa-'+'a'*12,'proc_device':1,'proc_inode':2}
+    def respawned():
+        with Session() as s:
+            row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(11)};s.commit()
+    with Session() as s:
+        row=s.get(Behavior,'subject-0');row.evidence={**row.evidence,'process_identity':identity(10)};s.commit()
+    def post(*a,**k):
+        sent.append(json.loads(k['json']['input']))
+        if respawn==('first_call' if len(sent)==1 else 'second_call'):respawned()
+        return result(['executable'] if len(sent)==1 else [])
+    def ssh(host,request,**kwargs):
+        requests.append(request)
+        if respawn=='evidence':respawned()
+        return {'identity_verified':True,'sha256':'a'*64,'context':'fixture'}
+    monkeypatch.setattr(ai.transport,'post',post);monkeypatch.setattr(worker.ssh,'call',ssh)
+    worker.investigate_one()
+    with Session() as s:
+        row=s.get(Behavior,'subject-0')
+        assert len(sent)==2 and row.verdict=='low'
+        # Remote evidence is never requested for the unverified replacement PID.
+        assert [r['process_identity']['pid'] for r in requests]==[10]
+        assert row.evidence['investigation']['details']['context']=='fixture'
+        assert row.evidence['process_identity']['pid']==11
+        assert all('process_identity' not in payload for payload in sent)
+        saved=s.scalar(select(ai_assessments.Assessment));assert saved and [i['evidence'] for i in saved.inputs]==sent
         assert not list(s.scalars(select(ai_claims.Claim)))
 
 

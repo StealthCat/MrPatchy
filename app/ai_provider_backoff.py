@@ -1,8 +1,10 @@
 """Durable fleet-wide provider Retry-After and transient failure backoff."""
+import hashlib
+import hmac
 import random
 import time
 
-from sqlalchemy import String, Double, Integer, Text
+from sqlalchemy import String, Double, Integer, Text, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -10,6 +12,10 @@ from .db import Base, Session
 
 
 MAX_PROVIDER_DELAY=86400  # a longer provider Retry-After is capped and flagged for administrator review
+
+
+class ReviewConflict(Exception):
+    """The reviewed provider-backoff state is no longer the active state."""
 
 
 class ProviderBackoff(Base):
@@ -68,21 +74,42 @@ def failed(error,now=None):
 def succeeded(request_started=None,now=None):
     """Clear escalation unless a parallel request recorded a newer failure."""
     now=time.time() if now is None else now
+    clearable = select(ProviderBackoff).where(
+        ProviderBackoff.id == 'global',
+        or_(ProviderBackoff.failures != 0, ProviderBackoff.blocked_until != 0, ProviderBackoff.reason != ''),
+    )
+    if request_started is not None:
+        clearable = clearable.where(ProviderBackoff.updated <= request_started)
+    # Healthy responses need one bounded read. Close the read transaction before
+    # taking the distributed lock so the reset sees any newly committed failure.
+    with Session() as session:
+        if session.scalar(clearable.with_only_columns(ProviderBackoff.id)) is None:
+            return
     with Lock('ai-provider-backoff'):
         with Session() as session:
-            row=session.get(ProviderBackoff,'global')
-            if row and (request_started is None or row.updated<=request_started):
+            row=session.scalar(clearable)
+            if row:
                 row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
                 session.commit()
 
 
-def clear(now=None):
-    """Administrator reset of the shared floor; returns whether a floor was active."""
-    now=time.time() if now is None else now
+def _revision(row):
+    if not row:return ''
+    state='|'.join((float(row.blocked_until or 0).hex(),str(row.failures or 0),
+        float(row.updated or 0).hex(),row.reason or ''))
+    return hashlib.sha256(state.encode()).hexdigest()
+
+
+def clear(now=None,expected_revision=None):
+    """Reset a reviewed shared floor; reject changed/expired administrator reviews."""
     with Lock('ai-provider-backoff'):
         with Session() as session:
             row=session.get(ProviderBackoff,'global')
+            now=time.time() if now is None else now
             active=bool(row and row.blocked_until>now)
+            if expected_revision is not None and (not active or
+                    not hmac.compare_digest(expected_revision,_revision(row))):
+                raise ReviewConflict('Provider backoff changed or expired; refresh AI Settings before clearing it.')
             if row:
                 row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
                 session.commit()
@@ -110,4 +137,5 @@ def status(session,now=None):
     now=time.time() if now is None else now;row=session.get(ProviderBackoff,'global')
     blocked=bool(row and row.blocked_until>now)
     return {'blocked':blocked,'next_at':row.blocked_until if blocked else None,
-        'failures':row.failures if row else 0,'reason':row.reason if blocked else ''}
+        'failures':row.failures if row else 0,'reason':row.reason if blocked else '',
+        'updated_at':row.updated if blocked else None,'revision':_revision(row) if blocked else ''}

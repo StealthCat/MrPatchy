@@ -92,10 +92,10 @@ def _state(session,cfg,now):
     return enabled,name,start,reset,groups,counted,cap
 
 
-def waiting(session,now,payload=None):
+def waiting(session,now,payload=None,*,settings=None):
     """Read-only preflight; final atomic reserve still owns spending authority."""
-    cfg=config(session)
-    enabled,_name,_start,reset,_groups,counted,cap=_state(session,cfg,now)
+    if settings is None:settings=config(session)
+    enabled,_name,_start,reset,_groups,counted,cap=_state(session,settings,now)
     if not enabled:return 0
     if counted>=cap:return reset
     if payload is not None:
@@ -107,11 +107,16 @@ def waiting(session,now,payload=None):
 def reserve(payload):
     """Atomically retain a conservative per-call amount before rate admission."""
     from .ai import AIError
-    quote=ai_pricing.reservation(payload)
+    with Session() as session:
+        if config(session)['ai_control_mode'] not in ai_pricing.CAP_MODES:
+            return None
+
     with Lock('ai-shared-budget'):
+        # Read again after waiting: the preflight does not authorize a capped reservation.
         with Session() as session:
             cfg=config(session)
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
+            quote=ai_pricing.reservation(payload)
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
             now=time.time();enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
@@ -137,12 +142,18 @@ def mark_sent(identifier,call_id):
             session.commit()
 
 
-def release_unsent(identifier,reason):
+def release_unsent(identifier,reason,*,pool_timeout_call_id=None):
+    """Release before transmission, or after a matching pool acquisition failure."""
     if not identifier:return
     with Lock('ai-shared-budget'):
         with Session() as session:
             row=session.get(BudgetEntry,identifier)
-            if row and row.status=='reserved':
+            if not row:return
+            if pool_timeout_call_id is None:
+                unsent=row.status=='reserved'
+            else:
+                unsent=row.status=='sent' and row.call_id==pool_timeout_call_id
+            if unsent:
                 row.status='released';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
 
 
@@ -184,7 +195,7 @@ def status(session,now=None):
         'pricing_catalog':ai_pricing.catalog_status(now)}
 
 
-def history(session,days=30,now=None):
+def history(session,days=30,now=None,*,timezone_name=None):
     """Return bounded aggregate spend windows from the retained accounting ledger."""
     if isinstance(days,bool) or not isinstance(days,int) or not 1<=days<=90:
         raise ValueError('AI spend history must cover 1 to 90 days')
@@ -200,11 +211,15 @@ def history(session,days=30,now=None):
         return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
     recognized=('reserved','sent','settled','uncertain')
     other=_aggregate(session,case((~BudgetEntry.status.in_(recognized),amount),else_=zero))
+    filters=[BudgetEntry.reset_at>cutoff,BudgetEntry.created<=now,BudgetEntry.status!='released']
+    if timezone_name is not None:
+        # Compare encoded bytes so MySQL's text collation cannot fold case.
+        filters.append(func.hex(BudgetEntry.timezone)==timezone_name.encode('utf-8').hex().upper())
     query=(select(BudgetEntry.timezone,BudgetEntry.reset_at,func.count(BudgetEntry.id).label('call_count'),
         bucket('settled').label('settled_usd'),bucket('reserved').label('reserved_usd'),
         bucket('sent').label('sent_usd'),bucket('uncertain').label('uncertain_usd'),
         other.label('other_usd'),_aggregate(session,amount).label('counted_usd'))
-        .where(BudgetEntry.reset_at>cutoff,BudgetEntry.created<=now,BudgetEntry.status!='released')
+        .where(*filters)
         .group_by(BudgetEntry.timezone,BudgetEntry.reset_at)
         .order_by(BudgetEntry.reset_at.desc(),BudgetEntry.timezone.asc()).limit(max_windows+1))
     rows=session.execute(query).mappings().all()

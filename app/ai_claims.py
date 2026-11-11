@@ -11,7 +11,8 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from types import SimpleNamespace
-from sqlalchemy import String, Double, select, func
+from time import perf_counter
+from sqlalchemy import String, Double, select, func, union_all
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -19,7 +20,6 @@ from . import ai, ai_runs, ai_retry, ai_assessments, ai_policy, host_lifecycle
 
 LEASE_SECONDS=120
 RENEW_SECONDS=15
-PER_HOST_LIMIT=2
 PROCESS_BOOT=uuid.uuid4().hex
 current=ContextVar('ai_triage_lease',default=None)
 
@@ -39,6 +39,13 @@ class Claim(Base):
     expires: Mapped[float]=mapped_column(Double,index=True)
 
 
+class HostTurn(Base):
+    """Durable cross-worker order for fair process-investigation admission."""
+    __tablename__='ai_triage_host_turns'
+    host_id: Mapped[str]=mapped_column(String(36),primary_key=True)
+    last_turn: Mapped[int]=mapped_column(index=True)
+
+
 class Lost(ai.AIError):
     def __init__(self):
         super().__init__('Investigation ownership, evidence, approval or configuration changed; no stale result was accepted. A sent request may still be billable.')
@@ -55,16 +62,21 @@ def owner_valid(s,owner,admitting=False):
 
 def reconcile(s,now):
     # Called under ai-triage. Never interrupt a different worker's live lease.
-    for claim in s.scalars(select(Claim).where(Claim.expires<=now)):
-        interrupt(s,claim.run_id);s.delete(claim)
+    runs=ai_runs.AIRun
+    expired=select(Claim,runs).outerjoin(runs,runs.id==Claim.run_id).where(Claim.expires<=now)
+    for claim,run in s.execute(expired):
+        _interrupt_run(s,run);s.delete(claim)
     s.flush()
     live=select(Claim.run_id)
-    for run in s.scalars(select(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.state=='running',ai_runs.AIRun.id.not_in(live))):
-        interrupt(s,run.id)
+    for run in s.scalars(select(runs).where(runs.purpose=='triage',runs.state=='running',runs.id.not_in(live))):
+        _interrupt_run(s,run)
 
 
 def interrupt(s,run_id):
-    run=s.get(ai_runs.AIRun,run_id)
+    _interrupt_run(s,s.get(ai_runs.AIRun,run_id))
+
+
+def _interrupt_run(s,run):
     if run and run.state=='running':
         run.state='interrupted';run.finished=time.time();run.stage='interrupted'
         run.message='Investigation lease was lost or expired. No stale result can be accepted; existing retry limits apply and sent calls may still be billable.'
@@ -79,9 +91,19 @@ def abandon_owner(owner):
         s.commit()
 
 
+def record_turn(s,host_id):
+    """Assign the next durable turn while the distributed admission lock is held."""
+    turn=(s.scalar(select(func.max(HostTurn.last_turn))) or 0)+1
+    row=s.get(HostTurn,host_id)
+    if row:row.last_turn=turn
+    else:s.add(HostTurn(host_id=host_id,last_turn=turn))
+
+
 def acquire(owner=None):
     lock=Lock('ai-triage')
+    lock_started=perf_counter()
     if not lock.acquire():return None
+    claim_lock_wait=perf_counter()-lock_started
     try:
         with Session() as s:
             now=time.time();reconcile(s,now);s.commit()
@@ -94,16 +116,52 @@ def acquire(owner=None):
             # Read-only gate: do not create runs/attempts for work that the shared
             # rate gate, provider backoff or daily budget cannot admit right now.
             from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing
-            if any(gate.waiting(s,now) for gate in (ai_admission,ai_provider_backoff,ai_budget)):return None
-            signature=ai_retry.configuration(s)
-            # Bound per-host occupancy so one noisy server cannot consume the
-            # whole pool while still allowing independent work to overlap.
-            saturated_hosts=(select(Claim.host_id).where(Claim.expires>now)
-                .group_by(Claim.host_id).having(func.count()>=PER_HOST_LIMIT))
-            row=s.scalar(select(Behavior).outerjoin(ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
-                Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
+            if (ai_admission.waiting(s,now,settings=cfg) or ai_provider_backoff.waiting(s,now) or
+                ai_budget.waiting(s,now,settings=cfg)):return None
+            signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
+            # Active claims are globally bounded by worker capacity. Resolve
+            # each occupied host's revisioned policy under this admission lock
+            # so a settings change and the next claim cannot cross.
+            live_counts=(select(Claim.host_id,func.count().label('live_count')).where(
+                Claim.expires>now).group_by(Claim.host_id).subquery())
+            occupancy=s.execute(select(live_counts.c.host_id,live_counts.c.live_count,Setting.key,Setting.value)
+                .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
+            saturated_hosts=[host_id for host_id,count,key,policy in occupancy
+                if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
+            # Balance live occupancy first. Ties use the durable least-recent
+            # host turn; a host with no turn sorts ahead of one already served.
+            # Project each eligible verdict as its own equality range so host
+            # election reads the admission index instead of scanning retained
+            # completed history through the host index; the union keeps every
+            # input to each host's oldest eligible first_seen.
+            election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
-                Behavior.verdict.in_(('pending','error')),ai_retry.eligible(signature,now)).order_by(Behavior.first_seen,Behavior.id).limit(1))
+                Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
+            eligible=union_all(*(select(Behavior.host_id,Behavior.first_seen).outerjoin(
+                ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                *election_filters,Behavior.verdict==verdict) for verdict in ('pending','error'))).subquery()
+            host_id=s.scalar(select(eligible.c.host_id).outerjoin(
+                live_counts,live_counts.c.host_id==eligible.c.host_id).outerjoin(
+                HostTurn,HostTurn.host_id==eligible.c.host_id).group_by(
+                eligible.c.host_id,live_counts.c.live_count,HostTurn.last_turn).order_by(
+                func.coalesce(live_counts.c.live_count,0),func.coalesce(HostTurn.last_turn,0),
+                func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
+            if not host_id:return None
+            # Within the elected host, keep each verdict as an equality range so
+            # the admission index can skip retained completed history and
+            # satisfy oldest-first ordering; the oldest member of either range is
+            # the host's oldest eligible pending/error candidate.
+            filters=(Behavior.host_id==host_id,Behavior.approved==False,
+                Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
+            oldest=[]
+            for verdict in ('pending','error'):
+                candidate=select(Behavior.id,Behavior.first_seen).outerjoin(
+                    ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                    *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
+                oldest.append(select(candidate.c.id,candidate.c.first_seen))
+            candidates=union_all(*oldest).subquery()
+            row=s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
+                candidates.c.first_seen,candidates.c.id).limit(1))
             if not row:return None
             # Approval writes use this host queue gate. Re-read after acquiring
             # it, including on MySQL repeatable-read connections.
@@ -124,26 +182,32 @@ def acquire(owner=None):
                     run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
                     s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
                     claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
-                        boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.revision(row),
+                        boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.lease_revision(row),
                         configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
-                    s.add(claim);s.commit()
+                    s.add(claim);record_turn(s,host_id);s.commit()
                     work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
-                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner)
+                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
             except host_lifecycle.Inactive:return None
     finally:lock.release()
 
 
 class Lease:
-    def __init__(self,claim,work,cfg,secret,owner):
+    def __init__(self,claim,work,cfg,secret,owner,claim_lock_wait):
         self.subject=claim.subject;self.token=claim.token;self.run_id=claim.run_id;self.host_id=claim.host_id
         self.work=work;self.cfg=cfg;self.secret=SimpleNamespace(value=secret);self.owner=owner
+        self.claim_lock_wait=claim_lock_wait
         self.stopped=threading.Event();self.lost=threading.Event()
 
     def validate(self,s):
-        claim=s.get(Claim,self.subject);row=s.get(Behavior,self.subject)
-        host=s.get(Host,self.host_id)
-        if (self.lost.is_set() or not claim or claim.token!=self.token or claim.expires<=time.time() or
-            not row or row.host_id!=self.host_id or ai_assessments.revision(row)!=claim.revision or
+        if self.lost.is_set():raise Lost()
+        claim=s.get(Claim,self.subject)
+        if not claim or claim.token!=self.token or claim.expires<=time.time():
+            self.lost.set();raise Lost()
+        row=s.get(Behavior,self.subject)
+        host=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==self.host_id)).one_or_none()
+        # Recheck expiry and the heartbeat fence after database I/O.
+        if (self.lost.is_set() or claim.expires<=time.time() or
+            not row or row.host_id!=self.host_id or ai_assessments.lease_revision(row)!=claim.revision or
             ai_retry.configuration(s)!=claim.configuration or not owner_valid(s,self.owner) or
             (host is not None and not host_lifecycle.active(host))):
             self.lost.set();raise Lost()
@@ -161,7 +225,7 @@ class Lease:
             # the actual stored row, not a stale ORM copy, without relaxing any
             # equality check or tolerating changed evidence on the next read.
             s.flush();s.refresh(row)
-            claim.revision=ai_assessments.revision(row);s.commit()
+            claim.revision=ai_assessments.lease_revision(row);s.commit()
 
     def renew(self):
         lock=Lock('ai-triage')

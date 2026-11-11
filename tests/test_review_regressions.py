@@ -179,3 +179,69 @@ def test_invalid_bridge_payload_does_not_partially_deploy(monkeypatch):
     with pytest.raises(ValueError,match='bridge digest'):
         bridge.handle({'action':'deploy','agent':base64.b64encode(code).decode(),'sha256':bridge.hashlib.sha256(code).hexdigest(),'bridge':base64.b64encode(code).decode(),'bridge_sha256':'bad'})
     assert not written
+
+def test_bridge_deploy_refuses_old_python_before_writing(monkeypatch):
+    from target import bridge
+    written=[]
+    monkeypatch.setattr(bridge,'atomic',lambda *a,**kw:written.append(a))
+    monkeypatch.setattr(bridge.sys,'version_info',(3,6,8,'final',0))
+    code=b'pass\n'
+    with pytest.raises(RuntimeError,match='Python 3.8 or newer'):
+        bridge.handle({'action':'deploy','agent':base64.b64encode(code).decode(),'sha256':bridge.hashlib.sha256(code).hexdigest()})
+    assert not written
+
+def test_first_deploy_through_legacy_bridge_refuses_old_python_before_writing(monkeypatch):
+    """#425 review: an already-bootstrapped host still runs its old forced-command bridge.
+
+    Model that bridge (no in-handler version guard) on a pre-3.8 interpreter and drive the
+    controller's first deployment request through it: no managed file may be replaced and the
+    controller must report the interpreter requirement instead of a late TypeError."""
+    import ast
+    from app import ssh
+    from target import bridge
+    written=[];calls=[]
+    def old_compile(source,filename,mode):
+        try:return ast.parse(source,filename,mode,feature_version=(3,6))
+        except SyntaxError as error:raise SyntaxError('invalid syntax',(filename,error.lineno,error.offset,None)) from None
+    monkeypatch.setattr(bridge,'compile',old_compile,raising=False)
+    monkeypatch.setattr(bridge.sys,'version_info',(3,9,0,'final',0))  # bypass the new guard: model the old bridge
+    monkeypatch.setattr(bridge,'atomic',lambda *a,**kw:written.append(a[0]))
+    monkeypatch.setattr(bridge,'run',lambda *a,**kw:written.append('run'))
+    def legacy_call(host,payload,**kw):
+        calls.append(payload['action'])
+        try:return bridge.handle(payload)
+        except Exception as error:
+            failure=ssh.RemoteFailure(str(error));failure.remote_started=True;raise failure from None
+    monkeypatch.setattr(ssh,'call',legacy_call)
+    with pytest.raises(RuntimeError,match='Python 3.8 or newer') as refused:
+        ssh.deploy(SimpleNamespace(id='h1'))
+    assert calls==['deploy'] and written==[] and refused.value.remote_started is True
+
+def test_central_target_helpers_compile_on_supported_python():
+    from target import bridge
+    for name in ('agent.py','bridge.py','release.py','rpm_support.py'):
+        compile((Path(bridge.__file__).parent/name).read_bytes(),name,'exec')
+
+def test_bootstrap_checks_target_python_version():
+    from app import ssh
+    from app.db import Session
+    h=SimpleNamespace(id='h1')
+    import app.ssh as m
+    monkey=pytest.MonkeyPatch()
+    monkey.setattr(m,'public_key',lambda _:'ssh-ed25519 AAAA')
+    try:script=m.bootstrap(h)
+    finally:monkey.undo()
+    assert 'sys.version_info >= (3, 8)' in script and 'Python 3.8 or newer' in script
+
+def test_full_server_queue_does_not_abort_scheduler_tick(admin,monkeypatch):
+    with Session() as s:
+        h=create_host(s);h.last_repo=0
+        for i in range(50):s.add(Job(id=f'full-{i}',host_id=h.id,action='patch',state='queued',next_at=time.time()+3600,payload={}))
+        s.commit()
+    alerts=[];waits=iter([False,False,True])
+    monkeypatch.setattr(worker.stop,'wait',lambda _:next(waits,True))
+    monkeypatch.setattr(worker,'poll_host',lambda *a:None)
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:alerts.append(1))
+    monkeypatch.setattr(worker.log,'exception',lambda *a,**k:pytest.fail('scheduler tick failed'))
+    worker.loop()
+    assert alerts
