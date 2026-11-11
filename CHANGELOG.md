@@ -1,3 +1,8 @@
+## 1.59.17 — 2026-11-11
+
+1. [PR #506](https://github.com/StealthCat/MrPatchy/pull/506): Add a pure firmware operation contract (`app/firmware_operation.py`). `bind_operation()` derives an operation id from the host and enrollment, device, action, exact payload and policy digest. Any change invalidates approval, and force/ignore flags are rejected rather than stripped. `preflight_blockers()` treats unknown facts as blockers. The operation state model allows only legal transitions, and cancellation is limited to queued, preflight or staged work. `classify_outcome()` never treats an exit code or a staged image as completion, and uncertain writes require reconciliation.
+2. Compatibility and limits: an unwired contract only. No execution, persistence, transport, UI or authorization change. This is a partial #399 increment: execution, receipts, locks and API/UI remain open. This source update does not publish a Docker image.
+
 ## 1.59.16 — 2026-11-11
 
 1. [PR #505](https://github.com/StealthCat/MrPatchy/pull/505): Add a pure database-failover safety contract (`app/db_failover.py`). `classify_outcome()` separates a statement that was provably never sent from an uncertain commit, where the statement or COMMIT was sent but no reply came. An unsent statement may be replayed only after the connection pool is invalidated. An uncertain commit is always reconciled by its durable operation id, never replayed, and refused when there is no id. `resume_gate()` treats a reconnect as no proof of ownership. Resuming requires a verified single writer, an unchanged deployment epoch, an unchanged ownership epoch with this controller still the owner, and no held session (`GET_LOCK`) locks. Malformed input fails closed.
