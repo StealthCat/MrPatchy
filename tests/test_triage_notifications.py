@@ -147,3 +147,47 @@ def test_events_are_per_behavior_and_host(admin):
             triage_notifications.publish_verdict(s, row)
         s.commit()
     assert sorted(item['host_id'] for item in viewer_items()) == ['one', 'two']
+
+
+def approve(admin, approved, expected=None):
+    revision = expected or admin.get('/api/investigations/subject/history').json()['current']['revision']
+    return admin.put('/api/investigations/subject', json={'approved': approved, 'expected_revision': revision})
+
+
+def test_administrator_approval_resolves_event_and_revocation_reopens(admin, monkeypatch):
+    seed()
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: provider('high'))
+    worker.investigate_one()
+    assert [(r[1], r[2]) for r in history()] == [('high', 'active')]
+
+    assert approve(admin, True).status_code == 200
+    assert [(r[1], r[2], r[3]) for r in history()] == [
+        ('high', 'active', 'risk:high'), ('info', 'resolved', 'approved')]
+    item = viewer_items()[0]
+    assert item['lifecycle'] == 'resolved' and 'administrator approved' in item['reason']
+    assert 'authorizes nothing' in item['reason'] and 'fixture' not in item['reason']
+    with Session() as s:
+        assert s.get(Behavior, 'subject').approved is True
+
+    assert approve(admin, True).status_code == 200  # repeated approval: no new revision
+    assert len(history()) == 2
+
+    assert approve(admin, False).status_code == 200  # revoked while still high: reopens
+    assert [(r[1], r[2]) for r in history()][-1] == ('high', 'active')
+    assert viewer_items()[0]['read'] is False
+
+
+def test_approval_without_active_event_or_with_stale_revision_publishes_nothing(admin, monkeypatch):
+    seed()
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: provider('low'))
+    worker.investigate_one()
+    assert approve(admin, True).status_code == 200
+    assert approve(admin, False).status_code == 200  # low verdict: revocation publishes nothing
+    assert history() == []
+
+    with Session() as s:
+        s.get(Behavior, 'subject').verdict = 'high'
+        triage_notifications.publish_verdict(s, s.get(Behavior, 'subject'))
+        s.commit()
+    assert approve(admin, True, expected='0' * 64).status_code == 409  # rejected: nothing announced
+    assert [(r[1], r[2]) for r in history()] == [('high', 'active')]

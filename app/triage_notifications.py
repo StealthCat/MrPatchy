@@ -13,6 +13,9 @@ Significance policy (advisory only):
 - ``low`` (provider or exact known-good reuse) resolves an existing active
   event and otherwise publishes nothing, so safe cache hits cause no storm.
 - ``unknown`` and any other state leave the event unchanged.
+- An administrator approval resolves an active event in the approval's own
+  transaction. Revoking that approval while the verdict is still significant
+  re-publishes the event as active.
 
 Notifications never approve a behavior, acknowledge anything or authorize a
 response.
@@ -67,3 +70,26 @@ def publish_verdict(session, behavior, *, now=None):
             lifecycle='resolved', **common)
         return created
     return False
+
+
+def publish_approval(session, behavior, *, now=None):
+    """Reflect an administrator approval change in the triage notification.
+
+    The approval itself is the source of the change; the notification never
+    grants or withdraws it. The caller owns the surrounding transaction.
+    Returns ``True`` when a new notification revision was added.
+    """
+    if not behavior.approved:
+        return publish_verdict(session, behavior, now=now)
+    if not _active(session, behavior):
+        return False
+    _, created = notifications.publish(
+        session, source=SOURCE, kind=KIND, subject_type=SUBJECT_TYPE,
+        subject_id=behavior.id, host_id=behavior.host_id,
+        deep_link=_link(behavior.host_id), minimum_role='viewer', now=now,
+        subject_revision='approved', severity='info',
+        reason=('An administrator approved this exact behavior. The earlier '
+                'significant AI verdict no longer needs attention; the assessment '
+                'remains advisory and this notification authorizes nothing.'),
+        lifecycle='resolved')
+    return created

@@ -910,7 +910,8 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(admin_user)):
             s.rollback();row=s.get(Behavior,behavior_id)
             if not row:raise HTTPException(404,'Behavior not found')
             if ai_assessments.revision(row)!=body.expected_revision:raise HTTPException(409,'The assessment changed since you opened it; review the current result and try again')
-            row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
+            from . import triage_notifications
+            row.approved=body.approved; triage_notifications.publish_approval(s,row); audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 
 class RetriageInput(BaseModel):
     expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
