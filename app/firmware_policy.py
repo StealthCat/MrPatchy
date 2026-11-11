@@ -119,15 +119,28 @@ def resolve_effective_policy(layers: Any, now: float) -> dict[str, Any]:
     layer present declares it, so a broader opt-in does not apply to a
     narrower layer that is silent. Contradictions and malformed values are
     reported as conflicts (which block compliance and unattended work), not
-    silently resolved or dropped.
+    silently resolved or dropped. More than ``MAX_LAYERS`` layers is a
+    blocking ``too_many_layers`` conflict that also disables unattended work;
+    an exclusion in any supplied layer still applies.
     """
     if not isinstance(layers, (list, tuple)):
         layers = []
-    layers = [l for l in layers if isinstance(l, dict)][:MAX_LAYERS]
+    layers = [l for l in layers if isinstance(l, dict)]
     values: dict[str, Any] = {}
     sources: dict[str, str] = {}
     excluded_by: list[str] = []
     conflicts: list[str] = []
+    over_cap = len(layers) > MAX_LAYERS
+    if over_cap:
+        # Fail closed instead of silently truncating: report a blocking
+        # conflict, keep exclusion sticky across every supplied layer and
+        # keep the narrowest layers (never the broadest) for merging, so a
+        # dropped narrow layer cannot hand authority to a broader one.
+        conflicts.append('too_many_layers')
+        for layer in layers[:-MAX_LAYERS]:
+            if layer.get('excluded') is True:
+                excluded_by.append(str(layer.get('scope') or 'unknown')[:MAX_TEXT])
+        layers = layers[-MAX_LAYERS:]
     channels: list[str] | None = None
     unattended_raw: Any = None
     unattended_src = None
@@ -170,6 +183,9 @@ def resolve_effective_policy(layers: Any, now: float) -> dict[str, Any]:
         conflicts.append('deferred_until_invalid')
     deferred = float(deferred) if _is_num(deferred) else None
     unattended = normalize_unattended(unattended_raw, now)
+    if over_cap:
+        unattended = {'enabled': False, 'reason': 'too_many_layers',
+                      'devices': [], 'actions': [], 'releases': []}
     return {
         'contract_version': CONTRACT_VERSION,
         'min_version': minimum if min_t else None,

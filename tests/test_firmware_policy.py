@@ -143,3 +143,44 @@ def test_broader_opt_in_is_not_inherited_by_a_silent_narrower_layer():
         {'scope': 'fleet', 'unattended': _opt(devices=['d9'])}, {'scope': 'host:a', 'unattended': _opt()}), NOW)
     assert own['unattended_source'] == 'host:a'
     assert fp.authorize_unattended(own, 'd1', 'install', 'r1', NOW)['allowed']
+
+
+def _over_cap(*narrow):
+    broad = [{'scope': f'broad{i}'} for i in range(fp.MAX_LAYERS - 1)]
+    return broad + list(narrow)
+
+
+def test_over_cap_layers_fail_closed_instead_of_dropping_narrow_layers():
+    # 15 broad layers + group opt-in + silent device layer = 17 > MAX_LAYERS
+    pol = fp.resolve_effective_policy(_over_cap(
+        {'scope': 'group', 'unattended': _opt()}, {'scope': 'device:d1'}), NOW)
+    assert 'too_many_layers' in pol['conflicts']
+    assert pol['unattended']['enabled'] is False
+    assert pol['unattended']['reason'] == 'too_many_layers'
+    result = fp.authorize_unattended(pol, 'd1', 'install', 'r1', NOW)
+    assert not result['allowed'] and 'policy_conflict' in result['blockers']
+    # even the narrowest layer's own valid opt-in is not honored over the cap
+    own = fp.resolve_effective_policy(_over_cap(
+        {'scope': 'group'}, {'scope': 'device:d1', 'unattended': _opt()}), NOW)
+    assert not fp.authorize_unattended(own, 'd1', 'install', 'r1', NOW)['allowed']
+
+
+def test_over_cap_layers_keep_narrow_and_broad_exclusions_sticky():
+    pol = fp.resolve_effective_policy(_over_cap(
+        {'scope': 'group'}, {'scope': 'device:d1', 'excluded': True}), NOW)
+    assert pol['excluded'] is True and 'device:d1' in pol['excluded_by']
+    assert 'too_many_layers' in pol['conflicts']
+    assert fp.evaluate_device(pol, '9.9', NOW)['state'] == 'excluded'
+    broad = [{'scope': 'fleet', 'excluded': True}] + [
+        {'scope': f's{i}'} for i in range(fp.MAX_LAYERS + 2)]
+    p = fp.resolve_effective_policy(broad, NOW)
+    assert p['excluded'] is True and p['excluded_by'] == ['fleet']
+    assert 'excluded' in fp.authorize_unattended(p, 'd1', 'install', 'r1', NOW)['blockers']
+
+
+def test_exactly_max_layers_is_not_a_conflict():
+    pol = fp.resolve_effective_policy(
+        [{'scope': f's{i}'} for i in range(fp.MAX_LAYERS - 1)]
+        + [{'scope': 'device:d1', 'unattended': _opt()}], NOW)
+    assert 'too_many_layers' not in pol['conflicts']
+    assert fp.authorize_unattended(pol, 'd1', 'install', 'r1', NOW)['allowed']
