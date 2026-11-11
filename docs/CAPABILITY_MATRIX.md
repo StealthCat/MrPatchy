@@ -7,7 +7,7 @@ PR and remaining acceptance. Historical review documents (for example
 their text unchanged as checkpoints. Where they list a capability as unfinished,
 this matrix states the current position.
 
-Status as of v1.59.4, 2026-11-11. First written against
+Status as of v1.59.5, 2026-11-11. First written against
 `3ac8f68` (v1.37.10) and reconciled by the coordinator at integration. Tracks
 issue [#347](https://github.com/StealthCat/MrPatchy/issues/347).
 
@@ -60,7 +60,7 @@ each issue stays open for its remaining acceptance.
 | [#334](https://github.com/StealthCat/MrPatchy/issues/334) | Asset groups, policy inheritance and scoped administration | In review | [PR #495](https://github.com/StealthCat/MrPatchy/pull/495): pure asset metadata, group membership and effective-policy preview contract. |
 | [#335](https://github.com/StealthCat/MrPatchy/issues/335) | Read-only security posture and configuration compliance | Partial | [PR #386](https://github.com/StealthCat/MrPatchy/pull/386) (v1.59.1): pure versioned SSH daemon posture rule evaluator (unwired; global `sshd -T` settings only). Other rule families, `Match` blocks, collection, storage, exceptions and UI remain. |
 | [#336](https://github.com/StealthCat/MrPatchy/issues/336) | Container and application dependency inventory with workload attribution | Partial | [PR #394](https://github.com/StealthCat/MrPatchy/pull/394) (v1.59.3): pure Docker/Podman workload inventory contract with image-digest identity, explicit gaps and change comparison (unwired). Collection, application dependencies, SBOM, advisory matching and fleet search remain. |
-| [#337](https://github.com/StealthCat/MrPatchy/issues/337) | Scoped service credentials and reliable external integrations | In review | [PR #494](https://github.com/StealthCat/MrPatchy/pull/494): pure idempotency-key contract. |
+| [#337](https://github.com/StealthCat/MrPatchy/issues/337) | Scoped service credentials and reliable external integrations | Partial | [PR #494](https://github.com/StealthCat/MrPatchy/pull/494) (v1.59.5): pure idempotency-key contract binding identity, action, targets and payload, with replay/conflict decisions (unwired). Scoped service identities, API surface, durable records and ticket/SIEM mappings remain. |
 | [#338](https://github.com/StealthCat/MrPatchy/issues/338) | Application-aware health gates for patch and reboot workflows | Partial | [PR #382](https://github.com/StealthCat/MrPatchy/pull/382) (v1.57.0): reviewed loopback HTTP/TCP probes that gate rollout patch stages. Replication/workload adapters, dependency groups, non-rollout patches and a probe editor UI remain. |
 | [#339](https://github.com/StealthCat/MrPatchy/issues/339) | Rollout rings, soak gates and service availability limits | Partial | [PR #392](https://github.com/StealthCat/MrPatchy/pull/392) (v1.57.2): pure rollout-ring planner with soak, failure and service/site availability limits (unwired). Runtime ring execution, soak enforcement and drain/rejoin remain. |
 | [#340](https://github.com/StealthCat/MrPatchy/issues/340) | Change freezes, holiday calendars and expiring patch exceptions | Partial | [PR #352](https://github.com/StealthCat/MrPatchy/pull/352) (v1.59.0): audited administrator-managed fleet-wide change freezes (API only) that block scheduled, manual and urgent patch, repair and release-upgrade dispatch. Per-host/group scope, holiday calendars, package deferrals, emergency exceptions and UI remain. |
