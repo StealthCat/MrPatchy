@@ -225,6 +225,49 @@ def test_concurrent_sequencers_assign_dense_unique_sequence(admin):
     assert head == len(rows) == 40
 
 
+def test_simultaneous_first_requests_initialize_head_without_error(admin, monkeypatch):
+    """Review finding on 7c2740e: two first-use requests deadlocked on MySQL.
+
+    Both requests are held until each has observed the missing head row, then
+    both seed it at once.  The old locking-UPDATE-then-INSERT path took gap
+    locks and failed one request with MySQL 1213; now the loser re-reads.
+    """
+    add_user('reader', 'viewer')
+    with Session() as session:
+        publish(session, 'before-first-use')
+        session.commit()
+    with Session() as session:
+        assert session.get(notifications.NotificationArrivalHead, 1) is None
+    both_missing = threading.Barrier(2, timeout=10)
+    original_seed = notifications._seed_arrival_head
+
+    def synchronized_seed(session):
+        both_missing.wait()
+        return original_seed(session)
+
+    monkeypatch.setattr(notifications, '_seed_arrival_head', synchronized_seed)
+    results, errors = [], []
+
+    def first_request():
+        try:
+            with Session() as session:
+                results.append(notifications.arrivals_for_user(session, 'reader'))
+        except Exception as error:  # pragma: no cover - reported below
+            errors.append(error)
+
+    workers = [threading.Thread(target=first_request) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(30)
+    assert errors == []
+    assert results == [{'items': [], 'cursor': 1, 'more': False, 'reset': False}] * 2
+    with Session() as session:
+        assert session.get(notifications.NotificationArrivalHead, 1).head == 1
+    login(admin, 'reader')
+    assert baseline(admin) == 1
+
+
 @pytest.mark.skipif(not os.getenv('TEST_DATABASE_URL', '').startswith('mysql'),
                     reason='SQLite serializes writers, so commits cannot reorder')
 def test_slow_lower_transaction_is_not_skipped_by_faster_higher_commit(admin):

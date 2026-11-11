@@ -12,7 +12,7 @@ import threading
 import time
 
 from sqlalchemy import Double, Integer, String, Text, and_, func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base, Session, audit
@@ -371,6 +371,45 @@ def dismiss(session, username, event_id, revision, *, now=None):
 ARRIVAL_SEQUENCE_BATCH = 500
 
 
+ARRIVAL_HEAD_SEED_ATTEMPTS = 20
+# MySQL reports deadlocks (1213) and lock-wait timeouts (1205) as OperationalError.
+_RETRYABLE_LOCK_ERRORS = {1205, 1213}
+
+
+def _seed_arrival_head(session):
+    """Insert the head row at the highest sequence already assigned."""
+    start = session.scalar(select(func.max(NotificationArrival.seq))) or 0
+    session.add(NotificationArrivalHead(id=1, head=start))
+    session.commit()
+
+
+def _ensure_arrival_head(factory):
+    """Create the single sequencing head row once, safely across controllers.
+
+    The existence check is a plain non-locking read, and the seed runs in its
+    own transaction before any locking statement.  A locking ``UPDATE`` that
+    misses the row would take a gap lock, and two such transactions then
+    deadlock on their inserts (MySQL 1213).  Here concurrent first users only
+    race on the primary-key insert: the loser gets a duplicate-key error, or a
+    retryable lock error, and re-reads the committed row.
+    """
+    for _ in range(ARRIVAL_HEAD_SEED_ATTEMPTS):
+        with factory() as session:
+            if session.get(NotificationArrivalHead, 1) is not None:
+                return
+            try:
+                _seed_arrival_head(session)
+                return
+            except IntegrityError:
+                session.rollback()
+            except OperationalError as error:
+                session.rollback()
+                code = error.orig.args[0] if getattr(error.orig, 'args', None) else None
+                if code not in _RETRYABLE_LOCK_ERRORS:
+                    raise
+    raise RuntimeError('Notification arrival head could not be initialized')
+
+
 def sequence_arrivals(factory=Session):
     """Assign arrival sequence numbers to committed, unsequenced arrivals.
 
@@ -383,24 +422,17 @@ def sequence_arrivals(factory=Session):
     Callers must not hold uncommitted writes in another session on SQLite.
     Returns the committed head.
     """
+    _ensure_arrival_head(factory)
     while True:
         with factory() as session:
-            locked = session.execute(
+            session.execute(
                 update(NotificationArrivalHead).where(NotificationArrivalHead.id == 1)
                 .values(head=NotificationArrivalHead.head)
                 .execution_options(synchronize_session=False))
             head = session.scalar(select(NotificationArrivalHead.head)
                                   .where(NotificationArrivalHead.id == 1))
             if head is None:
-                if locked.rowcount:
-                    raise RuntimeError('Notification arrival head is inconsistent')
-                start = session.scalar(select(func.max(NotificationArrival.seq))) or 0
-                session.add(NotificationArrivalHead(id=1, head=start))
-                try:
-                    session.commit()
-                except IntegrityError:
-                    session.rollback()
-                continue
+                raise RuntimeError('Notification arrival head is inconsistent')
             pending = session.scalars(
                 select(NotificationArrival.id).where(NotificationArrival.seq.is_(None))
                 .order_by(NotificationArrival.id).limit(ARRIVAL_SEQUENCE_BATCH)).all()
