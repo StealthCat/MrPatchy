@@ -7,7 +7,7 @@ PR and remaining acceptance. Historical review documents (for example
 their text unchanged as checkpoints. Where they list a capability as unfinished,
 this matrix states the current position.
 
-Status as of v1.59.5, 2026-11-11. First written against
+Status as of v1.59.6, 2026-11-11. First written against
 `3ac8f68` (v1.37.10) and reconciled by the coordinator at integration. Tracks
 issue [#347](https://github.com/StealthCat/MrPatchy/issues/347).
 
@@ -57,7 +57,7 @@ each issue stays open for its remaining acceptance.
 
 | Issue | Capability | Status | Delivered or in review |
 | --- | --- | --- | --- |
-| [#334](https://github.com/StealthCat/MrPatchy/issues/334) | Asset groups, policy inheritance and scoped administration | In review | [PR #495](https://github.com/StealthCat/MrPatchy/pull/495): pure asset metadata, group membership and effective-policy preview contract. |
+| [#334](https://github.com/StealthCat/MrPatchy/issues/334) | Asset groups, policy inheritance and scoped administration | Partial | [PR #495](https://github.com/StealthCat/MrPatchy/pull/495) (v1.59.6): pure asset metadata, static/rule group membership and effective-policy preview contract with conflict reporting (unwired). Persistence, group-scoped authorization, queued-work revalidation, UI and audit remain. |
 | [#335](https://github.com/StealthCat/MrPatchy/issues/335) | Read-only security posture and configuration compliance | Partial | [PR #386](https://github.com/StealthCat/MrPatchy/pull/386) (v1.59.1): pure versioned SSH daemon posture rule evaluator (unwired; global `sshd -T` settings only). Other rule families, `Match` blocks, collection, storage, exceptions and UI remain. |
 | [#336](https://github.com/StealthCat/MrPatchy/issues/336) | Container and application dependency inventory with workload attribution | Partial | [PR #394](https://github.com/StealthCat/MrPatchy/pull/394) (v1.59.3): pure Docker/Podman workload inventory contract with image-digest identity, explicit gaps and change comparison (unwired). Collection, application dependencies, SBOM, advisory matching and fleet search remain. |
 | [#337](https://github.com/StealthCat/MrPatchy/issues/337) | Scoped service credentials and reliable external integrations | Partial | [PR #494](https://github.com/StealthCat/MrPatchy/pull/494) (v1.59.5): pure idempotency-key contract binding identity, action, targets and payload, with replay/conflict decisions (unwired). Scoped service identities, API surface, durable records and ticket/SIEM mappings remain. |

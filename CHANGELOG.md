@@ -1,3 +1,8 @@
+## 1.59.6 — 2026-11-11
+
+1. [PR #495](https://github.com/StealthCat/MrPatchy/pull/495): Add a pure asset-group contract (`app/asset_groups.py`). `normalize_asset()` validates tags, site, owner, environment and criticality, and rejects unknown fields. `validate_group()` accepts static groups (host ids) and rule groups (all/any conditions over asset metadata, with `eq`, `in`, `has` and minimum-criticality operators), with optional parents. Unknown parents, parent cycles and nesting deeper than eight levels are rejected. `membership()` and `membership_diff()` give a deterministic membership preview and what a change would add or remove. `effective_policy()` previews one host's effective policy: a child group overrides its parent, the higher priority wins across groups, and equal-priority disagreements are reported as conflicts with the key left unset. Each resolved key names its source group.
+2. Compatibility and limits: an unwired contract only. No schema, migration, route, authorization, scheduling or runtime-action change. This is a partial #334 increment: persistence, group-scoped authorization, queued-work revalidation, UI and audit remain open. This source update does not publish a Docker image.
+
 ## 1.59.5 — 2026-11-11
 
 1. [PR #494](https://github.com/StealthCat/MrPatchy/pull/494): Add a pure idempotency-key contract for service-submitted mutations (`app/idempotency.py`). It validates 8–128-character keys without echoing a rejected key, and computes a canonical JSON payload digest. Its request fingerprint binds the identity, action, de-duplicated sorted targets and payload digest. `decide()` classifies a submission against the stored record as new, a replay that returns the original result, in progress, or a conflicting reuse with no result.
