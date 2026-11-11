@@ -1,3 +1,7 @@
+## 1.56.5 — 2026-11-11
+
+1. [PR #541](https://github.com/StealthCat/MrPatchy/pull/541): Let administrators filter retained AI spend windows by the exact recorded IANA budget timezone in AI Settings. The optional API filter runs before grouping and the result limit; clearing restores all timezones, and unsaved budget settings remain unchanged. Existing calls and response shape are unchanged; there is no schema or accounting-policy change. This completes the bounded timezone-history acceptance in #540; production faster-AI performance and provider-invoice reconciliation remain open. This source update does not publish a Docker image.
+
 ## 1.56.4 — 2026-11-10
 
 1. [PR #364](https://github.com/StealthCat/MrPatchy/pull/364): Add `docs/SECRET_CUSTODY.md`, the design inventory and migration contract for external secret custody and recoverable encryption-key rotation. It inventories every consumer of `secret.key`, including Fernet-sealed settings, MFA secrets, release plans, database profile files, the worker preflight key canary and backup bundles, plus the one HKDF-derived subkey. It proposes a provider interface with fail-closed rules, a read-compatible `mp1:<key_id>:` envelope, a resumable rotation, retirement and backup/restore contract, a test matrix and a delivery sequence. At integration the coordinator corrected the inventory to include the worker preflight canary (a fourth independent Fernet construction that workers verify before admitting work) and the legacy `scripts/backup.py` key copy.
