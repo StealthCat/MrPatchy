@@ -410,6 +410,14 @@ role/scope restrictions and Back/reload routes remain. Actual renders inspected:
 The shared queue/concurrency/rate/spend controls and full AI workspace acceptance
 remain planned under the faster-triage program; timing labels do not complete them.
 
+The #611 fleet AI logs panel adds an administrator-only view of retained
+process-triage timings. The panel loads on request and can retry independently of
+the run list. An accessible, horizontally scrollable table displays samples,
+errors and p50/p95 milliseconds, with missing percentiles shown as a dash. The
+coverage text identifies missing, malformed and truncated samples and explains
+overlapping stages. This surface depends on the #523 summary API. Matched
+production measurements and the broader AI workspace remain separate milestones.
+
 ## Planned live notification center
 
 Implement the [live notification roadmap](SECURITY_IMPLEMENTATION.md#planned-live-in-app-notifications-and-human-attention-alerts) as part of the shared application shell. Keep a persistent Notifications icon with an accessible unread badge, a compact recent panel and a dedicated paginated/filterable notification center. Apply the existing glass/status palette and Mr Patchy artwork while keeping event text readable.
@@ -417,6 +425,28 @@ Implement the [live notification roadmap](SECURITY_IMPLEMENTATION.md#planned-liv
 Human-attention events and significant triage findings should arrive through authenticated server push and update the badge/panel plus bounded in-app alerts without page refresh, navigation, stolen focus or lost form/dialog state. Keep durable per-user read state, severity/source/server/time and exact review links. Reading/dismissing differs from acknowledging/resolving the underlying issue. Retain urgent items in history, handle reconnect/catch-up and visible degraded state, and filter both payloads and counts to current permissions. Existing SMTP/webhook delivery remains independent.
 
 Verify actual asynchronous updates, multi-session read synchronization, replay/deduplication/reopening, role/session boundaries, keyboard/live-region behavior and mobile/tablet/desktop renders. This remains planned until the runtime and acceptance milestones are delivered.
+
+Issue #350 adds a bounded shell checkpoint: the
+desktop/tablet/mobile header has a persistent bell, count/severity cue and compact
+glass recent panel using the existing mascot portrait. Notification text is inserted
+as text, links receive a defensive same-origin check, and exact-revision read/dismiss
+controls are distinct from operational acknowledgement or response. Background
+polling and return-to-tab catch-up mutate only the shell notification subtree, so an
+open page or dialog keeps its focus and form state. Escape closes the panel and
+returns focus to the bell; reduced-motion/transparency and forced-color foundations
+remain shared with the shell. The panel states its 30-second polling limitation.
+Server push/replay, cross-tab synchronization, live toasts, the dedicated filtered
+center, retained-history navigation and full multi-browser/SQLite/MySQL acceptance
+remain planned, so this checkpoint does not complete the live notification center.
+
+Issue #353 adds the dedicated retained-history surface: the bell panel links to a
+deep-linkable workspace page with bounded previous/next navigation and server-side
+unread, severity, source and server filters. Cards retain the shared glass/status
+palette, escaped text, readable timestamps and safe subject links across desktop,
+tablet and phone layouts. Exact-revision read/dismiss remains an account-local UI
+choice and is explained separately from operational response. Server push/replay,
+cross-tab synchronization, live toasts and full multi-browser/SQLite/MySQL/failover
+acceptance remain planned, so the asynchronous notification program is not complete.
 
 
 ### v1.24.0 — Exact-match readiness on assessment detail

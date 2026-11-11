@@ -1,5 +1,7 @@
 import base64
+import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager, contextmanager
 import hashlib
 import os
@@ -10,22 +12,27 @@ import shlex
 import threading
 import time
 import uuid
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
-from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
-from .db import Session, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
-from .security import password_hash, verify, token_hash, seal
+from sqlalchemy import select, func, update, case, or_, not_, text, String, LargeBinary, cast
+from sqlalchemy.orm import defer, load_only
+from sqlalchemy.exc import IntegrityError, OperationalError
+from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
+from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import operations, incidents, connections,host_lifecycle
-from .identity import User,actor,consume_otp,new_secret
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes
+from .identity import User,consume_otp,new_secret
 from .security import unseal
 
 @asynccontextmanager
 async def lifespan(app):
     from .database_config import runtime_guard
+    from . import route_roles
+    route_roles.inventory(app,ROLE_DEPENDENCIES)  # fail closed if any route declares no role
     with runtime_guard():
         init()
         from .worker_preflight import publish
@@ -45,25 +52,60 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION='1.35.21'
+APP_VERSION = "1.59.19"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
-from .security import cipher
-from . import sso
-app.add_middleware(SessionMiddleware,secret_key=hashlib.sha256(cipher()._signing_key).hexdigest(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
+from . import sso, error_pages
+app.add_middleware(SessionMiddleware,secret_key=derive_key('oidc-flow-cookie').hex(),session_cookie='oidc_flow',https_only=True,same_site='lax',max_age=300)
 app.include_router(sso.router)
+
+
+def _stream_limit():
+    try:
+        value = int(os.getenv('NOTIFICATION_STREAM_LIMIT', '32'))
+    except ValueError:
+        value = 32
+    return min(256, max(1, value))
+
+
+notification_streams = notification_events.StreamConnections(_stream_limit())
+@app.exception_handler(host_lifecycle.Busy)
+@app.exception_handler(host_lifecycle.Inactive)
+async def lifecycle_busy(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=409)
+@app.exception_handler(host_lifecycle.QueueFull)
+async def queue_full(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=429)
 @app.exception_handler(ValueError)
 async def invalid_input(request,exc): return JSONResponse({'detail':str(exc)[:1000]},status_code=400)
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request,exc):
+    # Never echo `input` or `ctx` (they can contain passwords); return short field-labelled messages.
+    if request.url.path=='/api/login': return JSONResponse({'detail':'Invalid credentials'},status_code=422)
+    # `loc` can hold caller-chosen dict keys or forbidden extra field names, so only the first
+    # declared-looking field label is shown; dynamic/unknown locations get a generic message.
+    parts=[]
+    for err in exc.errors()[:5]:
+        if err.get('type')=='extra_forbidden':parts.append('Unexpected field');continue
+        loc=[x for x in err.get('loc',()) if x not in ('body','query','path','header','cookie')]
+        label=loc[0] if loc and isinstance(loc[0],str) and _VALIDATION_LABEL.fullmatch(loc[0]) else ''
+        msg=str(err.get('msg',''))[:200]
+        parts.append((label+': ' if label else '')+msg)
+    return JSONResponse({'detail':('; '.join(parts) or 'Invalid request')[:1000]},status_code=422)
+_VALIDATION_LABEL=re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 static=Path(__file__).parent/'static'
 app.mount('/static',StaticFiles(directory=static),name='static')
 
 @app.middleware('http')
 async def guard(request,call_next):
-    response=await call_next(request)
+    try: response=await call_next(request)
+    except Exception:
+        # Unhandled errors would otherwise be answered outside this middleware, without the security headers.
+        logging.getLogger('mrpatchy').exception('Unhandled error for %s %s',request.method,request.url.path)
+        response=JSONResponse({'detail':'Internal server error'},status_code=500)
     if request.method not in ('GET','HEAD') and getattr(request.state,'actor',None):
         with Session() as s:
             audit(s,'request',request.state.actor+' '+request.method+' '+request.url.path+' '+str(response.status_code));s.commit()
+    response=error_pages.decorate(request,response)
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='no-referrer'
@@ -71,7 +113,22 @@ async def guard(request,call_next):
     if request.url.path.startswith(('/api','/enroll','/auth')): response.headers['Cache-Control']='no-store'
     return response
 
-def auth(request:Request):
+ROLE_RANK={'viewer':1,'operator':2,'admin':3}
+ROLE_DEPENDENCIES={}
+def role_dependency(role,self_service=False):
+    """Build the dependency a route declares to state the minimum role it needs.
+
+    Authorization is declared per route, never inferred from the request path, so a
+    route that declares no role is rejected when the application starts (see
+    route_roles.inventory) instead of silently becoming readable by every viewer.
+    """
+    def dependency(request:Request): return authenticate(request,role)
+    dependency.__name__=('self' if self_service else role)+'_user'
+    dependency.required_role='self-service' if self_service else role
+    ROLE_DEPENDENCIES[dependency]=dependency.required_role
+    return dependency
+
+def authenticate(request:Request,minimum):
     token=request.cookies.get('mrpatchy','')
     with Session() as s:
         row=s.get(Setting,'session:'+token_hash(token))
@@ -82,13 +139,8 @@ def auth(request:Request):
             raise HTTPException(401,'Session revoked; sign in again')
         if request.method not in ['GET','HEAD'] and not secrets.compare_digest(request.headers.get('x-csrf-token',''),row.value['csrf']): raise HTTPException(403,'Invalid CSRF token')
         path=request.url.path
-        self_service=path in ('/api/logout','/api/identity','/api/identity/mfa','/api/identity/mfa/confirm','/api/identity/password','/api/identity/sessions')
-        operator_action=(path.endswith('/patch') or path.endswith('/actions/refresh') or path.endswith('/preview'))
-        sensitive_read=('/security' in path or '/release' in path or '/history' in path or path.endswith(('/installer','/enrollment-endpoints','/backups','/repository-access','/connection','/repositories','/snapshot','/security'))) or path.startswith(('/api/ai','/api/users','/api/settings','/api/audit','/api/operations','/api/tls','/api/schedules'))
-        if not self_service:
-            if sensitive_read and identity.role!='admin': raise HTTPException(403,'Administrator access required')
-            if request.method not in ('GET','HEAD') and identity.role!='admin':
-                if identity.role!='operator' or not operator_action: raise HTTPException(403,'This role cannot perform that operation')
+        if ROLE_RANK.get(identity.role,0)<ROLE_RANK[minimum]:
+            raise HTTPException(403,'Administrator access required' if minimum=='admin' else 'This role cannot perform that operation')
         host_path=re.match(r'^/api/(?:hosts|operations)/([^/]+)',path)
         if host_path:
             host=s.get(Host,host_path.group(1))
@@ -102,8 +154,15 @@ def auth(request:Request):
         request.state.actor=identity.username
         return {**row.value,'username':identity.username,'role':identity.role,'mfa':bool(identity.otp_secret)}
 
+viewer_user=role_dependency('viewer')
+operator_user=role_dependency('operator')
+admin_user=role_dependency('admin')
+self_user=role_dependency('viewer',self_service=True)
+
 @contextmanager
 def host_change(host_id,allow_quarantined=False,allow_inactive=False):
+    # Unknown IDs must not create permanent lock files or in-memory lock entries.
+    with Session() as s:host_or_404(s,host_id)
     lock=worker.host_lock(host_id)
     if not lock.acquire(False): raise HTTPException(409,'Server has an active operation. Retry this configuration change when it finishes.')
     try:
@@ -121,6 +180,20 @@ def host_or_404(s,host_id):
     if not h: raise HTTPException(404,'Server not found')
     return h
 
+def require_host_read(s,host_id,user):
+    """Apply retained-record policy after resolving query/indirect resource scope."""
+    host=s.get(Host,host_id) if host_id else None
+    if host and host.deleted_at and user['role']!='admin':
+        raise HTTPException(403,'Deleted server records require administrator access')
+
+
+def readable_host_records(query,host_column,user):
+    # Filter in SQL before pagination; disabled servers retain their read policy.
+    if user['role']!='admin':
+        query=query.where(host_column.not_in(select(Host.id).where(Host.deleted_at>0)))
+    return query
+
+
 def object_dict(obj,exclude=()): return {c.name:getattr(obj,c.name) for c in obj.__table__.columns if c.name not in exclude}
 def public_job(job):
     """Return operation metadata without exposing its internal execution payload."""
@@ -134,14 +207,23 @@ def health(): return {'status':'ok','version':APP_VERSION}
 class Login(BaseModel):
     username:str=Field(default='admin',pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     password:str=Field(max_length=1024)
-    otp:str=Field(default='',max_length=6)
+    otp:str=Field(default='',max_length=16)
 login_attempts={}; login_lock=threading.Lock(); login_throttle_logged={}
+# Failures per account by source address, used only to detect guessing spread across addresses (never to block).
+login_account_failures={}
+login_account_next_sweep=0.0
+LOGIN_BUCKET_LIMIT=10000
+LOGIN_SUSPICIOUS_ADDRESSES=5
+LOGIN_ACCOUNT_SWEEP_SECONDS=30
+# Verified when an account is missing or disabled so response time does not reveal which usernames exist.
+DUMMY_PASSWORD_HASH=password_hash('mrpatchy-timing-equaliser','00'*16)
 def audit_login_event(action,username,ip,reason):
     # Usernames are pattern-restricted by Login; never record the submitted password or OTP.
     with Session() as s:
         audit(s,action,username+' '+ip+' '+reason); s.commit()
 @app.post('/api/login')
 def login(body:Login,request:Request,response:Response):
+    global login_account_next_sweep
     ip=request.client.host; now=time.time()
     # Reserve an attempt before expensive password hashing; remove it only on success.
     bucket=ip+':'+body.username
@@ -152,50 +234,383 @@ def login(body:Login,request:Request,response:Response):
             if not login_attempts[key]: del login_attempts[key]
         for key in list(login_throttle_logged):
             if now-login_throttle_logged[key]>=300: del login_throttle_logged[key]
+        # Sweep global detector state periodically, not on every authentication request.
+        # The per-account failure path below still enforces the exact rolling window.
+        if now>=login_account_next_sweep:
+            for key,seen in list(login_account_failures.items()):
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                if not seen: del login_account_failures[key]
+            login_account_next_sweep=now+LOGIN_ACCOUNT_SWEEP_SECONDS
         recent=login_attempts.get(bucket,[])
-        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.startswith(ip+':'))
-        if len(recent)>=10 or ip_attempts>=50 or len(login_attempts)>=10000:
-            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit') if ip_attempts>=50 else ('global','global limit')
+        # Usernames cannot contain ':', so the address is everything before the last one.
+        # A prefix match would also count other IPv6 addresses, e.g. ::1:2 under ::1.
+        ip_attempts=sum(len(v) for k,v in login_attempts.items() if k.rsplit(':',1)[0]==ip)
+        if len(recent)>=10 or ip_attempts>=50:
+            scope,reason=(bucket,'account limit') if len(recent)>=10 else (ip,'address limit')
             # One audit entry per limit and window, so rejected requests cannot flood the log.
             throttled=reason if scope not in login_throttle_logged else ''
             login_throttle_logged.setdefault(scope,now)
-        else: login_attempts[bucket]=recent+[now]
+        else:
+            # Evict the buckets idle longest instead of rejecting every user at the cap.
+            if bucket not in login_attempts and len(login_attempts)>=LOGIN_BUCKET_LIMIT:
+                for key in sorted(login_attempts,key=lambda k:login_attempts[k][-1])[:len(login_attempts)-LOGIN_BUCKET_LIMIT+1]: del login_attempts[key]
+            login_attempts[bucket]=recent+[now]
     if throttled is not None:
         if throttled: audit_login_event('login throttled',body.username,ip,throttled)
         raise HTTPException(429,'Too many attempts. Try again in five minutes.')
     failure=None
-    with login_lock, Session() as s:
-        identity=s.get(User,body.username)
-        if not identity or not identity.enabled: failure='unknown or disabled account'
-        elif not verify(body.password,identity.password): failure='bad password'
-        elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
-        else:
-            token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-            s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
-            audit(s,'login',identity.username+' '+ip); s.commit()
-            login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+    # Hash outside login_lock so password guesses cannot serialize other sign-ins. Always hash, even for missing accounts.
+    for attempt in range(2):
+        with Session() as s:
+            identity=s.get(User,body.username)
+            stored=identity.password if identity and identity.enabled else None
+        password_ok=verify(body.password,stored or DUMMY_PASSWORD_HASH) and stored is not None
+        upgraded=password_hash(body.password) if password_ok and needs_rehash(stored) else None
+        retry=False
+        with login_lock, Session() as s:
+            identity=s.get(User,body.username)
+            if stored is None or not identity or not identity.enabled: failure='unknown or disabled account'
+            elif not password_ok: failure='bad password'
+            elif identity.password!=stored:
+                # A concurrent correct sign-in may have just upgraded this hash: re-verify once against the current value.
+                failure='bad password'; retry=attempt==0
+            elif identity.otp_secret and not consume_otp(identity,body.otp): failure='bad MFA code'
+            else:
+                failure=None
+                if upgraded: identity.password=upgraded
+                token=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
+                s.add(Setting(key='session:'+token_hash(token),value={'csrf':csrf,'expires':now+43200,'username':identity.username,'generation':identity.generation}))
+                audit(s,'login',identity.username+' '+ip); s.commit()
+                login_attempts[bucket]=[x for x in login_attempts.get(bucket,[]) if x!=now]
+        if not retry: break
     if failure:
         audit_login_event('login failed',body.username,ip,failure)
-        raise HTTPException(401,'Invalid credentials or MFA code' if failure=='bad MFA code' else 'Invalid credentials')
+        suspicious=False
+        with login_lock:
+            # Detect, never block: a hard per-account limit would let an attacker lock out a real administrator.
+            if body.username in login_account_failures or len(login_account_failures)<LOGIN_BUCKET_LIMIT:
+                seen=login_account_failures.setdefault(body.username,{})
+                for address,at in list(seen.items()):
+                    if now-at>=300: del seen[address]
+                # Only the most recent distinct sources are needed to recognize
+                # the threshold; never retain an unbounded rotating-IP history.
+                if ip not in seen and len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES:
+                    del seen[min(seen,key=seen.get)]
+                seen[ip]=now
+                scope='suspicious:'+body.username
+                if len(seen)>=LOGIN_SUSPICIOUS_ADDRESSES and scope not in login_throttle_logged:
+                    login_throttle_logged[scope]=now; suspicious=True
+        if suspicious: audit_login_event('login suspicious',body.username,ip,'failures from '+str(LOGIN_SUSPICIOUS_ADDRESSES)+' or more addresses')
+        raise HTTPException(401,'Invalid credentials or MFA code')
     response.set_cookie('mrpatchy',token,httponly=True,secure=os.getenv('COOKIE_SECURE','true').lower()=='true',samesite='strict',max_age=43200)
     return {'csrf':csrf,'username':identity.username,'role':identity.role}
 @app.get('/api/session')
-def session(user=Depends(auth)): return {'csrf':user['csrf']}
+def session(user=Depends(viewer_user)): return {'csrf':user['csrf']}
 @app.post('/api/logout')
-def logout(request:Request,response:Response,user=Depends(auth)):
+def logout(request:Request,response:Response,user=Depends(self_user)):
     with Session() as s:
         row=s.get(Setting,'session:'+token_hash(request.cookies['mrpatchy'])); s.delete(row); s.commit()
     response.delete_cookie('mrpatchy'); return {'ok':True}
 @app.get('/api/dashboard')
-def dashboard(user=Depends(auth)):
+def dashboard(user=Depends(viewer_user)):
     with Session() as s:
-        cfg=config(s); hosts=list(s.scalars(select(Host).where(Host.enabled==True,Host.deleted_at==0))); packages=list(s.scalars(select(Package).where(Package.host_id.in_(host_lifecycle.active_ids())))); now=time.time()
-        updates=[p for p in packages if p.candidate]
-        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':len(packages),'updates':len(updates),'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+        cfg=config(s); now=time.time()
+        # Large inventory/telemetry/baseline blobs are never needed for the overview counts.
+        hosts=list(s.scalars(select(Host).options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline)).where(Host.enabled==True,Host.deleted_at==0)))
+        active=Package.host_id.in_(host_lifecycle.active_ids())
+        total=s.scalar(select(func.count()).select_from(Package).where(active)) or 0
+        update_counts=dict(s.execute(select(Package.priority,func.count()).where(active,Package.candidate!='',Package.candidate.is_not(None)).group_by(Package.priority)).all())
+        overdue=0
+        for priority,count in update_counts.items():
+            # Same rule as before: now > available_since + deadline hours.
+            cutoff=now-cfg['deadlines'][priority]*3600
+            overdue+=s.scalar(select(func.count()).select_from(Package).where(active,Package.candidate!='',Package.candidate.is_not(None),Package.priority==priority,Package.available_since<cutoff)) or 0
+        return {'servers':len(hosts),'online':sum(h.state=='online' and now-h.last_seen<120 for h in hosts),'packages':total,'updates':sum(update_counts.values()),'overdue':overdue,'integrity_alerts':sum(len(h.integrity) for h in hosts),'investigations':s.scalar(select(func.count()).select_from(Behavior).where(Behavior.approved==False,Behavior.host_id.not_in(host_lifecycle.inactive_ids()))),'repo_minutes':cfg['repo_minutes']}
+
+FLEET_UPDATE_PRIORITIES=('critical','high','normal','low')
+FLEET_UPDATE_STATUS_FILTERS=('','available','queued','held','ineligible','installable')
+def fleet_repo_state(repo_error,last_repo,cfg,now):
+    """Repository-check freshness using the same rule worker.validate_patch enforces."""
+    if repo_error: return 'failed'
+    if not last_repo: return 'unknown'
+    return 'stale' if now-last_repo>cfg['repo_minutes']*120 else 'current'
+def fleet_installable_state(dpkg_state):
+    """Package state the patch worker accepts; mirrored by the SQL status filter."""
+    value=dpkg_state or ''
+    return value=='installed' or value.endswith(' installed')
+def fleet_queued_keys(s,host_ids):
+    """(host_id, name, candidate) of every package in an open patch job for these hosts."""
+    keys=set()
+    for job_host,payload in s.execute(select(Job.host_id,Job.payload).where(Job.host_id.in_(host_ids),Job.action=='patch',Job.state.in_(('queued','running')))):
+        packages=payload.get('packages') if isinstance(payload,dict) else None
+        for spec in packages if isinstance(packages,list) else ():
+            if isinstance(spec,str) and '=' in spec:
+                name,candidate=spec.split('=',1); keys.add((job_host,name,candidate))
+    return keys
+def fleet_queued_relation(s):
+    """Distinct (host_id, spec) of every package spec in an open patch job, expanded in the database.
+
+    Mirrors fleet_queued_keys() without binding one parameter per package: only JSON-array
+    ``packages`` payloads and their text members count, and specs compare byte-for-byte.
+    """
+    if s.get_bind().dialect.name=='sqlite':
+        sql=("SELECT DISTINCT j.host_id AS host_id, CAST(e.value AS BLOB) AS spec FROM jobs AS j, json_each(j.payload, '$.packages') AS e "
+             "WHERE j.action='patch' AND j.state IN ('queued','running') AND json_type(j.payload, '$.packages')='array' AND e.type='text'")
+    else:
+        sql=("SELECT DISTINCT j.host_id AS host_id, CAST(JSON_UNQUOTE(e.elem) AS BINARY) AS spec FROM jobs AS j, "
+             "JSON_TABLE(j.payload, '$.packages[*]' COLUMNS (elem JSON PATH '$')) AS e "
+             "WHERE j.action='patch' AND j.state IN ('queued','running') AND JSON_TYPE(JSON_EXTRACT(j.payload, '$.packages'))='ARRAY' AND JSON_TYPE(e.elem)='STRING'")
+    return text(sql).columns(host_id=String,spec=LargeBinary).subquery('fleet_queued')
+@app.get('/api/fleet/updates')
+def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:str='active',limit:int=50,offset:int=0,user=Depends(viewer_user)):
+    """Read-only, paged list of every available package candidate.
+
+    The default ``active`` scope uses the same active-server scope and candidate predicate
+    as /api/dashboard so the Overview count equals the unfiltered total. ``inactive`` lists
+    retained candidates on disabled (never deleted) servers separately from active totals.
+    No per-host cap; callers page with offset.
+    """
+    if priority and priority not in FLEET_UPDATE_PRIORITIES: raise HTTPException(400,'Unknown priority')
+    if status not in FLEET_UPDATE_STATUS_FILTERS: raise HTTPException(400,'Unknown status')
+    if scope not in ('active','inactive'): raise HTTPException(400,'Unknown scope')
+    limit=max(1,min(limit,200)); offset=max(0,offset)
+    with Session() as s:
+        cfg=config(s); deadlines=cfg['deadlines']; now=time.time()
+        scope_ids=(host_lifecycle.active_ids() if scope=='active'
+            else select(Host.id).where(Host.enabled==False,Host.deleted_at==0))
+        conditions=[Package.host_id.in_(scope_ids),Package.candidate!='',Package.candidate.is_not(None)]
+        if q: conditions.append(Package.name.contains(q[:200],autoescape=True))
+        if host_id: conditions.append(Package.host_id==host_id)
+        if priority: conditions.append(Package.priority==priority)
+        queued_join=None; queued_page_flag=None
+        if status:
+            # Filters use exactly the row states returned below (held > ineligible > queued > available).
+            installable_state=or_(Package.dpkg_state=='installed',Package.dpkg_state.like('% installed'))
+            if status=='held': conditions.append(Package.held==True)
+            elif status=='ineligible': conditions.append(Package.held==False); conditions.append(not_(installable_state))
+            else:
+                conditions+= [Package.held==False,installable_state]
+                if status in ('queued','available'):
+                    # Database-side membership: a distinct relation outer-joined on exact host and
+                    # "name=candidate" bytes, so cost and bind count never grow with the queue size.
+                    # Names containing '=' never match, as in fleet_queued_keys()'s first-'=' split.
+                    queued_rel=fleet_queued_relation(s)
+                    queued_join=(queued_rel,(queued_rel.c.host_id==Package.host_id)&(queued_rel.c.spec==cast(Package.name+'='+Package.candidate,LargeBinary))&~Package.name.contains('=',autoescape=True))
+                    queued_page_flag=queued_rel.c.host_id.is_not(None).label('queued_on_page')
+                    conditions.append(queued_rel.c.host_id.is_not(None) if status=='queued' else queued_rel.c.host_id.is_(None))
+        count_from=Package if queued_join is None else Package.__table__.outerjoin(*queued_join)
+        total=s.scalar(select(func.count()).select_from(count_from).where(*conditions)) or 0
+        rank=case(*[(Package.priority==name,index) for index,name in enumerate(FLEET_UPDATE_PRIORITIES)],else_=len(FLEET_UPDATE_PRIORITIES))
+        # Bounded projection: only the small Host fields the row needs (never inventory/telemetry/baseline/integrity).
+        page_columns=[Package,Host.name,Host.last_repo,Host.repo_error,Host.state,Host.last_seen]
+        if queued_page_flag is not None: page_columns.append(queued_page_flag)
+        page=select(*page_columns).join(Host,Host.id==Package.host_id)
+        if queued_join is not None: page=page.outerjoin(*queued_join)
+        rows=s.execute(page.where(*conditions)
+            .order_by(rank,Package.name,Host.name,Package.id).limit(limit).offset(offset)).all()
+        # Page-bounded lookups only: open patch jobs and deferred AI priority scoring for these rows.
+        page_hosts={r[0].host_id for r in rows}; page_names={r[0].name for r in rows}; deferred=set()
+        # A queued/available filter must render membership from the same statement that
+        # selected the page. A later job lookup can observe a transition and contradict
+        # the requested filter; unfiltered/installable pages still need live page-bounded state.
+        queued=fleet_queued_keys(s,page_hosts) if page_hosts and queued_page_flag is None else set()
+        if page_hosts:
+            U=update_scores.UpdateScore
+            deferred={tuple(r) for r in s.execute(select(U.host_id,U.name,U.installed,U.candidate).where(U.host_id.in_(page_hosts),U.name.in_(page_names),U.state=='deferred'))}
+        def candidate_status(p,queued_on_page=None):
+            if p.held: return 'held'
+            if not fleet_installable_state(p.dpkg_state): return 'ineligible'
+            if queued_on_page is not None: return 'queued' if queued_on_page else 'available'
+            if (p.host_id,p.name,p.candidate) in queued: return 'queued'
+            return 'available'
+        items=[{'id':p.id,'host_id':p.host_id,'host_name':h_name,'name':p.name,'installed':p.installed,'candidate':p.candidate,
+            'priority':p.priority,'held':bool(p.held),'status':candidate_status(p,membership[0] if membership else None),'dpkg_state':p.dpkg_state,'available_since':p.available_since,
+            'priority_deferred':(p.host_id,p.name,p.installed,p.candidate) in deferred,
+            'due':p.available_since+deadlines.get(p.priority,deadlines['normal'])*3600,
+            'host_active':scope=='active','repo_checked':h_last_repo or 0,'repo_error':h_repo_error or '','repo_state':fleet_repo_state(h_repo_error,h_last_repo,cfg,now),
+            'contact_stale':not(h_state=='online' and now-(h_last_seen or 0)<120)} for p,h_name,h_last_repo,h_repo_error,h_state,h_last_seen,*membership in rows]
+        return {'items':items,'total':total,'offset':offset,'limit':limit,'scope':scope}
+
+@app.get('/api/notifications')
+def notification_list(unread_only:bool=False,include_dismissed:bool=False,
+                      severity:str='',source:str='',host_id:str='',
+                      limit:int=50,offset:int=0,user=Depends(self_user)):
+    """Return a bounded, current-role-filtered page for the signed-in user."""
+    with Session() as s:
+        try:
+            filters={'severity':severity,'source':source,'host_id':host_id}
+            items=notification_events.list_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,limit=limit,offset=offset,
+                **filters)
+            total=notification_events.count_for_user(
+                s,user['username'],unread_only=unread_only,
+                include_dismissed=include_dismissed,**filters)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
+        return {'items':items,'offset':offset,'limit':limit,'total':total,
+                'more':offset+len(items)<total}
+
+@app.get('/api/notifications/arrivals')
+def notification_arrivals(after:int|None=None,limit:int=50,user=Depends(self_user)):
+    """Return visible revisions committed after a durable arrival cursor."""
+    with Session() as s:
+        try:
+            result=notification_events.arrivals_for_user(
+                s,user['username'],after=after,limit=limit)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
+        return result or {'items':[],'cursor':0,'more':False,'reset':False}
+
+@app.get('/api/notifications/unread-count')
+def notification_unread_count(user=Depends(self_user)):
+    with Session() as s:
+        return {'unread':notification_events.unread_count(s,user['username'])}
+
+
+def _notification_stream_session(session,session_key,username,generation,role):
+    row=session.get(Setting,session_key)
+    identity=session.get(User,username)
+    return bool(row and row.value.get('expires',0)>=time.time()
+                and row.value.get('username')==username
+                and row.value.get('generation')==generation
+                and identity and identity.enabled
+                and identity.generation==generation
+                and identity.role==role
+                and identity.role in notification_events.ROLES)
+
+
+def _notification_sse(cursor):
+    return f'id: {cursor}\nretry: 3000\nevent: notifications\ndata: {{"cursor":"{cursor}"}}\n\n'
+
+
+@app.get('/api/notifications/stream')
+async def notification_stream(request:Request,user=Depends(self_user)):
+    """Stream bounded invalidations; list/count APIs remain authoritative."""
+    if not notification_streams.acquire():
+        raise HTTPException(429,'Notification stream capacity reached',headers={'Retry-After':'3'})
+    token=request.cookies.get('mrpatchy','')
+    session_key='session:'+token_hash(token)
+    username=user['username'];generation=user['generation'];role=user['role']
+    supplied=request.headers.get('last-event-id','')
+    last=supplied if re.fullmatch(r'[0-9a-f]{64}',supplied) else ''
+
+    async def events():
+        nonlocal last
+        heartbeat=time.monotonic()
+        try:
+            while not await request.is_disconnected():
+                with Session() as s:
+                    if not _notification_stream_session(
+                            s,session_key,username,generation,role):
+                        yield 'event: close\ndata: {}\n\n'
+                        return
+                    cursor=notification_events.stream_cursor(s,username)
+                if cursor is None:
+                    yield 'event: close\ndata: {}\n\n'
+                    return
+                if cursor!=last:
+                    last=cursor
+                    yield _notification_sse(cursor)
+                    heartbeat=time.monotonic()
+                elif time.monotonic()-heartbeat>=15:
+                    yield ': heartbeat\n\n'
+                    heartbeat=time.monotonic()
+                await asyncio.sleep(1)
+        finally:
+            notification_streams.release()
+
+    return StreamingResponse(events(),media_type='text/event-stream',headers={
+        'Cache-Control':'no-store','X-Accel-Buffering':'no','Connection':'keep-alive'})
+
+class NotificationStateInput(BaseModel):
+    revision:int=Field(strict=True,ge=1)
+
+def _notification_event_id(event_id):
+    if not re.fullmatch(r'[0-9a-f]{64}',event_id):
+        raise HTTPException(404,'Notification not found')
+    return event_id
+
+def _notification_state(event_id,body,user,mutation):
+    event_id=_notification_event_id(event_id)
+    with Session() as s:
+        try:
+            state=mutation(s,user['username'],event_id,body.revision)
+        except PermissionError:
+            raise HTTPException(404,'Notification not found')
+        s.commit()
+        return {'id':event_id,'revision':body.revision,
+                'read_revision':state.read_revision,
+                'dismissed_revision':state.dismissed_revision}
+
+@app.post('/api/notifications/{event_id}/read')
+def notification_read(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    return _notification_state(event_id,body,user,notification_events.mark_read)
+
+@app.post('/api/notifications/{event_id}/dismiss')
+def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    return _notification_state(event_id,body,user,notification_events.dismiss)
+
 @app.get('/api/hosts')
-def hosts(deleted:bool=False,user=Depends(auth)):
+def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
-    with Session() as s: return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':h.inventory.get('architecture',''),'os':h.inventory.get('os',''),'package_manager':h.inventory.get('package_manager','apt')} for h in s.scalars(select(Host).where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name))]
+    with Session() as s:
+        keys=('architecture','os','package_manager');cols=[]
+        for key in keys:
+            path='$."%s"'%key
+            kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
+            cols+=[Host.inventory[key].as_string(),kind]
+        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+            .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
+            .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
+        def meta(value,kind,default):
+            if kind is None:return default
+            return None if str(kind).lower()=='null' else value
+        return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
+            'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
+            for h,a,ak,o,ok,m,mk,saved in rows]
+
+def saved_query_or_404(s,query_id):
+    row=s.get(fleet_queries.SavedFleetQuery,query_id)
+    if not row:raise HTTPException(404,'Saved fleet query not found')
+    return row
+
+@app.get('/api/fleet/queries')
+def fleet_query_list(user=Depends(viewer_user)):
+    with Session() as s:return [fleet_queries.public(r) for r in s.scalars(select(fleet_queries.SavedFleetQuery).order_by(fleet_queries.SavedFleetQuery.name).limit(500))]
+
+@app.post('/api/fleet/queries')
+def fleet_query_create(body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row=fleet_queries.SavedFleetQuery(id=fleet_queries.new_id(),name=body.name,definition=body.filter.model_dump(),created_by=user['username'])
+        s.add(row);audit(s,'fleet-query-create',row.id+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.put('/api/fleet/queries/{query_id}')
+def fleet_query_update(query_id:str,body:fleet_queries.SavedQueryInput,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        if body.expected_version!=row.version:raise HTTPException(409,'Saved fleet query changed; reload it before editing')
+        if s.scalar(select(func.count()).select_from(fleet_queries.SavedFleetQuery).where(fleet_queries.SavedFleetQuery.name==body.name,fleet_queries.SavedFleetQuery.id!=query_id)):raise HTTPException(409,'A saved fleet query with this name already exists')
+        row.name=body.name;row.definition=body.filter.model_dump();row.version+=1;row.updated=time.time()
+        audit(s,'fleet-query-update',row.id+' v'+str(row.version)+' '+row.name);s.commit()
+        return fleet_queries.public(row)
+
+@app.delete('/api/fleet/queries/{query_id}')
+def fleet_query_delete(query_id:str,user=Depends(admin_user)):
+    with worker.Lock('fleet-query-config'),Session() as s:
+        row=saved_query_or_404(s,query_id)
+        s.delete(row);audit(s,'fleet-query-delete',row.id+' '+row.name);s.commit()
+        return {'deleted':query_id}
+
+@app.get('/api/fleet/queries/{query_id}/results')
+def fleet_query_results(query_id:str,offset:int=0,limit:int=50,user=Depends(viewer_user)):
+    if offset<0 or not 1<=limit<=fleet_queries.PAGE_MAX:raise HTTPException(400,'Invalid fleet query pagination')
+    with Session() as s:
+        row=saved_query_or_404(s,query_id)
+        return fleet_queries.evaluate(s,fleet_queries.FleetFilter(**row.definition),offset,limit)|{'query':{'id':row.id,'name':row.name,'version':row.version,'filter':row.definition}}
 
 class HostLifecycleInput(BaseModel):
     enabled:bool
@@ -208,7 +623,7 @@ class HostDeletionInput(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.put('/api/hosts/{host_id}/lifecycle')
-def change_host_lifecycle(host_id:str,body:HostLifecycleInput,user=Depends(auth)):
+def change_host_lifecycle(host_id:str,body:HostLifecycleInput,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True):
         try:
             with host_lifecycle.changing(host_id),Session() as s:
@@ -218,7 +633,7 @@ def change_host_lifecycle(host_id:str,body:HostLifecycleInput,user=Depends(auth)
         except host_lifecycle.Busy as error:raise HTTPException(409,str(error)) from None
 
 @app.delete('/api/hosts/{host_id}')
-def delete_host(host_id:str,body:HostDeletionInput,user=Depends(auth)):
+def delete_host(host_id:str,body:HostDeletionInput,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True):
         try:
             with host_lifecycle.changing(host_id),Session() as s:
@@ -229,27 +644,37 @@ def delete_host(host_id:str,body:HostDeletionInput,user=Depends(auth)):
 
 class ServerAIInput(BaseModel):
     paused:bool
+    concurrency_limit:int|None=Field(default=None,strict=True,ge=1,le=4)
     expected_revision:str=Field(default='',max_length=36)
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.get('/api/hosts/{host_id}/security/ai-policy')
-def server_ai_policy(host_id:str,user=Depends(auth)):
+def server_ai_policy(host_id:str,user=Depends(admin_user)):
     from . import ai_policy
     with Session() as s:
         host_or_404(s,host_id);return ai_policy.status(s,host_id)
 
 @app.put('/api/hosts/{host_id}/security/ai-policy')
-def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(auth)):
-    from . import ai_policy
+def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
+    from . import ai_policy,ai_claims
     with worker.Lock('ai-policy-change:'+host_id):
-        lock=worker.Lock('ai-provider:'+host_id)
-        if not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
-        try:
-            with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,body.expected_revision,body.reason,user['username'])
-        finally:lock.release()
+        with worker.Lock('ai-triage'):
+            with Session() as s:
+                host_or_404(s,host_id);current=ai_policy.status(s,host_id)
+                pause_change=body.paused!=current['paused']
+                if pause_change and s.scalar(select(ai_claims.Claim.subject).where(
+                    ai_claims.Claim.host_id==host_id,ai_claims.Claim.expires>time.time()).limit(1)):
+                    raise HTTPException(409,'AI investigation is active; retry after it finishes. State has not changed.')
+            lock=worker.Lock('ai-provider:'+host_id) if pause_change else None
+            if lock and not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
+            try:
+                with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,
+                    body.expected_revision,body.reason,user['username'],body.concurrency_limit)
+            finally:
+                if lock:lock.release()
 
 @app.get('/api/hosts/{host_id}/summary')
-def host_summary(host_id:str,user=Depends(auth)):
+def host_summary(host_id:str,user=Depends(viewer_user)):
     with Session() as s:
         h=host_or_404(s,host_id); cfg=config(s); now=time.time()
         packages=list(s.scalars(select(Package).where(Package.host_id==host_id)))
@@ -257,7 +682,8 @@ def host_summary(host_id:str,user=Depends(auth)):
         behaviors=list(s.execute(select(Behavior.verdict,Behavior.approved).where(Behavior.host_id==host_id)))
         jobs=dict(s.execute(select(Job.state,func.count()).where(Job.host_id==host_id).group_by(Job.state)).all())
         last=s.scalar(select(Job).where(Job.host_id==host_id,Job.action=='patch').order_by(Job.created.desc(),Job.id).limit(1))
-        return {'host':object_dict(h,('inventory','telemetry','baseline')),
+        lifecycle=os_lifecycle.evaluate(h.inventory,now,cfg['repo_minutes']*120)
+        return {'host':object_dict(h,('inventory','telemetry','baseline'))|{'os_upgrade':os_upgrade.status(h)},
                 'system':{k:h.inventory.get(k) for k in ('os','architecture','foreign_architectures','package_manager','machine_id','collected')},
                 'collector':{'collected':h.telemetry.get('collected'), 'hashed_at':h.telemetry.get('hashed_at'),
                              'processes':len(h.telemetry.get('processes',[])), 'managed_files':len(h.telemetry.get('managed',{}))},
@@ -265,16 +691,57 @@ def host_summary(host_id:str,user=Depends(auth)):
                           'overdue':sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in updates),
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
-                'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None}
+                'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None,
+                'lifecycle':lifecycle}
+
+@app.get('/api/spool-health')
+def fleet_spool_health(user=Depends(viewer_user)):
+    with Session() as s:
+        # The rollup reads only these columns; load nothing else per server.
+        query=select(Host).options(load_only(Host.id,Host.name,Host.enabled,Host.deleted_at,Host.telemetry)).where(Host.deleted_at==0,Host.enabled==True)  # noqa: E712
+        rows=s.scalars(readable_host_records(query,Host.id,user)).all()
+        return agent_spool_health.fleet(rows)
+
+@app.get('/api/hosts/{host_id}/spool-health')
+def host_spool_health(host_id:str,user=Depends(viewer_user)):
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return agent_spool_health.health(h)
+
+RECOVERY_RECEIPTS='recovery-receipts'
+@app.get('/api/recovery/readiness')
+def recovery_readiness_status(user=Depends(admin_user)):
+    with Session() as s:
+        row=s.get(Setting,RECOVERY_RECEIPTS)
+        return recovery_readiness.readiness((row.value or {}).get('items',[]) if row else [])
+
+@app.post('/api/recovery/receipts')
+def record_recovery_receipt(body:dict,user=Depends(admin_user)):
+    with worker.Lock('recovery-receipts'),Session() as s:
+        row=s.get(Setting,RECOVERY_RECEIPTS)
+        try:items,item=recovery_readiness.add((row.value or {}).get('items',[]) if row else [],body)
+        except ValueError as e:raise HTTPException(400,str(e))
+        s.merge(Setting(key=RECOVERY_RECEIPTS,value={'items':items}))
+        audit(s,'record recovery receipt',f"{item['stage']} {item['result']} {item['id']}");s.commit()
+        return {'receipt':item,'readiness':recovery_readiness.readiness(items)}
 
 @app.get('/api/hosts/{host_id}/snapshot')
-def host_snapshot(host_id:str,user=Depends(auth)):
+def host_snapshot(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return {'inventory':h.inventory,'telemetry':h.telemetry,'baseline':h.baseline}
 
+@app.get('/api/hosts/{host_id}/file-status')
+def host_file_status(host_id:str,offset:int=Query(default=0,ge=0),
+                     q:str=Query(default='',max_length=200),
+                     status:str=Query(default='',max_length=40),user=Depends(admin_user)):
+    from . import file_status
+    with Session() as s:
+        h=host_or_404(s,host_id);require_host_read(s,host_id,user)
+        return file_status.page(s,h,offset,q,status)
+
 @app.get('/api/hosts/{host_id}/patching')
-def host_patching(host_id:str,start:float,end:float,user=Depends(auth)):
+def host_patching(host_id:str,start:float,end:float,user=Depends(viewer_user)):
     with Session() as s:
         host_or_404(s,host_id)
         events=scheduling.calendar(s,start,end,host_id)
@@ -291,7 +758,7 @@ class HostInput(BaseModel):
     port:int=Field(default=22,ge=1,le=65535)
     fingerprint:str=Field(default='',max_length=100)
 @app.post('/api/hosts')
-def add_host(body:HostInput,user=Depends(auth)):
+def add_host(body:HostInput,user=Depends(admin_user)):
     if body.fingerprint and not re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}',body.fingerprint): raise HTTPException(400,'Invalid SHA256 SSH fingerprint')
     with Session() as s:
         h=Host(id=str(uuid.uuid4()),**body.model_dump()); ssh.create_key(h.id); s.add(h); audit(s,'add server',h.name); s.commit(); return {'id':h.id}
@@ -300,13 +767,13 @@ class ConnectionUpdate(BaseModel):
     expected: connections.Connection
 
 @app.get('/api/hosts/{host_id}/connection')
-def get_connection(host_id:str,user=Depends(auth)):
+def get_connection(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         return connections.saved(s,h).model_dump()
 
 @app.put('/api/hosts/{host_id}/connection')
-def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(auth)):
+def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
         if h.deleted_at:raise HTTPException(409,'Deleted server connection is read-only')
@@ -321,23 +788,31 @@ def save_connection(host_id:str,body:ConnectionUpdate,user=Depends(auth)):
         return body.connection.model_dump()
 
 @app.post('/api/hosts/{host_id}/connection/test')
-def test_connection(host_id:str,user=Depends(auth)):
+def test_connection(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True), Session() as s:
         h=host_or_404(s,host_id)
-        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing')
-        try: ssh.call(h,{'action':'snapshot'},timeout=30)
+        if not h.fingerprint: raise HTTPException(400,'Pin the verified SSH fingerprint before testing. Use Pinned SSH fingerprint under Server → Connection, and take the value from the target\'s trusted console.')
+        try: ssh.call(h,{'action':'snapshot'},timeout=30,lifecycle_blocking=False)
+        except host_lifecycle.Busy:raise
         except Exception as error: raise HTTPException(502,str(error)[:2000]) from error
         return {'ok':True,'message':'Pinned SSH identity and bridge response verified. Normal polling checks collector freshness and integrity.'}
 
-class Fingerprint(BaseModel): fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+class Fingerprint(BaseModel):
+    fingerprint:str=Field(pattern=r'^SHA256:[A-Za-z0-9+/]{43}$')
+    replace_existing:bool=False
 @app.put('/api/hosts/{host_id}/fingerprint')
-def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(auth)):
+def set_fingerprint(host_id:str,body:Fingerprint,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True,allow_inactive=True), Session() as s:
         h=host_or_404(s,host_id)
         if h.deleted_at:raise HTTPException(409,'Deleted server identity is read-only')
-        h.fingerprint=body.fingerprint; audit(s,'pin SSH host key',h.id+' '+h.fingerprint); s.commit(); return {'ok':True}
+        previous=h.fingerprint or ''
+        if previous and previous!=body.fingerprint:
+            if not body.replace_existing:raise HTTPException(409,'A different SSH fingerprint is already pinned. Replace it under Server → Connection after verifying the new key from the target\'s trusted console.')
+            audit(s,'replace SSH host key',h.id+' '+previous+' -> '+body.fingerprint)
+        else:audit(s,'pin SSH host key',h.id+' '+body.fingerprint)
+        h.fingerprint=body.fingerprint; s.commit(); return {'ok':True}
 @app.get('/api/hosts/{host_id}/installer')
-def installer(host_id:str,user=Depends(auth)):
+def installer(host_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         h=host_or_404(s,host_id)
         return PlainTextResponse(ssh.bootstrap(h),headers={'Content-Disposition':'attachment; filename="mrpatchy-enroll.sh"'})
@@ -353,7 +828,7 @@ def enrollment_endpoints(request:Request):
     return endpoints
 
 @app.get('/api/hosts/{host_id}/enrollment-endpoints')
-def get_enrollment_endpoints(host_id:str,request:Request,user=Depends(auth)):
+def get_enrollment_endpoints(host_id:str,request:Request,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id)
     return {'endpoints':enrollment_endpoints(request)}
@@ -362,7 +837,7 @@ class EnrollmentLinkInput(BaseModel):
     endpoint:str=Field(default='default',max_length=32)
 
 @app.post('/api/hosts/{host_id}/enrollment-link')
-def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=None,user=Depends(auth)):
+def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=None,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
         endpoint=body.endpoint if body else 'default'
@@ -375,22 +850,40 @@ def enrollment_link(host_id:str,request:Request,body:EnrollmentLinkInput|None=No
         return {'url':url,'endpoint':endpoint,'expires_in':3600,
                 'command':f'f=$(mktemp) && curl -fsSL {shlex.quote(url)} -o "$f" && sudo bash "$f"; rm -f "$f"'}
 @app.get('/enroll/{token}')
-def enroll(token:str):
+def enroll(token:str,request:Request):
+    from . import enrollment_downloads
+    source=enrollment_downloads.source_id(request)
+    enrollment_downloads.admit(source)
     with Session() as s:
         row=s.get(Setting,'enroll:'+token_hash(token))
         if not row or row.value['expires']<time.time(): raise HTTPException(404,'Enrollment link expired')
-        h=host_or_404(s,row.value['host_id'])
+        host_id=row.value['host_id']
+        h=host_or_404(s,host_id)
         if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
-        with host_lifecycle.activity([h.id],'control'):return PlainTextResponse(ssh.bootstrap(h))
-@app.post('/api/hosts/{host_id}/actions/{action}')
-def host_action(host_id:str,action:str,user=Depends(auth)):
-    if action not in ['deploy','refresh','repair','rotate-key']: raise HTTPException(404,'Unknown action')
+        host_id=h.id  # Lock the persisted identity, including case-insensitive DB lookups.
+    with host_lifecycle.activity([host_id],'control'),Session() as s:
+        # Re-read after the lifecycle fence: concurrent preparations must not
+        # lose usage counts, and a revoked/expired link must not be reused.
+        row=s.get(Setting,'enroll:'+token_hash(token))
+        if not row or row.value['expires']<time.time():raise HTTPException(404,'Enrollment link expired')
+        h=host_or_404(s,host_id)
+        if not host_lifecycle.active(h):raise HTTPException(410,'Server management is disabled or deleted')
+        body=ssh.bootstrap(h)
+        enrollment_downloads.prepared(s,row,source,host_id);s.commit()
+        return PlainTextResponse(body)
+def enqueue_host_action(host_id,action):
     with Session() as s:
         h=host_or_404(s,host_id)
         if not h.fingerprint: raise HTTPException(400,'Pin the host fingerprint first')
         return {'job_id':worker.enqueue(s,host_id,action)}
+@app.post('/api/hosts/{host_id}/actions/refresh')
+def host_refresh(host_id:str,user=Depends(operator_user)): return enqueue_host_action(host_id,'refresh')
+@app.post('/api/hosts/{host_id}/actions/{action}')
+def host_action(host_id:str,action:str,user=Depends(admin_user)):
+    if action not in ['deploy','repair','rotate-key']: raise HTTPException(404,'Unknown action')
+    return enqueue_host_action(host_id,action)
 @app.get('/api/hosts/{host_id}/packages')
-def packages(host_id:str,q:str='',updates:bool=False,user=Depends(auth)):
+def packages(host_id:str,q:str='',updates:bool=False,user=Depends(viewer_user)):
     with Session() as s:
         h=host_or_404(s,host_id); cfg=config(s)
         versions={}
@@ -423,28 +916,33 @@ def reviewed_policy(s,host_id,expected):
     return policy
 
 @app.get('/api/hosts/{host_id}/patch-policy')
-def patch_policy(host_id:str,user=Depends(auth)):
+def patch_policy(host_id:str,user=Depends(viewer_user)):
     with Session() as s:
         host_or_404(s,host_id)
         return operations.recovery_policy(s,host_id)
 
 @app.post('/api/hosts/{host_id}/patch')
-def patch(host_id:str,body:PatchInput,user=Depends(auth)):
+def patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         policy=reviewed_policy(s,host_id,body.expected_recovery_policy)
-        if h.repo_error or not h.last_repo or time.time()-h.last_repo>config(s)['repo_minutes']*120: raise HTTPException(409,'Refresh repositories before patching; candidate data is stale')
+        cfg=config(s)
+        try: worker.validate_patch(s,h,[],cfg)
+        except ValueError as e: raise HTTPException(409,str(e))
         specs=[]
         if len(set(body.packages))!=len(body.packages): raise HTTPException(400,'Duplicate package selections')
         if body.expected_versions is not None and set(body.expected_versions)!=set(body.packages): raise HTTPException(400,'Expected versions must match selected packages')
         for name in body.packages:
             p=s.get(Package,host_id+':'+name)
-            if not p or not p.candidate or p.held or p.dpkg_state.split()[-1]!='installed': raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            if not p or not p.candidate: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
+            spec=p.name+'='+p.candidate
+            try: worker.validate_patch(s,h,[spec],cfg)
+            except ValueError: raise HTTPException(400,'Package missing, held, broken, or has no available update: '+name)
             if body.expected_versions is not None and body.expected_versions[name]!=p.candidate: raise HTTPException(409,'Candidate changed; reload and review '+name)
-            specs.append(p.name+'='+p.candidate)
+            specs.append(spec)
         return {'job_id':worker.enqueue(s,host_id,'patch',{'packages':specs,'_recovery_policy':policy,'_actor':user['username']})}
 @app.get('/api/hosts/{host_id}/repositories')
-def repositories(host_id:str,user=Depends(auth)):
+def repositories(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         access=worker.repository_access(s,host_id);health=[]
@@ -454,35 +952,41 @@ def repositories(host_id:str,user=Depends(auth)):
                 active=package_backend.sources(content,path,h.inventory,access)
                 state='disabled' if not active else ('check_failed' if h.repo_error else ('checked' if h.last_repo else 'unverified'))
                 detail='Central package metadata check includes this source' if active else 'No active repositories'
-            except ValueError as e: state='blocked';detail=str(e)
+            except ValueError as e: state='blocked';detail=package_backend.source_rejection(e)
             health.append({'path':path,'state':state,'detail':detail})
         return {'package_manager':h.inventory.get('package_manager','apt'),'editable_paths':[path for path in h.inventory.get('files',{}) if package_backend.source_path(path,h.inventory)],'files':h.inventory.get('files',{}),'keys':list(h.inventory.get('keys',{})),'last_checked':h.last_repo,'error':h.repo_error,'health':health}
 class RepoInput(BaseModel):
     path:str=Field(max_length=300)
     content:str=Field(max_length=1_000_000)
 @app.put('/api/hosts/{host_id}/repositories')
-def repository(host_id:str,body:RepoInput,user=Depends(auth)):
+def repository(host_id:str,body:RepoInput,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
         if not package_backend.source_path(body.path,h.inventory): raise HTTPException(400,'Unsupported repository path for this target')
         package_backend.sources(body.content,body.path,h.inventory,worker.repository_access(s,host_id))
         return {'job_id':worker.enqueue(s,host_id,'repository',body.model_dump())}
-class KeyInput(BaseModel): name:str; data:str=Field(max_length=3_000_000)
+class KeyInput(BaseModel): name:str=Field(max_length=255); data:str=Field(max_length=3_000_000)
+def key_filename(name):
+    # Suffix and stem are checked separately so no repeated class competes with a literal suffix.
+    stem,dot,suffix=name.rpartition('.')
+    return bool(dot) and suffix in ('gpg','asc') and re.fullmatch(r'[A-Za-z0-9_-]+',stem) is not None
 @app.put('/api/hosts/{host_id}/keys')
-def key_upload(host_id:str,body:KeyInput,user=Depends(auth)):
-    if not re.fullmatch(r'[A-Za-z0-9_-]+\.(gpg|asc)',body.name): raise HTTPException(400,'Use a .gpg or .asc filename')
+def key_upload(host_id:str,body:KeyInput,user=Depends(admin_user)):
+    if not key_filename(body.name): raise HTTPException(400,'Use a .gpg or .asc filename')
     try: base64.b64decode(body.data,validate=True)
     except ValueError: raise HTTPException(400,'Invalid base64 key data')
     with Session() as s:
         host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'key',body.model_dump())}
 @app.get('/api/investigations')
-def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(auth)):
+def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer_user)):
     if offset<0 or not 1<=limit<=500:raise HTTPException(400,'Invalid investigation pagination')
     with Session() as s:
         stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
-        if host_id: host_or_404(s,host_id);stmt=stmt.where(Behavior.host_id==host_id)
+        if host_id:
+            host_or_404(s,host_id);require_host_read(s,host_id,user)
+            stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
-        from . import ai_retry,ai_policy,ai_claims
+        from . import ai_retry,ai_policy,ai_claims,ai_assessments
         rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
@@ -493,15 +997,23 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(auth))
                 retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
                 if row.id in claimed:retry={**retry,'state':'running','next_at':0,'reason':'A worker owns this investigation. Its result must still pass ownership and evidence checks.'}
                 if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
-            result.append(object_dict(row)|{'retry':retry})
+            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row)})
         return result
-class ApproveInput(BaseModel): approved:bool
+class ApproveInput(BaseModel):
+    approved:bool
+    expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
 @app.put('/api/investigations/{behavior_id}')
-def approve(behavior_id:str,body:ApproveInput,user=Depends(auth)):
+def approve(behavior_id:str,body:ApproveInput,user=Depends(admin_user)):
     with Session() as s:
         row=s.get(Behavior,behavior_id)
         if not row: raise HTTPException(404,'Behavior not found')
         with host_lifecycle.activity([row.host_id],'queue'):
+            from . import ai_assessments
+            # Re-read under the host queue gate so a triage result or approval that landed
+            # after the administrator opened the dialog cannot be silently approved.
+            s.rollback();row=s.get(Behavior,behavior_id)
+            if not row:raise HTTPException(404,'Behavior not found')
+            if ai_assessments.revision(row)!=body.expected_revision:raise HTTPException(409,'The assessment changed since you opened it; review the current result and try again')
             row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 
 class RetriageInput(BaseModel):
@@ -516,7 +1028,7 @@ class RevokeKnownGoodInput(BaseModel):
 
 
 @app.post('/api/investigations/{behavior_id}/retriage')
-def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(auth)):
+def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin_user)):
     from . import ai_assessments,ai_claims
     reason=body.reason.strip()
     if len(reason)<10:raise HTTPException(400,'Provide a meaningful re-triage reason')
@@ -543,7 +1055,7 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(auth)
 
 
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
-def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(auth)):
+def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
     if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
         raise HTTPException(400,'Invalid known-good fingerprint')
@@ -563,21 +1075,21 @@ def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(aut
 
 
 @app.get('/api/investigations/{behavior_id}/history')
-def investigation_history(behavior_id:str,host_id:str='',offset:int=0,limit:int=20,user=Depends(auth)):
+def investigation_history(behavior_id:str,host_id:str='',offset:int=0,limit:int=20,user=Depends(admin_user)):
     from . import ai_assessments
     if offset<0 or not 1<=limit<=50:raise HTTPException(400,'Invalid assessment pagination')
     with Session() as s:
         row=s.get(Behavior,behavior_id)
         if host_id:host_or_404(s,host_id)
         if not row or (host_id and row.host_id!=host_id):raise HTTPException(404,'Investigation not found in this scope')
-        rows=list(s.scalars(select(ai_assessments.Assessment).where(ai_assessments.Assessment.subject==row.id,ai_assessments.Assessment.host_id==row.host_id).order_by(ai_assessments.Assessment.created.desc(),ai_assessments.Assessment.id.desc()).offset(offset).limit(limit+1)))
+        rows=list(s.scalars(ai_assessments.subject_history_query(row.id,row.host_id).offset(offset).limit(limit+1)))
         return {'current':{'id':row.id,'host_id':row.host_id,'executable':row.evidence.get('executable',''),'verdict':row.verdict,'analysis':row.analysis,'approved':row.approved,'revision':ai_assessments.revision(row),'can_retriage':host_lifecycle.active(s.get(Host,row.host_id)) and row.verdict in ai_assessments.COMPLETE and not s.get(ai_assessments.Refresh,row.id),
             'refresh':ai_assessments.refresh_info(s.get(ai_assessments.Refresh,row.id))},
             'items':[{'id':r.id,'source':r.source,'created':r.created,'risk':r.result.get('risk','unknown'),'model':r.model,'run_id':r.run_id} for r in rows[:limit]],'more':len(rows)>limit}
 
 
 @app.get('/api/investigations/{behavior_id}/history/{assessment_id}')
-def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',user=Depends(auth)):
+def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',user=Depends(admin_user)):
     from . import ai_assessments, known_good
     with Session() as s:
         behavior=s.get(Behavior,behavior_id);row=s.get(ai_assessments.Assessment,assessment_id)
@@ -586,7 +1098,7 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
         result=object_dict(row);result['known_good']=known_good.assessment(row,s)
         return result
 @app.get('/api/operations/workers')
-def registered_workers(offset:int=0,user=Depends(auth)):
+def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page
     return page(offset)
 
@@ -598,30 +1110,35 @@ class WorkerControlInput(BaseModel):
     reason:str=Field(min_length=10,max_length=1000)
 
 @app.post('/api/operations/workers/control')
-def control_worker(body:WorkerControlInput,user=Depends(auth)):
+def control_worker(body:WorkerControlInput,user=Depends(admin_user)):
     from .worker_registry import request_control
     return request_control(body.worker_id,body.boot_id,body.revision,body.action,body.reason,user['username'])
 
 @app.get('/api/jobs')
-def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(auth)):
+def jobs(host_id:str='',offset:int=0,limit:int=100,user=Depends(viewer_user)):
     if offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid operation pagination')
     with Session() as s:
-        query=select(Job)
-        if host_id:host_or_404(s,host_id);query=query.where(Job.host_id==host_id)
+        query=readable_host_records(select(Job),Job.host_id,user)
+        if host_id:
+            host_or_404(s,host_id);require_host_read(s,host_id,user)
+            query=query.where(Job.host_id==host_id)
+        # MySQL can choose a competing access path and sort retained history despite LIMIT.
+        history_index='ix_jobs_host_history' if host_id else 'ix_jobs_history'
+        query=query.with_hint(Job,f'FORCE INDEX FOR ORDER BY ({history_index})',dialect_name='mysql')
         return [public_job(x) for x in s.scalars(query.order_by(Job.created.desc(),Job.id).offset(offset).limit(limit))]
 @app.get('/api/audit')
-def audit_log(offset:int=0,limit:int=200,user=Depends(auth)):
+def audit_log(offset:int=0,limit:int=200,user=Depends(admin_user)):
     if offset<0 or not 1<=limit<=200:raise HTTPException(400,'Invalid audit pagination')
     with Session() as s:return [object_dict(x) for x in s.scalars(select(Audit).order_by(Audit.created.desc(),Audit.id.desc()).offset(offset).limit(limit))]
 
 @app.get('/api/audit/entries/{entry_id}')
-def audit_detail(entry_id:int,user=Depends(auth)):
+def audit_detail(entry_id:int,user=Depends(admin_user)):
     with Session() as s:
         row=s.get(Audit,entry_id)
         if not row:raise HTTPException(404,'Audit entry not found')
         return object_dict(row)
 @app.get('/api/settings')
-def settings(user=Depends(auth)):
+def settings(user=Depends(admin_user)):
     from . import ai_budget,ai_provider_backoff
     with Session() as s:
         cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
@@ -629,6 +1146,15 @@ def settings(user=Depends(auth)):
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+
+@app.get('/api/settings/ai-spend-history')
+def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)):
+    from . import ai_budget
+    if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
+    if timezone is not None and not ai_budget.valid_timezone(timezone):
+        raise HTTPException(400,'Select a valid IANA budget timezone.')
+    with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
+
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
@@ -637,25 +1163,34 @@ class ConfigInput(BaseModel):
     ai_hourly_limit:int=Field(default=20,ge=1,le=1000)
     ai_updates_enabled:bool=True
     ai_update_hourly_limit:int=Field(default=20,ge=1,le=1000)
-    ai_control_mode:str=Field(default='rate',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
+    ai_control_mode:str=Field(default='legacy',pattern='^(legacy|rate|daily_cap|rate_and_daily|unthrottled)$')
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
 @app.put('/api/settings')
-def settings_save(body:ConfigInput,user=Depends(auth)):
+def settings_save(body:ConfigInput,user=Depends(admin_user)):
     from . import ai_budget
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()): raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
+    supplied=set(body.model_fields_set)  # capture before normalizing: assignment would mark omitted fields as sent
     body.ai_model=body.ai_model.strip();body.api_key=body.api_key.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    with Session() as s:
-        if body.ai_enabled and (not body.ai_model or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
-        s.merge(Setting(key='config',value=body.model_dump(exclude={'api_key'})))
-        if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
-        audit(s,'update settings','Patch policy, cadence or AI configuration changed'); s.commit(); return {'ok':True}
+    # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
+    sent=body.model_dump(exclude={'api_key'},include=supplied)
+    with worker.Lock('settings-config'):
+        with Session() as s:
+            previous=config(s);merged=previous|sent
+            if merged['ai_enabled'] and (not merged['ai_model'] or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
+            raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
+            if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
+            detail='Patch policy, cadence or AI configuration changed ('+(', '.join(sorted(k for k in sent if previous.get(k)!=sent[k])) or 'no stored values changed')+')'
+            if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
+            if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
+            if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
+            audit(s,'update settings',detail); s.commit(); return {'ok':True}
 
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
@@ -704,7 +1239,7 @@ def save_settings_section(values,section):
             return {'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
 
 @app.put('/api/settings/ai-key')
-def ai_key_save(body:AIKeyInput,user=Depends(auth)):
+def ai_key_save(body:AIKeyInput,user=Depends(admin_user)):
     key=body.api_key.strip()
     if not re.fullmatch(r'[!-~]{1,1000}',key):raise HTTPException(400,'Enter an API key without whitespace or unsupported characters')
     with worker.Lock('settings-config'):
@@ -716,7 +1251,7 @@ def ai_key_save(body:AIKeyInput,user=Depends(auth)):
             return {'ok':True,'api_key_configured':True,'api_key_revision':ai_key_revision(secret)}
 
 @app.put('/api/settings/ai')
-def ai_settings_save(body:AISettingsInput,user=Depends(auth)):
+def ai_settings_save(body:AISettingsInput,user=Depends(admin_user)):
     from . import ai_budget
     body.ai_model=body.ai_model.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):
@@ -725,14 +1260,29 @@ def ai_settings_save(body:AISettingsInput,user=Depends(auth)):
     return save_settings_section(body.model_dump(),'ai')
 
 @app.put('/api/settings/patching')
-def patch_settings_save(body:PatchSettingsInput,user=Depends(auth)):
+def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()):
         raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
     return save_settings_section(body.model_dump(),'patching')
 
 @app.put('/api/settings/history')
-def history_settings_save(body:HistorySettingsInput,user=Depends(auth)):
+def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
     return save_settings_section(body.model_dump(),'history')
+
+class ProviderBackoffClearInput(BaseModel):
+    model_config={'extra':'forbid','str_strip_whitespace':True}
+    expected_revision:str=Field(min_length=64,max_length=64,pattern=r'^[0-9a-f]{64}$')
+    reason:str=Field(min_length=10,max_length=1000)
+    confirmation:str=Field(pattern=r'^CLEAR BACKOFF$')
+
+@app.post('/api/ai/provider-backoff/clear')
+def clear_provider_backoff(body:ProviderBackoffClearInput,user=Depends(admin_user)):
+    from . import ai_provider_backoff
+    try:active=ai_provider_backoff.clear(expected_revision=body.expected_revision)
+    except ai_provider_backoff.ReviewConflict as error:raise HTTPException(409,str(error)) from error
+    with Session() as s:
+        audit(s,'clear AI provider backoff',user['username']+' cleared reviewed active floor: '+body.reason.strip());s.commit()
+    return {'cleared':active}
 
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -740,7 +1290,7 @@ class AITestInput(BaseModel):
     expected_key_revision:str|None=Field(default=None,max_length=64)
 
 @app.post('/api/settings/ai-test')
-def ai_test(body:AITestInput|None=None,user=Depends(auth)):
+def ai_test(body:AITestInput|None=None,user=Depends(admin_user)):
     lock=worker.Lock('ai-connection-test')
     if not lock.acquire(False):raise HTTPException(409,'An AI connection test is already running')
     try:
@@ -763,7 +1313,7 @@ def ai_test(body:AITestInput|None=None,user=Depends(auth)):
     finally:lock.release()
 
 @app.get('/api/settings/ai-models')
-def ai_models(user=Depends(auth)):
+def ai_models(user=Depends(admin_user)):
     with Session() as s:
         secret=s.get(Setting,'openai_key')
         if not secret:raise HTTPException(400,'Save your API key in Settings → AI & models, then refresh models.')
@@ -776,16 +1326,24 @@ def ai_models(user=Depends(auth)):
 from . import database_config
 
 @app.get('/api/settings/database')
-def database_settings(user=Depends(auth)):
+def database_settings(user=Depends(admin_user)):
     return database_config.public_state()
 
 @app.put('/api/settings/database')
-def database_settings_save(body:database_config.DatabaseInput,user=Depends(auth)):
+def database_settings_save(body:database_config.DatabaseInput,user=Depends(admin_user)):
     result=database_config.stage(body)
     with Session() as s:
         audit(s,'stage database migration',user['username']+' staged '+body.backend+' destination; active database unchanged')
         s.commit()
     return {'ok':True,'target':result}
+
+@app.post('/api/settings/database/test')
+def database_settings_test(body:database_config.DatabaseInput,user=Depends(admin_user)):
+    try:result=database_config.test_connection(body)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with Session() as s:
+        audit(s,'test database connection',user['username']+' tested MySQL connection: '+result['category']);s.commit()
+    return result
 
 class TLSInput(BaseModel):
     domain:str=Field(default='',max_length=253)
@@ -806,15 +1364,15 @@ class TLSInput(BaseModel):
     clear_eab:bool=False
 
 @app.get('/api/tls')
-def tls_settings(user=Depends(auth)):
+def tls_settings(user=Depends(admin_user)):
     return tls.public_state()
 
 @app.put('/api/tls')
-def tls_save(body:TLSInput,user=Depends(auth)):
+def tls_save(body:TLSInput,user=Depends(admin_user)):
     return tls_profile_save('internal',body,user)
 
 @app.put('/api/tls/{profile}')
-def tls_profile_save(profile:str,body:TLSInput,user=Depends(auth)):
+def tls_profile_save(profile:str,body:TLSInput,user=Depends(admin_user)):
     try: result=tls.apply(body.model_dump(),profile)
     except Exception as e: raise HTTPException(400,'TLS configuration rejected: '+str(e)[:1000])
     with Session() as s:
@@ -825,24 +1383,32 @@ class PriorityInput(BaseModel):
     name:str
     priority:str
 @app.put('/api/hosts/{host_id}/priority')
-def set_priority(host_id:str,body:PriorityInput,user=Depends(auth)):
+def set_priority(host_id:str,body:PriorityInput,user=Depends(admin_user)):
     if body.priority not in ['critical','high','normal','low','auto']: raise HTTPException(400,'Invalid priority')
     with host_change(host_id), Session() as s:
         p=s.get(Package,host_id+':'+body.name)
         if not p: raise HTTPException(404,'Package not found')
         p.priority_manual=body.priority!='auto'
-        p.priority=body.priority if p.priority_manual else ('high' if '-security' in p.origin or '/security' in p.origin else 'normal')
+        h=s.get(Host,host_id)
+        if p.priority_manual: p.priority=body.priority
+        # No outstanding candidate means there is nothing to classify on any backend.
+        elif not p.candidate: p.priority='normal'
+        # APT classification is derived from the current candidate's origin, never a cache.
+        elif not h or (h.inventory or {}).get('package_manager','apt')=='apt': p.priority=apt.auto_priority(p.origin,p.candidate)
+        elif p.repository_priority: p.priority=p.repository_priority
+        else: h.last_repo=0  # No stored classification: keep the value and force a refresh.
         audit(s,'set package priority',host_id+' '+body.name+' '+body.priority);s.commit();return {'ok':True}
 
 @app.get('/api/jobs/{job_id}')
-def job_detail(job_id:str,host_id:str="",user=Depends(auth)):
+def job_detail(job_id:str,host_id:str="",user=Depends(viewer_user)):
     with Session() as s:
         job=s.get(Job,job_id)
         if not job or (host_id and job.host_id!=host_id): raise HTTPException(404,'Operation not found')
+        require_host_read(s,job.host_id,user)
         return public_job(job)
 
 @app.get('/api/hosts/{host_id}/history')
-def history(host_id:str,kind:str='inventory',offset:int=0,limit:int=50,user=Depends(auth)):
+def history(host_id:str,kind:str='inventory',offset:int=0,limit:int=50,user=Depends(admin_user)):
     if kind not in ('inventory','observations') or offset<0 or not 1<=limit<=100: raise HTTPException(400,'Invalid history query')
     model=InventoryRevision if kind=='inventory' else Observation
     timestamp=model.created if kind=='inventory' else model.observed
@@ -851,10 +1417,11 @@ def history(host_id:str,kind:str='inventory',offset:int=0,limit:int=50,user=Depe
         return [object_dict(row,('inventory','evidence')) for row in s.scalars(select(model).where(model.host_id==host_id).order_by(timestamp.desc()).offset(offset).limit(limit))]
 
 @app.get('/api/hosts/{host_id}/backups')
-def repository_backups(host_id:str,user=Depends(auth)):
+def repository_backups(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
-        try: return ssh.call(h,{'action':'backups'})
+        try: return ssh.call(h,{'action':'backups'},lifecycle_blocking=False)
+        except host_lifecycle.Busy:raise
         except Exception as e: raise HTTPException(502,str(e)[:1000])
 
 class RepositoryAccess(BaseModel):
@@ -866,13 +1433,13 @@ class RepositoryAccess(BaseModel):
     replace_credentials:bool=False
 
 @app.get('/api/hosts/{host_id}/repository-access')
-def get_repository_access(host_id:str,user=Depends(auth)):
+def get_repository_access(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);access=worker.repository_access(s,host_id)
         return {k:v for k,v in access.items() if k!='credentials'}|{'credential_scopes':[c['machine'] for c in access.get('credentials',[])]}
 
 @app.put('/api/hosts/{host_id}/repository-access')
-def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(auth)):
+def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(admin_user)):
     from .repository_access import validate
     with host_change(host_id), Session() as s:
         h=host_or_404(s,host_id);value=body.model_dump(exclude={'replace_credentials'})
@@ -883,12 +1450,14 @@ def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(auth))
         h.last_repo=0;audit(s,'update repository access',host_id);s.commit();return {'ok':True}
 
 @app.get('/api/investigation-status')
-def investigation_status(user=Depends(auth)):
+def investigation_status(user=Depends(viewer_user)):
     with Session() as s:
-        return ai_runs.status(s)
+        full=ai_runs.status(s)
+    if user.get('role')=='admin': return full
+    return {k:full[k] for k in ('pending','oldest','enabled')}
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
-def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(auth)):
+def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
     if kind not in ('inventory','observations'): raise HTTPException(400,'Invalid history kind')
     model=InventoryRevision if kind=='inventory' else Observation
     with Session() as s:
@@ -897,36 +1466,49 @@ def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(a
         return object_dict(record)
 
 @app.get('/api/identity')
-def identity_info(user=Depends(auth)): return {**{k:user[k] for k in ('username','role','mfa')},'version':APP_VERSION}
+def identity_info(user=Depends(self_user)): return {**{k:user[k] for k in ('username','role','mfa')},'version':APP_VERSION}
 
 class UserInput(BaseModel):
     username:str=Field(pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     password:str=Field(default='',max_length=1024)
     role:str=Field(pattern=r'^(admin|operator|viewer)$')
     enabled:bool=True
+    create:bool=False
 
 @app.get('/api/users')
-def users(user=Depends(auth)):
+def users(user=Depends(admin_user)):
     with Session() as s: return [{'username':u.username,'role':u.role,'enabled':u.enabled,'mfa':bool(u.otp_secret)} for u in s.scalars(select(User))]
 
 @app.put('/api/users')
-def save_user(body:UserInput,user=Depends(auth)):
-    if body.username=='admin' and (body.role!='admin' or not body.enabled): raise HTTPException(400,'The bootstrap administrator must remain enabled')
-    if body.username==user['username'] and (not body.enabled or body.role!='admin'): raise HTTPException(400,'Cannot revoke your own administrator access')
+def save_user(body:UserInput,user=Depends(admin_user)):
     if body.password and len(body.password)<12: raise HTTPException(400,'Password must have at least 12 characters')
     with Session() as s:
         row=s.get(User,body.username)
-        if not row:
+        if row is None:
+            # Case-insensitive backends (MySQL) load the row for a case variant above; elsewhere reject it explicitly.
+            row=s.scalars(select(User).where(func.lower(User.username)==body.username.lower())).first()
+            if row is not None and row.username!=body.username: raise HTTPException(409,'A user whose name differs only by letter case already exists. Use Edit user.')
+        created=row is None
+        if not created and body.create: raise HTTPException(409,'User already exists. Use Edit user to change it.')
+        if row is not None and row.username!=body.username: raise HTTPException(409,'A user whose name differs only by letter case already exists. Use Edit user.')
+        name=body.username if created else row.username
+        if name=='admin' and (body.role!='admin' or not body.enabled): raise HTTPException(400,'The bootstrap administrator must remain enabled')
+        if name==user['username'] and (not body.enabled or body.role!='admin'): raise HTTPException(400,'Cannot revoke your own administrator access')
+        if created:
             if not body.password: raise HTTPException(400,'New users require a password')
             row=User(username=body.username,password=password_hash(body.password));s.add(row);s.flush()
-        elif body.password: row.password=password_hash(body.password)
+            old_role=old_enabled='new'
+        else:
+            old_role=row.role;old_enabled=str(bool(row.enabled)).lower()
+            if body.password: row.password=password_hash(body.password)
         row.role=body.role;row.enabled=body.enabled;row.generation+=1
-        audit(s,'manage user',user['username']+' → '+body.username);s.commit()
+        detail=(user['username']+' → '+body.username+'; role '+str(old_role)+' → '+body.role+'; enabled '+old_enabled+' → '+str(bool(body.enabled)).lower()+'; password set: '+('yes' if body.password else 'no'))
+        audit(s,'manage user',detail);s.commit()
     return {'ok':True}
 
 class Reauthenticate(BaseModel):
     password:str=Field(max_length=1024)
-    otp:str=Field(default='',max_length=6)
+    otp:str=Field(default='',max_length=16)
     new_password:str=Field(default='',max_length=1024)
 
 def reserve_account_attempt(username):
@@ -939,20 +1521,20 @@ def reserve_account_attempt(username):
 
 def check_password(row,body):
     reserve_account_attempt(row.username)
-    if not verify(body.password,row.password): raise HTTPException(403,'Invalid credentials')
-    if row.otp_secret and not consume_otp(row,body.otp): raise HTTPException(403,'Invalid MFA code')
+    # One message for either factor: the reason stays out of the response so a password cannot be tested apart from the OTP.
+    if not verify(body.password,row.password) or (row.otp_secret and not consume_otp(row,body.otp)): raise HTTPException(403,'Invalid credentials or MFA code')
 
 @app.post('/api/identity/mfa')
-def begin_mfa(body:Reauthenticate,user=Depends(auth)):
+def begin_mfa(body:Reauthenticate,user=Depends(self_user)):
     from urllib.parse import quote
     with login_lock, Session() as s:
         row=s.get(User,user['username']);check_password(row,body)
         secret=new_secret();row.otp_pending=seal(secret);s.commit()
         return {'secret':secret,'uri':'otpauth://totp/MrPatchy:'+quote(row.username)+'?secret='+secret+'&issuer=MrPatchy&algorithm=SHA1&digits=6&period=30'}
 
-class OTPInput(BaseModel): otp:str=Field(max_length=6)
+class OTPInput(BaseModel): otp:str=Field(max_length=16)
 @app.post('/api/identity/mfa/confirm')
-def confirm_mfa(body:OTPInput,user=Depends(auth)):
+def confirm_mfa(body:OTPInput,user=Depends(self_user)):
     with login_lock, Session() as s:
         row=s.get(User,user['username'])
         reserve_account_attempt(row.username)
@@ -962,7 +1544,7 @@ def confirm_mfa(body:OTPInput,user=Depends(auth)):
     return {'ok':True,'sign_in_again':True}
 
 @app.put('/api/identity/password')
-def change_password(body:Reauthenticate,user=Depends(auth)):
+def change_password(body:Reauthenticate,user=Depends(self_user)):
     if len(body.new_password)<12: raise HTTPException(400,'Password must have at least 12 characters')
     with login_lock, Session() as s:
         row=s.get(User,user['username']);check_password(row,body)
@@ -971,15 +1553,28 @@ def change_password(body:Reauthenticate,user=Depends(auth)):
     return {'ok':True,'sign_in_again':True}
 
 @app.delete('/api/identity/sessions')
-def revoke_sessions(body:Reauthenticate,user=Depends(auth)):
+def revoke_sessions(body:Reauthenticate,user=Depends(self_user)):
     with login_lock, Session() as s:
         row=s.get(User,user['username']);check_password(row,body)
         row.generation+=1;audit(s,'revoke sessions',row.username);s.commit()
     return {'ok':True,'sign_in_again':True}
 
+@app.post('/api/users/{username}/mfa/reset')
+def reset_user_mfa(username:str,body:Reauthenticate,user=Depends(admin_user)):
+    # The administrator re-authenticates with their own credentials; the target's factors are cleared and sessions revoked via generation.
+    with login_lock, Session() as s:
+        actor=s.get(User,user['username']);check_password(actor,body)
+        row=s.get(User,username)
+        if row is None:raise HTTPException(404,'User not found')
+        if row.username==actor.username:raise HTTPException(400,'Use Account to manage your own MFA')
+        had=bool(row.otp_secret or row.otp_pending)
+        row.otp_secret='';row.otp_pending='';row.otp_counter=-1;row.generation+=1
+        audit(s,'reset user MFA',actor.username+' → '+row.username+'; MFA was '+('enabled or pending' if had else 'not configured'));s.commit()
+    return {'ok':True,'had_mfa':had}
+
 class WindowInput(BaseModel): windows:list[dict]=Field(default_factory=list,max_length=20)
 @app.put('/api/operations/{host_id}/window')
-def save_window(host_id:str,body:WindowInput,user=Depends(auth)):
+def save_window(host_id:str,body:WindowInput,user=Depends(admin_user)):
     for w in body.windows:
         if set(w)!={'days','start','end'} or not isinstance(w['days'],list) or not w['days'] or any(type(d)!=int or d not in range(7) for d in w['days']) or type(w['start'])!=int or type(w['end'])!=int or not 0<=w['start']<w['end']<=1440:
             raise HTTPException(400,'Windows require days 0–6 (Monday first) and start/end UTC minutes within one day')
@@ -987,10 +1582,40 @@ def save_window(host_id:str,body:WindowInput,user=Depends(auth)):
         host_or_404(s,host_id);s.merge(Setting(key='window:'+host_id,value=body.model_dump()));s.commit()
     return {'ok':True}
 @app.get('/api/operations/{host_id}/window')
-def get_window(host_id:str,user=Depends(auth)):
+def get_window(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'window:'+host_id)
         return row.value if row else {'windows':[]}
+
+class FreezeInput(BaseModel):
+    model_config={'extra':'forbid'}
+    freezes:list[dict]=Field(default_factory=list,max_length=50)
+    expected_revision:str=Field(default='',pattern=r'^(?:[a-f0-9]{64})?$')
+def freeze_view(s):
+    now=time.time()
+    base={'revision':freezes.revision(s),
+          'precedence':'A change freeze blocks scheduled, manual and urgent patch/repair/release-upgrade dispatch until it ends; maintenance windows and holds apply afterwards.'}
+    try:
+        rows=freezes.load(s);active=freezes.active(s,now);clear_at=freezes.clear_at(s,now)
+    except (ValueError,TypeError,OverflowError):
+        return {**base,'freezes':[],'active':[],'clear_at':None,'blocked':True,'policy_valid':False,
+                'error':'Saved change freeze policy is malformed; dispatch remains blocked until an administrator repairs it.'}
+    return {**base,'freezes':rows,'active':active,'clear_at':clear_at,'blocked':bool(active),'policy_valid':True}
+@app.get('/api/operations/freezes')
+def get_freezes(user=Depends(admin_user)):
+    with Session() as s: return freeze_view(s)
+@app.put('/api/operations/freezes')
+def save_freezes(body:FreezeInput,user=Depends(admin_user)):
+    try: rows=freezes.clean(body.freezes,user['username'])
+    except ValueError as error: raise HTTPException(400,str(error))
+    with worker.Lock('change-freeze-config'),Session() as s:
+        if body.expected_revision!=freezes.revision(s):raise HTTPException(409,'Change freeze policy changed; reload it before editing')
+        old=s.get(Setting,freezes.KEY)
+        before=old.value.get('freezes',[]) if old and isinstance(old.value,dict) else []
+        s.merge(Setting(key=freezes.KEY,value={'freezes':rows}))
+        audit(s,'change freezes',json.dumps({'actor':user['username'],'before':before,'after':rows,'previous_revision':body.expected_revision},sort_keys=True))
+        s.commit()
+        return freeze_view(s)
 
 class NotificationInput(BaseModel):
     enabled:bool=False
@@ -1011,7 +1636,7 @@ def retain_notification_secret(previous,value,secret,clear,identity):
     return value
 
 @app.get('/api/operations/notifications')
-def notification_settings(user=Depends(auth)):
+def notification_settings(user=Depends(admin_user)):
     with Session() as s:
         value=notification_config(s)
         return {k:v for k,v in value.items() if k not in ('password','token')}|{
@@ -1019,7 +1644,7 @@ def notification_settings(user=Depends(auth)):
             'token_configured':bool(value.get('token'))}
 
 @app.put('/api/operations/notifications')
-def notifications(body:NotificationInput,user=Depends(auth)):
+def notifications(body:NotificationInput,user=Depends(admin_user)):
     from urllib.parse import urlsplit
     url=urlsplit(body.url)
     if body.enabled and (url.scheme!='https' or not url.hostname or url.username or url.password or url.fragment):raise HTTPException(400,'Use an HTTPS webhook URL without embedded credentials')
@@ -1031,10 +1656,10 @@ def notifications(body:NotificationInput,user=Depends(auth)):
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
 @app.get('/api/operations/alerts')
-def alerts(user=Depends(auth)):
+def alerts(user=Depends(admin_user)):
     with Session() as s:return [object_dict(a) for a in s.scalars(select(operations.Alert).order_by(operations.Alert.created.desc()).limit(200))]
 @app.post('/api/operations/alerts/{alert_id}/ack')
-def acknowledge_alert(alert_id:str,user=Depends(auth)):
+def acknowledge_alert(alert_id:str,user=Depends(admin_user)):
     with Session() as s:
         alert=s.get(operations.Alert,alert_id)
         if not alert:raise HTTPException(404,'Alert not found')
@@ -1042,7 +1667,7 @@ def acknowledge_alert(alert_id:str,user=Depends(auth)):
     return {'ok':True}
 
 @app.post('/api/hosts/{host_id}/preview')
-def preview_patch(host_id:str,body:PatchInput,user=Depends(auth)):
+def preview_patch(host_id:str,body:PatchInput,user=Depends(operator_user)):
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id);specs=[]
         for name in body.packages:
@@ -1052,25 +1677,32 @@ def preview_patch(host_id:str,body:PatchInput,user=Depends(auth)):
         worker.validate_patch(s,h,specs)
         if package_backend.is_rpm(h.inventory):
             return {'plan':'Reviewed RPM candidates:\n'+'\n'.join(specs),'packages':specs,'warning':'Candidate review only. Native DNF resolves dependencies and verifies signatures on the target before installation; removals and downgrades are prohibited.'}
-        cfgfile=apt.DATA/'apt'/host_id/'apt.conf'
+        # Use the persisted identity: the URL text may differ (e.g. case-insensitive collation) and must never reach a filesystem path.
+        cfgfile=apt.DATA/'apt'/h.id/'apt.conf'
         if not cfgfile.exists():raise HTTPException(409,'Refresh repositories first')
         result=apt.run(cfgfile,['apt-get','--simulate','--no-remove','--only-upgrade','install','--',*specs])
         return {'plan':result[-48000:],'packages':specs,'warning':'Central simulation; target and repositories are revalidated at execution.'}
 
 @app.post('/api/operations/jobs/{job_id}/cancel')
-def cancel_job(job_id:str,user=Depends(auth)):
+def cancel_job(job_id:str,user=Depends(admin_user)):
+    from . import quarantine
     with Session() as s:
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
         host_id=job.host_id
-        publication_cancel=job.action=='trusted-repair-publish'
-    with host_change(host_id,allow_quarantined=publication_cancel),Session() as s:
+        # Cancelling unstarted response work is local bookkeeping, not a new
+        # target operation. Its own (or unrelated) holds must remain reviewable.
+        response_cancel=job.action in (*quarantine.ACTIONS,'evidence-prepare','evidence-preserve','evidence-status','evidence-acquire','evidence-archive-status','execution-scan')
+    with host_change(host_id,allow_quarantined=response_cancel),Session() as s:
         job=s.get(Job,job_id)
+        if not job or job.host_id!=host_id:raise HTTPException(404,'Job not found')
         if job.state!='queued':raise HTTPException(409,'Only queued operations can be cancelled')
-        job.state='cancelled'
-        if job.action=='trusted-repair-publish':
-            from . import repair_publication
-            repair_publication.reject_unstarted(s,job,user['username'],'cancelled')
+        cancelled=s.execute(update(Job).where(Job.id==job_id,Job.host_id==host_id,Job.state=='queued').values(state='cancelled')).rowcount
+        if cancelled!=1:raise HTTPException(409,'Only queued operations can be cancelled')
+        host_lifecycle.reject_pending_records(s,job,user['username'],'Operation cancelled before execution')
+        if job.action=='execution-scan':
+            from . import execution_scans
+            execution_scans.finish(s,job,'skipped','Operation cancelled before execution')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(releases.ReleasePlan,job.payload.get('plan_id'))
             if plan and plan.host_id==host_id and plan.job_id==job.id:
@@ -1078,25 +1710,61 @@ def cancel_job(job_id:str,user=Depends(auth)):
         audit(s,'cancel job',user['username']+' '+job_id);s.commit()
     return {'ok':True}
 
-@app.get('/api/hosts/{host_id}/sbom')
-def sbom(host_id:str,user=Depends(auth)):
+def sbom_components(inventory,packages):
     from urllib.parse import quote
+    values={}
+    for line in (inventory.get('os') or '').splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            key,value=line.split('=',1);values[key.strip()]=value.strip().strip('"').strip("'")
+    rpm=package_backend.is_rpm(inventory)
+    ident=values.get('ID','').lower()
+    namespace=quote(ident,safe='')+'/' if re.fullmatch(r'[a-z0-9][a-z0-9._-]*',ident) else ''
+    distro=ident+'-'+values['VERSION_ID'] if namespace and re.fullmatch(r'[A-Za-z0-9._-]+',values.get('VERSION_ID','')) else ''
+    def component(name,arch,version,epoch=None):
+        qualifiers=[('arch',arch)] if arch else []
+        if epoch and epoch!='0':qualifiers.append(('epoch',epoch))
+        if distro:qualifiers.append(('distro',distro))
+        query=('?'+'&'.join(k+'='+quote(v,safe='') for k,v in qualifiers)) if qualifiers else ''
+        return {'type':'library','name':name,'version':version,'purl':('pkg:rpm/' if rpm else 'pkg:deb/')+namespace+quote(name,safe='')+'@'+quote(version,safe='')+query}
+    if rpm and inventory.get('rpm_packages'):
+        # Every installed version is reported, including older install-only kernels.
+        entries=sorted({(p['name'],p['arch'],p['evr']) for p in inventory['rpm_packages']})
+        result=[]
+        for name,arch,evr in entries:
+            epoch,sep,version=evr.partition(':')
+            if not sep:epoch,version='0',evr
+            result.append(component(name,arch,version,epoch))
+        return result
+    result=[]
+    for p in packages:
+        name,_,arch=p.name.rpartition(':')
+        if not name:name,arch=p.name,''
+        if rpm:
+            epoch,sep,version=p.installed.partition(':')
+            if not sep:epoch,version='0',p.installed
+            result.append(component(name,arch,version,epoch))
+        else:result.append(component(name,arch,p.installed))
+    return result
+
+@app.get('/api/hosts/{host_id}/sbom')
+def sbom(host_id:str,user=Depends(viewer_user)):
     with Session() as s:
         h=host_or_404(s,host_id)
+        packages=s.scalars(select(Package).where(Package.host_id==host_id).order_by(Package.name)).all()
         return {'bomFormat':'CycloneDX','specVersion':'1.5','version':1,'serialNumber':'urn:uuid:'+str(uuid.uuid4()),
-            'components':[{'type':'library','name':p.name,'version':p.installed,'purl':('pkg:rpm/' if package_backend.is_rpm(h.inventory) else 'pkg:deb/')+quote(p.name.split(':')[0],safe='')+'@'+quote(p.installed,safe='')+'?arch='+p.name.split(':')[-1]} for p in s.scalars(select(Package).where(Package.host_id==host_id))]}
+            'components':sbom_components(h.inventory or {},packages)}
 
 @app.get('/api/audit/export')
-def export_audit(after:int=0,limit:int=1000,user=Depends(auth)):
+def export_audit(after:int=0,limit:int=1000,user=Depends(admin_user)):
     if after<0 or not 1<=limit<=10000:raise HTTPException(400,'Invalid export bounds')
     with Session() as s:
         rows=[object_dict(row) for row in s.scalars(select(Audit).where(Audit.id>after).order_by(Audit.id).limit(limit))]
         return PlainTextResponse(''.join(json.dumps(row)+'\n' for row in rows),media_type='application/x-ndjson',headers={'Content-Disposition':'attachment; filename="mrpatchy-audit.jsonl"'})
 
 @app.get('/api/metrics')
-def metrics(user=Depends(auth)):
+def metrics(user=Depends(viewer_user)):
     with Session() as s:
-        counts={'hosts':s.scalar(select(func.count()).select_from(Host)),'queued_jobs':s.scalar(select(func.count()).select_from(Job).where(Job.state=='queued')),'open_alerts':s.scalar(select(func.count()).select_from(operations.Alert).where(operations.Alert.state=='open'))}
+        counts={'hosts':s.scalar(select(func.count()).select_from(Host).where(Host.deleted_at==0)),'queued_jobs':s.scalar(select(func.count()).select_from(Job).where(Job.state=='queued')),'open_alerts':s.scalar(select(func.count()).select_from(operations.Alert).where(operations.Alert.state=='open'))}
         return PlainTextResponse(''.join('mrpatchy_'+name+' '+str(value)+'\n' for name,value in counts.items()))
 
 class RolloutInput(BaseModel):
@@ -1104,16 +1772,18 @@ class RolloutInput(BaseModel):
     packages:list[str]=Field(min_length=1,max_length=500)
     expected_recovery_policies:dict[str,dict[str,bool]]|None=None
 @app.post('/api/operations/rollouts')
-def rollout(body:RolloutInput,user=Depends(auth)):
+def rollout(body:RolloutInput,user=Depends(admin_user)):
     if len(set(body.hosts))!=len(body.hosts):raise HTTPException(400,'Duplicate servers')
     if body.expected_recovery_policies is not None and set(body.expected_recovery_policies)!=set(body.hosts):raise HTTPException(400,'Review recovery policies for every server')
+    with Session() as s:
+        for host_id in body.hosts:host_or_404(s,host_id)
     with host_lifecycle.activity(body.hosts,'queue'),Session() as s:
         prepared=[]
         for host_id in body.hosts:
             h=host_or_404(s,host_id);specs=[]
             if not host_lifecycle.active(h):raise HTTPException(409,'A selected server is disabled or deleted')
             policy=reviewed_policy(s,host_id,(body.expected_recovery_policies or {}).get(host_id))
-            if s.scalar(select(func.count()).select_from(Job).where(Job.host_id==host_id,Job.state.in_(['queued','running'])))>=50:raise HTTPException(429,'Server queue is full')
+            worker.ensure_queue_capacity(s,host_id)
             for name in body.packages:
                 p=s.get(Package,host_id+':'+name)
                 if not p or not p.candidate:raise HTTPException(400,'Missing candidate on '+h.name+': '+name)
@@ -1122,14 +1792,13 @@ def rollout(body:RolloutInput,user=Depends(auth)):
         # One transaction: no partial rollout submission. The first server is the canary.
         ids=[]
         for host_id,specs,policy,revision in prepared:
-            job=Job(id=str(uuid.uuid4()),host_id=host_id,action='patch',payload={'packages':specs,'_host_revision':revision,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']})
-            s.add(job);ids.append(job.id)
+            ids.append(worker.stage_job(s,host_id,'patch',{'packages':specs,'_host_revision':revision,'_depends_on':ids[-1:],'_recovery_policy':policy,'_actor':user['username']}))
         audit(s,'create staged rollout',user['username']+' '+','.join(ids));s.commit()
         return {'jobs':ids,'canary':ids[0]}
 
 class AdvisoryInput(BaseModel): packages:list[str]=Field(min_length=1,max_length=100)
 @app.post('/api/operations/{host_id}/advisories')
-def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(auth)):
+def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(admin_user)):
     from .advisories import scan
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
@@ -1138,7 +1807,7 @@ def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(auth)):
         s.merge(Setting(key='advisories:'+host_id,value=result));s.commit()
         return result
 @app.get('/api/operations/{host_id}/advisories')
-def get_advisories(host_id:str,user=Depends(auth)):
+def get_advisories(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
         return row.value if row else {'results':[],'coverage':'Not checked'}
@@ -1146,13 +1815,59 @@ def get_advisories(host_id:str,user=Depends(auth)):
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
     username:str=Field(min_length=1,max_length=64)
+    replace_username:str|None=Field(default=None,max_length=64)
+def sso_digest(key):return key.removeprefix('oidc:')[:16]
 @app.put('/api/operations/sso-binding')
-def bind_sso(body:SSOBinding,user=Depends(auth)):
+def bind_sso(body:SSOBinding,user=Depends(admin_user)):
     if not sso.issuer:raise HTTPException(409,'Configure OIDC deployment variables first')
+    key=sso.binding_key(body.subject)
     with Session() as s:
         if not s.get(User,body.username):raise HTTPException(404,'Create the local account/role first')
-        s.merge(Setting(key=sso.binding_key(body.subject),value={'username':body.username}))
-        audit(s,'bind SSO identity',user['username']+' → '+body.username);s.commit()
+        # Take the binding's write lock before reading it (the no-op UPDATE takes SQLite's write lock; the
+        # locking read takes the row lock and reads the latest commit on MySQL/PostgreSQL) so the replace
+        # confirmation, the write and the audited previous binding are one expected-value step: a concurrent
+        # replace that confirmed the same old binding conflicts instead of silently overwriting it.
+        s.execute(update(Setting).where(Setting.key==key).values(key=key))
+        previous=s.scalar(select(Setting).where(Setting.key==key).with_for_update().execution_options(populate_existing=True))
+        old=previous.value.get('username') if previous else None
+        if body.replace_username:
+            # An explicitly confirmed prior binding must still be the current state, including when the
+            # binding was removed meanwhile: a stale confirmation never recreates or overwrites a binding.
+            if old!=body.replace_username:
+                s.rollback()
+                raise HTTPException(409,'This subject binding changed (now '+('bound to '+old if old is not None else 'unbound')+'). Reload the bindings and retry.')
+        elif old is not None and old!=body.username:
+            s.rollback()
+            raise HTTPException(409,'This subject is already bound to '+old+'. Resend with replace_username set to confirm the replacement.')
+        if previous:previous.value={'username':body.username}
+        else:s.add(Setting(key=key,value={'username':body.username}))
+        audit(s,'bind SSO identity',user['username']+' → '+body.username+'; subject '+sso_digest(key)+'; previous '+(old or 'none'))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject was bound concurrently; reload the bindings and retry.')
+    return {'ok':True,'subject_digest':sso_digest(key)}
+
+@app.get('/api/operations/sso-bindings')
+def list_sso_bindings(user=Depends(admin_user)):
+    with Session() as s:
+        rows=s.scalars(select(Setting).where(Setting.key.like('oidc:%')).order_by(Setting.key)).all()
+        return [{'subject_digest':sso_digest(r.key),'username':r.value.get('username')} for r in rows]
+
+@app.delete('/api/operations/sso-bindings/{digest}')
+def delete_sso_binding(digest:str,user=Depends(admin_user)):
+    if not re.fullmatch(r'[0-9a-f]{16}',digest):raise HTTPException(400,'Invalid subject digest')
+    with Session() as s:
+        # Take the same write/row lock bind_sso() uses before reading, so the read, delete and audited
+        # account are one step serialized with a concurrent replacement of this subject.
+        matching=Setting.key.like('oidc:'+digest+'%')
+        s.execute(update(Setting).where(matching).values(key=Setting.key))
+        rows=s.scalars(select(Setting).where(matching).with_for_update().execution_options(populate_existing=True)).all()
+        if len(rows)!=1:s.rollback();raise HTTPException(404,'SSO binding not found')
+        old=rows[0].value.get('username');s.delete(rows[0])
+        audit(s,'remove SSO binding',user['username']+' removed subject '+digest+' → '+str(old))
+        try:s.commit()
+        except (IntegrityError,OperationalError):
+            s.rollback();raise HTTPException(409,'This subject binding changed concurrently; reload the bindings and retry.')
     return {'ok':True}
 
 class SMTPInput(BaseModel):
@@ -1167,7 +1882,7 @@ class SMTPInput(BaseModel):
     ca:str=Field(default='',max_length=100000)
     clear_password:bool=False
 @app.put('/api/operations/smtp')
-def smtp_save(body:SMTPInput,user=Depends(auth)):
+def smtp_save(body:SMTPInput,user=Depends(admin_user)):
     from .mail import validate
     value=validate(body.model_dump(exclude={'clear_password'}));value['channel']='smtp'
     with Session() as s:
@@ -1180,20 +1895,40 @@ class RecoveryPolicy(BaseModel):
     reboot:bool=False
     rollback:bool=False
 @app.put('/api/operations/{host_id}/recovery')
-def recovery_policy(host_id:str,body:RecoveryPolicy,user=Depends(auth)):
+def recovery_policy(host_id:str,body:RecoveryPolicy,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
-        status=ssh.call(h,{'action':'recovery-status'})
+        status=ssh.call(h,{'action':'recovery-status'},lifecycle_blocking=False)
         if body.rollback and not status['rollback_adapter']:raise HTTPException(409,'Install and validate a root-owned rollback adapter on this target first')
         if body.reboot and not status['systemd']:raise HTTPException(409,'Automatic reboot requires systemd')
         s.merge(Setting(key='recovery:'+host_id,value=body.model_dump()));audit(s,'set recovery policy',host_id);s.commit()
     return {'ok':True,'capabilities':status}
 
+class ProbeInput(BaseModel): probes:list[dict]
+@app.get('/api/operations/{host_id}/probes')
+def probe_list(host_id:str,user=Depends(viewer_user)):
+    from . import app_probes
+    with Session() as s:
+        host_or_404(s,host_id)
+        row=s.get(Setting,app_probes.key(host_id))
+        return {'probes':app_probes.load(s,host_id),'reviewed_by':row.value.get('reviewed_by') if row else None}
+@app.put('/api/operations/{host_id}/probes')
+def probe_save(host_id:str,body:ProbeInput,user=Depends(admin_user)):
+    """Reviewed loopback HTTP/TCP probes that gate rollout stages; definitions only, never commands."""
+    from . import app_probes
+    try:probes=app_probes.normalize(body.probes)
+    except ValueError as error:raise HTTPException(400,str(error))
+    with host_change(host_id),Session() as s:
+        host_or_404(s,host_id)
+        s.merge(Setting(key=app_probes.key(host_id),value={'probes':probes,'reviewed_by':user['username']}))
+        audit(s,'set application probes',host_id+' '+', '.join(p['name'] for p in probes)[:500]);s.commit()
+    return {'probes':probes}
+
 class ObservabilityInput(BaseModel): ebpf:bool=False
 @app.put('/api/operations/{host_id}/observability')
-def observability(host_id:str,body:ObservabilityInput,user=Depends(auth)):
+def observability(host_id:str,body:ObservabilityInput,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
-        h=host_or_404(s,host_id);result=ssh.call(h,{'action':'observability','ebpf':body.ebpf})
+        h=host_or_404(s,host_id);result=ssh.call(h,{'action':'observability','ebpf':body.ebpf},lifecycle_blocking=False)
         path='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
         baseline=dict(h.baseline)
         if body.ebpf:baseline[path]=hashlib.sha256(b'[Service]\nProtectSystem=false\nNoNewPrivileges=false\nRestrictAddressFamilies=AF_UNIX AF_NETLINK\n').hexdigest()
@@ -1202,11 +1937,55 @@ def observability(host_id:str,body:ObservabilityInput,user=Depends(auth)):
         audit(s,'configure eBPF',host_id+' '+str(body.ebpf));s.commit()
     return result
 
+class SpoolBatchInput(BaseModel):
+    batch_limit_bytes:int=Field(ge=16*1024,le=1024*1024,strict=True)
+
+@app.put('/api/operations/{host_id}/spool')
+def configure_spool(host_id:str,body:SpoolBatchInput,user=Depends(admin_user)):
+    limit = body.batch_limit_bytes
+    expected = {'configured': True, 'version': 1, 'batch_limit_bytes': limit}
+    with host_change(host_id),Session() as s:
+        h = host_or_404(s, host_id)
+        rejected = False
+        try:
+            result = ssh.call(h, {'action': 'spool-config', 'batch_limit_bytes': limit}, lifecycle_blocking=False)
+        except Exception as error:
+            if ssh.request_unstarted(error):
+                raise
+            rejected = isinstance(error, ssh.RemoteFailure)
+            result = None
+        detail = f'{host_id} batch_limit_bytes={limit}'
+        if (result != expected or result['configured'] is not True
+                or type(result['version']) is not int or type(result['batch_limit_bytes']) is not int):
+            # The bridge lock serializes this observation with the original request.
+            # A lost receipt must never cause a second configuration mutation.
+            try:
+                observed = ssh.call(h, {'action': 'spool-config-status'}, timeout=10, lifecycle_blocking=False)
+            except Exception:
+                observed = None
+            if (isinstance(observed, dict) and type(observed.get('version')) is int and observed['version'] == 1
+                    and type(observed.get('batch_limit_bytes')) is int
+                    and 16*1024 <= observed['batch_limit_bytes'] <= 1024*1024
+                    and type(observed.get('active')) is bool):
+                detail += f" observed_batch_limit_bytes={observed['batch_limit_bytes']} active={observed['active']}"
+            else:
+                observed = None
+                detail += ' target state unverified'
+            if rejected or observed is None or not observed['active'] or observed['batch_limit_bytes'] != limit:
+                audit(s, 'configure agent spool failed', detail)
+                s.commit()
+                raise HTTPException(502, 'Target did not confirm the requested spool configuration. Check collector state before retrying.')
+            detail += ' verified by readback'
+        s.merge(Setting(key='spool:'+host_id, value={'version': 1, 'batch_limit_bytes': limit}))
+        audit(s, 'configure agent spool', detail)
+        s.commit()
+    return expected
+
 class ReconcileInput(BaseModel):
     verified_target_state:bool=False
     verified_ai_receipts:bool=False
 @app.post('/api/operations/jobs/{job_id}/reconcile')
-def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
+def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(admin_user)):
     with Session() as s:
         job=s.get(Job,job_id)
         if not job:raise HTTPException(404,'Job not found')
@@ -1217,7 +1996,7 @@ def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         job=s.get(Job,job_id);h=host_or_404(s,host_id)
         if job.state not in operations.QUARANTINE_STATES:raise HTTPException(409,'Only running or recovery-required jobs require reconciliation')
-        if not advisory and ssh.call(h,{'action':'operation-status'}).get('busy'):raise HTTPException(409,'Target operation is still running')
+        if not advisory and ssh.call(h,{'action':'operation-status'},lifecycle_blocking=False).get('busy'):raise HTTPException(409,'Target operation is still running')
         if job.action in ('release-plan','release-upgrade'):
             plan=s.get(worker.releases.ReleasePlan,job.payload.get('plan_id'))
             if plan:plan.state='interrupted'
@@ -1232,14 +2011,14 @@ def reconcile_job(job_id:str,body:ReconcileInput,user=Depends(auth)):
 from . import releases
 
 @app.get('/api/hosts/{host_id}/releases')
-def release_plans(host_id:str,user=Depends(auth)):
+def release_plans(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id)
         rows=s.scalars(select(releases.ReleasePlan).where(releases.ReleasePlan.host_id==host_id).order_by(releases.ReleasePlan.created.desc()).limit(20))
         return [{'id':r.id,'state':r.state,'created':r.created,'job_id':r.job_id,'error':r.error} for r in rows]
 
 @app.post('/api/hosts/{host_id}/releases')
-def plan_release(host_id:str,user=Depends(auth)):
+def plan_release(host_id:str,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
         if package_backend.is_rpm(h.inventory):raise HTTPException(409,'RPM major release upgrades require a distribution-specific migration plan; regular RPM patching is supported')
@@ -1254,7 +2033,7 @@ def plan_release(host_id:str,user=Depends(auth)):
         return {'plan_id':row.id,'job_id':job.id}
 
 @app.get('/api/hosts/{host_id}/releases/{plan_id}')
-def release_plan(host_id:str,plan_id:str,user=Depends(auth)):
+def release_plan(host_id:str,plan_id:str,user=Depends(admin_user)):
     with Session() as s:
         row=s.get(releases.ReleasePlan,plan_id)
         if not row or row.host_id!=host_id:raise HTTPException(404,'Release plan not found')
@@ -1265,7 +2044,7 @@ class ReleaseDecision(BaseModel):
     digest:str=Field(pattern='^[a-f0-9]{64}$')
 
 @app.post('/api/hosts/{host_id}/releases/{plan_id}/decision')
-def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(auth)):
+def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
         host_or_404(s,host_id);row=s.get(releases.ReleasePlan,plan_id)
         if not row or row.host_id!=host_id:raise HTTPException(404,'Release plan not found')
@@ -1288,30 +2067,30 @@ def decide_release(host_id:str,plan_id:str,body:ReleaseDecision,user=Depends(aut
 
 
 @app.get('/api/schedules')
-def patch_schedules(user=Depends(auth)):
+def patch_schedules(user=Depends(admin_user)):
     with Session() as s:
-        return {'host_policies':{h.id:operations.recovery_policy(s,h.id) for h in s.scalars(select(Host).where(Host.deleted_at==0))},
+        return {'host_policies':operations.recovery_policies(s,[h.id for h in s.scalars(select(Host).where(Host.deleted_at==0))]),
                 'schedules':[scheduling.serialize(row) for row in s.scalars(select(scheduling.PatchSchedule).order_by(scheduling.PatchSchedule.updated.desc()))],
                 'runs':[object_dict(row) for row in s.scalars(select(scheduling.PatchRun).order_by(scheduling.PatchRun.due.desc()).limit(100))]}
 
 @app.get('/api/schedules/calendar')
-def patch_calendar(start:float,end:float,user=Depends(auth)):
+def patch_calendar(start:float,end:float,user=Depends(admin_user)):
     with Session() as s: return {'events':scheduling.calendar(s,start,end)}
 
 @app.post('/api/schedules')
-def create_patch_schedule(body:scheduling.ScheduleInput,user=Depends(auth)):
+def create_patch_schedule(body:scheduling.ScheduleInput,user=Depends(admin_user)):
     with scheduling.Lock('patch-schedules'),Session() as s:
         return scheduling.save(s,body,None,user['username'])
 
 @app.put('/api/schedules/{schedule_id}')
-def update_patch_schedule(schedule_id:str,body:scheduling.ScheduleInput,user=Depends(auth)):
+def update_patch_schedule(schedule_id:str,body:scheduling.ScheduleInput,user=Depends(admin_user)):
     with scheduling.Lock('patch-schedules'),Session() as s:
         return scheduling.save(s,body,schedule_id,user['username'])
 
 class ScheduleRevision(BaseModel): revision:int=Field(ge=1)
 
 @app.delete('/api/schedules/{schedule_id}')
-def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(auth)):
+def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(admin_user)):
     with scheduling.Lock('patch-schedules'),Session() as s:
         row=s.get(scheduling.PatchSchedule,schedule_id)
         if not row: raise HTTPException(404,'Schedule not found')
@@ -1320,8 +2099,16 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(aut
         s.delete(row);audit(s,'delete patch schedule',user['username']+' '+schedule_id);s.commit()
     return {'ok':True}
 
+@app.get('/api/ai/triage/timings')
+def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depends(admin_user)):
+    if not 1 <= limit <= ai_runs.TIMING_SUMMARY_RUN_LIMIT:
+        raise HTTPException(400, 'Invalid timing sample limit')
+    with Session() as s:
+        return ai_runs.triage_timing_summary(s, limit)
+
+
 @app.get('/api/ai/runs')
-def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(auth)):
+def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(admin_user)):
     if purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
     with Session() as s:
         query=select(ai_runs.AIRun)
@@ -1338,7 +2125,7 @@ def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Dep
             'shared_batch':len(members[r.id])>1} for r in rows[:limit]],'more':len(rows)>limit}
 
 @app.get('/api/ai/runs/{run_id}')
-def ai_run_detail(run_id:str,host_id:str='',user=Depends(auth)):
+def ai_run_detail(run_id:str,host_id:str='',user=Depends(admin_user)):
     with Session() as s:
         row=s.get(ai_runs.AIRun,run_id)
         if host_id:
@@ -1351,7 +2138,7 @@ def ai_run_detail(run_id:str,host_id:str='',user=Depends(auth)):
             'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
 
 @app.post('/api/investigations/{behavior_id}/retry')
-def retry_investigation(behavior_id:str,user=Depends(auth)):
+def retry_investigation(behavior_id:str,user=Depends(admin_user)):
     from . import ai_claims
     lock=worker.Lock('ai-triage')
     if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Retry when it finishes.')
@@ -1371,11 +2158,13 @@ def retry_investigation(behavior_id:str,user=Depends(auth)):
     finally:lock.release()
 
 @app.get('/api/package-history')
-def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user=Depends(auth)):
+def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user=Depends(viewer_user)):
     if offset<0 or not 1<=limit<=200:raise HTTPException(400,'Invalid history pagination')
     with Session() as s:
-        query=select(package_history.PackageEvent)
-        if host_id:host_or_404(s,host_id);query=query.where(package_history.PackageEvent.host_id==host_id)
+        query=readable_host_records(select(package_history.PackageEvent),package_history.PackageEvent.host_id,user)
+        if host_id:
+            host_or_404(s,host_id);require_host_read(s,host_id,user)
+            query=query.where(package_history.PackageEvent.host_id==host_id)
         if q:query=query.where(package_history.PackageEvent.name.contains(q[:200],autoescape=True))
         rows=list(s.scalars(query.order_by(package_history.PackageEvent.recorded.desc(),package_history.PackageEvent.id.desc()).offset(offset).limit(limit+1)))
         saved=update_scores.historical_cache(s,[(r.host_id,r.name,v) for r in rows[:limit] if r.action=='version_changed' for v in r.after])
@@ -1383,7 +2172,7 @@ def package_history_list(host_id:str='',q:str='',offset:int=0,limit:int=100,user
 
 
 @app.get('/api/security/coverage')
-def fleet_security_coverage(offset:int=0,limit:int=50,q:str='',user=Depends(auth)):
+def fleet_security_coverage(offset:int=0,limit:int=50,q:str='',user=Depends(admin_user)):
     from . import security_coverage
     if offset<0 or not 1<=limit<=100 or len(q)>200:raise HTTPException(400,'Invalid coverage pagination or search')
     with Session() as s:return security_coverage.page(s,offset,limit,q)
@@ -1392,7 +2181,7 @@ class SecurityScanInput(BaseModel):
     paths:list[str]=Field(min_length=1,max_length=16)
 
 @app.get('/api/hosts/{host_id}/security')
-def security_status(host_id:str,user=Depends(auth)):
+def security_status(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id)
         row=s.scalar(select(incidents.Scan).where(incidents.Scan.host_id==host_id).order_by(incidents.Scan.created.desc()).limit(1))
@@ -1400,10 +2189,14 @@ def security_status(host_id:str,user=Depends(auth)):
         legacy=s.get(Setting,'security-scan:'+host_id)
         return legacy.value if legacy else {'state':'not_scanned','findings':[],'gaps':['No security scan has completed']}
 
+def validate_scan_paths(paths):
+    from .scan_paths import canonical
+    for path in paths:
+        if not canonical(path,allow_root=True):raise ValueError('Invalid scan directory')
+
 @app.post('/api/hosts/{host_id}/security')
-def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(auth)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+def security_scan_queue(host_id:str,body:SecurityScanInput,user=Depends(admin_user)):
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id)
@@ -1415,9 +2208,8 @@ class YaraScanInput(SecurityScanInput):
     bundle_id:str=Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
 
 @app.post('/api/hosts/{host_id}/security/yara')
-def yara_scan_queue(host_id:str,body:YaraScanInput,user=Depends(auth)):
-    for path in body.paths:
-        if not path.startswith('/') or path.startswith('//') or '..' in Path(path).parts or len(path)>4096:raise ValueError('Invalid scan directory')
+def yara_scan_queue(host_id:str,body:YaraScanInput,user=Depends(admin_user)):
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'),Session() as s:
         host_or_404(s,host_id)
         if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(['security-scan','yara-scan','execution-scan']),Job.state.in_(['queued','running'])).limit(1)):
@@ -1433,7 +2225,7 @@ class ExecutionScanPolicy(SecurityScanInput):
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.get('/api/hosts/{host_id}/security/execution-scans')
-def execution_scan_status(host_id:str,offset:int=0,user=Depends(auth)):
+def execution_scan_status(host_id:str,offset:int=0,user=Depends(admin_user)):
     from . import execution_scans
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1442,7 +2234,7 @@ def execution_scan_status(host_id:str,offset:int=0,user=Depends(auth)):
         return execution_scans.status(s,host_id)|{'items':[object_dict(row) for row in rows[:20]],'more':len(rows)>20}
 
 @app.put('/api/hosts/{host_id}/security/execution-scans')
-def execution_scan_policy_save(host_id:str,body:ExecutionScanPolicy,user=Depends(auth)):
+def execution_scan_policy_save(host_id:str,body:ExecutionScanPolicy,user=Depends(admin_user)):
     from . import execution_scans
     with host_change(host_id,allow_quarantined=True),worker.Lock('security-scan-queue'),Session() as s:
         host=host_or_404(s,host_id);value=execution_scans.save(s,host,body,user['username']);s.commit()
@@ -1452,7 +2244,7 @@ class ScannerRecordExport(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.post('/api/hosts/{host_id}/security/export')
-def export_scanner_record(host_id:str,body:ScannerRecordExport,user=Depends(auth)):
+def export_scanner_record(host_id:str,body:ScannerRecordExport,user=Depends(admin_user)):
     from . import scanner_records,response_records
     reason=body.reason.strip()
     if len(reason)<10:raise ValueError('Provide a meaningful export reason')
@@ -1466,7 +2258,7 @@ def export_scanner_record(host_id:str,body:ScannerRecordExport,user=Depends(auth
             'X-Scanner-Record-SHA256':digest,'Cache-Control':'no-store'})
 
 @app.get('/api/hosts/{host_id}/security/history')
-def security_history(host_id:str,offset:int=0,user=Depends(auth)):
+def security_history(host_id:str,offset:int=0,user=Depends(admin_user)):
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
@@ -1474,7 +2266,7 @@ def security_history(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':[object_dict(r) for r in rows[:20]],'more':len(rows)>20}
 
 @app.get('/api/hosts/{host_id}/security/incidents')
-def security_incidents(host_id:str,offset:int=0,user=Depends(auth)):
+def security_incidents(host_id:str,offset:int=0,user=Depends(admin_user)):
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
@@ -1487,7 +2279,7 @@ class EvidenceApproval(BaseModel):
     confirmation:str
 
 @app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/preservation')
-def prepare_evidence_copy(host_id:str,incident_id:str,user=Depends(auth)):
+def prepare_evidence_copy(host_id:str,incident_id:str,user=Depends(admin_user)):
     from . import evidence_vault as vault
     with host_change(host_id),Session() as s:
         row=vault.incident(s,host_id,incident_id)
@@ -1495,7 +2287,7 @@ def prepare_evidence_copy(host_id:str,incident_id:str,user=Depends(auth)):
         return {'job_id':worker.enqueue(s,host_id,'evidence-prepare',{'incident_id':row.id,'evidence_digest':incidents.digest(row.evidence)})}
 
 @app.get('/api/hosts/{host_id}/security/evidence-copies')
-def evidence_copies(host_id:str,offset:int=0,user=Depends(auth)):
+def evidence_copies(host_id:str,offset:int=0,user=Depends(admin_user)):
     from .evidence_vault import EvidenceCopy
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1504,7 +2296,7 @@ def evidence_copies(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':[object_dict(r)|{'snapshot_digest':incidents.digest(r.snapshot)} for r in rows[:20]],'more':len(rows)>20}
 
 @app.post('/api/hosts/{host_id}/security/evidence-copies/{copy_id}/execute')
-def approve_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Depends(auth)):
+def approve_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Depends(admin_user)):
     from . import evidence_vault as vault
     if body.confirmation!='PRESERVE':raise ValueError('Type PRESERVE to approve copying evidence; the original remains in place')
     if len(body.reason.strip())<10:raise ValueError('Provide a meaningful preservation reason')
@@ -1519,7 +2311,7 @@ def approve_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Dep
         return {'job_id':job_id,'original_not_removed':True}
 
 @app.post('/api/hosts/{host_id}/security/evidence-copies/{copy_id}/status')
-def reconcile_evidence_copy(host_id:str,copy_id:str,user=Depends(auth)):
+def reconcile_evidence_copy(host_id:str,copy_id:str,user=Depends(admin_user)):
     from .evidence_vault import EvidenceCopy
     with host_change(host_id),Session() as s:
         copy=s.get(EvidenceCopy,copy_id)
@@ -1528,7 +2320,7 @@ def reconcile_evidence_copy(host_id:str,copy_id:str,user=Depends(auth)):
         return {'job_id':worker.enqueue(s,host_id,'evidence-status',{'copy_id':copy.id})}
 
 @app.post('/api/hosts/{host_id}/security/evidence-copies/{copy_id}/acquire')
-def acquire_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Depends(auth)):
+def acquire_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Depends(admin_user)):
     from . import evidence_archive as archive
     from .evidence_vault import EvidenceCopy,EvidenceArchive
     if body.confirmation!='ACQUIRE':raise ValueError('Type ACQUIRE to approve transferring preserved file contents to the controller')
@@ -1544,7 +2336,7 @@ def acquire_evidence_copy(host_id:str,copy_id:str,body:EvidenceApproval,user=Dep
         return {'job_id':job_id,'archive_id':row.id}
 
 @app.get('/api/hosts/{host_id}/security/evidence-archives')
-def evidence_archives(host_id:str,offset:int=0,user=Depends(auth)):
+def evidence_archives(host_id:str,offset:int=0,user=Depends(admin_user)):
     from .evidence_vault import EvidenceArchive,ArchiveObservation
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1557,7 +2349,7 @@ def evidence_archives(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':items,'more':len(rows)>20}
 
 @app.get('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/history')
-def evidence_archive_history(host_id:str,archive_id:str,offset:int=0,user=Depends(auth)):
+def evidence_archive_history(host_id:str,archive_id:str,offset:int=0,user=Depends(admin_user)):
     from .evidence_vault import EvidenceArchive,ArchiveObservation
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1567,7 +2359,7 @@ def evidence_archive_history(host_id:str,archive_id:str,offset:int=0,user=Depend
         return {'items':[object_dict(r) for r in rows[:20]],'more':len(rows)>20}
 
 @app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/status')
-def verify_evidence_archive(host_id:str,archive_id:str,user=Depends(auth)):
+def verify_evidence_archive(host_id:str,archive_id:str,user=Depends(admin_user)):
     from .evidence_vault import EvidenceArchive
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=s.get(EvidenceArchive,archive_id)
@@ -1592,7 +2384,7 @@ class ResponseServiceHealth(BaseModel):
     baseline_id:str=Field(default='',max_length=36)
 
 @app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-health')
-def response_service_health_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+def response_service_health_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(admin_user)):
     from .response_health import Observation
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1601,7 +2393,7 @@ def response_service_health_history(host_id:str,quarantine_id:str,offset:int=0,u
         return {'items':[object_dict(item)|{'report_digest':incidents.digest(item.report)} for item in rows[:20]],'more':len(rows)>20}
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-health')
-def observe_response_service_health(host_id:str,quarantine_id:str,body:ResponseServiceHealth,user=Depends(auth)):
+def observe_response_service_health(host_id:str,quarantine_id:str,body:ResponseServiceHealth,user=Depends(admin_user)):
     from . import response_health,quarantine
     response_health.response_service_units(body.units);reason=body.reason.strip()
     if len(reason)<10:raise ValueError('Provide a meaningful service review reason')
@@ -1627,7 +2419,7 @@ class ServiceWatchInput(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.get('/api/hosts/{host_id}/security/service-monitor')
-def service_monitor_status(host_id:str,user=Depends(auth)):
+def service_monitor_status(host_id:str,user=Depends(admin_user)):
     from . import service_monitor
     with Session() as s:
         host_or_404(s,host_id);status=service_monitor.assessment(s,host_id);status.pop('eligible')
@@ -1635,7 +2427,7 @@ def service_monitor_status(host_id:str,user=Depends(auth)):
         return status|{'pending':{'id':pending.id,'state':pending.state} if pending else None,'server_changes_paused':operations.host_quarantined(s,host_id)}
 
 @app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-watch')
-def get_service_watch(host_id:str,quarantine_id:str,user=Depends(auth)):
+def get_service_watch(host_id:str,quarantine_id:str,user=Depends(admin_user)):
     from . import service_monitor
     with Session() as s:
         row=response_row(s,host_id,quarantine_id);host=host_or_404(s,host_id);watch=s.get(service_monitor.Watch,row.id)
@@ -1643,7 +2435,7 @@ def get_service_watch(host_id:str,quarantine_id:str,user=Depends(auth)):
         return service_monitor.view(watch)|{'scope_current':service_monitor.current(s,host,row,watch)}
 
 @app.put('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-watch')
-def save_service_watch(host_id:str,quarantine_id:str,body:ServiceWatchInput,user=Depends(auth)):
+def save_service_watch(host_id:str,quarantine_id:str,body:ServiceWatchInput,user=Depends(admin_user)):
     from . import service_monitor
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
@@ -1659,7 +2451,7 @@ class ServicePauseReview(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/service-watch/release')
-def release_service_pause(host_id:str,quarantine_id:str,body:ServicePauseReview,user=Depends(auth)):
+def release_service_pause(host_id:str,quarantine_id:str,body:ServicePauseReview,user=Depends(admin_user)):
     from . import service_monitor
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
@@ -1667,7 +2459,7 @@ def release_service_pause(host_id:str,quarantine_id:str,body:ServicePauseReview,
         return {'service_hold':False,'server_changes_paused':operations.host_quarantined(s,host_id),'incident_not_resolved':True}
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/export')
-def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExport,user=Depends(auth)):
+def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExport,user=Depends(admin_user)):
     from . import response_records
     reason=body.reason.strip()
     if len(reason)<10:raise ValueError('Provide a meaningful export reason')
@@ -1688,14 +2480,17 @@ def export_response_record(host_id:str,quarantine_id:str,body:ResponseRecordExpo
             'Content-Disposition':'attachment; filename="mrpatchy-response-'+identifier+'.json"',
             'X-Response-Record-SHA256':digest,'Cache-Control':'no-store'})
 
-def response_idle(s,host_id,response_id=None):
+def pending_response_work(s,host_id,exclude_audit=True):
     from .quarantine import ACTIONS
+    actions=tuple(action for action in ACTIONS if not exclude_audit or action!='quarantine-audit')
+    return bool(s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)))
+
+def response_idle(s,host_id,response_id=None):
     if operations.host_quarantined(s,host_id,response_id=response_id):raise HTTPException(409,'Another operation or file response requires reconciliation')
-    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(ACTIONS),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'File response work is pending; reconcile interrupted running jobs in Activity first')
+    if pending_response_work(s,host_id,exclude_audit=False):raise HTTPException(409,'File response work is pending; reconcile interrupted running jobs in Activity first')
 
 @app.post('/api/hosts/{host_id}/security/evidence-archives/{archive_id}/quarantine')
-def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
-    from . import quarantine
+def prepare_quarantine(host_id:str,archive_id:str,user=Depends(admin_user)):
     from .evidence_vault import EvidenceArchive,EvidenceCopy,incident
     with host_change(host_id),Session() as s:
         host_or_404(s,host_id);archive=s.get(EvidenceArchive,archive_id)
@@ -1708,7 +2503,7 @@ def prepare_quarantine(host_id:str,archive_id:str,user=Depends(auth)):
         return {'job_id':worker.enqueue(s,host_id,'quarantine-prepare',{'archive_id':archive.id,'evidence_digest':copy.evidence_digest,'_actor':user['username']})}
 
 @app.get('/api/hosts/{host_id}/security/quarantines')
-def quarantines(host_id:str,offset:int=0,user=Depends(auth)):
+def quarantines(host_id:str,offset:int=0,user=Depends(admin_user)):
     from .quarantine import Quarantine
     from . import response_monitor,response_processes,repair_publication,response_health,service_monitor
     if offset<0:raise ValueError('Invalid offset')
@@ -1732,13 +2527,12 @@ class RepairPreparationInput(BaseModel):
     plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/repair-preparations')
-def prepare_trusted_replacement(host_id:str,quarantine_id:str,body:RepairPreparationInput,user=Depends(auth)):
-    from . import repair_preparation,quarantine
+def prepare_trusted_replacement(host_id:str,quarantine_id:str,body:RepairPreparationInput,user=Depends(admin_user)):
+    from . import repair_preparation
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
         if operations.host_quarantined(s,host_id,response_id=row.id,read_only_response_id=row.id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
-        actions=tuple(action for action in quarantine.ACTIONS if action!='quarantine-audit')
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending')
         preparation=repair_preparation.Preparation(id=str(uuid.uuid4()),host_id=host_id,quarantine_id=row.id,bundle_id=body.bundle_id,
             path=row.plan['file']['path'],actor=user['username'],fingerprint=host.fingerprint,response_plan_digest=body.plan_digest)
         repair_preparation.source(s,host,preparation);s.add(preparation)
@@ -1746,7 +2540,7 @@ def prepare_trusted_replacement(host_id:str,quarantine_id:str,body:RepairPrepara
                 'preparation_id':preparation.id,'read_only':True,'publication':'not_implemented'}
 
 @app.get('/api/hosts/{host_id}/security/repair-preparations')
-def trusted_replacement_history(host_id:str,offset:int=0,user=Depends(auth)):
+def trusted_replacement_history(host_id:str,offset:int=0,user=Depends(admin_user)):
     from .repair_preparation import Preparation
     from .repair_staging import Stage
     if offset<0:raise ValueError('Invalid offset')
@@ -1757,10 +2551,8 @@ def trusted_replacement_history(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':[object_dict(r)|{'report_digest':incidents.digest(r.report),'stage_id':stages.get(r.id)} for r in rows[:20]],'more':len(rows)>20}
 
 def staging_idle(s,host_id,quarantine_id):
-    from .quarantine import ACTIONS
     if operations.host_quarantined(s,host_id,response_id=quarantine_id,staging_response_id=quarantine_id):raise HTTPException(409,'An unrelated response or recovery operation requires reconciliation')
-    actions=tuple(action for action in ACTIONS if action!='quarantine-audit')
-    if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted work in Activity first')
+    if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending; reconcile interrupted work in Activity first')
 
 class RepairStagingApproval(BaseModel):
     report_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -1768,7 +2560,7 @@ class RepairStagingApproval(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.post('/api/hosts/{host_id}/security/repair-preparations/{preparation_id}/stage')
-def approve_replacement_staging(host_id:str,preparation_id:str,body:RepairStagingApproval,user=Depends(auth)):
+def approve_replacement_staging(host_id:str,preparation_id:str,body:RepairStagingApproval,user=Depends(admin_user)):
     from . import repair_staging,repair_preparation
     if body.confirmation!='STAGE' or len(body.reason.strip())<10:raise ValueError('Type STAGE and provide a meaningful review reason')
     with host_change(host_id,allow_quarantined=True),Session() as s:
@@ -1786,7 +2578,7 @@ def staging_row(s,host_id,stage_id):
     return row
 
 @app.get('/api/hosts/{host_id}/security/repair-stages')
-def replacement_staging_history(host_id:str,offset:int=0,user=Depends(auth)):
+def replacement_staging_history(host_id:str,offset:int=0,user=Depends(admin_user)):
     from .repair_staging import Stage
     from . import repair_publication
     from .quarantine import Quarantine
@@ -1799,7 +2591,7 @@ def replacement_staging_history(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'report_digest':incidents.digest(r.report),'publication_id':publications[r.quarantine_id].id if r.quarantine_id in publications and publications[r.quarantine_id].stage_id==r.id else None} for r in rows[:20]],'more':len(rows)>20}
 
 @app.post('/api/hosts/{host_id}/security/repair-stages/{stage_id}/status')
-def verify_replacement_stage(host_id:str,stage_id:str,user=Depends(auth)):
+def verify_replacement_stage(host_id:str,stage_id:str,user=Depends(admin_user)):
     from . import repair_publication
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id);row=staging_row(s,host_id,stage_id)
@@ -1812,7 +2604,7 @@ def verify_replacement_stage(host_id:str,stage_id:str,user=Depends(auth)):
         return {'job_id':worker.enqueue(s,host_id,'trusted-repair-stage-status',{'stage_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
 
 @app.get('/api/hosts/{host_id}/security/repair-stages/{stage_id}/history')
-def replacement_stage_events(host_id:str,stage_id:str,offset:int=0,user=Depends(auth)):
+def replacement_stage_events(host_id:str,stage_id:str,offset:int=0,user=Depends(admin_user)):
     from .repair_staging import Event
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1827,13 +2619,11 @@ def publication_row(s,host_id,publication_id):
     return row
 
 def publication_idle(s,row):
-    from .quarantine import ACTIONS
     if operations.host_quarantined(s,row.host_id,response_id=row.quarantine_id,publication_id=row.id,publication_response_id=row.quarantine_id):raise HTTPException(409,'Another operation or response requires reconciliation')
-    actions=tuple(a for a in ACTIONS if a!='quarantine-audit')
-    if s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
+    if pending_response_work(s,row.host_id):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
 
 @app.post('/api/hosts/{host_id}/security/repair-stages/{stage_id}/publish')
-def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingApproval,user=Depends(auth)):
+def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingApproval,user=Depends(admin_user)):
     from . import repair_publication
     if body.confirmation!='PUBLISH' or len(body.reason.strip())<10:raise ValueError('Type PUBLISH and provide a meaningful reason')
     with host_change(host_id,allow_quarantined=True),Session() as s:
@@ -1841,13 +2631,12 @@ def approve_replacement_publication(host_id:str,stage_id:str,body:RepairStagingA
         # Before a publication exists, use its response scope without bypassing
         # any existing publication hold. Related process pauses remain active.
         if operations.host_quarantined(s,host_id,response_id=staged.quarantine_id,publication_response_id=staged.quarantine_id):raise HTTPException(409,'An unrelated operation or response requires reconciliation')
-        from .quarantine import ACTIONS
-        if s.scalar(select(Job.id).where(Job.host_id==host_id,Job.action.in_(tuple(a for a in ACTIONS if a!='quarantine-audit')),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending')
+        if pending_response_work(s,host_id):raise HTTPException(409,'Response work is pending')
         row=repair_publication.approve(s,host,stage_id,body.report_digest,user['username'],body.reason.strip())
         return {'publication_id':row.id,'publication_hold':True,'job_id':worker.enqueue(s,host_id,'trusted-repair-publish',{'publication_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
 
 @app.get('/api/hosts/{host_id}/security/repair-publications')
-def replacement_publications(host_id:str,offset:int=0,user=Depends(auth)):
+def replacement_publications(host_id:str,offset:int=0,user=Depends(admin_user)):
     from .repair_publication import Publication
     from .quarantine import Quarantine
     if offset<0:raise ValueError('Invalid offset')
@@ -1858,14 +2647,14 @@ def replacement_publications(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':[object_dict(r)|{'plan_digest':incidents.digest(r.plan),'receipt_digest':incidents.digest(r.receipt),'file_hold':originals.get(r.quarantine_id,False)} for r in records[:20]],'more':len(records)>20}
 
 @app.post('/api/hosts/{host_id}/security/repair-publications/{publication_id}/status')
-def verify_replacement_publication(host_id:str,publication_id:str,user=Depends(auth)):
+def verify_replacement_publication(host_id:str,publication_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=publication_row(s,host_id,publication_id);publication_idle(s,row)
         if row.state in ('queued','rejected','console_recovered'):raise HTTPException(409,'Publication is queued, unstarted or archived by console review')
         return {'job_id':worker.enqueue(s,host_id,'trusted-repair-publish-status',{'publication_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
 
 @app.get('/api/hosts/{host_id}/security/repair-publications/{publication_id}/history')
-def replacement_publication_events(host_id:str,publication_id:str,offset:int=0,user=Depends(auth)):
+def replacement_publication_events(host_id:str,publication_id:str,offset:int=0,user=Depends(admin_user)):
     from .repair_publication import Event
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1880,7 +2669,7 @@ class PublicationReview(BaseModel):
     confirmation:str
 
 @app.post('/api/hosts/{host_id}/security/repair-publications/{publication_id}/release')
-def review_publication_pause(host_id:str,publication_id:str,body:PublicationReview,user=Depends(auth)):
+def review_publication_pause(host_id:str,publication_id:str,body:PublicationReview,user=Depends(admin_user)):
     from . import repair_publication,quarantine
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);row=publication_row(s,host_id,publication_id);publication_idle(s,row)
@@ -1902,7 +2691,7 @@ class ResponseProcessRequest(BaseModel):
     plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/processes')
-def inspect_response_processes(host_id:str,quarantine_id:str,body:ResponseProcessRequest,user=Depends(auth)):
+def inspect_response_processes(host_id:str,quarantine_id:str,body:ResponseProcessRequest,user=Depends(admin_user)):
     from . import response_processes
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);row=response_row(s,host_id,quarantine_id)
@@ -1911,7 +2700,7 @@ def inspect_response_processes(host_id:str,quarantine_id:str,body:ResponseProces
         return {'job_id':worker.enqueue(s,host_id,'quarantine-processes',{'quarantine_id':row.id,'plan_digest':body.plan_digest,'fingerprint':host.fingerprint,'_actor':user['username']})}
 
 @app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/processes')
-def response_process_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+def response_process_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(admin_user)):
     from .response_processes import Observation
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1925,7 +2714,7 @@ class ProcessPreparationRequest(BaseModel):
     plan_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/process-preparations')
-def prepare_process_response(host_id:str,quarantine_id:str,body:ProcessPreparationRequest,user=Depends(auth)):
+def prepare_process_response(host_id:str,quarantine_id:str,body:ProcessPreparationRequest,user=Depends(admin_user)):
     from . import process_response
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host=host_or_404(s,host_id);response_row(s,host_id,quarantine_id);response_idle(s,host_id,response_id=quarantine_id)
@@ -1948,7 +2737,7 @@ def process_idle(s,row):
     if s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(actions),Job.state.in_(['queued','running'])).limit(1)):raise HTTPException(409,'Response work is pending; reconcile interrupted jobs in Activity first')
 
 @app.get('/api/hosts/{host_id}/security/process-responses')
-def process_responses(host_id:str,offset:int=0,user=Depends(auth)):
+def process_responses(host_id:str,offset:int=0,user=Depends(admin_user)):
     from .process_response import ProcessResponse
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -1963,7 +2752,7 @@ class ProcessApprovalRequest(BaseModel):
     confirmation:str
 
 @app.post('/api/hosts/{host_id}/security/process-responses/{process_id}/actions/{action}')
-def review_process_response(host_id:str,process_id:str,action:str,body:ProcessApprovalRequest,user=Depends(auth)):
+def review_process_response(host_id:str,process_id:str,action:str,body:ProcessApprovalRequest,user=Depends(admin_user)):
     from . import process_response
     if action not in ('suspend','resume','release'):raise HTTPException(404,'Process response action not found')
     with host_change(host_id,allow_quarantined=True),Session() as s:
@@ -1991,14 +2780,14 @@ def review_process_response(host_id:str,process_id:str,action:str,body:ProcessAp
         return {'job_id':worker.enqueue(s,host_id,'process-'+action,{'process_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']}),'process_hold':True}
 
 @app.post('/api/hosts/{host_id}/security/process-responses/{process_id}/verify')
-def verify_process_response(host_id:str,process_id:str,user=Depends(auth)):
+def verify_process_response(host_id:str,process_id:str,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=process_row(s,host_id,process_id);process_idle(s,row)
         if row.state in ('prepared','rejected'):raise HTTPException(409,'This preparation has not requested process suspension')
         return {'job_id':worker.enqueue(s,host_id,'process-status',{'process_id':row.id,'quarantine_id':row.quarantine_id,'_actor':user['username']})}
 
 @app.get('/api/hosts/{host_id}/security/process-responses/{process_id}/history')
-def process_response_history(host_id:str,process_id:str,offset:int=0,user=Depends(auth)):
+def process_response_history(host_id:str,process_id:str,offset:int=0,user=Depends(admin_user)):
     from .process_response import Approval,Event
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -2014,13 +2803,13 @@ class ResponseMonitorPolicy(BaseModel):
     expected_revision:str=''
 
 @app.get('/api/hosts/{host_id}/security/response-monitor')
-def response_monitor_policy(host_id:str,user=Depends(auth)):
+def response_monitor_policy(host_id:str,user=Depends(admin_user)):
     from . import response_monitor
     with Session() as s:
         host_or_404(s,host_id);return response_monitor.assessment(s,host_id)
 
 @app.put('/api/hosts/{host_id}/security/response-monitor')
-def save_response_monitor_policy(host_id:str,body:ResponseMonitorPolicy,user=Depends(auth)):
+def save_response_monitor_policy(host_id:str,body:ResponseMonitorPolicy,user=Depends(admin_user)):
     from . import response_monitor
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
@@ -2037,7 +2826,7 @@ class ResponseWatchReview(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.put('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/watch')
-def review_response_watch(host_id:str,quarantine_id:str,body:ResponseWatchReview,user=Depends(auth)):
+def review_response_watch(host_id:str,quarantine_id:str,body:ResponseWatchReview,user=Depends(admin_user)):
     from . import response_monitor,quarantine
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=response_row(s,host_id,quarantine_id)
@@ -2051,7 +2840,7 @@ def review_response_watch(host_id:str,quarantine_id:str,body:ResponseWatchReview
         return cfg
 
 @app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/checks')
-def response_check_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+def response_check_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(admin_user)):
     from .response_monitor import Check
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -2060,7 +2849,7 @@ def response_check_history(host_id:str,quarantine_id:str,offset:int=0,user=Depen
         return {'items':[object_dict(r) for r in checks[:20]],'more':len(checks)>20}
 
 @app.get('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/history')
-def quarantine_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(auth)):
+def quarantine_history(host_id:str,quarantine_id:str,offset:int=0,user=Depends(admin_user)):
     from .quarantine import Event,Approval
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
@@ -2091,17 +2880,17 @@ def queue_file_response(s,host,row,body,user,restore=False):
     return {'job_id':worker.enqueue(s,host.id,'quarantine-restore' if restore else 'quarantine-apply',{'quarantine_id':row.id,'_actor':user['username']}),'server_changes_paused':True}
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/execute')
-def approve_quarantine(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(auth)):
+def approve_quarantine(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(admin_user)):
     with host_change(host_id),Session() as s:
         return queue_file_response(s,host_or_404(s,host_id),response_row(s,host_id,quarantine_id),body,user)
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/restore')
-def approve_quarantine_restore(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(auth)):
+def approve_quarantine_restore(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         return queue_file_response(s,host_or_404(s,host_id),response_row(s,host_id,quarantine_id),body,user,restore=True)
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/status')
-def reconcile_quarantine(host_id:str,quarantine_id:str,user=Depends(auth)):
+def reconcile_quarantine(host_id:str,quarantine_id:str,user=Depends(admin_user)):
     from . import repair_publication
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=response_row(s,host_id,quarantine_id)
@@ -2114,7 +2903,7 @@ def reconcile_quarantine(host_id:str,quarantine_id:str,user=Depends(auth)):
         return {'job_id':worker.enqueue(s,host_id,'quarantine-status',{'quarantine_id':row.id,'_actor':user['username']})}
 
 @app.post('/api/hosts/{host_id}/security/quarantines/{quarantine_id}/release')
-def release_quarantine_hold(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(auth)):
+def release_quarantine_hold(host_id:str,quarantine_id:str,body:ResponseApproval,user=Depends(admin_user)):
     from . import quarantine,repair_publication
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=response_row(s,host_id,quarantine_id)
@@ -2132,7 +2921,7 @@ class SecurityPlanInput(BaseModel):
     include_related:bool=False
 
 @app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/plan')
-def security_plan_queue(host_id:str,incident_id:str,body:SecurityPlanInput|None=None,user=Depends(auth)):
+def security_plan_queue(host_id:str,incident_id:str,body:SecurityPlanInput|None=None,user=Depends(admin_user)):
     with worker.Lock('security-plan-queue'):
         with Session() as s:
             host_or_404(s,host_id);row=s.get(incidents.Incident,incident_id)
@@ -2154,7 +2943,7 @@ class SecurityPlanApproval(BaseModel):
     evidence_digest:str
 
 @app.post('/api/hosts/{host_id}/security/plans/{plan_id}/approve')
-def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(auth)):
+def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True):
         with Session() as s:
             plan=s.get(incidents.Plan,plan_id)
@@ -2176,15 +2965,14 @@ class SecurityScanPolicy(SecurityScanInput):
     interval_hours:int=Field(default=24,ge=1,le=720)
 
 @app.get('/api/hosts/{host_id}/security/policy')
-def security_policy(host_id:str,user=Depends(auth)):
+def security_policy(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
         return row.value if row else {'enabled':False,'interval_hours':24,'paths':['/usr/local/bin','/tmp']}
 
 @app.put('/api/hosts/{host_id}/security/policy')
-def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(auth)):
-    for path in body.paths:
-        if not path.startswith('/') or '..' in Path(path).parts or len(path)>4096 or '\x00' in path:raise ValueError('Invalid scan directory')
+def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_user)):
+    validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
             host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
@@ -2198,7 +2986,7 @@ class IncidentReview(BaseModel):
     expected_updated:float=Field(ge=0,allow_inf_nan=False)
 
 @app.put('/api/hosts/{host_id}/security/incidents/{incident_id}')
-def security_incident_review(host_id:str,incident_id:str,body:IncidentReview,user=Depends(auth)):
+def security_incident_review(host_id:str,incident_id:str,body:IncidentReview,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True):
         with Session() as s:
             row=s.get(incidents.Incident,incident_id)
@@ -2207,8 +2995,43 @@ def security_incident_review(host_id:str,incident_id:str,body:IncidentReview,use
             incidents.review(s,row,body.state,body.reason,user['username'],body.expected_updated)
             s.commit();return object_dict(row)
 
+class IncidentOwner(BaseModel):
+    owner:str=Field(max_length=64)
+    reason:str=Field(min_length=10,max_length=4000)
+    expected_revision:int=Field(ge=0)
+
+class IncidentNote(BaseModel):
+    note:str=Field(min_length=1,max_length=4000)
+
+@app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/case')
+def security_incident_case(host_id:str,incident_id:str,user=Depends(admin_user)):
+    with Session() as s:
+        row=s.get(incidents.Incident,incident_id)
+        if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+        return incidents.case_state(s,row)
+
+@app.put('/api/hosts/{host_id}/security/incidents/{incident_id}/owner')
+def security_incident_owner(host_id:str,incident_id:str,body:IncidentOwner,user=Depends(admin_user)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            try:incidents.assign(s,row,body.owner,body.reason,user['username'],body.expected_revision)
+            except ValueError as e:raise HTTPException(409 if 'changed' in str(e) else 422,str(e))
+            s.commit();return incidents.case_state(s,row)
+
+@app.post('/api/hosts/{host_id}/security/incidents/{incident_id}/notes')
+def security_incident_note(host_id:str,incident_id:str,body:IncidentNote,user=Depends(admin_user)):
+    with host_change(host_id,allow_quarantined=True):
+        with Session() as s:
+            row=s.get(incidents.Incident,incident_id)
+            if not row or row.host_id!=host_id:raise HTTPException(404,'Incident not found')
+            try:incidents.add_note(s,row,body.note,user['username'])
+            except ValueError as e:raise HTTPException(422,str(e))
+            s.commit();return {'recorded':True}
+
 @app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/related')
-def security_related_evidence(host_id:str,incident_id:str,offset:int=0,as_of:float|None=None,expected_digest:str='',user=Depends(auth)):
+def security_related_evidence(host_id:str,incident_id:str,offset:int=0,as_of:float|None=None,expected_digest:str='',user=Depends(admin_user)):
     from . import security_correlation
     if offset<0 or offset>1_000_000 or len(expected_digest)>64:raise ValueError('Invalid evidence page')
     with Session() as s:
@@ -2218,7 +3041,7 @@ def security_related_evidence(host_id:str,incident_id:str,offset:int=0,as_of:flo
         return security_correlation.page(s,row,offset,as_of,expected_digest)
 
 @app.get('/api/hosts/{host_id}/security/incidents/{incident_id}/timeline')
-def security_incident_timeline(host_id:str,incident_id:str,offset:int=0,user=Depends(auth)):
+def security_incident_timeline(host_id:str,incident_id:str,offset:int=0,user=Depends(admin_user)):
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         row=s.get(incidents.Incident,incident_id)
@@ -2227,7 +3050,7 @@ def security_incident_timeline(host_id:str,incident_id:str,offset:int=0,user=Dep
         return {'items':[object_dict(e) for e in events[:50]],'more':len(events)>50,'note':'Timeline recording begins with this version; older receipts and plans remain available.'}
 
 @app.get('/api/security/indicators/{sha256}')
-def security_indicator_matches(sha256:str,offset:int=0,user=Depends(auth)):
+def security_indicator_matches(sha256:str,offset:int=0,user=Depends(admin_user)):
     if not re.fullmatch('[a-f0-9]{64}',sha256) or offset<0:raise ValueError('Invalid hash or offset')
     with Session() as s:
         rows=list(s.scalars(select(incidents.Incident).where(incidents.Incident.evidence['sha256'].as_string()==sha256).order_by(incidents.Incident.updated.desc(),incidents.Incident.id).offset(offset).limit(51)))
@@ -2240,7 +3063,7 @@ class SecurityInspectionInput(BaseModel):
     persistence:bool=True
 
 @app.post('/api/hosts/{host_id}/security/inspections')
-def queue_security_inspection(host_id:str,body:SecurityInspectionInput,user=Depends(auth)):
+def queue_security_inspection(host_id:str,body:SecurityInspectionInput,user=Depends(admin_user)):
     from target.agent import validate_inspection
     validate_inspection(body.packages,body.persistence,body.custom_paths)
     with worker.Lock('security-inspection-queue'), Session() as s:
@@ -2253,7 +3076,7 @@ class VendorInspectionInput(BaseModel):
     bundle_id:str=Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
 
 @app.post('/api/hosts/{host_id}/security/vendor-inspections')
-def queue_vendor_inspection(host_id:str,body:VendorInspectionInput,user=Depends(auth)):
+def queue_vendor_inspection(host_id:str,body:VendorInspectionInput,user=Depends(admin_user)):
     # Authentication and archive parsing happen on the worker, outside HTTP requests.
     with worker.Lock('security-inspection-queue'),Session() as s:
         host_or_404(s,host_id)
@@ -2262,7 +3085,7 @@ def queue_vendor_inspection(host_id:str,body:VendorInspectionInput,user=Depends(
         return {'job_id':worker.enqueue(s,host_id,'vendor-inspect',body.model_dump())}
 
 @app.get('/api/hosts/{host_id}/security/inspections')
-def security_inspections(host_id:str,offset:int=0,user=Depends(auth)):
+def security_inspections(host_id:str,offset:int=0,user=Depends(admin_user)):
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
@@ -2271,7 +3094,7 @@ def security_inspections(host_id:str,offset:int=0,user=Depends(auth)):
 
 
 @app.get('/api/hosts/{host_id}/security/inspections/{inspection_id}/comparison')
-def persistence_comparison(host_id:str,inspection_id:str,user=Depends(auth)):
+def persistence_comparison(host_id:str,inspection_id:str,user=Depends(admin_user)):
     from .persistence import compare
     with Session() as s:
         host_or_404(s,host_id)
@@ -2290,31 +3113,51 @@ def persistence_comparison(host_id:str,inspection_id:str,user=Depends(auth)):
 
 
 class AgentPolicyInput(BaseModel):
+    # None (or omitted) means "use the global default"; False/True are explicit overrides.
+    auto_upgrade:bool|None=None
+    auto_repair:bool|None=None
+    expected:dict
+
+class AgentGlobalPolicyInput(BaseModel):
     auto_upgrade:bool=False
     auto_repair:bool=False
     expected:dict
 
 @app.get('/api/hosts/{host_id}/security/agent')
-def agent_state(host_id:str,user=Depends(auth)):
+def agent_state(host_id:str,user=Depends(admin_user)):
     from . import agent_maintenance
     with Session() as s:return agent_maintenance.public(s,host_or_404(s,host_id))
 
+@app.get('/api/settings/agent-maintenance')
+def agent_global_policy(user=Depends(admin_user)):
+    from . import agent_maintenance
+    with Session() as s:return agent_maintenance.global_policy(s)
+
+@app.put('/api/settings/agent-maintenance')
+def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_user)):
+    from . import agent_maintenance
+    value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+    try:saved=agent_maintenance.save_global(value,body.expected,lambda s:audit(s,'agent global policy updated',json.dumps(value)))
+    except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
+    if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
+    return value
+
 @app.put('/api/hosts/{host_id}/security/agent')
-def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(auth)):
+def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
     from . import agent_maintenance
     with host_change(host_id):
         with Session() as s:
             host_or_404(s,host_id)
             if body.expected!=agent_maintenance.policy(s,host_id):raise HTTPException(409,'Agent policy changed; refresh before saving')
-            value={'auto_upgrade':body.auto_upgrade,'auto_repair':body.auto_repair}
+            value={k:v for k,v in (('auto_upgrade',body.auto_upgrade),('auto_repair',body.auto_repair)) if v is not None}
             row=s.get(Setting,'agent-policy:'+host_id)
             if row:row.value=value
             else:s.add(Setting(key='agent-policy:'+host_id,value=value))
-            audit(s,'agent policy updated',host_id+' '+json.dumps(value));s.commit()
-            return value
+            audit(s,'agent policy updated',host_id+' overrides '+json.dumps(value));s.commit()
+            return agent_maintenance.public(s,host_or_404(s,host_id))['policy']
 
 @app.post('/api/hosts/{host_id}/security/agent/{action}')
-def agent_action(host_id:str,action:str,user=Depends(auth)):
+def agent_action(host_id:str,action:str,user=Depends(admin_user)):
     from . import agent_maintenance
     if action not in ('check','update'):raise HTTPException(404,'Unknown agent operation')
     with host_change(host_id):
@@ -2327,30 +3170,31 @@ def agent_action(host_id:str,action:str,user=Depends(auth)):
 
 
 class PersistenceApproval(BaseModel):
+    review_digest:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
     inspection_id:str=Field(max_length=36)
     evidence_digest:str=Field(pattern=r'^[a-f0-9]{64}$')
     expected:str=Field(default='',max_length=36)
     reason:str=Field(min_length=10,max_length=4000)
 
 @app.get('/api/hosts/{host_id}/security/baseline')
-def get_persistence_baseline(host_id:str,user=Depends(auth)):
+def get_persistence_baseline(host_id:str,user=Depends(admin_user)):
     from . import persistence
     with Session() as s:
         host_or_404(s,host_id)
-        return persistence.status(s,host_id)
+        return persistence.review(s,host_id)
 
 @app.post('/api/hosts/{host_id}/security/baseline')
-def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(auth)):
+def approve_persistence_baseline(host_id:str,body:PersistenceApproval,user=Depends(admin_user)):
     from . import persistence
     with host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id)
-        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'])
+        try:identifier=persistence.approve(s,host_id,body.inspection_id,body.evidence_digest,body.expected,body.reason,user['username'],body.review_digest)
         except ValueError as error:raise HTTPException(409,str(error)) from None
         s.commit()
         return {'id':identifier}
 
 @app.get('/api/hosts/{host_id}/security/baseline/history')
-def persistence_baseline_history(host_id:str,offset:int=0,user=Depends(auth)):
+def persistence_baseline_history(host_id:str,offset:int=0,user=Depends(admin_user)):
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id)
@@ -2367,14 +3211,14 @@ class PersistenceMonitorInput(BaseModel):
     expected_revision:str=Field(default='',max_length=36)
 
 @app.get('/api/hosts/{host_id}/security/persistence-monitor')
-def get_persistence_monitor(host_id:str,user=Depends(auth)):
+def get_persistence_monitor(host_id:str,user=Depends(admin_user)):
     from .persistence import monitor_policy
     with Session() as s:
         host_or_404(s,host_id)
         return monitor_policy(s,host_id)
 
 @app.put('/api/hosts/{host_id}/security/persistence-monitor')
-def save_persistence_monitor(host_id:str,body:PersistenceMonitorInput,user=Depends(auth)):
+def save_persistence_monitor(host_id:str,body:PersistenceMonitorInput,user=Depends(admin_user)):
     from .persistence import monitor_policy
     from target.agent import validate_custom_paths
     validate_custom_paths(body.custom_paths)
@@ -2388,7 +3232,7 @@ def save_persistence_monitor(host_id:str,body:PersistenceMonitorInput,user=Depen
         return value
 
 @app.get('/api/hosts/{host_id}/security/persistence-incidents')
-def startup_incidents(host_id:str,offset:int=0,user=Depends(auth)):
+def startup_incidents(host_id:str,offset:int=0,user=Depends(admin_user)):
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         host_or_404(s,host_id);table=incidents.PersistenceIncident
@@ -2397,7 +3241,7 @@ def startup_incidents(host_id:str,offset:int=0,user=Depends(auth)):
         return {'items':[object_dict(row)|{'plans':plans(s,row)} for row in rows[:10]],'more':len(rows)>10}
 
 @app.get('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/history')
-def startup_incident_history(host_id:str,incident_id:str,offset:int=0,user=Depends(auth)):
+def startup_incident_history(host_id:str,incident_id:str,offset:int=0,user=Depends(admin_user)):
     if offset<0:raise ValueError('Invalid offset')
     with Session() as s:
         row=s.get(incidents.PersistenceIncident,incident_id)
@@ -2407,7 +3251,7 @@ def startup_incident_history(host_id:str,incident_id:str,offset:int=0,user=Depen
         return {'baseline_id':row.baseline_id,'detections':[object_dict(r) for r in detections[:20]],'reviews':[object_dict(r) for r in reviews[:20]],'more':len(detections)>20 or len(reviews)>20}
 
 @app.put('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}')
-def review_startup_incident(host_id:str,incident_id:str,body:IncidentReview,user=Depends(auth)):
+def review_startup_incident(host_id:str,incident_id:str,body:IncidentReview,user=Depends(admin_user)):
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=s.get(incidents.PersistenceIncident,incident_id)
         if not row or row.host_id!=host_id:raise HTTPException(404,'Startup incident not found')
@@ -2425,7 +3269,7 @@ class StartupPlanRequest(BaseModel):
     expected_updated:float=Field(ge=0,allow_inf_nan=False)
 
 @app.post('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/plan')
-def queue_startup_plan(host_id:str,incident_id:str,body:StartupPlanRequest,user=Depends(auth)):
+def queue_startup_plan(host_id:str,incident_id:str,body:StartupPlanRequest,user=Depends(admin_user)):
     from . import startup_ai
     with worker.Lock('security-plan-queue'),host_change(host_id,allow_quarantined=True),Session() as s:
         host_or_404(s,host_id);row=s.get(incidents.PersistenceIncident,incident_id)
@@ -2441,7 +3285,7 @@ def queue_startup_plan(host_id:str,incident_id:str,body:StartupPlanRequest,user=
         return {'job_id':worker.enqueue(s,host_id,'startup-plan',{'incident_id':row.id,'expected_updated':repr(row.updated)})}
 
 @app.post('/api/hosts/{host_id}/security/persistence-incidents/{incident_id}/plans/{plan_id}/approve')
-def approve_startup_plan(host_id:str,incident_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(auth)):
+def approve_startup_plan(host_id:str,incident_id:str,plan_id:str,body:SecurityPlanApproval,user=Depends(admin_user)):
     from . import startup_ai
     with host_change(host_id,allow_quarantined=True),Session() as s:
         row=s.get(incidents.PersistenceIncident,incident_id);plan=s.get(incidents.Plan,plan_id)
@@ -2456,7 +3300,7 @@ def approve_startup_plan(host_id:str,incident_id:str,plan_id:str,body:SecurityPl
 
 
 @app.get('/api/hosts/{host_id}/security/startup-inventory')
-def startup_inventory(host_id:str,offset:int=0,q:str='',expected_digest:str='',user=Depends(auth)):
+def startup_inventory(host_id:str,offset:int=0,q:str='',expected_digest:str='',user=Depends(admin_user)):
     from . import startup_inventory as inventory
     if offset<0 or offset>256 or len(q)>200 or (expected_digest and not re.fullmatch('[a-f0-9]{64}',expected_digest)):
         raise ValueError('Invalid startup inventory page')

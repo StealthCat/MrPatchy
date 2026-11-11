@@ -31,11 +31,14 @@ def bridge():
 def digest(value):return hashlib.sha256(value).hexdigest()
 def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
 def os_info(text):
-    return {k:v.strip().strip('"').strip("'") for k,v in (line.split('=',1) for line in text.splitlines() if '=' in line and not line.startswith('#'))}
+    return {k.strip():v.strip().strip('"').strip("'") for k,v in (line.split('=',1) for line in text.splitlines() if '=' in line and not line.lstrip().startswith('#'))}
+def is_raspberry_pi(inv,kind):
+    # 64-bit Pi OS also reports ID=debian. Detect its vendor packages/sources.
+    return kind=='raspbian' or any(x in inv.get('status','') for x in ('Package: raspberrypi-sys-mods\n','Package: raspi-config\n')) or any('raspberrypi.' in x or 'raspbian.' in x for x in inv.get('files',{}).values())
+
 def transition(inv):
     info=os_info(inv['os']);kind=info.get('ID');version=info.get('VERSION_ID','')
-    # 64-bit Pi OS also reports ID=debian. Detect its vendor packages/sources.
-    if kind=='raspbian' or any(x in inv.get('status','') for x in ('Package: raspberrypi-sys-mods\n','Package: raspi-config\n')) or any('raspberrypi.' in x or 'raspbian.' in x for x in inv.get('files',{}).values()):
+    if is_raspberry_pi(inv,kind):
         raise ValueError('Raspberry Pi OS major upgrades require a new-image migration; in-place upgrades are not supported')
     pair=TRANSITIONS.get(kind,{}).get(version)
     if not pair:raise ValueError('No supported adjacent stable release path for '+str(kind)+' '+version)

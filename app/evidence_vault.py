@@ -1,7 +1,7 @@
 """Explicitly approved evidence preservation. Never removes the source file."""
 import time
 import uuid
-from sqlalchemy import String,Double,JSON,Text,select
+from sqlalchemy import String,Double,JSON,Text
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base,audit
 from . import incidents,ssh

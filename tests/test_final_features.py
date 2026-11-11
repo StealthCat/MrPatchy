@@ -95,7 +95,7 @@ def test_provenance_does_not_export_arguments(tmp_path,monkeypatch):
 
 def test_encrypted_recovery_round_trip(tmp_path,monkeypatch):
     import importlib.util,sqlite3,shutil
-    if not shutil.which('restic'):pytest.skip('restic is exercised in recovery CI')
+    if not shutil.which('restic'):pytest.skip('restic is exercised in the CI tests job')
     spec=importlib.util.spec_from_file_location('recovery',Path(__file__).parents[1]/'scripts/recovery.py')
     recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
     data=tmp_path/'data';data.mkdir();(data/'ssh').mkdir();(data/'ssh/test.key').write_text('private fixture')
@@ -120,7 +120,7 @@ def test_encrypted_recovery_round_trip(tmp_path,monkeypatch):
 def test_encrypted_recovery_round_trip_for_empty_fleet(tmp_path,monkeypatch):
     """A fresh deployment has no ssh/ directory until its first server is added (#131)."""
     import importlib.util,sqlite3,shutil,stat
-    if not shutil.which('restic'):pytest.skip('restic is exercised in recovery CI')
+    if not shutil.which('restic'):pytest.skip('restic is exercised in the CI tests job')
     spec=importlib.util.spec_from_file_location('recovery',Path(__file__).parents[1]/'scripts/recovery.py')
     recovery=importlib.util.module_from_spec(spec);spec.loader.exec_module(recovery)
     data=tmp_path/'data';data.mkdir();(data/'secret.key').write_text('encryption fixture')
@@ -178,3 +178,68 @@ def test_sso_callback_state_is_consumed_once(client,monkeypatch):
     result=client.get('/auth/sso/callback',params={'state':state})
     assert result.status_code==400 and 'reused' in result.json()['detail']
     assert calls==['exchange']
+
+def sso_failure_setup(monkeypatch,validate,authorize):
+    import time
+    from app.security import token_hash
+    monkeypatch.setattr(sso,'issuer','https://issuer.example')
+    sso.failure_logged.clear()
+    monkeypatch.setattr(sso,'validate_provider',validate)
+    monkeypatch.setattr(sso,'oauth',SimpleNamespace(provider=SimpleNamespace(authorize_access_token=authorize)))
+    def state(name):
+        with Session() as session:
+            session.add(Setting(key='oidc-state:'+token_hash(name),value={'expires':time.time()+300}));session.commit()
+        return name
+    return state
+
+def sso_audits():
+    from sqlalchemy import select
+    from app.db import Audit
+    with Session() as s:return [a.detail for a in s.scalars(select(Audit).where(Audit.action=='SSO login failed'))]
+
+def test_sso_callback_failures_are_logged_and_audited(client,monkeypatch,caplog):
+    from fastapi import HTTPException
+    async def bad_discovery():raise HTTPException(400,'OIDC discovery issuer mismatch')
+    async def ok():return {}
+    async def unassigned(request):return {'userinfo':{'iss':sso.issuer,'sub':'secret-subject-value'}}
+    state=sso_failure_setup(monkeypatch,bad_discovery,unassigned)
+    with caplog.at_level('WARNING',logger='mrpatchy.sso'):
+        r=client.get('/auth/sso/callback',params={'state':state('s1')})
+    assert r.status_code==400 and r.json()['detail']=='SSO validation failed or account is not assigned'
+    assert 'discovery or endpoint validation failed' in caplog.text and 'HTTPException' in caplog.text
+    assert any('issuer https://issuer.example' in d and 'discovery' in d for d in sso_audits())
+    monkeypatch.setattr(sso,'validate_provider',ok)
+    for name in ('s2','s3'):
+        assert client.get('/auth/sso/callback',params={'state':state(name)}).status_code==400
+    details=sso_audits()
+    unassigned_rows=[d for d in details if 'no enabled account binding' in d]
+    assert len(unassigned_rows)==1  # repeat of the same reason+subject is rate limited
+    assert 'secret-subject-value' not in ' '.join(details)
+
+def test_malformed_bpftrace_line_keeps_sibling_events():
+    from target.agent import decode_bpf_events
+    good=lambda n:json.dumps({'type':'printf','data':'%d\t0\t/bin/x\n'%n}).encode()
+    chunk=good(1)+b'\n{"type":"printf","data":"1\\t0\\t/tmp/\xff"}\n'+b'not json\n'+good(2)+b'\n'
+    rows,pending=decode_bpf_events(b'',chunk)
+    assert pending==b''
+    printf=[r for r in rows if r['type']=='printf']
+    assert len(printf)==3 and printf[1]['data'].endswith('/tmp/\udcff')
+    assert [r for r in rows if r['type']=='malformed']==[{'type':'malformed','count':1}]
+
+def test_sso_pending_states_are_bounded_per_source_and_evict_oldest(monkeypatch):
+    """One unauthenticated source must not lock every user out of SSO (#416)."""
+    import time
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    with Session() as s:
+        for row in s.scalars(select(Setting).where(Setting.key.like('oidc-state:%'))):s.delete(row)
+        s.commit()
+    for i in range(sso.PENDING_PER_SOURCE):sso.admit_state('a%d'%i,'noisy')
+    with pytest.raises(HTTPException) as err:sso.admit_state('extra','noisy')
+    assert err.value.status_code==429
+    sso.admit_state('legit','other')  # unaffected by the noisy source
+    monkeypatch.setattr(sso,'PENDING_GLOBAL',12)
+    for i in range(5):sso.admit_state('g%d'%i,'src%d'%i)
+    with Session() as s:
+        keys=[r.key for r in s.scalars(select(Setting).where(Setting.key.like('oidc-state:%')))]
+    assert len(keys)==12 and 'oidc-state:g4' in keys and 'oidc-state:a0' not in keys

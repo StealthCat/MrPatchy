@@ -57,6 +57,28 @@ def test_bad_preflight_never_attempts_patch(admin,monkeypatch,sample,policy):
     assert 'patch' not in calls and 'protected-patch' not in calls
     with Session() as s:assert s.get(Job,'preflight-job').state=='failed'
 
+@pytest.mark.parametrize('inspect',[RuntimeError('Configuration recovery manifest exceeds capture budget'),{'version':0}])
+def test_failed_read_only_inspect_before_protected_patch_is_plain_failure(admin,monkeypatch,inspect):
+    policy={'reboot':False,'rollback':True}
+    with Session() as s:
+        s.add(Host(id='inspect',name='inspect',address='192.0.2.1',fingerprint='test'))
+        s.add(Job(id='inspect-job',host_id='inspect',action='patch',payload={'packages':['demo=2'],'_recovery_policy':policy}));s.commit()
+    calls=[]
+    def call(host,req,**kw):
+        calls.append(req['action'])
+        if req['action']=='health':return health()
+        if req['action']=='patch-inspect':
+            if isinstance(inspect,BaseException):raise inspect
+            return inspect
+        return {}
+    monkeypatch.setattr(worker.ssh,'call',call)
+    monkeypatch.setattr(worker,'save_inventory',lambda *args:None)
+    monkeypatch.setattr(worker,'validate_patch',lambda *args:None)
+    monkeypatch.setattr(operations,'recovery_policy',lambda *args:policy)
+    worker.execute('inspect-job')
+    assert 'protected-patch' not in calls
+    with Session() as s:assert s.get(Job,'inspect-job').state=='failed'
+
 def test_target_recovery_preflight_creates_no_transaction(tmp_path,monkeypatch):
     monkeypatch.setattr(bridge,'ROOT',tmp_path)
     calls=[]
@@ -69,11 +91,17 @@ def test_target_recovery_preflight_creates_no_transaction(tmp_path,monkeypatch):
 def test_target_health_list_is_not_truncated(monkeypatch):
     units=''.join(f'unit-{n}.service loaded failed failed Example\n' for n in range(1000))
     assert len(units)>20000
-    monkeypatch.setattr(bridge,'bounded',lambda *args,**kwargs:(units,''))
-    monkeypatch.setattr(bridge,'run',lambda *args,**kwargs:'active')
+    monkeypatch.setattr(bridge,'bounded',lambda args,**kwargs:('active\n','',0) if 'is-active' in args else (units,''))
     monkeypatch.setattr(bridge,'rpm_backend',lambda:False)
     result=bridge.handle({'action':'health'})
     assert len(operations.failed_unit_names(result))==1000
     assert result['failed_units'].startswith('unit-0.service')
     monkeypatch.setattr(bridge,'bounded',lambda *args,**kwargs:('', 'Failed to connect to bus'))
     with pytest.raises(RuntimeError,match='unambiguous'):bridge.handle({'action':'health'})
+
+@pytest.mark.parametrize('state,code',[('inactive',3),('failed',3),('activating',3),('unknown',4)])
+def test_target_health_reports_inactive_collector_instead_of_raising(monkeypatch,state,code):
+    monkeypatch.setattr(bridge,'bounded',lambda args,**kwargs:(state+'\n','',code) if 'is-active' in args else ('',''))
+    monkeypatch.setattr(bridge,'rpm_backend',lambda:False)
+    result=bridge.handle({'action':'health'})
+    assert result['collector_active'] is False and result['failed_units']==''

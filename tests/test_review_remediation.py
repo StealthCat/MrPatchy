@@ -81,7 +81,7 @@ def test_hash_rejects_inode_change_and_elapsed_budget(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='changed'):agent.hash_artifact(path,cache)
     assert cache=={}
     monkeypatch.setattr(agent.os,'fstat',real)
-    times=iter([0,0,3]);monkeypatch.setattr(agent.time,'monotonic',lambda:next(times))
+    times=iter([0,3]);monkeypatch.setattr(agent.time,'monotonic',lambda:next(times))
     with pytest.raises(ValueError,match='time budget'):agent.hash_artifact(path,cache)
     assert cache=={}
 
@@ -327,3 +327,43 @@ def test_stale_approved_plan_does_not_reuse_cancelled_job(admin):
         releases.store(row,{'blockers':[],'expires':time.time()+600})
         s.add_all([row,Job(id=job_id,host_id=host,action='release-upgrade',state='cancelled',payload={'plan_id':plan_id})]);s.commit();digest=row.digest
     assert admin.post(f'/api/hosts/{host}/releases/{plan_id}/decision',json={'decision':'go','digest':digest}).status_code==409
+
+
+def test_cached_hash_is_returned_after_deadline(tmp_path):
+    path=tmp_path/'bin';path.write_bytes(b'cached')
+    cache={}
+    digest=agent.hash_artifact(path,cache)
+    assert agent.hash_artifact(path,cache,deadline=agent.time.monotonic()-1)==digest
+    for name,data in (('full',b'x'*10),('empty',b'')):
+        target=tmp_path/name;target.write_bytes(data)
+        reads=[]
+        real=agent.os.fdopen
+        def spy(fd,*a,**k):
+            stream=real(fd,*a,**k)
+            class S:
+                def __getattr__(self,n):return getattr(stream,n)
+                def __enter__(self):return self
+                def __exit__(self,*e):return stream.__exit__(*e)
+                def read(self,*x):reads.append(x);return stream.read(*x)
+            return S()
+        agent.os.fdopen=spy
+        try:
+            with pytest.raises(ValueError,match='time budget'):
+                agent.hash_artifact(target,{},deadline=agent.time.monotonic()-1)
+        finally:agent.os.fdopen=real
+        assert reads==[]
+
+
+def test_poll_ingests_each_event_batch_once(admin,tmp_path,monkeypatch):
+    monkeypatch.setattr(agent,'ROOT',tmp_path)
+    for _ in range(3):agent.spool([],time.time())
+    snapshot=agent.pending_events();acked=[];ingested=[]
+    real=worker.ingest_events
+    monkeypatch.setattr(worker,'ingest_events',lambda s,h,snap:ingested.append(1) or real(s,h,snap))
+    def call(h,request,**kw):
+        assert request['action']=='ack';acked.append(request['ids']);return agent.acknowledge(request['ids'])
+    monkeypatch.setattr(worker.ssh,'call',call)
+    with Session() as s:
+        ids=[event['id'] for event in snapshot['events']]
+        worker.drain_events(s,SimpleNamespace(id='once'),snapshot,ingested_ids=ids)
+    assert not ingested and acked==[ids]

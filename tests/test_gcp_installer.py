@@ -89,3 +89,40 @@ def test_wif_mount_and_credentials_validation(installer):
     assert 'compose.gcp-auth.json' in login
     assert run('--credential-dir',str(credentials)).returncode==0
     assert run().returncode!=0
+
+
+@pytest.mark.parametrize('url',['https://patchy.example.test:0','https://patchy.example.test:','https://patchy.example.test:70000','https://[::1]:'])
+def test_installer_rejects_invalid_public_ports_without_traceback(installer,url):
+    root,run=installer
+    result=run('--public-url',url)
+    assert result.returncode!=0 and not (root/'.env').exists()
+    assert 'Invalid public port' in result.stderr and 'Traceback' not in result.stderr
+
+
+def test_installer_defaults_to_443_without_explicit_port(installer):
+    root,run=installer
+    assert run('--public-url','https://patchy.example.test').returncode==0
+    assert 'HTTPS_PORT=443' in (root/'.env').read_text()
+
+
+def test_installer_warns_when_public_url_is_ignored_for_existing_env(installer):
+    root,run=installer
+    assert run('--public-url','https://patchy.example.test').returncode==0
+    config=(root/'.env').read_text()
+    again=run('--public-url','https://other.example.test')
+    assert again.returncode==0 and (root/'.env').read_text()==config
+    assert '--public-url ignored' in again.stderr
+    assert '--public-url ignored' not in run().stderr
+
+
+def test_installer_persists_gcp_compose_files_for_plain_compose(installer):
+    root,run=installer
+    (root/'.env').write_text('ADMIN_PASSWORD=x\nGCP_ZONE=old\n')
+    result=run()
+    assert result.returncode==0,result.stderr
+    config=dict(line.split('=',1) for line in (root/'.env').read_text().splitlines())
+    assert config['COMPOSE_FILE']=='compose.yaml:compose.gcp.yaml'
+    assert config['GCP_PROJECT']=='test-project' and config['GCP_ZONE']=='us-central1-a'
+    assert config['ADMIN_PASSWORD']=='x'
+    before=(root/'.env').read_text()
+    assert run().returncode==0 and (root/'.env').read_text()==before

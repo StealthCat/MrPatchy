@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -48,7 +49,7 @@ def test_independent_profiles_preserve_each_other_and_redact_material(configured
     for secret in [private['certificate'], private['private_key'], 'YWJj']:
         assert secret not in json.dumps(result)
     assert 'https://patchy.internal.test, https://alias.internal.test' in calls[-1]
-    assert 'https://patchy.external.test' in calls[-1]
+    assert re.search(r'https://patchy\.external\.test(?::|/|\s|}|$)', calls[-1])
     assert 'test_dir "https://ca.example.test/directory"' in calls[-1]
     assert 'https://patchy.external.test:{$HTTPS_PORT:443}{uri}' in calls[-1]
     assert 'external' in tls.read_profiles()
@@ -236,3 +237,16 @@ def test_bootstrap_upgrades_generated_configuration_without_port_marker(configur
     tls.bootstrap()
     assert '# mrpatchy-ports:' in path.read_text() and tls.read_profiles()==profiles
     assert not calls
+
+
+def test_unconfirmed_bootstraps_keep_last_confirmed_uploaded_key(configured,monkeypatch):
+    root,calls=configured
+    material=certificate(['patchy.internal.test'])
+    tls.apply({'domain':'patchy.internal.test','mode':'uploaded',**material})
+    confirmed=root/tls._live_state()
+    for port in ('10443','11443'):
+        monkeypatch.setenv('HTTPS_PORT',port)
+        tls.bootstrap()
+    assert len(calls)==1
+    assert (confirmed/'internal-key.pem').read_text()==material['private_key']
+    assert (confirmed/'profiles.json').exists()

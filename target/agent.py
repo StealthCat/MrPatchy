@@ -14,17 +14,69 @@ import sqlite3
 import tempfile
 import threading
 from contextlib import contextmanager
+from types import SimpleNamespace
 import uuid
 import re
 
+# Deployment guard (#425): bridges compile this file before replacing any managed
+# helper. The assignment expression is Python 3.8+ syntax, so even an older
+# forced-command bridge on Python <3.8 rejects the deployment before any write.
+PYTHON_MINIMUM = (_python_minimum := (3, 8))
+
 ROOT = Path('/opt/drpatch')
 SERVICE_PROPERTIES = ('Id','LoadState','ActiveState','SubState','Result','ExecMainCode','ExecMainStatus','MainPID','NRestarts','InvocationID','FragmentPath','UnitFileState')
-SPOOL_BATCH_BYTES = 256*1024
+DEFAULT_SPOOL_BATCH_BYTES = 256*1024
+MIN_SPOOL_BATCH_BYTES = 16*1024
+MAX_SPOOL_BATCH_BYTES = 1024*1024
 SPOOL_CAPACITY_BYTES = 48_000_000
+SPOOL_CONFIG_CACHE = {'identity':object(),'batch_limit_bytes':DEFAULT_SPOOL_BATCH_BYTES}
+SPOOL_CONFIG_LOCK = threading.Lock()
+
+def read_spool_config(path, info):
+    """Return verified configuration bytes and cap from a bounded file read."""
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077 or info.st_size > 1024):
+        raise ValueError('Unsafe agent spool configuration')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        data = os.read(fd, 1025)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    expected = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    opened = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    finished = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    if len(data) > 1024 or expected != opened or opened != finished:
+        raise ValueError('Agent spool configuration changed while reading')
+    try:
+        config = json.loads(data)
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError('Invalid agent spool configuration') from None
+    if (not isinstance(config, dict) or set(config) != {'version', 'batch_limit_bytes'}
+            or type(config['version']) is not int or config['version'] != 1):
+        raise ValueError('Invalid agent spool configuration')
+    value = config['batch_limit_bytes']
+    if type(value) is not int or not MIN_SPOOL_BATCH_BYTES <= value <= MAX_SPOOL_BATCH_BYTES:
+        raise ValueError('Invalid agent spool batch limit')
+    return data, value
+
+def spool_batch_limit():
+    """Read the root-owned, bridge-written batch cap without per-event file reads."""
+    path=ROOT/'spool.json'
+    try:info=path.lstat();identity=(str(path),info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+    except FileNotFoundError:identity=(str(path),None)
+    with SPOOL_CONFIG_LOCK:
+        if SPOOL_CONFIG_CACHE['identity']==identity:return SPOOL_CONFIG_CACHE['batch_limit_bytes']
+        if identity[1] is None:value=DEFAULT_SPOOL_BATCH_BYTES
+        else:
+            _, value = read_spool_config(path, info)
+        SPOOL_CONFIG_CACHE.update(identity=identity,batch_limit_bytes=value)
+        return value
 
 def response_service_units(units):
     if (not isinstance(units,list) or not 1<=len(units)<=16 or
-        any(not isinstance(unit,str) or len(unit)>128 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@:\-]*\.service',unit) for unit in units) or len(set(units))!=len(units)):
+        any(not isinstance(unit,str) or len(unit)>128 or not unit.endswith('.service') or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@:\-]*',unit[:-len('.service')]) for unit in units) or len(set(units))!=len(units)):
         raise ValueError('Select 1–16 unique explicit .service unit names without paths, patterns or options')
     return units
 
@@ -175,24 +227,139 @@ def collect(hash_cache):
         except (OSError, StopIteration) as e: errors.append({'pid':p.name,'error':str(e)})
     return processes, errors
 
+def root_filesystem_health(statvfs=os.statvfs,collected=None):
+    """Collect one cheap root-filesystem capacity observation without enumerating files."""
+    observed=time.time() if collected is None else collected
+    base={'version':1,'collected':observed,'source':'statvfs','scope':{'kind':'filesystem','path':'/'},'gaps':[]}
+    unknown={'state':'unknown','unit':'bytes'}
+    unknown_inodes={'state':'unknown','unit':'inodes'}
+    try:
+        value=statvfs('/')
+        fields={name:getattr(value,name) for name in ('f_frsize','f_bsize','f_blocks','f_bfree','f_bavail','f_files','f_ffree','f_favail')}
+        if any(type(item) is not int for item in fields.values()):raise ValueError('non-integer capacity value')
+        block_size=fields['f_frsize'] or fields['f_bsize']
+        if block_size<=0 or any(fields[name]<0 for name in ('f_blocks','f_bfree','f_bavail','f_files','f_ffree','f_favail')):raise ValueError('invalid capacity value')
+        total=fields['f_blocks']*block_size
+        free=min(fields['f_bfree']*block_size,total)
+        available=min(fields['f_bavail']*block_size,total)
+        if total>2**63-1:raise ValueError('capacity exceeds supported range')
+        result={**base,'applicability':'supported','bytes':{'state':'collected','unit':'bytes','total':total,'available':available,'used':total-free}}
+        if 0<fields['f_files']<=2**63-1:
+            inode_total=fields['f_files'];inode_free=min(fields['f_ffree'],inode_total);inode_available=min(fields['f_favail'],inode_total)
+            result['inodes']={'state':'collected','unit':'inodes','total':inode_total,'available':inode_available,'used':inode_total-inode_free}
+        else:
+            result['applicability']='partial'
+            result['inodes']=unknown_inodes
+            result['gaps'].append({'signal':'inodes','reason':'unsupported' if fields['f_files']==0 else 'unavailable-or-malformed'})
+        return result
+    except PermissionError:
+        reason='permission-denied'
+    except (OSError,AttributeError,TypeError,ValueError,OverflowError):
+        reason='unavailable-or-malformed'
+    return {**base,'applicability':'unknown','bytes':unknown,'inodes':unknown_inodes,'gaps':[{'signal':'filesystem-capacity','reason':reason}]}
+
+PRESSURE_FILES={'cpu':'/proc/pressure/cpu','memory':'/proc/pressure/memory'}
+_PSI_VALUE=re.compile(r'[0-9]+(?:\.[0-9]+)?')
+_PSI_TOTAL=re.compile(r'[0-9]+')
+class MissingPressureLine(ValueError):
+    """The requested PSI record is absent (distinct from a present but malformed one)."""
+def _pressure_line(text,kind):
+    found=None
+    for line in text.splitlines():
+        parts=line.split()
+        if parts and parts[0]==kind:
+            if found is not None:raise ValueError('duplicate pressure line')
+            values={}
+            for item in parts[1:]:
+                key,sep,raw=item.partition('=')
+                if not sep or key in values:raise ValueError('malformed pressure line')
+                if (key in ('avg10','avg60','avg300') and not _PSI_VALUE.fullmatch(raw)) or (key=='total' and not _PSI_TOTAL.fullmatch(raw)):raise ValueError('malformed pressure line')
+                values[key]=raw
+            found={k:float(values[k]) for k in ('avg10','avg60','avg300') if k in values}
+            if set(found)!={'avg10','avg60','avg300'} or any(not 0<=v<=100 for v in found.values()):raise ValueError('malformed pressure line')
+    if found is None:raise MissingPressureLine('missing pressure line')
+    return found
+
+def resource_pressure(read=lambda path:Path(path).read_text(),collected=None):
+    """Collect bounded CPU/memory pressure (PSI) and memory availability; absent sources stay unknown."""
+    observed=time.time() if collected is None else collected
+    result={'version':1,'collected':observed,'source':'procfs','scope':{'kind':'host'},'gaps':[]}
+    def failure(error):return 'permission-denied' if isinstance(error,PermissionError) else 'unsupported' if isinstance(error,FileNotFoundError) else 'unavailable-or-malformed'
+    for name,path in PRESSURE_FILES.items():
+        try:
+            text=read(path)
+            if not isinstance(text,str) or len(text)>4096:raise ValueError('invalid pressure data')
+            entry={'state':'collected','unit':'percent-stalled','some':_pressure_line(text,'some')}
+            try:entry['full']=_pressure_line(text,'full')
+            except MissingPressureLine:
+                if name!='cpu':raise # only a missing CPU "full" record is tolerated (older kernels); a malformed one is not
+            result[name]=entry
+        except (OSError,ValueError,TypeError) as error:
+            result[name]={'state':'unknown','unit':'percent-stalled'}
+            result['gaps'].append({'signal':name+'-pressure','reason':failure(error)})
+    try:
+        text=read('/proc/meminfo')
+        if not isinstance(text,str) or len(text)>65536:raise ValueError('invalid meminfo')
+        info={}
+        for line in text.splitlines():
+            key,_,rest=line.partition(':');fields=rest.split()
+            if key in ('MemTotal','MemAvailable'):
+                if key in info or len(fields)!=2 or fields[1]!='kB' or not (fields[0].isascii() and fields[0].isdigit()):raise ValueError('malformed memory field')
+                info[key]=int(fields[0])*1024
+        if set(info)!={'MemTotal','MemAvailable'} or info['MemTotal']<=0 or info['MemTotal']>2**63-1:raise ValueError('missing memory fields')
+        result['memory_capacity']={'state':'collected','unit':'bytes','total':info['MemTotal'],'available':min(info['MemAvailable'],info['MemTotal'])}
+    except (OSError,ValueError,TypeError) as error:
+        result['memory_capacity']={'state':'unknown','unit':'bytes'}
+        result['gaps'].append({'signal':'memory-capacity','reason':failure(error)})
+    states=[result[k]['state'] for k in ('cpu','memory','memory_capacity')]
+    result['applicability']='supported' if all(x=='collected' for x in states) else 'unknown' if not any(x=='collected' for x in states) else 'partial'
+    return result
+
+def telemetry_snapshot(hashed_at,hashes,metadata,processes,errors,clock=time.time,statvfs=os.statvfs,pressure=resource_pressure):
+    collected=clock()
+    return {'collected':collected,'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,
+            'processes':processes,'errors':errors,'device_health':root_filesystem_health(statvfs,collected),'resource_pressure':pressure(collected=collected)}
+
 def atomic(path, value):
+    path=Path(path)
+    if path.is_symlink():raise ValueError('Refusing symlink destination')
     fd,name=tempfile.mkstemp(prefix='.'+path.name,dir=path.parent)
     try:
         with os.fdopen(fd,'w') as stream:
             json.dump(value,stream);stream.flush();os.fsync(stream.fileno());os.fchmod(stream.fileno(),0o600)
         os.replace(name,path)
+        directory_fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(directory_fd)
+        finally:os.close(directory_fd)
     finally:
         if os.path.exists(name):os.unlink(name)
 
+SPOOL_READY=set()
+SPOOL_READY_LOCK=threading.Lock()
+
 @contextmanager
 def spool_db():
-    db=sqlite3.connect(ROOT/'events.db',timeout=5)
-    db.execute('PRAGMA journal_mode=WAL')
-    db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, observed REAL, payload TEXT)')
-    db.execute('CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER)')
+    path=ROOT/'events.db'
+    fresh=str(path) not in SPOOL_READY or not path.exists()
+    db=sqlite3.connect(path,timeout=5)
     try:
+        # WAL mode is persistent; schema and the running totals are prepared once per process.
+        if fresh:
+            with SPOOL_READY_LOCK:
+                db.execute('PRAGMA journal_mode=WAL')
+                db.execute('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, observed REAL, payload TEXT)')
+                db.execute('CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER)')
+                with db:
+                    # Spools created before the running totals existed are measured once.
+                    db.execute("INSERT OR IGNORE INTO counters SELECT 'queued_bytes',COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events")
+                    db.execute("INSERT OR IGNORE INTO counters SELECT 'queued_count',count(*) FROM events")
+                SPOOL_READY.add(str(path))
         with db: yield db
     finally: db.close()
+
+def spool_total(db,name):
+    row=db.execute('SELECT value FROM counters WHERE name=?',(name,)).fetchone()
+    return row[0] if row else 0
 
 def spool_counter(db,name,value=1):
     if value:
@@ -203,20 +370,22 @@ def spool_drop(db,reason,batches,observations):
     spool_counter(db,'dropped_'+reason+'_batches',batches)
     spool_counter(db,'dropped_'+reason+'_observations',observations)
 
-def spool_payloads(processes):
+def spool_payloads(processes,batch_limit_bytes=None):
     """Split one observation snapshot without splitting or silently losing records."""
     if not isinstance(processes,list):raise ValueError('Invalid spool process batch')
+    batch_limit_bytes=spool_batch_limit() if batch_limit_bytes is None else batch_limit_bytes
+    if type(batch_limit_bytes) is not int or not MIN_SPOOL_BATCH_BYTES<=batch_limit_bytes<=MAX_SPOOL_BATCH_BYTES:raise ValueError('Invalid agent spool batch limit')
     prefix='{"processes":[';suffix=']}'
     batches=[];current=[];size=len(prefix.encode())+len(suffix.encode())
     oversize=0
     for process in processes:
         encoded=json.dumps(process,separators=(',',':'))
         encoded_size=len(encoded.encode())
-        if len(prefix.encode())+encoded_size+len(suffix.encode())>SPOOL_BATCH_BYTES:
+        if len(prefix.encode())+encoded_size+len(suffix.encode())>batch_limit_bytes:
             oversize+=1
             continue
         separator=1 if current else 0
-        if current and size+separator+encoded_size>SPOOL_BATCH_BYTES:
+        if current and size+separator+encoded_size>batch_limit_bytes:
             batches.append(prefix+','.join(current)+suffix);current=[];size=len(prefix.encode())+len(suffix.encode());separator=0
         current.append(encoded);size+=separator+encoded_size
     if current or not processes:batches.append(prefix+','.join(current)+suffix)
@@ -228,25 +397,28 @@ def spool(processes, observed):
         payloads,oversize=spool_payloads(processes)
         if oversize:spool_drop(db,'oversize',oversize,oversize)
         db.executemany('INSERT INTO events VALUES (?,?,?)',[(str(uuid.uuid4()),observed,payload) for payload in payloads])
-        size=db.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events').fetchone()[0]
+        size=spool_total(db,'queued_bytes')+sum(len(x.encode()) for x in payloads)
+        count=spool_total(db,'queued_count')+len(payloads)
         while size>SPOOL_CAPACITY_BYTES:
             row=db.execute('SELECT id,payload,length(CAST(payload AS BLOB)) FROM events ORDER BY rowid LIMIT 1').fetchone()
-            db.execute('DELETE FROM events WHERE id=?',(row[0],));size-=row[2]
+            db.execute('DELETE FROM events WHERE id=?',(row[0],));size-=row[2];count-=1
             try:lost=len(json.loads(row[1]).get('processes',[]))
             except (AttributeError,TypeError,ValueError):lost=0
             spool_drop(db,'capacity',1,lost)
+        db.executemany('INSERT INTO counters VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value',
+                       [('queued_bytes',size),('queued_count',count)])
 
 def pending_events():
+    batch_limit_bytes=spool_batch_limit()
     with spool_db() as db:
         rows=db.execute('SELECT id,observed,payload FROM events ORDER BY rowid LIMIT 8').fetchall()
         counters=dict(db.execute('SELECT name,value FROM counters').fetchall())
-        count=db.execute('SELECT count(*) FROM events').fetchone()[0]
-        queued_bytes=db.execute('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM events').fetchone()[0]
+        count=counters.get('queued_count',0);queued_bytes=counters.get('queued_bytes',0)
     oversize_batches=counters.get('dropped_oversize_batches',0);capacity_batches=counters.get('dropped_capacity_batches',0)
     dropped=counters.get('dropped',0)
     return {'events':[{'id':r[0],'observed':r[1],**json.loads(r[2])} for r in rows],
             'spool':{'pending':count,'queued_bytes':queued_bytes,'capacity_bytes':SPOOL_CAPACITY_BYTES,
-                     'batch_limit_bytes':SPOOL_BATCH_BYTES,'dropped':dropped,
+                     'batch_limit_bytes':batch_limit_bytes,'dropped':dropped,
                      'dropped_observations':counters.get('dropped_oversize_observations',0)+counters.get('dropped_capacity_observations',0),
                      'drop_reasons':{'oversize':{'batches':oversize_batches,'observations':counters.get('dropped_oversize_observations',0)},
                                      'capacity':{'batches':capacity_batches,'observations':counters.get('dropped_capacity_observations',0)},
@@ -255,14 +427,22 @@ def pending_events():
 def acknowledge(ids):
     if not isinstance(ids,list) or len(ids)>8 or any(not isinstance(x,str) or len(x)!=36 for x in ids):
         raise ValueError('Invalid event acknowledgement')
-    with spool_db() as db: db.executemany('DELETE FROM events WHERE id=?',[(x,) for x in ids])
+    with spool_db() as db:
+        for x in ids:
+            row=db.execute('SELECT length(CAST(payload AS BLOB)) FROM events WHERE id=?',(x,)).fetchone()
+            if row:
+                # A concurrent duplicate acknowledgement may already have deleted the row:
+                # only the call whose DELETE removed it may decrement the counters.
+                if db.execute('DELETE FROM events WHERE id=?',(x,)).rowcount==1:
+                    db.execute("UPDATE counters SET value=MAX(0,value-?) WHERE name='queued_bytes'",(row[0],))
+                    db.execute("UPDATE counters SET value=MAX(0,value-1) WHERE name='queued_count'")
     return {'acknowledged':len(ids)}
 
 def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
     # Read through one descriptor: pathname replacement cannot change the inode
     # between validation and hashing. O_NONBLOCK prevents FIFO substitution hangs.
     deadline=min(deadline if deadline is not None else float('inf'),time.monotonic()+2)
-    if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
+    # The budget applies only when a cache miss needs the file read (checked per chunk).
     fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as stream:
         info=os.fstat(stream.fileno())
@@ -272,6 +452,8 @@ def hash_artifact(path,cache,expected=None,deadline=None,metadata=None):
             raise ValueError('On-disk inode differs from the running mapping')
         identity=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns,info.st_size)
         if identity not in cache:
+            # Expired budget: reject a miss before any read (also covers empty files).
+            if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
             checksum=hashlib.sha256();total=0
             for chunk in iter(lambda:stream.read(1024*1024),b''):
                 if time.monotonic()>deadline:raise ValueError('Hash time budget exceeded')
@@ -370,9 +552,21 @@ def decode_bpf_events(pending,chunk):
     """Frame pipe reads without losing buffered events or splitting UTF-8 characters."""
     lines=(pending+chunk).split(b'\n')
     if any(len(line)>65536 for line in lines):raise ValueError('Oversized bpftrace event')
-    return [json.loads(line) for line in lines[:-1] if line],lines[-1]
+    events=[];bad=0
+    for line in lines[:-1]:
+        if not line:continue
+        try:
+            # surrogateescape matches os.readlink(), so non-UTF-8 paths still compare equal.
+            event=json.loads(line.decode('utf-8','surrogateescape'))
+        except ValueError:bad+=1;continue
+        if isinstance(event,dict):events.append(event)
+        else:bad+=1
+    if bad:events.append({'type':'malformed','count':bad})
+    return events,lines[-1]
 
-def ebpf_process(data,proc_root=Path('/proc')):
+EBPF_HASH_CACHE_LIMIT=4096
+
+def ebpf_process(data,proc_root=Path('/proc'),cache=None):
     """Convert one bpftrace exec record to the canonical collector protocol."""
     pid_text,uid_text,filename=data.rstrip('\n').split('\t',2)
     if (not re.fullmatch(r'(?:0|[1-9][0-9]{0,9})',pid_text) or not 0<int(pid_text)<=2**31-1
@@ -380,7 +574,11 @@ def ebpf_process(data,proc_root=Path('/proc')):
         raise ValueError('Invalid bpftrace process identity')
     pid=int(pid_text);uid=int(uid_text);proc=proc_root/str(pid);sha=None
     try:
-        if os.readlink(proc/'exe')==filename:sha=hash_artifact(proc/'exe',{})
+        if os.readlink(proc/'exe')==filename:
+            # The cache key includes inode, mtime, ctime and size; identity is re-checked on every hit.
+            if cache is None:cache={}
+            elif len(cache)>=EBPF_HASH_CACHE_LIMIT:cache.clear()
+            sha=hash_artifact(proc/'exe',cache)
     except (OSError,ValueError):pass
     event_process={'pid':pid,'uid':uid,'executable':filename,'sha256':sha or 'unavailable',
                    'connections':[],'capture':'ebpf','identity_verified':sha is not None}
@@ -438,7 +636,7 @@ def ebpf_loop():
             threading.Thread(target=diagnostics,daemon=True).start()
             import selectors
             selector=selectors.DefaultSelector();selector.register(process.stdout,selectors.EVENT_READ)
-            pending=b'';ended=False
+            pending=b'';ended=False;hash_cache={};last_status=0.0
             while not ended:
                 current=json.loads(config_path.read_text()) if config_path.exists() else {}
                 if not current.get('ebpf'):process.terminate();break
@@ -447,14 +645,22 @@ def ebpf_loop():
                     if not chunk:ended=True;break
                     events,pending=decode_bpf_events(pending,chunk)
                     for event in events:
+                        if event.get('type')=='malformed':
+                            record_ebpf_diagnostic(instance,('Skipped %d malformed bpftrace line(s)'%event['count']).encode());continue
                         if event.get('type')!='printf':continue
-                        event_process=ebpf_process(event['data'])
-                        spool([event_process],time.time())
+                        try:
+                            event_process=ebpf_process(event['data'],cache=hash_cache)
+                            spool([event_process],time.time())
+                        except Exception as error:
+                            # One bad record must not discard its siblings or restart the collector.
+                            record_ebpf_diagnostic(instance,('Skipped bpftrace event: '+type(error).__name__).encode());continue
                         with EBPF_DIAGNOSTIC_LOCK:
                             # The first delivered event proves this run recovered; earlier
                             # warnings become history, later ones remain current.
                             if status.current!=('active',instance):retire_ebpf_diagnostic('recovered',instance)
-                            status('active',instance,last_event=time.time())
+                            # Rewrite the fsynced status file about once a second, not per event.
+                            if status.current!=('active',instance) or time.monotonic()-last_status>=1:
+                                status('active',instance,last_event=time.time());last_status=time.monotonic()
             selector.close()
             try:process.wait(timeout=5)
             except subprocess.TimeoutExpired:process.kill();process.wait()
@@ -477,14 +683,14 @@ def main():
                 optional='/etc/systemd/system/mrpatchy-agent.service.d/observability.conf'
                 for p in MANAGED+([optional] if Path(optional).exists() else []):
                     try:
-                        hashes[p] = digest(p)
-                        info=Path(p).stat()
-                        metadata[p]={'uid':info.st_uid,'gid':info.st_gid,'mode':stat.S_IMODE(info.st_mode)}
+                        # One descriptor yields hash and ownership, so a swap cannot split them.
+                        found={};hashes[p] = hash_artifact(p,{},metadata=found)
+                        metadata[p]={key:found[key] for key in ('uid','gid','mode')}
                     except (OSError,ValueError) as e: hashes[p] = 'ERROR: '+str(e)
                 hashed_at = time.time(); next_hash = started+300
             procs, errors = collect(cache)
             spool(procs,time.time())
-            atomic(ROOT/'telemetry.json', {'collected':time.time(),'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,'processes':procs,'errors':errors})
+            atomic(ROOT/'telemetry.json', telemetry_snapshot(hashed_at,hashes,metadata,procs,errors))
             if started >= next_inventory:
                 atomic(ROOT/'inventory.json', inventory()); next_inventory = started+300
             (ROOT/'collector-error.json').unlink(missing_ok=True)
@@ -495,6 +701,8 @@ def main():
 SCAN_EXCLUDED = ('/proc','/sys','/dev','/run','/var/lib/mrpatchy-quarantine','/var/lib/mrpatchy-evidence','/var/lib/mrpatchy-process-response','/var/lib/mrpatchy-repair-staging')
 SCAN_MAX_ENTRIES = 10000
 SCAN_MAX_DEPTH = 32
+CLAMAV_BATCH_FILES = 32
+CLAMAV_BATCH_BYTES = 128*1024*1024
 SIGNATURE_MAX_AGE = 7*86400
 
 
@@ -648,12 +856,100 @@ def security_scan(paths,yara_rules=None):
             for root,fd in handles:
                 yield from scan_entries(fd,root,report,deadline,gap)
         iterator=entries()
+        clam_options=[engine,'--stdout','--no-summary','--alert-exceeds-max=yes','--alert-encrypted=yes',
+                      '--follow-file-symlinks=2','--max-filesize=32M','--max-scansize=64M','--max-recursion=16']
+
+        def accept_result(record,result,identifiers=None):
+            """Verify the same opened object is still named, then retain its result."""
+            path=record['path'];fd=record['fd'];before=record['before']
+            try:
+                after=os.fstat(fd)
+                with scan_root(record['directory']) as current_dir:
+                    current_info=os.fstat(current_dir);original_info=os.fstat(record['directory_fd'])
+                    if (current_info.st_dev,current_info.st_ino)!=(original_info.st_dev,original_info.st_ino):
+                        gap(path,'Parent directory changed during scanning');return False
+                named=os.stat(record['name'],dir_fd=record['directory_fd'],follow_symlinks=False)
+                if (named.st_dev,named.st_ino)!=(before.st_dev,before.st_ino):
+                    gap(path,'File path replaced during scanning');return False
+                if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+                    gap(path,'File changed during scanning');return False
+                if result.returncode not in (0,1):gap(path,'Scanner failed');return False
+                if 'Heuristics.Limits.Exceeded' in result.stdout or 'Heuristics.Encrypted' in result.stdout:
+                    gap(path,'Scanner inspection limit or encrypted content prevented complete inspection')
+                report['scanned']+=1
+                if result.returncode==1:
+                    finding={'path':str(path),'sha256':record['digest'].hexdigest(),'device':before.st_dev,
+                             'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,
+                             'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:]}
+                    if identifiers is not None:finding['rule_ids']=identifiers
+                    report['findings'].append(finding)
+                    if len(report['findings'])>=100:
+                        gap(path,'Finding limit reached; scan stopped');return True
+                return False
+            except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:
+                gap(path,type(error).__name__);return False
+            finally:
+                os.close(fd);os.close(record['directory_fd'])
+
+        def parse_clam_batch(records,result):
+            if result.returncode not in (0,1):return None
+            lines=[line for line in result.stdout.splitlines() if line]
+            if len(lines)!=len(records):return None
+            parsed={}
+            for record in records:
+                target=f"/proc/self/fd/{record['fd']}"
+                matches=[line for line in lines if line.startswith(target+': ')]
+                if len(matches)!=1:return None
+                evidence=matches[0]
+                if evidence.endswith(': OK'):code=0
+                elif evidence.endswith(' FOUND'):code=1
+                else:return None
+                parsed[record['fd']]=SimpleNamespace(returncode=code,stdout=evidence)
+            if result.returncode!=int(any(item.returncode for item in parsed.values())):return None
+            return parsed
+
+        def flush_clam_batch(records):
+            """Scan open descriptors together; ambiguous batch output safely retries per file."""
+            if not records:return False
+            parsed=None
+            try:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise TimeoutError()
+                fds=tuple(record['fd'] for record in records)
+                result=subprocess.run(clam_options+[f'/proc/self/fd/{fd}' for fd in fds],pass_fds=fds,
+                                      capture_output=True,text=True,timeout=min(120,max(1,remaining)))
+                parsed=parse_clam_batch(records,result)
+            except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired):
+                parsed=None
+            stop=False
+            for record in records:
+                if stop:
+                    os.close(record['fd']);os.close(record['directory_fd']);continue
+                result=parsed.get(record['fd']) if parsed is not None else None
+                if result is None:
+                    try:
+                        remaining=deadline-time.monotonic()
+                        if remaining<=0:raise TimeoutError()
+                        os.lseek(record['fd'],0,0)
+                        result=subprocess.run(clam_options+[f"/proc/self/fd/{record['fd']}"],
+                                              pass_fds=(record['fd'],),capture_output=True,text=True,
+                                              timeout=min(30,max(1,remaining)))
+                    except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:
+                        gap(record['path'],type(error).__name__)
+                        os.close(record['fd']);os.close(record['directory_fd']);continue
+                stop=accept_result(record,result) or stop
+            records.clear()
+            return stop
+
         try:
+            pending=[];pending_bytes=0;stop_scan=False
             for directory_fd,directory,name in iterator:
                 path=directory/name;report['examined']+=1
                 if report['examined']>2000 or time.monotonic()>deadline:
+                    stop_scan=flush_clam_batch(pending) or stop_scan
                     gap(path,'Scan budget exhausted; remaining files not examined');return finish()
                 fd=None
+                record=None
                 try:
                     fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory_fd)
                     before=os.fstat(fd)
@@ -668,44 +964,46 @@ def security_scan(paths,yara_rules=None):
                         digest.update(chunk)
                         if time.monotonic()>deadline:raise TimeoutError()
                     os.lseek(fd,0,0)
+                    record={'path':path,'directory':directory,'name':name,'fd':fd,
+                            'directory_fd':os.dup(directory_fd),'before':before,'digest':digest}
+                    fd=None
                     if yara_rules is not None:
                         try:from bridge import bounded
                         except ImportError:from target.bridge import bounded
                         os.lseek(rules_file.fileno(),0,0)
-                        output,errors,status=bounded([engine,'-a','10',f'/proc/self/fd/{rules_file.fileno()}',f'/proc/self/fd/{fd}'],pass_fds=(rules_file.fileno(),fd),timeout=min(15,max(1,deadline-time.monotonic())),limit=64000,return_status=True,memory_limit=512*1024*1024,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','TZ':'UTC'})
+                        output,errors,status=bounded([engine,'-a','10',f'/proc/self/fd/{rules_file.fileno()}',f"/proc/self/fd/{record['fd']}"],pass_fds=(rules_file.fileno(),record['fd']),timeout=min(15,max(1,deadline-time.monotonic())),limit=64000,return_status=True,memory_limit=512*1024*1024,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','TZ':'UTC'})
                         if errors:raise ValueError('YARA diagnostics prevented complete inspection')
                         identifiers=[]
                         for line in output.splitlines():
-                            match=re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]{0,127}) '+re.escape(f'/proc/self/fd/{fd}'),line)
+                            match=re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]{0,127}) '+re.escape(f"/proc/self/fd/{record['fd']}"),line)
                             if not match or len(identifiers)>=100:raise ValueError('Unexpected or excessive YARA matches')
                             identifiers.append(match[1])
-                        from types import SimpleNamespace
                         result=SimpleNamespace(returncode=1 if identifiers else 0,stdout='YARA rules: '+', '.join(identifiers))
+                        stop_scan=accept_result(record,result,identifiers)
+                        record=None
                     else:
-                        result=subprocess.run([engine,'--stdout','--no-summary','--alert-exceeds-max=yes','--alert-encrypted=yes','--follow-file-symlinks=2','--max-filesize=32M','--max-scansize=64M','--max-recursion=16',f'/proc/self/fd/{fd}'],pass_fds=(fd,),capture_output=True,text=True,timeout=min(30,max(1,deadline-time.monotonic())))
-                    after=os.fstat(fd)
-                    with scan_root(directory) as current_dir:
-                        current_info=os.fstat(current_dir);original_info=os.fstat(directory_fd)
-                        if (current_info.st_dev,current_info.st_ino)!=(original_info.st_dev,original_info.st_ino):
-                            gap(path,'Parent directory changed during scanning');continue
-                    named=os.stat(name,dir_fd=directory_fd,follow_symlinks=False)
-                    if (named.st_dev,named.st_ino)!=(before.st_dev,before.st_ino):
-                        gap(path,'File path replaced during scanning');continue
-                    if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
-                        gap(path,'File changed during scanning');continue
-                    if result.returncode not in (0,1):gap(path,'Scanner failed');continue
-                    if 'Heuristics.Limits.Exceeded' in result.stdout or 'Heuristics.Encrypted' in result.stdout:gap(path,'Scanner inspection limit or encrypted content prevented complete inspection')
-                    report['scanned']+=1
-                    if result.returncode==1:
-                        report['findings'].append({'path':str(path),'sha256':digest.hexdigest(),'device':before.st_dev,'inode':before.st_ino,'size':before.st_size,'uid':before.st_uid,'mode':stat.S_IMODE(before.st_mode),'evidence':result.stdout[-2000:],**({'rule_ids':identifiers} if yara_rules is not None else {})})
-                        if len(report['findings'])>=100:
-                            gap(path,'Finding limit reached; scan stopped');return finish()
+                        if pending and (len(pending)>=CLAMAV_BATCH_FILES or pending_bytes+before.st_size>CLAMAV_BATCH_BYTES):
+                            stop_scan=flush_clam_batch(pending) or stop_scan;pending_bytes=0
+                        pending.append(record);pending_bytes+=before.st_size
+                        record=None
+                        if len(pending)>=CLAMAV_BATCH_FILES:
+                            stop_scan=flush_clam_batch(pending) or stop_scan;pending_bytes=0
+                    if stop_scan:return finish()
 
                 except (OSError,ValueError,RuntimeError,TimeoutError,subprocess.TimeoutExpired) as error:gap(path,type(error).__name__)
                 finally:
                     if fd is not None:os.close(fd)
-        except TimeoutError:gap('Traversal','Scan budget exhausted; remaining entries not examined')
-        finally:iterator.close()
+                    if record is not None:
+                        os.close(record['fd']);os.close(record['directory_fd'])
+            flush_clam_batch(pending)
+        except TimeoutError:
+            flush_clam_batch(pending)
+            gap('Traversal','Scan budget exhausted; remaining entries not examined')
+        finally:
+            iterator.close()
+            for record in pending:
+                os.close(record['fd']);os.close(record['directory_fd'])
+            pending.clear()
     return finish()
 
 
@@ -853,14 +1151,14 @@ def persistence_inventory(deadline,custom_paths=None):
 def security_inspect(packages,persistence=True,custom_paths=None):
     """Local database comparison and metadata-only startup inventory; no remediation."""
     validate_inspection(packages,persistence,custom_paths)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
+    try:from bridge import bounded,rpm_backend
+    except ImportError:from target.bridge import bounded,rpm_backend
     report={'version':1,'started':time.time(),'state':'incomplete','trust_basis':'target_local_package_database',
             'packages':[],'gaps':[],'persistence':None,
             'limitations':['Local package metadata is not an independent trusted vendor baseline.',
                           'Differences may be legitimate configuration changes; they are not malware verdicts.',
                           'No differences does not establish complete file coverage or a clean host.']}
-    rpm=not Path('/var/lib/dpkg/status').exists()
+    rpm=rpm_backend()
     report['package_manager']='rpm' if rpm else 'dpkg'
     deadline=time.monotonic()+180
     def command(args,allowed=(0,)):
@@ -942,8 +1240,6 @@ def vendor_inspect(manifest):
         if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or str(Path(path))!=path or '..' in Path(path).parts or path in seen or len(path)>4096 or any(ord(c)<32 for c in path):raise ValueError('Invalid vendor file path')
         if not re.fullmatch('[a-f0-9]{64}',entry.get('sha256','')) or type(entry.get('size')) is not int or not 0<=entry['size']<=32*1024*1024:raise ValueError('Invalid vendor file hash or size')
         seen.add(path)
-    try:from bridge import bounded
-    except ImportError:from target.bridge import bounded
     result={'state':'incomplete','package':manifest['package'],'version':version,'architecture':manifest['architecture'],
             'scope_files':len(entries),'examined':0,'findings':[],'gaps':[],'trust_basis':'controller_authenticated_rpm_artifact' if manager=='rpm' else 'controller_authenticated_debian_artifact'}
     deadline=time.monotonic()+120;total=0
@@ -1293,7 +1589,14 @@ def response_status_open(directory,identifier,plan,facts=None):
         review=response_json(directory,'restore-intent.json')
         if review.get('id')!=identifier or review.get('plan')!=plan:raise ValueError('Restoration intent does not bind approved evidence')
     path=Path(plan['file']['path']);mode=stat.S_IMODE(plan['file']['identity']['mode'])
-    with response_parent(path.parent) as (parent,chain):
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        try:parent,chain=stack.enter_context(response_parent(path.parent))
+        except FileNotFoundError:
+            # A removed ancestor (at this single parent open) is a changed parent, not a missing vault record; the held file stays verifiable.
+            facts['parents_match']=False;held=response_present(directory,'held');facts['held_present']=held
+            if held:os.close(response_file(directory,'held',plan,(0o600,mode)));facts['held_verified']=True
+            return result
         facts['parents_match']=chain==plan['ancestors']
         if chain!=plan['ancestors']:return result
         held=response_present(directory,'held');source=response_present(parent,path.name)

@@ -60,6 +60,16 @@ class Pinned(paramiko.MissingHostKeyPolicy):
         if fingerprint(key)!=self.expected: raise paramiko.SSHException('SSH host fingerprint mismatch; verify on target console')
 class RemoteProtocolError(RuntimeError):
     """A reply cannot be trusted as a complete remote operation receipt."""
+class RemoteFailure(RuntimeError):
+    """The target bridge returned a structured failure receipt for the request."""
+
+def request_unstarted(error):
+    """True only when call() failed before the remote command could start.
+
+    call() records this on every error it raises. Errors without the marker
+    (for example from an unexpected wrapper) are never treated as unstarted."""
+    from . import host_lifecycle
+    return isinstance(error,host_lifecycle.Inactive) or getattr(error,'remote_started',None) is False
 
 def read_channel(channel, deadline, max_bytes=64*1024*1024):
     """Drain both streams; an idle timeout alone does not bound a trickling peer."""
@@ -86,7 +96,10 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
     if status:
         try: detail=json.loads(output).get('error')
         except (ValueError,AttributeError): detail=None
-        raise RuntimeError(detail or diagnostics.decode(errors='replace') or 'Remote bridge failed')
+        # Only the bridge's own JSON error is a failure receipt; a bare non-zero
+        # exit may be a crash part-way through a mutation.
+        if detail: raise RemoteFailure(detail)
+        raise RuntimeError(diagnostics.decode(errors='replace') or 'Remote bridge failed')
     try: result=json.loads(output)
     except (ValueError,UnicodeDecodeError) as error:
         # Never echo inventory/key material from a damaged response into logs/UI.
@@ -94,18 +107,33 @@ def read_channel(channel, deadline, max_bytes=64*1024*1024):
         location=(' at character '+str(position)) if position is not None else ''
         raise RemoteProtocolError('SSH returned incomplete or invalid JSON'+location+' ('+str(len(output))+' bytes received). Verify target state before retrying.') from None
     if not isinstance(result,dict): raise ValueError('Remote bridge returned a non-object response')
-    if result.get('error'): raise RuntimeError(result['error'])
+    if result.get('error'): raise RemoteFailure(result['error'])
     return result
 
-def call(host, payload, timeout=60, key_file=None):
+def call(host, payload, timeout=60, key_file=None, lifecycle_blocking=True):
     from . import host_lifecycle
     if not host_lifecycle.active(host):raise host_lifecycle.Inactive('Server management is disabled or deleted')
     kind='telemetry' if payload.get('action') in ('snapshot','events','ack') else 'control'
-    with host_lifecycle.activity([host.id],kind):
-        return _call(host,payload,timeout,key_file)
-
-def _call(host, payload, timeout=60, key_file=None):
+    stage={'started':False}
+    # One deadline covers lifecycle admission and transport: time spent waiting
+    # for the control lock is taken from the call's own budget.
     deadline=time.monotonic()+timeout
+    try:
+        with host_lifecycle.activity([host.id],kind,blocking=lifecycle_blocking,wait=timeout):
+            return _call(host,payload,timeout,key_file,stage,deadline=deadline)
+    except Exception as error:
+        # Callers deciding whether a mutation may have run need to know if the
+        # remote command was ever requested, including lifecycle admission and
+        # lock-release failures around the transport itself.
+        error.remote_started=stage['started']
+        raise
+
+def _call(host, payload, timeout=60, key_file=None, stage=None, deadline=None):
+    stage=stage if stage is not None else {}
+    deadline=time.monotonic()+timeout if deadline is None else deadline
+    budget=deadline-time.monotonic()
+    if budget<=0: raise TimeoutError('SSH call exceeded its total deadline before connecting; no remote command was started')
+    connect_timeout=min(15,budget)
     from . import connections
     route=connections.for_host(host)
     tunnel=None
@@ -114,12 +142,13 @@ def _call(host, payload, timeout=60, key_file=None):
     try:
         if route.transport=='gcp_iap': tunnel=connections.IAPSocket(route,deadline)
         client.connect(host.address,port=host.port,sock=tunnel,username='drpatch',key_filename=str(key_file or key_path(host.id)),
-                       look_for_keys=False,allow_agent=False,timeout=min(15,timeout),auth_timeout=min(15,timeout),banner_timeout=min(15,timeout),
+                       look_for_keys=False,allow_agent=False,timeout=connect_timeout,auth_timeout=connect_timeout,banner_timeout=connect_timeout,
                        disabled_algorithms={'keys':['ssh-rsa'],'pubkeys':['ssh-rsa'],
                                             'kex':['diffie-hellman-group1-sha1','diffie-hellman-group14-sha1','diffie-hellman-group-exchange-sha1']})
         client.get_transport().set_keepalive(20)
         remaining=deadline-time.monotonic()
         if remaining<=0: raise TimeoutError('SSH connection exceeded its total deadline')
+        stage['started']=True
         stdin,stdout,stderr=client.exec_command('mrpatchy',timeout=remaining)
         stdin.write(json.dumps(payload));stdin.flush();stdin.channel.shutdown_write()
         try: return read_channel(stdout.channel,deadline)
@@ -129,6 +158,9 @@ def _call(host, payload, timeout=60, key_file=None):
     except paramiko.AuthenticationException as error:
         raise RuntimeError('SSH authentication rejected for drpatch. Re-run this server’s installer from a trusted console and verify its local account/key. On GCP, check OS Login username/UID conflicts and guest-agent key management; IAP does not replace SSH authentication.') from error
     except (socket.timeout, paramiko.ssh_exception.NoValidConnectionsError, socket.gaierror) as error:
+        if stage.get('started') and isinstance(error,TimeoutError):
+            # The command was already requested: this is a deadline/idle timeout, not a connection failure.
+            raise RuntimeError('SSH '+str(payload.get('action','request'))+' exceeded its '+str(int(timeout))+' s deadline; the remote outcome is unknown. Verify target state before retrying.') from error
         hint=('Check the runtime gcloud identity, IAP tunnel permissions, VM state and IAP firewall rule.'
               if route.transport=='gcp_iap' else 'Check the saved address/port, VM state, routing and SSH firewall. GCP ephemeral external IPs can change after stop/start.')
         raise RuntimeError('SSH connection unavailable. '+hint+' Verify target operation state before retrying a patch.') from error
@@ -152,6 +184,8 @@ def expected_files(host):
     if optional in host.baseline:files[optional]=host.baseline[optional]
     return files
 
+TARGET_PYTHON_TOO_OLD='Mr Patchy target helpers require Python 3.8 or newer at /usr/bin/python3 (EL8 ships 3.6 by default). The target refused the deployment before replacing any helper. Install a newer python3 and finish installation again.'
+
 def deploy(host):
     from target.bridge import UNIT
     code=(TARGET/'agent.py').read_bytes()
@@ -162,10 +196,19 @@ def deploy(host):
     payload={'action':'deploy','rpm_support':base64.b64encode(rpm_code).decode(),'rpm_sha256':expected['rpm_sha256'],'agent':base64.b64encode(code).decode(),'sha256':expected['deployed'],
                       'bridge':base64.b64encode(bridge).decode(),'bridge_sha256':expected['bridge_sha256'],
                       'unit':UNIT,'unit_sha256':expected['unit_sha256'],'release':base64.b64encode(release).decode(),'release_sha256':expected['release_sha256']}
-    result=call(host,payload)
+    def send():
+        try:return call(host,payload)
+        except RuntimeError as error:
+            # The central agent.py always compiles on Python >=3.8, so a target-side
+            # syntax rejection of it means the target interpreter is older. Bridges
+            # compile every payload before replacing any file, so nothing was written.
+            if 'invalid syntax (agent.py' not in str(error):raise
+            refused=RuntimeError(TARGET_PYTHON_TOO_OLD);refused.remote_started=getattr(error,'remote_started',True)
+            raise refused from error
+    result=send()
     if result.get('bridge_sha256')==expected['bridge_sha256'] and ('release_sha256' not in result or 'rpm_sha256' not in result):
         # Older bridges accept their own replacement before understanding runner deployment.
-        result=call(host,payload)
+        result=send()
     if result.get('bridge_sha256') is None:
         raise RuntimeError('Target uses the legacy bootstrap bridge. Download and rerun its installer through a trusted console, then finish installation again.')
     if any(result.get(key)!=value for key,value in expected.items()):
@@ -181,6 +224,7 @@ set -euo pipefail
 for command in python3 sshd ssh-keygen sudo visudo useradd sha256sum openssl; do
   command -v "$command" >/dev/null || {{ echo "Missing prerequisite: $command. Install python3 openssh-server sudo first."; exit 1; }}
 done
+/usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || {{ echo 'Mr Patchy target helpers require Python 3.8 or newer at /usr/bin/python3 (EL8 ships 3.6 by default). Install a newer python3 first.'; exit 1; }}
 if [ ! -f /var/lib/dpkg/status ]; then
   /usr/bin/python3 -c 'import dnf,rpm' || {{ echo 'RPM targets require Python 3 with python3-dnf and python3-rpm installed first (DNF4 bindings, including on DNF5 systems).'; exit 1; }}
 fi
@@ -239,6 +283,13 @@ sshd -t
 {HOST_FINGERPRINT_SCRIPT}
 printf '\nAllow SSH from your Mr Patchy server, then click Finish installation.\n'
 '''
+
+def rotation_resumable(host):
+    """True when an unfinished rotation journal exists, so a retry may finish it."""
+    journal=DATA/'ssh'/(host.id+'.rotation.json')
+    try:state=json.loads(journal.read_text())
+    except (OSError,ValueError):return False
+    return isinstance(state,dict) and not state.get('complete') and bool(state.get('old')) and bool(state.get('new'))
 
 def rotate(host):
     """Add new key, prove it works, atomically promote, then revoke old key."""

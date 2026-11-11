@@ -1,20 +1,69 @@
 # Security implementation checkpoint
 
-## Version policy: major fixed at 1
+## Development and integration policy
 
-User instruction (2026-10-30): use **1.MINOR.PATCH** and keep the major number at
-**1** until the user explicitly instructs otherwise. The initial transition is
-`0.17.0` to `1.17.0`, preserving the existing minor/patch numbers. Subsequent
-completed updates retain the existing patch/minor increment criteria and full
-version monotonicity. This overrides automatic major bumps, including for breaking
-changes; record compatibility impacts while keeping major 1.
+User instructions (2026-10-30 and 2026-10-31): keep the application major at **1**;
+allow independent concurrent implementation with one coordinator responsible for
+final version allocation, integration, merging and verified issue closure. Start
+with at most two active implementation streams. Existing schedules are unchanged.
 
-All other versioning instructions remain in force: authoritative `APP_VERSION`,
-synchronized README/changelog/UI/API metadata, versioned development and merge
-commit subjects and PR titles/labels, exact-final-commit checks and skipped Git
-tags. `AGENTS.md`, the source version checker and the scheduled development task
-carry this policy. Roadmap completion remains governed by the existing completion
-gate and issue-first workflow.
+Workers use isolated issue-owned branches and leave APP_VERSION, README.md and
+CHANGELOG.md unchanged. They document reproduction, delivered behavior, compatibility impacts
+and validation in the PR, then explicitly hand the exact ready commit to the
+coordinator. Development commits/PRs need no version prefix. The coordinator owns
+all README/changelog notes and updates based on the PR description, and adds
+the final version, a numbered PR-linked changelog entry and versioned integration/
+merge subjects only when integrating that PR. README no longer tracks a source
+version. Runtime UI/API/health/identity still derive from APP_VERSION. Preserve
+historical commits/changelog entries and skip Git tags. A source bump does not
+publish a Docker image.
+
+Development metadata checks permit unchanged release metadata against main. The
+separate `integration-version` gate requires a newer version and this PR's link in
+the newest changelog entry; all applicable checks must pass on the exact final
+integrated commit before merge. Reconcile/retest when main or the head changes.
+Only the coordinator merges and verifies fully delivered issues close. Read
+[AGENTS.md](../AGENTS.md) and [the coordinator guide](DEVELOPMENT_COORDINATOR.md)
+for ownership, handoff, transition and the copyable coordinator prompt. Historical
+delivery records below describe the policy in force when they were written.
+
+## Dependency vulnerability gate (partial #201)
+
+The CI `static` job runs `pip-audit` (pinned in `requirements-audit.txt`) against the
+hash-locked `requirements.lock` and then `tools/dependency_policy.py`, which fails the
+job for any finding without an active exception. Policy: fix by upgrading the
+dependency where a fixed version exists. If no fix is available, record an entry in
+`docs/dependency-exceptions.json` with `id` (the advisory id or alias), `owner`,
+`reason` and an ISO `expires` date at most 90 days ahead. Expired, malformed or
+unused exceptions also fail, so exceptions cannot linger silently. The gate covers
+Python runtime dependencies only; npm dev tooling, base-image packages and live
+GitHub alert state are not covered, and a successful scan is not evidence of the
+latter. The scan needs network access to the PyPI advisory service.
+
+## Dependency update coverage (partial #201)
+
+PR #284 configures weekly Dependabot updates for pip, npm, GitHub Actions and
+Docker at the root, deploy and test-fixture manifest locations. Tracked Dockerfile
+location coverage has regression tests; live Dependabot update generation has not
+been exercised as part of this delivery. This is update configuration, not code
+or dependency vulnerability scanning. PR #292 pins the CI workflow's
+`actions/checkout`, `actions/setup-python` and `actions/setup-node` references to
+full commit SHAs with version comments, covered by a regression test. Base images
+remain tag-based and Python requirements lack install hashes. Image digest and
+hash pinning, code scanning and additional Compose sandboxing remain unfinished
+under #201; no runtime response authority or deployment sandbox boundary is
+changed.
+
+This checkpoint supersedes the code-scanning status immediately above: a
+separate least-privilege CodeQL workflow analyzes Python on pull requests
+targeting `main`, pushes to `main` and a bounded weekly schedule. Checkout and both
+CodeQL actions are pinned to full commit SHAs with readable version comments, and
+regression coverage keeps the triggers, Python/security-extended query suite,
+action pins, timeout and upload permission explicit. Results are repository
+security-analysis findings; they do not authorize runtime remediation. Base-image
+digests, hash-pinned Python
+installs, dependency-vulnerability scanning and additional Compose sandboxing
+remain unfinished under #201.
 
 ## Scheduled development completion gate
 
@@ -23,15 +72,29 @@ Before each scheduled development cycle, assess the current roadmap against curr
 implementation checkpoint and any unfinished related PR. This is a read-only
 assessment before any implementation, UI polishing, versioning or repository write.
 
-- If the explicitly requested roadmap is feature complete and no unfinished in-scope implementation remains, stop that cycle without working on the code. Do not invent additional features, refactor, polish the UI or begin speculative bug hunts to fill the cycle.
+- After issue-first triage, if the requested roadmap is feature complete and neither actionable issue fixes nor unfinished in-scope implementation remains, stop that cycle without working on the code. Do not invent additional features, refactor, polish the UI or begin speculative bug hunts to fill the cycle.
 - A completed cycle with no work must not change source, tests, documentation or the checkpoint; it must not bump a version or create commits, tags or PRs merely to record that nothing needs doing.
 - Report briefly that no development is needed, citing this roadmap and the latest merged PR/commit used for the assessment. Keep the development schedule enabled; later cycles may resume when a new roadmap requirement or unfinished in-scope milestone is present.
-- Proceed only when the assessment identifies a concrete outstanding roadmap requirement or unfinished related implementation. State the remaining work before starting it. Review/polish, versioning, testing, PR/merge and checkpoint requirements apply when there is actual work to deliver.
+- Proceed when the assessment identifies an actionable issue fix, a concrete outstanding roadmap requirement or unfinished related implementation. State the remaining work before starting it. Workers own implementation/testing/checkpoints; the coordinator owns final versioning, integration and merge checks.
 - Missing, contradictory or blocked evidence is not proof of completion. Report the uncertainty or blocker and stop without speculative code changes; retain honest outstanding requirements and limitations.
 
 This gate takes precedence over instructions to always continue development or
 produce another PR. Judge completion from the current repository and latest merged
 work rather than stale milestone numbers or repeated historical requests.
+
+### Runtime Python dependency hash lock — partial #201 checkpoint
+
+This source checkpoint supersedes every older #201 status statement in this
+historical document, including entries located later in the file, that production
+Python installs remain unhashed. A generated Python 3.12 lock pins the complete
+production dependency graph and records SHA-256 hashes for the available
+distributions. Container builds now install that lock with pip's
+`--require-hashes` enforcement; focused tests require exact direct pins, hashed
+transitive entries and the enforced Docker install path. The development/test
+dependency range remains outside this production-runtime slice. Base-image digest
+pinning, code scanning and the other #201 controls remain independently tracked;
+this checkpoint does not add vulnerability scanning or alter runtime response
+authority.
 
 ## Development-cycle work budget
 
@@ -42,14 +105,61 @@ validation and PR completion. A large milestone may fill the batch; combine
 several small related items when appropriate.
 
 - State the selected items and intended outcome before implementation, respecting dependency order and unfinished work from earlier runs.
-- Reserve roughly the final 10–15 minutes for review, applicable tests/checks, version/changelog consistency, PR/merge handling and the checkpoint.
+- Reserve roughly the final 10–15 minutes for review, applicable tests/checks, the PR ready handoff and the checkpoint. Final version/changelog preparation and merging belong to the coordinator.
 - If a small item finishes early and roadmap work remains, take the next coherent item only when it can reasonably be completed and validated within the remaining budget. Do not stop merely because one small milestone is finished.
-- Preserve reviewable scope and passing checks on the exact final commit. Avoid risky late additions or overlapping development runs; leave a precise checkpoint and unfinished PR state if safe completion is not possible.
+- Preserve reviewable scope and applicable checks on the exact worker commit. Independent development may overlap within the two-stream limit; overlapping ownership and concurrent final integration are prohibited. Avoid risky late additions and leave a precise checkpoint when a safe handoff is not possible.
 - This is a sizing target, not a mandatory minimum. Stop early for roadmap completion or a genuine blocker. Do not invent work, wait, repeat successful checks or change completed code simply to fill time.
 
 The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
+
+### Enrollment installer downloads (partial #202)
+
+Enrollment links retain their one-hour expiry and support repeated downloads for
+partial-download retries. Public download requests, including invalid tokens,
+share a ten-attempt sliding sixty-second window per ASGI client address across
+controllers using the existing SQLite/shared-filesystem or MySQL coordination.
+Admission is persisted in one settings row with at most 1,024 active source hashes
+and ten timestamps per source. Active sources are never evicted to admit new ones;
+when capacity is full, new sources receive HTTP 429 until a slot expires. Requests
+over quota return 429 with Retry-After before installer generation; lock contention
+returns 503 with a one-second retry. The limiter does not authorize enrollment or
+alter the installer or managed-target actions. Proxy trust remains the deployment's
+ASGI configuration; the route does not consume raw forwarding headers.
+
+Every successfully prepared valid installer records its first/retry use number,
+host ID, non-bearer link identifier and hashed client address in the audit history.
+Preparation is not proof of full delivery or execution. Expired/revoked links,
+inactive hosts, generation failures and throttled requests do not record a prepared
+installer. Tokens and installer content are not included in these audit records.
+The independent route-exception-header item remains in PR #264, and #202 stays
+open pending both deliveries. No new schema, runtime response authority or source
+version is introduced by this worker slice.
+
+### Bounded budget aggregation follow-up (#133)
+
+The follow-up to partial #273 replaces grouping by distinct receipt amount with
+at most five status buckets, including a conservative bucket for every unknown
+unreleased status. MySQL uses native DECIMAL summation. SQLite uses a registered
+bounded-memory integer nano-dollar aggregate, normalizing each value at the same
+nine-place precision as the previous SQLAlchemy Numeric reader and returning text
+to avoid an additional floating-point sum. This does not change SQLite's existing
+NUMERIC storage precision, ledger retention, admission locks or timezone membership.
+
+On disposable 10,000-receipt fixtures, exact-head SQLite and MySQL checks reduced
+aggregation results from 10,000 rows to one. The recorded locked aggregation times
+were 0.0295 to 0.0176 seconds on SQLite and 0.0487 to 0.0107 seconds on MySQL.
+Separately, five actual reserve() calls on SQLite measured median held-lock time of
+0.1497 versus 0.0493 seconds and peak traced allocation of 3,335,400 versus 157,231
+bytes. These are single fixture measurements without a timing guarantee or fleet
+throughput claim. Exact-head SQLite/MySQL, precision and concurrent near-cap tests
+retain exact money totals and atomic admission.
+
+PR #240 separately owns timezone-window membership; its later integration must
+preserve both its predicate correction and this aggregate. Eligible ledger scanning
+remains O(N), and the wider faster-triage program and its end-to-end acceptance gate
+remain unfinished.
 
 Current response milestone: approved target preservation and separately approved
 controller acquisition are implemented. Reviewed quarantine and original-file
@@ -87,7 +197,7 @@ New tables are included in the offline SQLite/MySQL migration metadata. Security
 
 Prerequisites: install ClamAV and current signatures on the managed target and redeploy the Mr Patchy collector/bridge using the existing reviewed installation workflow. No scanner installation or signature updates are performed automatically. Engine version is captured with the scan report.
 
-Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file, four-minute overall work budget and 30-second per-file scanner timeout. Symlinks are not followed during traversal. Virtual filesystem directories and the reserved quarantine directory are excluded. Exclusions and failures are reported as incomplete coverage. Scanning uses an opened descriptor and checks metadata before accepting the result. A compromised root/kernel remains outside this trust boundary. Reports never claim the server is clean.
+Limits: 16 explicit root directories, 2,000 examined files, 32 MiB per file and a four-minute overall work budget. ClamAV groups at most 32 already-open file descriptors and 128 MiB of source bytes into one local `clamscan` process with a 120-second batch timeout. An engine failure or output that cannot be mapped exactly back to every descriptor falls back to the prior 30-second per-file invocation while the overall deadline remains. This does not enable or connect to a ClamAV daemon. Symlinks are not followed during traversal. Virtual filesystem directories and the reserved quarantine directory are excluded. Exclusions and failures are reported as incomplete coverage. Scanning uses opened file and parent-directory descriptors and checks metadata before accepting each result. A compromised root/kernel remains outside this trust boundary. Reports never claim the server is clean.
 
 Remaining major work before the requested system is complete (later sections define
 the bounded features already implemented):
@@ -135,7 +245,9 @@ Traversal opens each root ancestor with `O_DIRECTORY|O_NOFOLLOW`, then descends 
 
 New incident evidence includes a bounded scan coverage summary (engine, freshness, counts, timestamps and up to 20 shortened gap messages). AI proposals see these limitations, and the existing evidence digest binds them into plan generation and review. Full immutable receipts remain available in scan history. Historical incidents/approvals are not silently rewritten; their signature context remains unknown until a new scan supplies it. Plans still require review and remain advisory only.
 
-After updating the controller, use the existing **Finish / verify installation** workflow to redeploy the updated collector to managed targets. Old collectors continue producing legacy receipts without freshness metadata. Automated tests simulate engine output, signature drift, path replacement, parent symlink races, empty-directory budgets, descriptor cleanup and AI evidence binding. A live ClamAV engine with production databases was not available in this development environment.
+After updating the controller, use the existing **Finish / verify installation** workflow to redeploy the updated collector to managed targets. Old collectors continue producing legacy receipts without freshness metadata. Automated tests simulate bounded multi-file ClamAV invocations, mixed clean/detection mapping, ambiguous-output fallback, engine output, signature drift, path replacement, parent symlink races, finding-limit descriptor cleanup, empty-directory budgets and AI evidence binding.
+
+A disposable supported-target ClamAV 1.5.3 run used the complete cryptographically verified production set: `main.cvd` version 63 (3,287,027 signatures), `daily.cvd` version 28171 (355,841 signatures, built 2026-11-01) and `bytecode.cvd` version 339. Loading that set and scanning one benign file took 8.070–8.640 seconds across three launches with about 987,312 KiB peak child RSS. Scanning the same 20 benign files separately took 173.018 seconds / 20 launches; one bounded batch took 9.382 seconds / one launch (18.4x elapsed improvement). Both modes scanned 20/20 files with no gaps or detections and the same 987,460 KiB peak child RSS. An end-to-end `security_scan()` run also used one descriptor batch, scanned 20/20 files in 9.625 seconds, reported recent signatures and no coverage gaps, and retained the before/after engine-version checks.
 
 ## Read-only package and persistence inspection
 
@@ -168,7 +280,8 @@ avoids depending on GitHub's mutable host `base-files` package. SSH key-rotation
 checks assert the wrapped authentication exception and its underlying cause, so
 unrelated connection errors cannot count as successful key revocation. Both SSH
 matrix entries run even if one fails. CI supports manual dispatch and bounds each
-job to 30 minutes; PR and main-push triggers remain enabled.
+job to at most 30 minutes (see "CI pipeline review (v1.35.24)" for current limits);
+PR and main-push triggers remain enabled.
 
 ## Managed-agent health and maintenance
 
@@ -2022,7 +2135,112 @@ skip follow-up checks or treat an unavailable assessment as benign to claim spee
 Concurrency primarily reduces queue delay; measure single-investigation latency
 separately instead of promising a fixed production speedup.
 
+Successful process-triage claims retain a separate monotonic `claim_lock` timing
+sample (#619) in the existing redacted run diagnostics. The sample covers only
+waiting to acquire the distributed `ai-triage` claim lock; aggregate admission
+still includes claim selection and run creation, and queue age remains distinct.
+Refused or empty claims create no run and therefore no fabricated timing. This
+adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence and
+response-authorization behavior are unchanged. Production contention baselines
+and the broader faster-AI acceptance remain open.
+
+The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
+summary from #523. It reports per-stage sample counts, errors and p50/p95 with
+coverage and truncation, and keeps individual run logs available when the summary
+request fails. The panel is read-only and available to administrators. Matched
+production serial/parallel measurements remain outstanding.
+
+### Update-scoring candidate database reads
+
+Candidate discovery reads server IDs and inventory in its existing bounded
+batches. Server telemetry, baselines and other unrelated fields stay out of this
+query. The regression checks the selected columns across multiple batches and
+compares candidate order, APT/RPM evidence and exact score identities with full
+server records. Existing pause and lifecycle filters still govern eligibility.
+This reduces data fetched per scoring pass. Candidate hashing and measured
+production throughput remain open.
+
+The update-scoring memo uses the distribution and package-manager fields
+shared with the scoring payload, plus installed RPM inventory when applicable.
+Repository file text, raw APT status and unrelated OS fields no longer evict
+identities when the stored inventory refreshes. SQLite and MySQL regression
+coverage checks retained APT/RPM score matches across refreshes and misses
+after relevant version, distribution or package-manager changes. Existing
+score keys and provider payloads are preserved. The worker still reads stored
+inventory, fingerprints the RPM list and walks eligible candidates. Production
+throughput and the broader parallel-scoring milestone remain open.
+
+At the 256-server memo bound, overflow servers use a pass-local memo and
+retained servers stay warm across scoring passes. An exhausted pass releases
+entries for absent eligible servers. A pass that stops after selecting a
+provider batch keeps entries for servers it has yet to visit. The regression
+checks overflow, early exit, slot reclaim and the exact completed-score matches
+on both database engines. The candidate walk and pass-local state still scale
+with the eligible fleet. Production throughput and parallel scoring remain
+open.
+
 ### Parallel execution and latency work
+
+Worker checkpoint #594 batches score-row reads when linking the diagnostic run
+and persisting completed, deferred or failed outcomes for the existing five-item
+scoring batch. The same sessions still recheck current package and server evidence
+before accepting an assessment. A five-item fixture reduces ID-filtered score
+SELECTs from twelve to four, including candidate and host-scope reads. This is
+partial scoring performance work. Idle candidate hashing, measured production
+throughput and full parallel scoring acceptance remain open.
+
+Worker checkpoint #597 adds an ordered purpose/state/start-time index for active
+AI run status and recovery lookups. Startup adds the index to existing databases
+while retaining history and existing indexes. The retained-history fixture uses
+the active-run index instead of filtering completed runs and sorting the result.
+This is a partial database performance increment. Production throughput and
+end-to-end parallel triage acceptance remain open.
+
+Worker checkpoint #590 groups the administrator AI status poll's two run-detail
+reads into one statement. It keeps the newest running triage stage and newest
+triage or worker diagnostic in one database snapshot, projecting only the fields
+used by the status response. This reduces a polling round trip. Production
+throughput and the full faster-AI acceptance milestones remain open.
+
+Investigation lease validation checks the current claim before fetching host or
+behavior evidence. A live lease reads only the host lifecycle fields and still
+checks the full behavior evidence, owner, configuration and expiry. Focused
+regressions verify the reduced SQL and continued refusal after lifecycle or
+evidence changes. This limits recurring lease-check I/O. Production throughput
+and the wider parallel-investigation acceptance remain open.
+
+Worker checkpoint #599 adds a composite approval/verdict/first-seen/identity
+index for the real process-triage admission query. Startup adds the index
+idempotently to existing databases while retaining behavior history and existing
+indexes. A retained-history fixture verifies that candidate filtering uses the
+index instead of scanning every completed behavior before the existing retry,
+pause, lifecycle, capacity and oldest-first eligibility checks. This is a partial
+database performance increment; production throughput and full faster-AI
+acceptance remain open.
+
+Worker checkpoint #647 adds a covering index on the attempt timestamp used by
+the administrator's recent-attempt status and the legacy hourly admission gate.
+Startup adds it to existing behavior tables without rewriting retained rows.
+The focused acceptance checks both real query plans, the strict one-hour cutoff,
+the displayed retry time and idempotent index installation on SQLite and MySQL.
+The index incurs timestamp-write maintenance. Fixture measurements do not
+establish production throughput or complete the faster-AI milestone.
+
+Worker checkpoint #603 adds a server/package/state/candidate index for exact
+score history and deferred scoring lookups. Startup creates it idempotently on
+existing databases and keeps retained scores and existing indexes. A fixture with
+5,000 unrelated scores on one server verifies the actual query plans and retained
+results. This is partial scoring performance work. Idle candidate hashing and
+end-to-end production throughput acceptance remain open.
+
+Worker checkpoint #649 indexes run purpose and start time for the administrator
+status aggregate and legacy triage and scoring counts. The index is installed
+during startup for new and existing databases. Focused tests verify the three
+real query plans, the strict hourly cutoff, unchanged admission and retry
+behavior, and idempotent index creation on SQLite and MySQL. The index adds
+maintenance to run inserts and retains the existing running-state index.
+Local query measurements do not establish production throughput or complete
+the faster-AI milestone.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2032,6 +2250,36 @@ separately instead of promising a fixed production speedup.
 - Reuse lifecycle-managed HTTP clients/connection pools with bounded pool/connect/read deadlines and safe per-request credentials; close them on drain/shutdown. Keep slow provider/SSH operations outside database transactions wherever possible. Measure candidate-query/index and repeated evidence-collection costs before optimizing them.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
+
+### Live process-triage lease telemetry
+
+The administrator investigation status API reports
+`active_lease_expires_at`, the earliest expiry among currently live process
+investigation claims, or null when no claim is live. Expired claims are
+excluded. The AI worker status displays this boundary with the active count so
+an administrator can tell when an unrenewed slot becomes eligible for fenced
+recovery. Expiry does not prove a provider request stopped or was not billed.
+This telemetry is read-only: it does not renew, reconcile, cancel, retry or
+otherwise alter a claim. Full multi-controller failover and production
+recovery acceptance remain open.
+
+### Update-scoring schedule-state reads
+
+The scheduler reads only identity, state and eligibility fields from retained
+update scores while checking exact and deferred candidates. Assessment text and
+other detail fields are loaded by their existing detail and completion paths.
+Regression coverage checks the scheduling queries across batches, including
+durable deferral, stale-state updates and the existing assessment identity.
+Candidate hashing and production throughput validation remain open.
+
+Scoring prepares the operating-system fields, package manager and installed RPM
+version index as each bounded host batch is read. Raw inventory is released
+with that batch. The pass keeps the prepared inputs in first-candidate order
+and uses the same installed versions in the outbound evidence. Result
+persistence still rechecks live inventory. Focused SQLite and MySQL tests
+cover exact score identities, multi-version and multi-architecture RPM payloads,
+and superseding a result after a committed inventory change. Compact per-host
+state still scales with the eligible fleet. Production throughput remains open.
 
 ### Fleet-wide exact-match known-good cache
 
@@ -2051,6 +2299,28 @@ explicitly requested or the entry no longer matches/is no longer valid.
 
 ### Throttling, daily cap and unthrottled operation
 
+The shared Responses API request path validates strict UTF-8 JSON against a
+2,000,000-byte encoded ceiling before shared rate, budget and provider-backoff
+admission. Refused bodies create no provider receipt and expose a fixed local
+diagnostic. Valid bodies send the validated bytes and retain their structured
+evidence for pricing and accounting. This checkpoint covers outbound request
+validation. Production throughput and wider transport acceptance remain open.
+
+The spend-reservation path checks the current budget mode before computing a quote
+or acquiring the shared budget lock (#615). Legacy, rate-only and unthrottled
+requests skip both operations and create no budget entry. Capped requests still
+recheck settings in a fresh session under the lock, then quote and atomically
+reserve spend if the cap still applies. Capped requests add one settings read
+and compute the quote while holding the lock. This checkpoint removes one
+shared lock acquisition per request that begins budget admission uncapped.
+End-to-end throughput and broader shared-controls acceptance remain open.
+
+Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
+history query to legacy mode. Shared modes still queue at most ten plans per tick
+and enforce shared admission at execution. The legacy combined security/startup
+allowance stays in effect until explicit migration. This avoids a history read
+under the queue lock and leaves migration and throughput acceptance open.
+
 Provide administrator-controlled modes in Settings with clear effects before save:
 
 | Mode | Admission behavior |
@@ -2059,16 +2329,31 @@ Provide administrator-controlled modes in Settings with clear effects before sav
 | Daily spend cap | Allow work while its conservative reservation fits the configured USD/day budget; queue remaining work until the next calendar-day reset. A rate throttle may also be enabled. |
 | Unthrottled | Apply no Mr Patchy rate or spend allowance; run as quickly as configured concurrency, resources and provider limits permit. |
 
+Shared provider-start admission skips the fleet rate lock when a fresh mode read
+shows legacy, daily-cap-only or unthrottled operation (#617). Paced modes add a
+settings read before locking, then reread the current mode and rate under the
+lock before updating the durable pacing row. Continuations still share the
+logical work item's start. This removes one lock acquisition per start that does
+not use shared pacing. Production throughput and broader shared-controls
+acceptance remain open.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
 - In cap mode configure a positive USD amount, an explicit IANA timezone and the next calendar-day reset, including daylight-saving transitions. Changes to amount/timezone/mode are revision-checked and audited; prevent resets, restarts, clock changes or mode toggles from silently granting duplicate budget.
 - Reserve cost atomically before admitting each paid call, accounting for all outstanding reservations across workers/purposes, selected model/tier, bounded input and output/reasoning tokens, supported charges and the potential follow-up stage. Define whether an entire multi-stage run is reserved in advance or deferred between stages; never skip a required stage or accept an incomplete verdict because funds run out.
-- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
+- Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts with unknown transmission outcomes and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
 ### Finite implementation and acceptance milestones
+
+Initial triage preflight reuses the global settings and encrypted key already
+loaded under the admission lock. The rate and budget preflights retain their
+order and the retry signature retains its existing format. Capped eligibility
+still reads current settings after the queue lock, and the provider reservation
+remains authoritative. This reduces repeated settings reads. Production
+throughput remains unverified.
 
 1. **Baseline, transport and known-good reuse:** record queue/admission/provider/SSH/persistence stage timing, p50/p95 end-to-end latency, throughput, calls/tokens/cost, errors and backlog age for representative one/two-stage workloads; add safe client pooling, evidence deduplication and the fleet-wide exact-match known-good cache with explicit re-triage, without changing the capability contract.
 2. **Threaded execution:** deliver configurable concurrent tasks, atomic claims/leases, context/session isolation, fair scheduling, pause-safe same-host/cross-host admission, drain and recovery. Compare serial and parallel execution on identical delayed I/O fixtures: four eligible independent investigations must actually overlap and complete materially faster than their serial sum without lost work or reduced checks. Report measured production limits separately.
@@ -2079,6 +2364,191 @@ Issue reproduction/fixes retain priority over these roadmap milestones. Reconcil
 unfinished related work first and use the existing cycle budget, source/PR versioning
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
+
+### Release definitely unsent spend — worker checkpoint #588
+
+A confirmed local HTTP connection-pool acquisition timeout releases only the
+matching request's reservation and records a redacted reason in the ledger. The
+shared client sends once without following redirects or automatically retrying.
+Other transport timeouts, interrupted workers and lost replies retain conservative
+charges when the provider outcome is unknown. The existing transient backoff still
+applies. This is a partial shared-controls increment. Cross-worker failover and
+end-to-end spend and throughput acceptance remain open.
+
+### SSH evidence delay in the triage benchmark — worker checkpoint #524
+
+`tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
+remains 10 ms. Both simulated delays are included in the JSON report. For a
+matched SSH-heavy serial/parallel comparison, run the same eight investigations
+with the same provider and SSH delays:
+
+```sh
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 1
+python tools/benchmark_ai.py --runs 8 --provider-delay-ms 10 --ssh-delay-ms 150 --concurrency 4
+```
+
+Check that both reports retain the same provider call count and one-stage and
+two-stage workload before comparing their stage percentiles and throughput.
+These are loopback and stubbed SSH measurements. Production comparison remains
+open.
+
+### Retained behavior history in the triage benchmark — worker checkpoint #641
+
+Use `--retained-history-rows` to seed 0–50,000 older completed observations in
+the disposable SQLite fixture before the timed investigations. The default is
+zero. The JSON report records the count, and the comparator requires equal
+counts across both reports. It interprets reports from older fixtures as zero.
+Use the same history size, run count and delays for a serial/parallel pair.
+The fixture still checks the same provider, SSH evidence and completion workload.
+Native MySQL and production throughput acceptance remain open.
+
+### Same-server process-triage benchmark (issue #654)
+
+The disposable benchmark can seed distinct process observations on one server.
+The fixture uses the runtime's maximum supported per-server slot limit for both
+executions and rejects a requested thread count above that limit. The following
+commands compare one worker with four under the same fixture conditions.
+
+```bash
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
+python tools/compare_ai_benchmarks.py serial.json parallel.json
+```
+
+The benchmark checks that every persisted run belongs to the expected subject
+and server, with a receipt for every provider call. Reports record the observed
+server count, the single-server slot limit, and peak simultaneous loopback
+provider handling. The comparator requires the same server count and slot limit
+in addition to matching observed evidence, calls, and sample counts. Older
+reports without topology fields retain their one-server-per-subject meaning.
+
+The CLI measures the existing claim and request path on disposable SQLite with
+synthetic provider and SSH delays. A separate native MySQL 8.4.13 preview changed
+only the fixture database URL. Three matched eight-subject pairs retained the
+same evidence fingerprint, 12 provider calls and four follow-ups per execution.
+Peak simultaneous provider handling rose from one to four in all three pairs.
+Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
+The CLI has no MySQL mode, and matched production measurements remain open.
+
+### Retained process-triage timing sample — worker checkpoint #522
+
+The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
+recently started completed or failed process investigations (up to 100, configurable
+with `limit`). It reads at most 2,048 retained timing events plus a truncation probe,
+without returning event messages, run IDs or evidence. Each allowlisted stage reports
+its sample and error counts and nearest-rank p50/p95 milliseconds, including both
+successful and failed samples. Missing percentiles are null. Runs without valid
+samples, discarded malformed events and event truncation are visible.
+
+A run can supply multiple provider or persistence samples, and stages overlap.
+These are retained diagnostic samples, subject to pruning or incomplete writes.
+Dashboard presentation and matched serial/parallel production measurement remain
+open. There is no new collection, migration, provider call or admission change.
+
+### Bounded same-server process triage — worker checkpoint #379
+
+Claim admission reads live server occupancy and saved per-server investigation
+limits together while holding the existing admission lock. Missing limits keep
+the default and malformed limits keep the minimum fallback. The regression
+checks that saturated servers are skipped without per-server policy reads.
+This reduces database round trips. Production throughput remains unverified.
+
+This bounded threaded-execution increment permits two independent renewable process-
+triage leases for one server, while the configured fleet-wide AI executor capacity
+remains the outer bound. The subject claim stays exclusive and selection excludes a
+server once its two live leases are occupied, so one noisy server cannot consume an
+arbitrarily large pool. The investigations use independent sessions and run contexts;
+their provider calls can actually overlap instead of only occupying executor slots.
+
+The durable lease also becomes the in-flight fence for per-server AI policy and server
+lifecycle changes. Provider admission briefly serializes with policy updates, rechecks
+pause and lease ownership, then releases that gate before network I/O. Pause/resume is
+rejected while either lease remains live. Disable/delete obtains the triage admission
+gate before server activity locks, rejects a live lease, and a claim delayed behind a
+lifecycle transition re-reads active state before committing. Non-triage AI purposes
+retain their existing exclusive per-server provider gate.
+
+Focused acceptance covers real two-call same-server overlap, refusal of a third and
+fourth slot, status/UI disclosure of the bound, policy-change rejection and lifecycle
+rejection. This does not complete priority/aging across every AI purpose, make the
+per-server bound administrator-configurable, or establish full multi-controller/MySQL
+failover acceptance. Exact-head full CI and coordinator integration remain required.
+
+
+Lease recovery reads expired claims and their retained run rows together
+under the existing admission lock. It still interrupts running orphaned runs,
+preserves live leases and provider receipts, and removes expired claims with
+missing runs. The recovery fixture checks the fixed read count and idempotent
+interruption history. Production throughput remains unverified.
+
+### Configurable per-server process-triage occupancy — worker checkpoint #383
+
+This stacked threaded-execution increment replaces the fixed two-lease server bound
+with an administrator-controlled limit from one through four. Existing server policy
+rows without the field retain two; malformed persisted values fail closed to serial
+admission. The value shares the existing revisioned server AI policy, meaningful
+reason and audit trail, and is visible beside pause state in each server workspace.
+
+Claim admission reads live per-host claim counts and every occupied host's current
+policy under the short distributed triage lock. Lowering a limit never cancels a live
+lease or retracts a request already sent, but later claims remain blocked until the
+count falls below the new value. Raising it cannot exceed the configured fleet-wide
+executor capacity. Subject exclusivity, renewable evidence/configuration fencing,
+global/server pause, lifecycle, shared rate/spend controls and provider policy checks
+remain unchanged. Pause/resume still rejects a live leased investigation.
+
+Focused acceptance covers default/serial/three-slot admission, lowering beneath live
+occupancy, stale and invalid settings, audit/role/CSRF enforcement and responsive UI
+state. This depends on #379 / PR #380 and does not complete cross-purpose priority or
+aging, provider-specific quotas, native complete-context collection, full supported
+multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
+browser, full-suite and coordinator integration checks remain required.
+
+### Reviewed shared provider-backoff reset — worker checkpoint #552
+
+AI Settings exposes an active shared provider Retry-After/transient-failure floor with
+its sanitized reason, consecutive-failure count, recorded time and next eligibility.
+An administrator may clear the reviewed floor with an exact confirmation phrase and
+meaningful audited reason. The request carries an opaque digest of the durable state;
+the controller rechecks it under the provider-backoff lock and preserves a newer or
+already expired floor instead of applying a stale browser action.
+
+Resetting sends no provider or target request. It releases only the shared provider
+floor and provider-only item waits; local retry deadlines, attempt limits, smooth-rate
+and daily-budget admission, pause, lifecycle and concurrency controls stay
+authoritative. Status exposes no provider body, prompt, evidence, credential or raw
+error. No schema or target-helper upgrade is required.
+
+Focused acceptance covers active reset, changed/expired conflicts, required review
+fields, role/CSRF boundaries, audit evidence and responsive Settings behavior. This
+does not diagnose provider availability, reconcile uncertain charges, bypass provider
+limits or complete the broader shared-controls/faster-AI program. Exact-head
+SQLite/MySQL, browser, full-suite and coordinator integration checks remain required.
+
+
+### Durable cross-server process-triage fairness — worker checkpoint #388
+
+Process-triage admission now balances eligible servers by live leased occupancy before
+using another slot on the same server. Ties use a durable monotonically ordered server
+turn. A never-admitted eligible server sorts before one already served, and releasing
+a claim does not erase its turn, so worker or controller restarts cannot reset the
+order and let one deep queue repeatedly win on an older observation timestamp.
+
+The host choice remains inside the existing short distributed triage admission lock.
+Only a successfully committed subject claim records the next turn; refused locks,
+lifecycle changes and ineligible work do not consume one. The scheduler uses bounded
+SQL grouping and ordering rather than materializing the pending queue. A server may
+still fill its configured occupancy when no less-occupied eligible server is waiting.
+Subject exclusivity, per-server and fleet capacity, retry eligibility, pause/lifecycle,
+rate/spend/provider admission, evidence revisions and stale-result fencing remain
+authoritative.
+
+Focused acceptance covers live-occupancy balancing, persisted least-recent turns,
+same-server fallback and failed-admission non-consumption, plus offline database-copy
+retention. This stacked increment depends on #383 and does not complete cross-purpose
+priority/aging, provider-specific quotas, native complete-context collection, complete
+multi-controller failover acceptance or the overall faster-AI program. Exact-head
+SQLite/MySQL/full-suite and coordinator integration checks remain required.
 
 
 ## Portable per-server scanner records
@@ -2497,6 +2967,118 @@ the existing external delivery configuration and alert lifecycle.
 Track this addition in the scheduled development task and UI design guide. Preserve
 issue-first priority, the current AI performance program, the fixed major-1 policy,
 the cycle budget and exact-final-commit version/CI/merge requirements.
+
+Implementation checkpoint (issue #320, integrated in v1.36.0): the first bounded
+event-model increment adds stable source/kind/subject event identities, retained
+safe payload revisions, unchanged-observation deduplication, resolution/reopening
+revisions, current-role filtering and independent per-user read/dismiss revisions.
+Read/dismiss mutations remain separate from operational acknowledgement, incident
+state, AI approval and response authorization. This checkpoint does not complete
+milestone 1: producer transactions, cross-worker concurrent publication recovery,
+retention/pruning policy and broader existing-alert lifecycle integration remain,
+as do the live transport, UI and end-to-end milestones 2–4.
+
+Implementation checkpoint (issue #324, integrated in v1.37.0): the next bounded
+increment exposes authenticated, current-role-filtered notification pages and unread
+counts plus CSRF-protected per-user read/dismiss mutations. The server derives the
+recipient from the active session, returns only the safe retained public payload and
+keeps stale-tab revisions from marking a newer event revision read. Hidden events
+fail closed and read/dismiss remains independent of global alert acknowledgement,
+incident state, AI approval and response authorization. This does not complete the
+notification program: producers, retention, live cross-controller delivery, UI and
+end-to-end SQLite/MySQL/browser acceptance remain planned.
+
+Implementation checkpoint (issue #350): the authenticated shell now consumes
+those APIs through a persistent
+responsive bell, accessible unread/severity label and compact recent panel. Safe
+public payloads are rendered with text nodes, and a second client-side same-origin
+check rejects invalid deep links before creating an action. Read/dismiss sends the
+exact displayed revision through the existing CSRF API and remains account-local;
+logout, expiry and account switching clear the client state. A bounded 30-second
+poll plus visibility catch-up updates only the shell subtree, preserving page and
+dialog form state, scroll and focus, and explicitly labels polling as degraded
+coverage. Focused browser coverage exercises malicious text/links, exact-revision
+mutations, background form/focus preservation, Escape focus return and mobile
+layout. This does not complete milestone 3: the dedicated paginated/filterable
+center and live toasts remain planned. Event producers/retention, authenticated
+SSE with cursor replay/cross-controller delivery, multi-tab synchronization and
+end-to-end SQLite/MySQL/failover acceptance also remain milestones 1, 2 and 4.
+
+Implementation checkpoint (issue #353): the next bounded milestone-3 increment
+adds a dedicated deep-linkable notification center. Its server-side page/count query
+applies the same current-role and per-user dismissal boundaries while supporting
+exact severity, source, server and unread filters. The responsive page renders the
+current revision's source, severity, server, time, lifecycle and escaped reason,
+defensively revalidates same-origin subject links, and keeps exact-revision read and
+dismiss actions separate from acknowledgement, resolution, approval and remediation.
+The bell panel links to the center; filters and pagination use bounded pages without
+exposing raw evidence or credentials. This still does not complete milestone 3:
+live toasts, multi-tab synchronization and server-pushed updates remain planned.
+Producers/retention, authenticated replay across controllers/workers and the complete
+two-browser SQLite/MySQL/failover acceptance remain milestones 1, 2 and 4.
+
+Implementation checkpoint (issue #374): a bounded milestone-2 increment adds an
+authenticated Server-Sent Events invalidation stream. Each connection polls the
+shared durable notification tables, emits only a safe digest cursor, and leaves the
+existing permission-filtered list/count APIs authoritative. New event revisions and
+that user's read/dismiss progress change the cursor; role, account enablement,
+session generation and expiry are rechecked while connected. EventSource supplies
+automatic reconnect and Last-Event-ID, so a stale cursor receives an immediate
+authoritative catch-up signal after reload, sleep or controller reconnect.
+
+The stream has a configurable bounded per-controller connection count (default 32,
+hard maximum 256), one small current invalidation with no per-client queue, a
+15-second heartbeat and a three-second reconnect hint. It disables proxy buffering
+and retains the 30-second polling/visibility fallback. The bell, recent panel and an
+open notification center refresh from the durable APIs; center filters, pagination,
+unrelated dialogs/forms and focus remain in place. Logout or revoked account state
+closes the stream and clears account-scoped client data. This is not completion of
+milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client and
+connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
+two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
+
+Worker checkpoint (issue #668): a bounded milestone-2 increment adds a durable
+arrival sequence. Every newly created notification revision appends one unsequenced row to
+`notification_arrivals` in the publisher's transaction. Identical repeated
+observations append nothing. `GET /api/notifications/arrivals` is available to any
+signed-in role:
+
+- Without `after` it returns only a baseline cursor.
+- With `after` it returns, in arrival order, current revisions committed after that
+  cursor. Items use the list API shape plus `arrival`, and the response carries a
+  `more` flag and a new cursor.
+
+Results apply the caller's current role, and read and dismissed flags are reported,
+not filtered. Superseded revisions and hidden events are skipped, but the cursor
+still advances past them. A cursor beyond the retained sequence resets to a fresh
+baseline and sets `reset`.
+
+Discovery is independent of producer timestamps and list ordering. A newly
+committed revision is found even when its producer clock lags, or when 100 or more
+newer unread events of the same severity crowd it out of a bounded page. Those are
+the two gaps the live-toast reviews reproduced.
+
+Arrival numbers are assigned only after the producer commits. Before reading,
+the arrivals endpoint runs a short sequencing transaction. It first writes the
+single `notification_arrival_head` row, which serializes sequencers on SQLite and
+MySQL. It then numbers the committed unsequenced rows densely above the head and
+commits them atomically. So every reader snapshot sees a gap-free committed
+prefix:
+
+- A slow lower transaction that commits after a faster higher one is numbered
+  above any cursor already returned, so it is never skipped.
+- A rolled-back publish never appears and leaves no gap.
+- A baseline covers every revision committed before the request, however many
+  there are. This removes the earlier 60-second gap hold, its clock-skew limit and
+  the 500-row partial baseline that the #669 reviews reproduced.
+
+The sequencing transaction itself is the only serialization point; publishers do
+not wait on it.
+
+This is additive: SSE payloads, list/count APIs, read/dismiss/acknowledgement
+semantics and response authorization are unchanged. Client adoption by the live
+toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
+do arrival retention/pruning and multi-controller acceptance.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
@@ -4097,6 +4679,61 @@ retained in PR #81; only all-success checks on the final published commit permit
 merge. No checks or UI assertions are weakened to obtain a pass.
 
 
+### Pooled AI model discovery — worker checkpoint #556
+
+The administrator model picker now sends its non-billable model-list GET through
+the same process-local bounded HTTP pool as provider POSTs. GET and POST each build
+a new request with only allowlisted ordinary client headers plus the current call's
+authorization; neither response cookies nor credentials become client defaults or
+flow to a later request. Model discovery keeps its 20-second timeout, redirect
+refusal, response-size and model-ID validation, controlled diagnostics and single
+attempt. No automatic retry or provider-call admission/accounting change is added.
+
+Focused acceptance uses a loopback HTTP/1.1 provider to prove socket reuse across
+GET/POST traffic, absent GET bodies, changing credentials, discarded cookies and
+bounded shutdown. Existing discovery route/role and redaction coverage remains in
+place. This is a finite safe-transport improvement; it does not establish provider
+availability, guarantee throughput, change AI concurrency or complete the faster-AI
+performance program. No schema, UI, target helper or agent change is required.
+
+### Observed AI benchmark workload fingerprint — worker checkpoint #530
+
+Fixture reports include `workload_fingerprint` with a version and SHA-256 value.
+Compare the full field across matched runs. It covers the actual synthetic model
+requests and SSH evidence requests, including duplicates, and excludes dispatch
+order, the fixture collection timestamp and ordering within the SSH check set.
+A mismatch identifies a workload difference even when token and call counts
+match. Compare delay settings and capability counts separately. Reports expose
+no request contents. Comparator enforcement and production measurements remain
+open.
+
+
+
+### Workload-bound AI benchmark comparison — worker checkpoint #536
+
+The fixture comparator now requires the observed version-1 workload fingerprint
+from both reports and refuses missing, malformed, unsupported or unequal values
+before emitting performance deltas. Matching call counts, token totals, stage
+sample counts and fixture delays are no longer sufficient to claim capability
+equivalence when the underlying synthetic provider or SSH request multiset differs.
+Accepted comparison output retains only the version and SHA-256 fingerprint for
+audit; it never includes the raw fixture requests. Historical reports that predate
+the fingerprint must be regenerated rather than treated as equivalent without
+evidence. Existing strict JSON, bounded-input, stage/count, cost-status and timing
+consistency validation remains. This is fixture-only tooling: it changes no
+production provider call, target access, runtime admission or response authority,
+and it does not establish production performance or complete the faster-AI gate.
+
+The seeded fixture queue age is a capability control, not a measured result, and
+the workload fingerprint does not cover it. The comparator therefore requires the
+same queue age in both reports before emitting deltas. It reads `queue_age_seconds`,
+otherwise `initial_fixture_queue_age_seconds`, otherwise the documented legacy fixed
+two-second seed; it refuses malformed or out-of-range values (integer seconds,
+0–86,400) and reports whose two queue-age fields disagree. A configured-queue-age
+pair with matching fingerprints but different seeds is refused rather than reported
+as a queue-age latency delta.
+
+
 ## v1.23.0 — Bind follow-up evidence to the recorded process identity
 
 Issue-first reconciliation inspected main `de18cee4`, repository instructions, this
@@ -4421,6 +5058,31 @@ recorded in the completion report after publication; no earlier or failed head m
 merged.
 
 
+### Indexed retained assessment lookup/history — worker checkpoint #607
+
+Retained Assessment provenance grows independently of diagnostic pruning. Exact-state
+Re-triage preservation and the authenticated per-subject/per-host history endpoint
+previously filtered through separate single-column indexes and then sorted matching
+rows in temporary storage. This bounded faster-triage increment gives those two
+existing query shapes composite subject/state/creation and subject/host/creation
+indexes, including deterministic ID ordering. Existing installations reconcile the
+indexes idempotently during the established controller-owned startup migration; new
+installations receive them from shared SQLAlchemy metadata. MySQL queries use narrow
+join-scoped index hints for these exact paths so its optimizer cannot regress to intersecting
+the legacy single-column indexes and filesorting retained matches.
+
+Acceptance covers an old SQLite schema with retained data, repeat startup, exact
+newest-result/history ordering amid 1,000 unrelated retained rows and SQLite query
+plans without temporary sorting. The same test asserts the selected key and absence
+of filesort on the existing MySQL acceptance job. Index construction has the ordinary
+startup DDL lock, time and disk implications; no history is pruned and no cache,
+classification, approval, role, pause, admission or response-authorization semantics
+change. This is a finite lookup/persistence performance milestone only: the broader
+parallel investigation, fleet cache and shared rate/spend program remains incomplete,
+and coordinator integration plus exact integrated-head SQLite/MySQL acceptance remain
+pending.
+
+
 ## v1.29.0 — Audited fleet candidate invalidation and linked review
 
 Issue-first reconciliation read current main `05c46912`, repository instructions,
@@ -4611,13 +5273,36 @@ eight-thread atomic admission, reset/remaining status, actual reconciliation,
 uncertain transmitted failures, unsent release, combined-mode settings and timezone
 validation. Exact-head SQLite, MySQL, browser and full-suite checks remain mandatory.
 
+The bundled public-price catalog now carries an exact reviewed-at and expires-at
+window. Settings expose its safe version/source/freshness metadata. At the expiry
+boundary, daily-cap and combined-cap admission fails before consuming rate capacity
+or contacting the provider; rate-only and unthrottled operation remain independent
+of Mr Patchy's spend guard. Updating the catalog still requires a reviewed source
+change, and post-call estimates remain advisory rather than provider invoices.
+
 This does not complete the program. Exact durable defer/resume for every manual and
-plan path, pricing-catalog update/expiry controls, provider-invoice reconciliation,
+plan path, automated/signed pricing-catalog updates, provider-invoice reconciliation,
 long-horizon reports and full SQLite/MySQL reset/failover acceptance remain planned.
 APP_VERSION/README/changelog/UI/API synchronize at v1.32.0 with major fixed at 1.
 Rebuild the controller first to create the ledger table, then matching workers. No
 target-helper/agent update, Docker publication, Git tag or schedule change is included.
 
+
+## Faster AI triage — local connection-pool contention
+
+A confirmed local HTTP pool timeout defers the affected request without creating,
+extending or clearing fleet-wide provider backoff. Advisory plans and scoring use
+the five-second local eligibility delay. Process triage keeps its existing bounded
+per-item retry schedule and has no provider Retry-After floor for this failure.
+Other workers can continue when shared rate, budget, provider and policy controls
+permit. Read timeouts and other ambiguous transport failures keep their existing
+shared backoff and budget treatment.
+
+Issue #605 preserves #589's matching-receipt release of confirmed unsent spend
+reservations. The acceptance checks cover another request proceeding after local contention, a
+concurrent provider floor surviving unchanged and an ambiguous read timeout
+still creating shared backoff. Native exact-head CI and the broader parallel
+triage and multi-controller acceptance remain separate milestones.
 
 ## v1.33.0 — Fleet-wide provider backoff and Retry-After admission
 
@@ -4666,6 +5351,19 @@ Rebuild the controller first to create the provider-backoff table, then matching
 workers. No target-helper/agent update, Docker publication, Git tag or schedule change
 is included.
 
+
+### Successful provider responses — worker checkpoint #609
+
+Successful and non-transient responses check one backoff key without acquiring
+the distributed lock when no reset is eligible. A reset candidate takes the
+same shared lock and checks again in a fresh transaction, preserving a newer
+failure recorded between the initial read and lock acquisition. An already
+clear row does not receive an otherwise unnecessary timestamp write.
+
+Acceptance covers the absent, clear and newer rows, an eligible reset and a
+concurrent failure injected before the locked reread. This increment reduces
+lock acquisitions and writes on these paths. Fleet throughput, recovery and
+complete multi-controller acceptance remain separate milestones.
 
 ## v1.34.0 — Durable update-scoring deferral and exact resume
 
@@ -5259,3 +5957,880 @@ intact and this update's entries reapplied.
 
 
 Final integration (Codex res-20261031): user requested resolution and merge of PR #196. Preserve main 8531ae0 (v1.35.20), including #139, #168 and #174. The earlier v1.35.20 allocation above is historical; current source is v1.35.21, before pending PR #203 v1.35.22. Preserve all main delivery notes and rerun every applicable CI job on this exact final head before merging. No Git tags or Docker publication.
+
+## v1.35.29 — Deleted-server indirect read authorization
+
+Owner: Codex `issue118-a53dc732a02d`, branch
+`codex/deleted-host-read-boundary`, issue #118. Read current main `128704f`
+(v1.35.21), AGENTS/CONTRIBUTING, checkpoint, 78 open issues and open PRs
+#203/#206/#207. #119 and #205 are actively owned; #120 is a separate recovery
+scope and #204 depends on active #203. No unrelated roadmap/UI changes selected.
+The issue claim's initially written 21:25Z timestamp was inaccurate; the actual
+run/checkpoint is 2026-10-31T21:19Z.
+
+Reproduced on unmodified main using disposable SQLite and the real authenticated
+FastAPI application: 14 failures / 12 passes in the new regression suite. Viewers
+and operators received 200 for deleted-server query-scoped jobs, job output,
+investigations and package history; global job/package pages included deleted
+records. Direct host paths already returned 403. The cause was URL-only lifecycle
+read authorization, without resolved-host checks in query/indirect endpoints.
+
+The fix checks the resolved host before returning query-scoped records or job-ID
+output. Job/package list filtering occurs in SQL before pagination. Retained
+administrator access, disabled-server read policy, active-only default fleet
+investigations, missing/mismatched scope responses and hostless jobs are preserved.
+No response authority, schema, helper, audit policy or route-role changes.
+
+Focused validation: 44 passed (26 new authorization cases plus lifecycle suite).
+Full Python suite and exact-final-head CI remain required before merge. Source,
+README and changelog use v1.35.29 above pending .22/.23/.24 allocations; integration
+must recheck main/version order and preserve #206's independently owned role work.
+No tags or Docker publication. Issue #118 stays open until a tested merge is
+verified. All wider roadmap requirements remain tracked above.
+
+## CI pipeline review (v1.35.24)
+
+The owner requested a full CI review, committed directly to `main`. Changes are
+confined to `.github/workflows/ci.yml`, a test-sharding hook in `tests/conftest.py`
+and documentation. No application, role, audit, target helper, response-authorization
+or Docker publication change is included.
+
+- **Main verification.** The concurrency group was shared by every push to `main`,
+  with `cancel-in-progress`. Each merge therefore cancelled the previous main run:
+  runs 329, 331, 334, 335 and 337 (v1.35.16–v1.35.20) never completed on `main`.
+  Push and manual runs now get unique groups. Only an older run of the same pull
+  request (keyed by PR number, not branch name) is superseded.
+- **Shell syntax.** `bash -n a b c` parses only `a`, so only
+  `deploy/entrypoint.sh` had been checked. Each tracked `*.sh` is now checked on its
+  own, as is every tracked `*.js`/`*.cjs` file, and `scripts/`, `tools/` and `tests/`
+  are byte-compiled. All of them pass today.
+- **Runner image (#197).** Every job is pinned to `ubuntu-24.04`. Adopting Ubuntu 26.04
+  should be a separate, fully validated change.
+- **Critical path.** A `static` job (10-minute limit) runs version, syntax and
+  Compose checks without waiting for the SQLite suite. The serial MySQL suite took
+  about 21 of its 30 minutes. It now runs as four isolated jobs (20-minute limit),
+  each with its own MySQL 8.4 service. `MRPATCHY_TEST_SHARD=INDEX/TOTAL` assigns whole
+  test files greedily by test count, so file order and module fixtures are preserved.
+  Every file lands in exactly one shard, and an invalid specification is a usage error.
+- **Duplication.** The restic backup/restore drill now runs in the `tests` job by
+  installing restic, so the separate `recovery` job was removed. Native RPM unit tests
+  use the runner's libdnf/libRPM rather than the matrix target, so they run in the
+  `fedora:44` leg only. Pip and npm downloads are cached.
+
+Check names change: `static` and `mysql (1)`–`mysql (4)` are added, and `mysql` and
+`recovery` are removed. Branch-protection required checks must follow. Future exact-head
+records should list the twelve resulting jobs rather than nine. Action references
+remain major-version tags; SHA pinning belongs to supply-chain issue #201.
+
+## v1.35.37 — Rollback adapter stream isolation (#150)
+
+Issue-first triage on current main `6589f4d` found all open P1 issues already owned by
+active PRs. Issue #150 was the highest-impact independent unclaimed P2 and had no
+related fix. A disposable executable adapter reproduced both snapshot and rollback
+misreporting successful JSON as `JSONDecodeError: Extra data` whenever it also emitted
+a warning on stderr. `recovery_hook` now invokes the existing bounded subprocess
+collector directly, parses stdout alone and rejects stdout above 20 KB before parsing;
+stderr remains separately bounded and cannot corrupt the JSON response. Existing
+root ownership, writable-bit, executable, operation, identifier and object-response
+checks remain unchanged.
+
+Focused regression coverage demonstrates the failure before the fix and covers both
+operations, durable snapshot/rollback journal recording and the oversized-response
+guard. Exact-final-head static, SQLite, four MySQL shards, browser, SSH/RPM,
+Docker/TLS/proxy and GCP checks remain the merge gate. Version **v1.35.37** follows
+active allocations through v1.35.36; major remains 1 and no Git tag or Docker
+publication is included.
+
+Final integration refresh: main advanced to `8fd8d49` (v1.35.29) after all twelve
+checks passed on the earlier head. Preserve PR #212's durable recovery coverage and
+PR #208's deleted-server read authorization, including their tests, recovery format
+and delivery records. The combined v1.35.37 head requires a fresh full local run and
+all twelve exact-head checks; the earlier green run does not authorize merge.
+
+Second final integration refresh: all twelve jobs passed on combined head
+`7b0cb3d54f56452ba6e054ab8db863550c2820f8`, and its local tree passed 1,670 tests,
+11 skips and 9 subtests. Main then advanced to `db7871e` (v1.35.30) through PR #203.
+Preserve its uncertain ordinary-patch outcome hold, remote-start classification,
+receipts, audit records and regression suite unchanged. The new combined head again
+requires the full local and twelve-job exact-head gates; neither earlier green run
+authorizes merge.
+
+Third final integration refresh: all twelve jobs passed on head
+`0243975481869722bb39a3ae102779dea5b12ee3`, and its local tree passed 1,682 tests,
+11 skips and 9 subtests. Main then advanced to `115e3bd` (v1.35.35) through PR #217,
+and open PR #218 allocated v1.35.36. This fix is reallocated to **v1.35.37** and
+preserves #217's sanitized, rate-limited rejected-SSO logging/auditing and tests.
+The changed version/integration head must pass the full local and twelve-job exact-head
+gates again; earlier results do not authorize merge.
+
+Integration continuation — Codex `integration-6eac54918b34`, PR #208, 2026-10-31.
+Accepted the explicit #118 handoff and retained the same branch. Reproduced again
+on current main `fa5d933` (v1.35.24): 14 failed / 12 passed in
+`tests/test_deleted_host_reads.py`. Merged that main into this branch, preserving
+all CI pipeline review/sharding changes and both delivery entries. Allocated
+v1.35.29 above pending proposals through .28; other owners retain their work and
+must reconcile against final main when integrating. This independently scoped P1
+read-boundary fix has no dependency on the separate route-role refactor #206.
+No roadmap work started. Current open-issue listing returned all 78 reports;
+#119/#120/#198/#205 have existing owned fixes, #204 depends on #203, and #140
+remains actionable independent work for a later cycle after this integration.
+Final local validation and all twelve applicable exact-head CI jobs are required;
+no issue closure is claimed until the tested merge is verified. Keep schedule unchanged.
+
+
+Before merge, main advanced to `6589f4d` (v1.35.25, PR #207 checkbox CSS).
+Preserve that exact main and its stylesheet regression. The combined final tree
+requires fresh exact-head CI and local focused authorization/CSS/lifecycle checks;
+the preceding full local suite passed 1647 tests / 9 skipped / 9 subtests on the
+pre-CSS integration tree. Earlier-head CI does not authorize this final integration.
+
+## v1.35.27 — Durable controller recovery coverage (#120)
+
+Codex `recovery-437f6ead2050` selected independent P1 #120 after reading main
+fa5d933 (v1.35.24), repository instructions, the checkpoint, all 77 open issues
+(one 100-item API page, no next link), six open PRs and candidate issue comments.
+P1 #118/#119/#205 already have #208/#203/#209 and retain their owners; #204 depends
+on #203. No roadmap work or competing fix was started. Claim comment's 21:40Z
+was an inaccurate manually entered timestamp; actual claim was near 21:35Z.
+
+On unchanged main, the new staged-bundle regression failed because
+`evidence-archive/sample/content` did not exist after backup. The cause was the
+explicit database/key/SSH/TLS-only allowlist in scripts/recovery.py. A format-2
+manifest now inventories evidence-archive, vendor-packages, yara-rules and local
+gcloud trees with names, sizes and hashes, explicit absence, and verified archive
+IDs. Both restore and activation recheck coverage. Backup refuses missing files
+for verified archives. SQLite activation independently checks retained SQL rows.
+Private evidence/trust/GCP contents restore with 0700 directories, 0600 files and
+app service ownership; links/special files are rejected. Format 1 remains readable
+with an honest missing-coverage warning. External dependencies and reconstructible
+caches are inventoried in docs/ENTERPRISE_RECOVERY.md. Existing response authority,
+role/lifecycle and #131 SSH safeguards remain intact; mounted-volume retry work
+remains separate in #151.
+
+Validation at first publication: unchanged-main failure recorded; focused recovery
+and final-feature suites 37 passed / 4 skipped locally (native restic/MySQL absent).
+New tests verify an actual EvidenceArchive after a SQLite snapshot/activation and
+reauthenticate signed vendor/YARA bundles using restored keyrings. They cover
+modified/missing/extra files, links/FIFOs, missing verified files and legacy/absent
+coverage. Native encrypted SQLite and MySQL dump/import drills are CI gates;
+MySQL CI now installs restic and MariaDB clients. Full suite and exact-head CI are
+pending. This is self-review, not independent approval. No issue closure before
+all applicable exact-final-head checks pass and the tested PR merges.
+
+Proposed version v1.35.27 follows main .24 and pending work through #210 .26;
+recheck main and actively owned lower-version PR integration before merging.
+Keep the same focused branch/PR if integration is still held. No Git tags, Docker
+publication, schedule change or completed-roadmap claim.
+
+Self-review/validation update (2026-10-31T21:44Z): full local Python suite on the
+initial published tree completed with **1637 passed, 11 skipped, 9 subtests passed**.
+The follow-up adds missing-trust warnings and staging-restore tamper coverage;
+focused final recovery/final-feature validation with an extracted native restic
+binary completed **42 passed, 1 skipped** (only the MySQL-specific drill). The
+real encrypted SQLite evidence recovery and both existing restic drills pass.
+No local MySQL server/client or Docker acceptance is claimed. All twelve exact-head
+GitHub jobs must run after this follow-up, including the native MySQL drill.
+PR #212 targets main, has the matching v1.35.27 label and Fixes #120. Initial
+published commit 96c000071caee68ffc5287730e657454afa9a560 exactly matched the locally
+tested tree. Active integration/version holds were posted on #203/#206/#207/#208/
+#209 because main's direct CI update is already v1.35.24. Do not merge ahead of
+that coordinated issue-fix sequence or reuse lower versions. Keep #120 open until
+the tested final merge is verified; continue the same PR if this cycle ends first.
+
+
+Final integration refresh (2026-10-31T21:54Z): all twelve checks passed on PR #212
+head e4ea3714a60ad06139ea9c6cd9e95849831d8788 (run 41244989750). SQLite CI:
+1521 passed / 129 skipped / 9 subtests. MySQL shards combined: 1517 passed /
+133 skipped / 9 subtests; the native encrypted MySQL archive recovery drill is
+included in successful shard 1. Browser, both SSH and RPM legs, GCP runtime and
+static checks passed. Main advanced just before merge to 6589f4d (PR #207,
+v1.35.25). Preserve its checkbox CSS/regression and delivery entry; retain
+v1.35.27 and rerun ALL checks on this new merged final commit. No stale-combination
+merge was attempted. #208's owner explicitly confirmed independent integration
+and will refresh its .29 work if #212 integrates first. Current next-integration
+proposal is #212 at .27; preserve other independently owned fixes and recheck
+main immediately before merge. The earlier blanket hold was superseded by
+PR #212's integration discussion. No issue closure before verified tested merge.
+
+
+Coordinated P1 integration: preserve exact #212 head
+`8253159beb1799986dec5f1644e67cd08174f4eb` (v1.35.27) as an explicit dependency
+of #208 v1.35.29. Serial merge order agreed in PR discussions: #212, #208,
+#203, then later versions. Recovery code, native validation and every delivery
+entry remain intact. The combined final source receives fresh full local and
+all twelve exact-head CI checks. Do not merge #208 before #212's tested merge is
+verified; if its head changes, refresh/reassess this candidate. No other branch
+ownership or schedule changes.
+
+
+## v1.35.30 — Uncertain ordinary patch outcomes (#119)
+
+MrPatchy hourly development, Claude Code session `session_01AfdfYehh8Cf5AJiiyGRkCf`,
+claimed unowned issue #119 after reviewing all open issues, comments and PRs at
+main 56d4eb7 (v1.35.19). Reproduced on that main: with reboot/rollback off, an
+injected `RemoteProtocolError` on the patch send left the job `failed` and the
+host unquarantined, so the next queued mutation ran.
+
+The worker now tracks ordinary patch progress (not sent, sent, receipt received,
+inventory observed). After the request is sent, a failure is held as
+`recovery_required` unless `ssh.call` proves the remote command never started or
+the bridge returned its own structured JSON failure (`ssh.RemoteFailure`). A
+bridge exit without that receipt, a lost/truncated/invalid reply, a timeout, a
+transport error after `exec_command`, and a failed post-patch inventory read are
+all uncertain. Held jobs keep the receipt, the error and the operation identity
+in output and audit (`uncertain patch <job id>`), block later queued work through
+the existing quarantine states and are released only through the existing
+reconciliation path; nothing is replayed. Once the post-patch inventory is
+observed, a later health regression stays a terminal `failed` rollout stage.
+Protected-patch, release-upgrade, role, response-authorization and audit
+boundaries are unchanged. `repository`, `key` and `repair` mutations keep their
+existing classification; tracked in follow-up issue #204.
+
+Regressions in `tests/test_patch_outcome_uncertainty.py` cover lost and malformed
+replies, timeouts, post-start transport errors, a bare bridge exit, post-patch
+inventory failure, verified target failure, inactive and unreachable servers
+(using the real `ssh.call`), the remote-start marker, structured-failure parsing
+and a later queued job. First proposed as v1.35.22. While this PR waited, main
+advanced through PRs #174 (v1.35.20), #196 (v1.35.21), the CI review (v1.35.24),
+#207 (v1.35.25), #212 (v1.35.27) and #208 (v1.35.29), in the order agreed on
+#203/#208/#212; all are preserved. v1.35.30 is newer than main and below the
+later #213-#215 allocations. No schema, target helper or Git tag change; source versioning
+publishes no Docker image.
+
+Checkpoint v1.35.35 (#170): failed SSO callbacks are logged server-side with
+the exception class and a fixed sanitized reason, and audited as `SSO login
+failed` with issuer, hashed subject prefix and reason, rate-limited per
+reason/subject per five minutes. Responses keep the generic 400 message; no
+raw provider text, token or plain subject is recorded. Roles, successful-login
+audit and response-authorization boundaries are unchanged.
+
+## v1.35.32 — Independent periodic scheduler producers (#140)
+
+Owner: Codex `scheduler-6eac54918b34`, branch
+`codex/scheduler-tick-isolation`. Issue-first triage selected #140 after accepting
+#118/#208's explicit integration handoff. Current main `fa5d933` reproduced all
+seven injected producer failures in a disposable real application/SQLite loop:
+queued-job dispatch was skipped and failing tasks retried each iteration. Cause:
+a single outer exception boundary surrounded all producers and the rest of the
+loop, with the shared schedule timestamp advanced only after every task succeeded.
+
+Each leader producer now has its own deadline and failure count. A named failure
+is logged and backed off at 30/60/120/240 seconds, capped at 300 seconds, without
+skipping the remaining producers, polling, dispatch, cleanup, notification or AI
+admission. Success restores 30-second cadence. Worker identity loss propagates
+to the existing stop path rather than being treated as a retriable policy error.
+Deadlines are process-local scheduling safeguards, not durable job claims or a
+replacement for existing coordinator election, drain, leases and per-host locks.
+No additional response authority, automatic replay or provider call is introduced.
+
+Focused new loop/backoff/identity-loss and existing advisory restart, drain/control
+and worker registry tests: 67 passed. Full final-tree local suite and all twelve
+applicable exact-head GitHub jobs are required before merge. No UI changes were
+made. The runtime pipeline remains a priority, but unrelated roadmap work waits
+behind actionable issues. Wider issues/roadmap are not claimed complete.
+
+Version/source/README/changelog use v1.35.32, major fixed at 1. Depends on the exact
+#208 final integration head `a16688690e2a2486cfe3e281ddbae7dce2c09507` (v1.35.29),
+which includes current main `6589f4d` (v1.35.25, #207). Merge #208 first after its
+own exact-head checks; preserve other owners' mutation, recovery and route-role
+work. Re-read main/open PR versions before integration, rerun affected checks if
+head or integration changes, and verify #140 closes only after tested merge.
+No Git tags, Docker publication or schedule changes.
+
+Version allocation correction: another active owner had reserved v1.35.30 for
+#203, and #213 reserves v1.35.31. Reassigned this update to v1.35.32 after the
+fresh open-PR check. Preserve #203's independently owned worker mutation changes;
+coordinate #208 then #203 integration before this later version. Earlier .30
+candidate metadata/CI is superseded; final version metadata receives fresh CI.
+
+Final review extended the same per-producer exception/backoff boundary to module
+loading, so an unavailable optional producer dependency cannot skip healthy tasks
+or the rest of the loop. A focused import-failure regression joins the seven real
+loop failures and backoff/identity checks (67 focused tests pass). Superseded local
+suite/CI results do not authorize this final runtime revision; rerun the full suite
+and all applicable exact-head jobs on the final published tree.
+
+
+Continuation integration (Codex scheduler-85a36b0d8f8a, 2026-10-31): SAME PR #214
+accepts the released handoff after #212/#208/#203 merged. Current main db7871e
+(v1.35.30) reproduces all seven producer-position failures: queued dispatch is
+skipped and the failed producer retries every loop. Preserve all recovery,
+read-authorization and ordinary-patch uncertainty implementation, regressions,
+CI and delivery records while retaining independent periodic producers. No new
+roadmap or unrelated UI scope. This run retrieved 73 open issues (under the
+100-result limit) and nine open PRs; prior run's initial count was 77, not the
+copied historical 78. Keep source v1.35.32 pending coordinated .31/#213 order;
+refresh main and version allocations before merge. The earlier candidate's green
+checks do not authorize this changed integration: require combined focused/full
+local validation and all twelve exact-final-head CI jobs. No issue closure before
+tested merge; no tags, Docker publication or schedule changes.
+
+Coordinator integration v1.35.41 (2026-10-31): the historical candidate versions and
+reservations above are superseded by the maintainer-directed batch in #222. PR #214
+preserves current main through #221/#209, including rollback/SSO/recovery/patch-safety
+and all delivery history. README has no source-version field. Final major-1 version
+and the numbered changelog entry are allocated by the sole coordinator; all 13
+applicable checks must pass on the final integrated head before merge.
+
+## v1.35.22 — Per-route role declarations (#198)
+
+Claude Code session `012YQAphimPkYCq5KWgr1sGh` claimed issue #198 after reading main
+`1328a82` (v1.35.17), all open issues and open PRs. Pending #139, #168, #174 and #196
+hold versions up to v1.35.20 and also edit `app/main.py`; this update proposes
+v1.35.22, subject to refreshing main before merge.
+
+`auth()` used to decide roles by testing the request path (`'/security' in path`,
+`path.endswith('/patch')`, prefix lists), so a new route defaulted to viewer-readable
+and any path ending in `/preview` was operator-writable. Roles are now declared per
+route through `viewer_user`, `operator_user`, `admin_user` and `self_user`, which share
+one `authenticate()` that keeps session, generation, CSRF and host lifecycle checks in
+their existing order. `app/route_roles.py` builds an inventory of every route at
+startup (including the SSO router) and raises if a route declares no role, declares
+conflicting roles, or is public without being listed in `PUBLIC_ROUTES`.
+
+The authenticated routes were migrated from the roles the old logic produced and compared
+against it. The full suite caught one route the template comparison missed: operators may
+run `refresh` through `/api/hosts/{id}/actions/{action}`, so `refresh` is now its own
+operator route and the other actions stay admin. Old accidental matches (a concrete id such
+as `patch` ending a path) no longer grant operator access. `tests/test_route_roles.py` pins
+the full route-to-role table, proves unlisted routes fail closed, and drives a viewer
+and an operator through every admin-only and operator route. #157 (viewer-readable
+`/api/investigation-status`) is still a viewer route here; changing it is now a one-word
+edit on the new mechanism and is left to that issue. Host-lifecycle and deleted-record
+checks still read the path; they are not role decisions and were out of scope.
+
+Coordinator integration v1.35.42 (2026-10-31): PR #226 preserves original #206
+commits and current main through #214, including the deleted-server resolved-host
+and SQL list-filter safeguards. The fork is read-only to this connection, so the
+maintainer-directed batch #222 uses a writable upstream branch. Historical
+candidate version .22 is superseded; README no longer tracks versions. Final
+PR-bound version and all 13 exact-head checks are required before delivery and
+verified #206/#198 closure. The separate #157 telemetry report stays open.
+
+## v1.35.48 — Lifecycle-aware host metrics (#160)
+
+PR #210 filters the Prometheus mrpatchy_hosts gauge to Host.deleted_at==0.
+Soft-deleted history remains retained and administrator-readable; disabled,
+non-deleted servers remain counted. Other metrics, route roles, audit retention
+and runtime response authorization are unchanged. The final version/changelog
+record is coordinator-owned under #222, and all 13 exact-head checks remain
+required before merge and verified issue closure. No tags or Docker publication.
+
+## v1.35.49 — Cache-aware artifact hash deadlines (#166)
+
+PR #220 moves the initial shared-deadline check into the verified cache-miss
+branch before data reads, retaining per-chunk checks. A matching cache hit still
+checks device, inode, mtime, ctime and size and can return after the deadline.
+Expired uncached empty/nonempty files perform no data reads. Existing file and
+process identity checks, roles and response authorization remain unchanged.
+This preserves the owner's corrected bebc0c9 handoff; legacy candidate versions
+are superseded by coordinator #222's final version/PR-linked changelog. All 13
+exact-head checks are required before merge and verified issue closure. Deploy
+the agent update through the existing reviewed maintenance workflow; no tags.
+
+### Configurable bounded AI HTTP connections — worker checkpoint #560
+
+Each controller and worker process now validates a startup-only
+`MRPATCHY_AI_HTTP_CONNECTIONS` ceiling from 1 through 64 (default 16) before
+creating its reusable AI HTTP client. The same ceiling bounds total and keepalive
+connections; invalid configuration refuses worker registration and provider
+transport instead of silently falling back or opening an unbounded pool. Complete
+Compose installation passes the setting to both application and worker processes.
+
+Worker registrations expose the effective process-local ceiling alongside AI task
+capacity. The dashboard labels it as a transport limit rather than available task
+or provider capacity. Existing AI concurrency, shared admission, rate/spend and
+provider backoff, pause/lifecycle checks, per-request credentials, cookie clearing,
+redirect refusal, timeouts, shutdown/drain behavior and single-attempt accounting
+remain unchanged. This configuration does not increase AI task concurrency by
+itself, guarantee sockets are available, establish provider throughput or complete
+the faster-AI performance program.
+
+
+## Password hashes and secret-key handling
+
+- Passwords are stored as `scrypt$N$r$p$salt$digest` (currently N=2^17, r=8, p=1). Legacy `salt:digest` hashes (N=2^14) still verify and are replaced with the current format after a successful sign-in, so the cost can be raised later without breaking existing accounts.
+- The Fernet instance is cached and reloaded only when `secret.key` changes (inode, size or mtime).
+- The OIDC flow-cookie secret is derived from `secret.key` with HKDF-SHA256 and a purpose label; the Fernet key material is not reused directly.
+- Threat model: `secret.key` lives on the same `/data` volume as the database. Encryption of stored secrets therefore only helps when the database is leaked without the volume (for example a database-only dump to MySQL). It does not protect against a compromise of the data volume.
+
+
+### Production image digests — partial #201 checkpoint
+
+This source checkpoint supersedes older statements in this historical log that
+production Python/Caddy references remain tag-only. The application Dockerfile
+keeps the existing `python:3.12-slim-bookworm` tag and binds it to the official
+Docker Hub OCI image-index digest
+`sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337`.
+The deployed Compose Caddy image keeps `caddy:2.10`, bound to index digest
+`sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb`.
+The CI Caddy adapter fixture uses that same complete image reference, so its
+adapter/TLS checks cannot silently test a newer floating tag than deployment.
+Focused regression tests reject missing/malformed digests and fixture drift.
+
+Both pins are multi-platform index digests, not an amd64-only child manifest.
+Direct official-registry reads on 2026-11-02 UTC verified the SHA-256 of the raw
+index bytes against Docker-Content-Digest, and both indexes include Linux amd64
+and arm64. Python also includes Linux arm/v7; Caddy includes arm/v6 and arm/v7.
+Index availability is not a claim that every architecture was built or tested.
+A digest fixes the selected bytes; it is not independent vendor signing or proof
+of a vulnerability-free image. No runtime version family or response authority
+is changed.
+
+Refresh procedure: inspect the intended official tag with
+`docker buildx imagetools inspect python:3.12-slim-bookworm` or
+`docker buildx imagetools inspect caddy:2.10`; verify the index digest and required
+platforms before updating the tag/digest pair. Update Caddy in both compose.yaml
+and the CI adapter fixture together. Keep the readable tag, run the focused pin
+and supply-chain tests, review upstream changes and run the full exact-head CI
+including Compose configuration, production/GCP builds and real Caddy HTTPS
+checks before coordinator integration. Existing Dependabot Docker coverage can
+propose application Dockerfile changes; this checkpoint does not claim automatic
+Compose digest refresh. Manual review remains required, including when a Python
+minor-version proposal such as #287 needs a different matching digest and real
+compatibility/build acceptance. Never pair a new tag with the old tag's digest.
+
+Limits: apt, pip and the GCP CLI installation still resolve packages during the
+build, so this is not a fully reproducible or hash-locked application build.
+Python install hashes, dependency-vulnerability scanning policy and Compose
+sandbox/resource hardening remain unfinished. The GCP Dockerfile's local
+`BASE_IMAGE=mrpatchy:base`, Compose's locally built `mrpatchy:gcp`, and explicitly
+parameterized SSH/RPM test-fixture bases remain build/test inputs, not falsely
+claimed registry digest pins. #292's Actions pins and #302's CodeQL coverage are
+separate deliveries whose history must be preserved during integration. #201
+stays partial/open; no broader deployment/security roadmap completion is claimed.
+
+### Compose capability bounding — partial #201 checkpoint
+
+The complete Compose file now drops all Linux capabilities from `app`, `worker`
+and `caddy` and adds back only what each needs. `app` and `worker` start as root
+only for the entrypoint's `chown` of the data/TLS volumes and the `gosu` drop to
+the unprivileged `mrpatchy` user, so they keep `CHOWN`, `SETUID` and `SETGID`.
+`caddy` keeps `NET_BIND_SERVICE` for ports 80/443 and `DAC_READ_SEARCH` to read
+the owner-only files on the read-only `/tls` mount. `no-new-privileges` is
+unchanged. `tests/test_compose_capabilities.py` pins this exact set.
+
+Limits: read-only root filesystems, PID/memory limits and GCP override services
+remain unfinished under #201; the dependency-vulnerability gate is tracked by the
+separate #369 checkpoint. Acceptance of the new capability set on a real Docker
+host comes from the exact-head CI Compose and HTTPS checks; no local Docker was
+available. No runtime response authority changes.
+
+### Compose process-count bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services each set
+`pids_limit: 1024`. This bounds fork exhaustion while retaining headroom for the
+configured thread pools and subprocess work. Regression coverage requires every
+declared production service to retain a numeric limit between 256 and 4096.
+Custom overrides that legitimately need more than 1024 simultaneous processes in
+one container must raise the limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. It does not
+add memory limits, read-only root filesystems or GCP override-specific limits, and
+it does not establish a live GitHub alert inventory; those #201 items remain open.
+No Docker runtime was available locally, so exact-head CI supplies the image-build,
+Compose/HTTPS startup and custom-binding acceptance.
+
+### Resumable multi-stage release configuration reviews — worker checkpoint #366
+
+Issue #366 implements the next bounded faster-AI increment. Distribution release
+planning now seals each accepted configuration review before another provider call.
+A controlled smooth-rate, daily-spend, provider-backoff or administrator-pause wait
+leaves the job queued at the authoritative eligibility time (or indefinite resume
+state) and leaves the plan non-approvable in `planning` state. Once policy permits
+execution, an exact completed stage is reconstructed without another provider call.
+
+Reuse is deliberately strict. The encrypted checkpoint and its digest must be valid,
+and its versioned identity binds the host, target release, inspected inventory,
+release runner, rewritten sources, simulated package transaction, every relevant
+configuration's verified bytes/metadata/package state, selected model, review-policy
+version, vendor-default bytes and package-news bytes. Any mismatch discards all saved
+stage results and performs current-evidence reviews; a name, package or file hash by
+itself is never sufficient. Completed plans remove the private progress envelope and
+retain the existing digest-bound administrator GO/NO-GO decision, expiry, validation,
+audit, lifecycle and response safeguards.
+
+Focused regression coverage reproduces a wait after one accepted review, verifies the
+job remains queued and the partial plan remains non-approvable, then proves exact
+resume calls only the unfinished stage. A changed completed configuration proves the
+conservative miss path re-runs both stages. This checkpoint does not make a provider
+call interrupted without an accepted structured result safe to replay automatically,
+does not expand release support or response authority, and does not complete the
+remaining provider-invoice or multi-controller failover/reset roadmap. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before this increment is delivered.
+
+
+### Configurable AI benchmark queue age — worker checkpoint #542
+
+This bounded faster-AI measurement increment lets the fixture-only serial/parallel
+benchmark seed observations with a selected synthetic queue age from zero through
+one day. The historical two-second default remains unchanged. The selected age is
+reported in the machine-readable profile and drives the existing queue-age timing,
+so paired runs can exercise fresh and delayed-backlog telemetry without sleeping or
+changing the provider, SSH-evidence, persistence, model, reasoning, evidence or
+one/two-stage workload.
+
+Focused acceptance rejects negative and excessive ages before fixture startup, then
+proves a five-second selection yields two queue-age samples at or beyond the selected
+age while preserving three provider calls and the SSH follow-up for two subjects.
+The queue age remains synthetic: it does not reproduce scheduler contention, pause,
+rate/budget deferral, provider backoff or production load, and it does not establish
+a production speedup. Coordinator integration of prerequisite #525, exact-head
+SQLite/MySQL/full-suite checks and fresh code scanning remain required before this
+increment is delivered.
+
+
+### Retained AI spend history — worker checkpoint #372
+
+This bounded faster-AI increment exposes retained daily accounting windows to
+administrators instead of limiting Settings to the currently active window. The
+report groups by each ledger entry's persisted reset time and IANA timezone, so a
+later timezone change does not rewrite historical accounting. Settled calls use the
+retained public-price usage estimate; reserved, transmitted, uncertain and unknown
+unreleased states keep their conservative ceilings. Released unsent attempts do not
+count. The report contains only aggregate amounts, counts and window boundaries—no
+model names, keys, prompts, evidence, provider responses or pricing-source URLs.
+
+The administrator API validates a trailing 1–90 day range and performs fixed-precision
+SQL aggregation without materializing individual ledger records. Result groups are
+bounded to four persisted reset/timezone combinations per requested day (at most 360),
+and an explicit truncation flag discloses heavier configuration churn. AI Settings
+offers 7-, 30- and 90-day views with loading, empty, error and truncation states and
+states plainly that local public-price estimates are not provider invoices.
+
+AI Settings can filter this history by an exact IANA timezone recorded with the
+ledger window. The administrator API applies the optional timezone before
+grouping and limiting so other timezones cannot hide matching windows.
+Clearing the filter restores the all-timezone report. Applying a filter
+does not change budget settings or their unsaved edits.
+
+This checkpoint changes no admission, provider-call, pause, response-authorization or
+ledger-retention behavior. Provider-invoice reconciliation, signed/automated pricing
+catalog lifecycle and complete multi-controller failover/reset acceptance remain
+planned. Coordinator integration, exact-head SQLite/MySQL/browser/full-suite checks
+and fresh code scanning are still required before delivery.
+
+### AI pricing catalog lifecycle alerts — worker checkpoint #370
+
+This bounded faster-AI increment warns administrators through the existing durable
+operational outbox and in-app notification history during the final seven days of a
+catalog's reviewed window. The stable subject is deduplicated while unchanged,
+escalates from medium to high and reopens delivery at expiry, and resolves when a
+reviewed catalog refresh moves outside the warning window or enabled daily-cap
+enforcement is removed. Only safe catalog version/status/expiry text is published;
+the event contains no keys, prompts, evidence or provider receipts and links to the
+administrator-only AI settings page. Per-user read/dismiss remains separate from
+operational acknowledgement and neither changes admission nor performs remediation.
+Rate-only, unthrottled, legacy and globally disabled AI modes do not receive this
+spend-guard alert.
+
+Focused acceptance covers the exact warning and expiry boundaries, repeated
+collection, acknowledged-warning escalation, per-user revision visibility,
+resolution and non-cap/disabled modes. This does not automate or sign catalog
+updates, reconcile provider invoices, add provider-derived billing truth or complete
+the remaining multi-controller/reset acceptance. Final delivery still requires the
+coordinator's exact-head full test matrix and fresh code scan.
+
+### Compose memory bounding — partial #201 checkpoint
+
+The production Compose `app`, `worker` and `caddy` services set `mem_limit` with
+defaults of 2 GiB, 4 GiB and 512 MiB, overridable through
+`MRPATCHY_APP_MEM_LIMIT`, `MRPATCHY_WORKER_MEM_LIMIT` and `MRPATCHY_CADDY_MEM_LIMIT`.
+A runaway container is OOM-killed and restarted (`restart: unless-stopped`) instead
+of exhausting the host. Regression coverage requires every declared production
+service to keep an overridable default between 256 MiB and 16 GiB. Large fleets with
+heavy concurrent scanning or AI fan-out should raise the worker limit explicitly.
+
+This changes no API, schema, role, audit or runtime response authority. Read-only
+root filesystems, GCP override hardening and the live alert inventory remain open
+under #201. No Docker runtime was available locally.
+
+### Bounded decoded AI provider responses — worker checkpoint #564
+
+The shared provider transport now advertises only `gzip` (with implicit identity),
+reads raw response bytes and performs its own bounded identity/gzip decoding. It
+accepts at most 2,000,000 decoded bytes. Incremental gzip output is limited to the
+remaining allowance plus one byte before each allocation, including across split
+and concatenated gzip members, so an expansion bomb is refused without first
+materializing its expanded body. A normalized decimal `Content-Length` above the
+ceiling is refused before body consumption without converting attacker-controlled
+digit strings to an integer; missing, malformed, compressed, chunked or dishonest
+lengths remain subject to the decoded-byte ceiling while streaming.
+
+Malformed/truncated gzip and unadvertised or ambiguous content encodings produce a
+fixed redacted transport failure. Successful decoding removes consumed encoding and
+framing headers and records the bounded decoded length. Every underlying response
+is closed on success, overflow or decoding/transport failure. A complete bounded
+body is reconstructed with its status and safe request metadata so existing
+structured parsing, usage receipts and HTTP error handling remain unchanged.
+
+An oversized successful response produces a fixed diagnostic and no partial result.
+The transmitted call keeps its full conservative spend reservation as uncertain
+because reliable usage is unavailable, and it is never automatically retried.
+Oversized and invalid-encoding HTTP failures retain status-based transient handling
+and a valid bounded `Retry-After` floor without persisting response bodies or
+arbitrary headers. Both retain the conservative spend reservation as uncertain when
+usage cannot be recovered. Existing per-request credentials, cookie clearing,
+redirect refusal, timeouts, connection reuse, shutdown/drain, pause/lifecycle,
+admission and response-authorization boundaries remain in force.
+
+This is a finite safe-transport checkpoint, not a claim that upstream memory use,
+provider throughput, connection capacity, model discovery or the broader faster-AI
+program is complete. Coordinator integration with ready pooled-discovery and
+configurable-connection work must preserve this decoded-response ceiling, followed
+by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
+
+## Ordered file assessment and visibility (#626)
+
+### Automatic retained file trust (#636)
+
+File observations matching controller-authenticated artifact bytes now retain an
+immutable trust decision and audit record during telemetry ingestion, authenticated
+inspection and pre-AI evidence resolution. Repeated identical matches reuse the
+same record. Exact path/SHA-256 matches can reuse a previous repository-rooted
+observation across servers only while its original authenticated inspection remains
+the latest matching proof. A local newer mismatch takes precedence. When the latest
+receipt reports different or missing bytes at a path, only an observation made
+after that receipt can become trust; older byte evidence stays historical. Prior
+lookups bind the exact, collation-independent path identity before reading history,
+so unrelated paths sharing the same bytes cannot hide an eligible match, and a
+concurrently committed duplicate observation is resolved with a current read
+without aborting the caller's transaction or duplicating its audit entry. Missing,
+invalid, merely observed or changed bytes cannot seed trust. Trust receipts are
+independent of diagnostic pruning; missing origin evidence fails closed.
+
+Exact contextual known-good cache reuse also stores a file trust receipt. Its
+display remains conditional on the existing active, validated assessment and cache
+provenance; revocation retains history but removes effective trust. Read-only file
+status shows automatic trust without creating records. Existing observations are
+populated on the next ingestion/inspection/investigation, not by a GET migration.
+
+This trusts file identity, not every use of that file. Behavior approval, integrity
+alarms, incident history, deterministic protection and response authorization are
+unchanged. Current signing-key revocation and automatic repository retrieval remain
+separate unfinished work. Acceptance includes durable/idempotent writes, prior
+cross-server matches, newer mismatches, deleted origins, cache revocation and
+unchanged administrator boundaries, with native SQLite/MySQL CI required.
+
+
+### Exact-path triage file provenance — worker checkpoint #643
+
+Single-executable triage and cross-server byte-trust rechecks resolve one path
+from the retained controller receipts. They skip manifests without that exact
+path and stop at the newest fully revalidated receipt that contains it, including
+receipts that report a mismatch. This reduces repeated validation and file-map
+construction. Inventory and bulk assessment still build the complete map.
+Misses can still scan retained history. Production latency and the broader
+known-good cache acceptance remain open.
+
+The controller checks retained authenticated Debian/RPM artifact manifests against
+recorded SHA-256 values before exact known-good behavior lookup and optional AI.
+Target-supplied file-assessment claims are replaced. A mismatch against the latest
+authenticated artifact bypasses safe-cache reuse. File authenticity does not
+resolve behavior risk; baseline approval remains explicit and no AI opinion
+creates a trusted artifact. Repository evidence uses existing operator-managed
+authenticated vendor bundles; automatic repository artifact retrieval and current
+signing-key revocation checks are not added here.
+
+Administrator File status pages (fleet selector and server workspace) and the
+overview show paginated recorded managed/startup/vendor/process file observations,
+hashes, evidence methods, behavior assessment provenance, freshness, baseline
+comparison and coverage gaps. Multiple hashes at one path remain separate
+observations. Enrollment-only files remain unavailable, not verified. This is
+recorded-scope visibility, not enumeration of every file on disk. Viewing never
+contacts targets, invokes AI, approves a baseline or authorizes response actions.
+
+### Configurable observation batch cap — partial #106 checkpoint
+
+This bounded reliability increment lets an administrator set each enrolled server's
+serialized observation-batch cap through a typed controller operation. The bridge
+accepts only integer values from 16 KiB through 1 MiB, writes a versioned root-only
+configuration atomically and restarts the collector. Normal snapshots and eBPF events
+use the same effective cap, and existing spool telemetry reports it. The default stays
+256 KiB. The controller accepts the setting only after the target returns the exact
+requested receipt or verifies the requested cap and an active collector through a
+serialized read-only check after an uncertain reply. A failed restart restores the
+prior configuration or its absence and checks the prior collector running state.
+The controller audits unconfirmed outcomes with the observed target state when
+available, keeps the last confirmed setting, and never replays a lost request.
+Only administrators can change the cap.
+
+Configuration does not change the 48 MB durable capacity, ordered commit-before-ACK
+replay, atomic observation records or explicit oversize/capacity loss accounting. An
+oversized observation is still rejected whole and counted while eligible siblings are
+queued. Unsafe, malformed or out-of-range target configuration fails visibly instead
+of silently widening a transport boundary. The target caches a verified file identity
+so high-rate eBPF intake does not reread the configuration for every event.
+
+This does not complete #106: measured adaptive pressure draining, configurable timed
+flush and graceful-shutdown checkpoints, negotiated compression and decompression
+limits, mixed-version fallback, sustained fairness, small-ARM CPU/memory/latency
+benchmarks and the #107/#108 outage/replay/health acceptance remain open. Coordinator
+integration plus exact-head SQLite/MySQL/native/full-suite checks are still required
+before delivery.
+
+### Capability-equivalent AI benchmark comparison — worker checkpoint #526
+
+The disposable AI benchmark now has a separate comparison gate that refuses to
+interpret results unless both reports use the same run count, provider and SSH
+fixture delays, one/two-stage workload shape, provider-call count and token totals.
+Reports with fixture errors, missing or malformed metrics, lost calls/evidence or
+an unchanged execution configuration are rejected before any speed delta is shown.
+Reports from the original fixed-delay harness normalize its documented 10 ms SSH
+fixture explicitly; newer reports retain the configured value and source.
+Input reports are bounded to one megabyte and output has a fixed allowlisted shape.
+
+For valid serial/parallel pairs, the command emits machine-readable elapsed,
+throughput and allowlisted stage p50/p95 deltas. Zero baseline latency produces an
+explicit unavailable percentage instead of division by zero. Each report's cost
+status is preserved; unavailable synthetic cost is never converted to zero or
+described as a provider invoice. Output states that the loopback fixture does not
+establish production performance.
+
+This checkpoint adds no provider call, target access, schema, runtime admission or
+response authority. It does not complete production baseline collection, dashboard
+presentation or the faster-AI end-to-end acceptance milestone. Coordinator
+integration, exact-head full-suite/SQLite/MySQL checks and fresh code scanning remain
+required before delivery.
+
+
+
+### AI benchmark timing-consistency gate — worker checkpoint #532
+
+The fixture-report comparison gate now reconciles each report's run count, elapsed
+time and derived throughput before emitting deltas. Because the producer rounds
+elapsed seconds and runs per second independently to three decimal places, the
+check uses the exact half-unit intervals implied by that precision instead of a
+loose percentage tolerance. A report is accepted only when those
+rounding intervals can describe the same underlying execution. This preserves the
+retained v1.22 fixture pair and values produced at either elapsed-time rounding edge,
+while rejecting understated or overstated throughput with a field-specific error.
+
+This bounded follow-up is stacked on #526/#527 and does not edit its frozen branch.
+It adds no provider call, target access, benchmark workload, production runtime,
+schema, admission or response authority. Workload fingerprints, repeated production
+measurements, dashboard presentation and the full faster-AI acceptance milestone
+remain separate and incomplete. Coordinator integration must first preserve #527,
+then remove the prerequisite diff and run every applicable exact-head check before
+delivery.
+
+
+### Configurable AI benchmark persistence latency — worker checkpoint #613
+
+The disposable serial/parallel triage benchmark now accepts a bounded
+`--persistence-delay-ms` input. The synthetic delay is applied independently to
+billable request-receipt creation and usage reconciliation, and both operations keep
+their separate measured stages. Machine-readable output records the configured delay,
+completed and approved subject counts, provider calls and token totals so comparisons
+can reject a workload or result mismatch instead of reporting an invalid speedup.
+
+Focused coverage rejects values outside 0–1000 milliseconds and runs the same four
+subjects serially and with two workers. Both executions complete four low-risk,
+non-approved subjects, make six provider calls, account for 600 input and 120 output
+tokens, and record the configured delay in all six receipt and usage measurements.
+The reproducible 12-subject comparison in
+`docs/benchmarks/ai-persistence-delay.json` used a 5 ms loopback provider, a 20 ms
+synthetic receipt/usage persistence delay and the existing 10 ms SSH fixture. It
+measured 8.647 subjects/second serially and 19.497 with four workers (2.255x), with
+identical provider calls, tokens, completed subjects and zero errors.
+
+This fixture isolates controlled accounting-persistence pressure; it does not emulate
+database lock, network or failover behavior and does not establish production, TLS or
+database performance. The default remains zero added persistence delay. Runtime
+admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
+response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
+the broader faster-AI roadmap remain incomplete.
+
+
+### Verified operating-system lifecycle status — worker checkpoint #341
+
+The server Overview now reports a read-only lifecycle assessment for reviewed
+Ubuntu and Debian releases. Matching is strict on the exact `ID` and
+`VERSION_ID`; derivatives, unknown releases, stale or future-dated inventory and
+unverified extended-support architectures fail closed as unknown. The versioned
+catalog records the vendor source and review date. Ubuntu extended coverage
+explicitly reports that Pro entitlement is not observed, while Debian 12 LTS
+checks the published architecture set. Inclusive support boundaries have focused
+regression coverage.
+
+This increment does not schedule, recommend or authorize an upgrade and does not
+change patching, response or AI behavior. The migration-planning queue, supported
+target correlation, fleet filters/reports, lifecycle alerts, RPM/vendor coverage,
+entitlement discovery, signed or automated catalog refresh/expiry, and real-target
+upgrade acceptance remain planned under #341. Coordinator integration, exact-head
+full SQLite/MySQL/browser checks and fresh code scanning remain required before
+this checkpoint is delivered.
+
+
+### Batched automatic security-plan eligibility — worker checkpoint #592
+
+This bounded faster-AI increment shortens the database work performed while holding
+the distributed automatic security-plan queue lock. After the existing policy,
+pause, quarantine, lifecycle, prior-attempt and YARA filters select at most 100
+incidents, one projected eligibility query joins each bounded incident ID to its
+canonical host identity and uses a correlated `EXISTS` to read queued/running
+security or startup-plan occupancy. Keeping both comparisons in SQL preserves the
+database's host-ID collation. A successful enqueue updates an in-memory set with
+the canonical host ID, so another collating-equal incident remains deferred exactly
+as it was when each loop iteration queried the job table again.
+
+The 12-host SQLite reproduction admits at most the existing ten plans. Current main
+performs ten final host lookups plus ten final pending-job lookups; the candidate
+uses one bounded eligibility read, reducing the fixture from 151 to 132 SELECT
+statements. Focused coverage also retains a pre-existing startup-plan occupant and
+verifies that two eligible incidents on one host still produce only one automatic
+plan. Native MySQL coverage exercises differently cased stored/candidate host IDs,
+an existing collating-equal occupant and within-tick canonical-host deduplication.
+
+This changes no schema, public API, provider call, spend control, plan content,
+response authority or incident ordering. Per-policy pause and quarantine reads that
+occur before candidate selection remain separate work, and this checkpoint does not
+complete smooth shared planning admission, threaded investigations, production
+throughput or failover acceptance. Coordinator integration with current main is complete; exact integrated-head SQLite/MySQL/full-suite checks and fresh code-scanning inventory remain required before merge. The reported 12-host SELECT reduction is fixture evidence, not production-throughput validation.
+
+### Batched AI-status aggregates — worker checkpoint #586
+
+This bounded faster-AI increment reduces the database work performed whenever the
+AI worker dashboard is polled. The rolling triage-run count and oldest run now come
+from one aggregate statement and therefore one database snapshot. Deferred update-
+score count and next eligibility likewise come from one aggregate statement over
+the same scoped package join. The source-main reproduction issued 20 SQL statements
+for an empty status read: four read `ai_runs` and two read the deferred score join.
+The updated path issues 18: three read `ai_runs` and one reads the score join.
+
+Regression coverage rejects a return to separate count/minimum scans and preserves
+the existing pending, paused, ready, retry, provider-backoff, admission and budget
+status semantics. No schema, provider call, evidence, model, concurrency, pause,
+authorization or response behavior changes. This query reduction does not complete
+threaded investigations, fair scheduling, shared accounting across every billable
+path, production throughput acceptance or the remaining SQLite/MySQL failover and
+reset milestones. Coordinator integration, exact-head full-suite/SQLite/MySQL checks
+and fresh code scanning remain required before delivery.
+
+### Newest authenticated receipt for AI follow-up (issue #645)
+
+Within the retained inspection search, the newest validated vendor receipt that
+names the exact executable path governs provenance. A different hash, an observed
+difference, or incomplete verification leaves the package evidence gap in place.
+Invalid receipts and receipts for unrelated paths do not mask valid evidence.
+
+This slice covers follow-up provenance binding. Roadmap B remains incomplete.
+Fleet-wide reuse still requires end-to-end acceptance of complete evidence,
+zero-call cross-host hits, invalidation, Re-triage, and role isolation on SQLite
+and MySQL.
+
+### Eligible process-triage backlog telemetry — PR #529
+
+Administrator investigation status now reports the count of retry-eligible,
+unclaimed observations and the oldest qualifying observation timestamp from the
+same aggregate snapshot. Only active, unpaused servers qualify; approved,
+retry-delayed, blocked and live-leased work is excluded, while an expired lease
+does not hide otherwise eligible work. The timestamp is null when no observations
+qualify and measures observation age. Existing fields and viewer/operator
+response boundaries are preserved. Shared admission limits and available worker
+capacity may still delay dispatch.
+
+This is an additive administrator API change with no schema/configuration
+migration, provider call, scheduling change, UI change or response-authorization
+change. Matched production throughput and the broader dashboard remain open.

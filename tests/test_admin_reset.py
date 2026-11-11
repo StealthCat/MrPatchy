@@ -34,3 +34,34 @@ def test_reset_refuses_missing_nonadmin_and_weak_password(admin):
     with Session() as s:
         u=s.get(User,'admin');u.role='viewer';s.commit()
     with pytest.raises(ValueError):reset('admin','replacement-password-long')
+
+
+def test_user_management_audit_records_role_enabled_and_password(admin):
+    assert admin.put('/api/users',json={'username':'bob','role':'viewer','password':'bob-password-long-1'}).status_code==200
+    assert admin.put('/api/users',json={'username':'bob','role':'admin','enabled':False}).status_code==200
+    with Session() as s:
+        details=[a.detail for a in s.scalars(select(Audit).where(Audit.action=='manage user'))]
+    assert any('bob' in d and 'role new → viewer' in d and 'password set: yes' in d for d in details)
+    assert any('bob' in d and 'role viewer → admin' in d and 'enabled true → false' in d and 'password set: no' in d for d in details)
+    assert 'bob-password-long-1' not in str(details)
+
+
+def test_user_create_refuses_existing_and_case_variant_names(admin):
+    body={'username':'casey','role':'admin','password':'casey-password-long-1'}
+    assert admin.put('/api/users',json={**body,'create':True}).status_code==200
+    again=admin.put('/api/users',json={**body,'role':'viewer','password':'other-password-long-2','create':True})
+    assert again.status_code==409
+    variant=admin.put('/api/users',json={**body,'username':'CASEY','create':True})
+    assert variant.status_code==409
+    # A case variant without the create flag must not create or overwrite either.
+    assert admin.put('/api/users',json={'username':'CASEY','role':'viewer','enabled':False}).status_code==409
+    with Session() as s:
+        assert [u.username for u in s.scalars(select(User).where(User.username.in_(['casey','CASEY'])))]==['casey']
+        assert s.get(User,'casey').role=='admin'
+
+
+def test_bootstrap_admin_guard_blocks_case_variant(admin):
+    r=admin.put('/api/users',json={'username':'ADMIN','role':'viewer','enabled':False})
+    assert r.status_code==409
+    with Session() as s:
+        u=s.get(User,'admin');assert u.role=='admin' and u.enabled

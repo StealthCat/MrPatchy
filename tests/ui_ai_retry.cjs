@@ -1,20 +1,21 @@
 const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
  const now=Date.now()/1000;let injected=true;
- const status=route=>route.fulfill({json:{pending:3,active:2,queued:1,reported_capacity:4,ready:0,blocked:1,paused:1,hourly_limit:20,recent_attempts:2,worker_seen:now,enabled:true,reason:'backoff',message:'Transient or interrupted investigations are waiting for retry eligibility. Configuration failures require review.',retry_at:now+120,last_error:''}});
+ const status=route=>route.fulfill({json:{pending:3,active:2,active_lease_expires_at:now+45,queued:1,reported_capacity:4,ready:0,blocked:1,paused:1,hourly_limit:20,recent_attempts:2,worker_seen:now,enabled:true,reason:'backoff',message:'Transient or interrupted investigations are waiting for retry eligibility. Configuration failures require review.',retry_at:now+120,last_error:''}});
  const rows=route=>route.fulfill({json:[
   {id:'delayed',host_id:'fixture',evidence:{executable:'/srv/transient-task',uid:1000},verdict:'error',approved:false,last_seen:now,analysis:'OpenAI API HTTP 503. No assessment was accepted.',retry:{state:'deferred',attempts:2,next_at:now+120,reason:'Provider Retry-After is active; existing AI policy limits still apply.'}},
   {id:'blocked',host_id:'fixture',evidence:{executable:'/srv/configuration-review',uid:1000},verdict:'error',approved:false,last_seen:now,analysis:'API authentication failed. Check the saved key.',retry:{state:'blocked',attempts:1,next_at:0,reason:injected?'<img src=x onerror=window.__retryInjected=true> Review configuration; no automatic retry is scheduled.':'Review configuration; no automatic retry is scheduled.'}}
  ]});
  let retries=0;
  const retry=route=>{retries++;return route.fulfill({status:409,json:{detail:'Provider Retry-After is still active; retry after the displayed eligibility time.'}});};
- await page.route('**/api/investigation-status',status);await page.route('**/api/investigations',rows);await page.route('**/api/investigations/delayed/retry',retry);
+ await page.route('**/api/investigation-status',status);await page.route('**/api/investigations?*',rows);await page.route('**/api/investigations/delayed/retry',retry);
  try{
   await page.goto(new URL('/#investigations',page.url()).href);
   await page.getByRole('heading',{name:'AI worker status',exact:true}).waitFor();
   await page.getByText('need review',{exact:false}).waitFor();
   await page.getByText('2 active investigations',{exact:false}).waitFor();
   await page.getByText('4 reported AI slots',{exact:false}).waitFor();
+  await page.getByText('Earliest live lease expiry:',{exact:false}).waitFor();
   await page.getByText('Retry: deferred',{exact:false}).waitFor();
   assert.equal(await page.locator('#content img[src=x]').count(),0);assert.equal(await page.evaluate(()=>window.__retryInjected),undefined);
   await page.locator('[data-action="retry-investigation"][data-id="delayed"]').click();
@@ -26,9 +27,23 @@ module.exports=async(page,capture)=>{
    await capture('ai-parallel-v1220-'+width);
   }
   await page.reload();await page.getByText('Retry: blocked',{exact:false}).waitFor();assert.equal(retries,1);
+  // Fleet view pages in 50s so behaviors past the first page stay reachable.
+  const queries=[];const paged=route=>{const q=new URL(route.request().url()).searchParams,offset=Number(q.get('offset')),n=offset===0?50:3;queries.push([q.get('offset'),q.get('limit'),q.get('host_id')]);return route.fulfill({json:Array.from({length:n},(_,i)=>({id:'p'+(offset+i),host_id:'fixture',evidence:{executable:'/srv/p'+(offset+i),uid:1000},verdict:'low',approved:false,last_seen:now,analysis:'ok'}))});};
+  await page.route('**/api/investigations?*',paged);
+  try{
+   await page.reload();await page.locator('#content .card.investigation').nth(49).waitFor();assert.equal(await page.locator('#content .card.investigation').count(),50);
+   assert.deepEqual(queries[queries.length-1],['0','50',null]);
+   await page.locator('.server-pagination button',{hasText:'Next'}).click();await page.getByText('/srv/p52',{exact:true}).waitFor();
+   assert.equal(await page.locator('#content .card.investigation').count(),3);assert.deepEqual(queries[queries.length-1],['50','50',null]);
+   assert.equal(await page.locator('.server-pagination button',{hasText:'Next'}).isDisabled(),true);
+   // The offset is remembered per view: Refresh and leaving/returning keep page 2.
+   await page.locator('#refresh-page').click();await page.getByText('/srv/p52',{exact:true}).waitFor();assert.deepEqual(queries[queries.length-1],['50','50',null]);
+   await page.goto(new URL('/#overview',page.url()).href);await page.getByRole('heading',{name:/./}).first().waitFor();
+   await page.goto(new URL('/#investigations',page.url()).href);await page.getByText('/srv/p52',{exact:true}).waitFor();assert.deepEqual(queries[queries.length-1],['50','50',null]);
+  }finally{await page.unroute('**/api/investigations?*',paged);}
  }finally{
   await page.setViewportSize({width:1440,height:1000});
-  await page.unroute('**/api/investigation-status',status);await page.unroute('**/api/investigations',rows);await page.unroute('**/api/investigations/delayed/retry',retry);
+  await page.unroute('**/api/investigation-status',status);await page.unroute('**/api/investigations?*',rows);await page.unroute('**/api/investigations/delayed/retry',retry);
   await page.goto(new URL('/#overview',page.url()).href);
  }
 };

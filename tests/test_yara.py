@@ -103,3 +103,21 @@ def test_rule_compilation_diagnostics_fail_even_with_empty_scope(tmp_path,monkey
     fake_engine(tmp_path,monkeypatch,True);root=tmp_path/'empty';root.mkdir()
     report=agent.security_scan([str(root)],packet())
     assert report['state']=='incomplete' and report['scanned']==0 and report['gaps']
+
+
+def test_many_yara_incidents_do_not_starve_automatic_clamav_plans(admin):
+    from app.db import Setting
+    from app.security import seal
+    with Session() as s:
+        s.add(Host(id='yara-host',name='yara',address='192.0.2.1',fingerprint='pin'))
+        s.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture'}))
+        s.add(Setting(key='security-policy:yara-host',value={'auto_ai_plan':True}))
+        for n in range(100):
+            s.add(incidents.Incident(id=f'yara-{n:03}',host_id='yara-host',scan_id=f'ys{n}',updated=1000+n,evidence={'scan_context':{'engine':'YARA'}}))
+        s.add(incidents.Incident(id='clam-new',host_id='yara-host',scan_id='cs',updated=5000,evidence={'scan_context':{'engine':'ClamAV'}}))
+        s.commit()
+    incidents.auto_plan_tick()
+    with Session() as s:
+        jobs=s.query(Job).filter(Job.action=='security-plan').all()
+        assert [j.payload['incident_id'] for j in jobs]==['clam-new']

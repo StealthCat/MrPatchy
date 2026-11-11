@@ -280,12 +280,60 @@ def _prepare(profiles, validate=True):
         raise
 
 
+_STATE = re.compile(r'^# mrpatchy-state: ([a-f0-9-]{36})$', re.M)
+
+
+def _live_state():
+    path = directory() / 'Caddyfile'
+    try:
+        match = _STATE.search(path.read_text())
+    except OSError:
+        return None
+    return match[1] if match else None
+
+
+def _shred(folder):
+    """Best-effort overwrite before unlink, not forensic erasure on SSD/COW storage."""
+    for item in folder.rglob('*'):
+        try:
+            if item.is_file() and not item.is_symlink():
+                with open(item, 'r+b') as stream:
+                    remaining=stream.seek(0, os.SEEK_END)
+                    stream.seek(0)
+                    zeros=b'\0'*65536
+                    while remaining:
+                        written=stream.write(zeros[:min(remaining,len(zeros))])
+                        if not written:raise OSError('Cannot overwrite retired TLS state')
+                        remaining-=written
+                    stream.flush()
+                    os.fsync(stream.fileno())
+        except OSError:
+            pass
+    shutil.rmtree(folder, ignore_errors=True)
+
+
+def _prune(*keep):
+    """After a confirmed activation keep only the live and rollback state; never recovery-required folders."""
+    keep = {str(name) for name in keep if name}
+    try:
+        entries = list(directory().iterdir())
+    except OSError:
+        return
+    for folder in entries:
+        if folder.name in keep or folder.is_symlink() or not folder.is_dir():
+            continue
+        if not re.fullmatch(r'[a-f0-9-]{36}', folder.name) or (folder / 'recovery-required').exists():
+            continue
+        _shred(folder)
+
+
 def apply(payload, profile='internal'):
     if profile not in PROFILES:
         raise ValueError('Unknown HTTPS profile')
     with _lock:
         profiles = read_profiles()
         profiles[profile] = _merge(profiles[profile], payload)
+        previous = _live_state()
         folder, content = _prepare(profiles)
         try:
             _activate(folder, content)
@@ -293,6 +341,7 @@ def apply(payload, profile='internal'):
             if not (folder / 'recovery-required').exists():
                 shutil.rmtree(folder, ignore_errors=True)
             raise
+        _prune(folder.name, previous)
         return _public(profiles)
 
 
@@ -337,6 +386,8 @@ def bootstrap():
     folder, _ = _prepare(profiles, validate=False)
     (folder / 'Caddyfile.pending').replace(path)
     _sync_directory(directory())
+    # Rendering is not a live activation receipt. Keep earlier generations until
+    # apply() has confirmed a replacement through Caddy's admin API.
 
 
 if __name__ == '__main__':

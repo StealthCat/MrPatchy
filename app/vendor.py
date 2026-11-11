@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 import re
 import stat
-import subprocess
 import tarfile
 import tempfile
 import time
+from .gpgv import verify as verify_gpgv
 
 TAR_STREAM_LIMIT=130*1024*1024
 
@@ -112,12 +112,7 @@ def authenticate(bundle_id,now=None):
     with tempfile.TemporaryDirectory() as tmp:
         for name,data in [('trustedkeys.gpg',keyring),('Release',release),('Release.gpg',signature)]:
             (Path(tmp)/name).write_bytes(data)
-        result=subprocess.run(['gpgv','--homedir',tmp,'--keyring',str(Path(tmp)/'trustedkeys.gpg'),'--status-fd','1',str(Path(tmp)/'Release.gpg'),str(Path(tmp)/'Release')],capture_output=True,timeout=15)
-        if result.returncode or b'[GNUPG:] VALIDSIG ' not in result.stdout:raise ValueError('Vendor Release signature verification failed')
-        # Reject weak digest signatures, even if the local gpgv policy accepts them.
-        signatures=[line.split() for line in result.stdout.decode().splitlines() if line.startswith('[GNUPG:] VALIDSIG ')]
-        if any(len(line)<10 or line[9] not in ('8','9','10','11') for line in signatures):raise ValueError('Weak vendor signature digest')
-        signers=[line[2] for line in signatures]
+        signers=verify_gpgv(['gpgv','--homedir',tmp,'--keyring',str(Path(tmp)/'trustedkeys.gpg'),'--status-fd','1',str(Path(tmp)/'Release.gpg'),str(Path(tmp)/'Release')])
     meta=fields(release.decode('utf-8'))
     now=time.time() if now is None else now
     def stamp(key):
@@ -227,12 +222,12 @@ def validate_authenticated(manifest,proof,result):
 
 
 def known_good_binding(manifest,proof,result,path,checksum):
-    """Bind one exact path/hash to signed package evidence without target trust."""
+    """Bind an exact path, or return None when a valid receipt cannot prove its bytes."""
     verified=validate_authenticated(manifest,proof,result)
-    if result.get('state')!='matches_artifact_bytes':raise ValueError('Vendor inspection did not verify all authenticated regular files')
-    entries=[entry for entry in manifest['entries'] if entry['path']==path and entry['sha256']==checksum]
-    if len(entries)!=1:raise ValueError('Executable is not an exact authenticated vendor artifact match')
-    entry=entries[0];basis=trust_basis(manifest)
+    entry=next((entry for entry in manifest['entries'] if entry['path']==path),None)
+    if entry is None:raise ValueError('Executable is absent from the authenticated vendor manifest')
+    if result['state']!='matches_artifact_bytes' or entry['sha256']!=checksum:return None
+    basis=trust_basis(manifest)
     artifact={'version':1,'verified':True,'kind':'vendor-package-regular-file','path':path,'sha256':checksum,
         'size':entry['size'],'manifest_sha256':sha(json.dumps(entry,sort_keys=True,separators=(',',':')).encode())}
     provenance={'version':1,'verified':True,'scheme':basis,'subject':manifest['package'],'release':manifest['version'],

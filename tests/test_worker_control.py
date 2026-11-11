@@ -93,12 +93,15 @@ def test_invalid_control_blocks_admission_without_forging_ack(admin):
 @pytest.mark.parametrize('jobs,polls',[('1','1'),('8','32')])
 def test_configured_capacities_report_actual_pool_limits(admin,monkeypatch,jobs,polls):
     monkeypatch.setenv('MRPATCHY_JOB_CONCURRENCY',jobs);monkeypatch.setenv('MRPATCHY_POLL_CONCURRENCY',polls)
+    monkeypatch.setenv('MRPATCHY_AI_HTTP_CONNECTIONS','37')
     with registry.Registration() as node:
         assert node.capacity=={'jobs':int(jobs),'polls':int(polls),'ai':4}
-        row=registry.page()['items'][0];assert row['job_capacity']==int(jobs) and row['poll_capacity']==int(polls)
+        row=registry.page()['items'][0]
+        assert row['job_capacity']==int(jobs) and row['poll_capacity']==int(polls)
+        assert row['ai_http_capacity']==37
 
 
-@pytest.mark.parametrize('env,value',[('MRPATCHY_JOB_CONCURRENCY','0'),('MRPATCHY_JOB_CONCURRENCY','9'),('MRPATCHY_POLL_CONCURRENCY','33'),('MRPATCHY_POLL_CONCURRENCY','-1'),('MRPATCHY_JOB_CONCURRENCY','2.0'),('MRPATCHY_POLL_CONCURRENCY','nan'),('MRPATCHY_AI_CONCURRENCY','0'),('MRPATCHY_AI_CONCURRENCY','9'),('MRPATCHY_AI_CONCURRENCY','1.5')])
+@pytest.mark.parametrize('env,value',[('MRPATCHY_JOB_CONCURRENCY','0'),('MRPATCHY_JOB_CONCURRENCY','9'),('MRPATCHY_POLL_CONCURRENCY','33'),('MRPATCHY_POLL_CONCURRENCY','-1'),('MRPATCHY_JOB_CONCURRENCY','2.0'),('MRPATCHY_POLL_CONCURRENCY','nan'),('MRPATCHY_AI_CONCURRENCY','0'),('MRPATCHY_AI_CONCURRENCY','9'),('MRPATCHY_AI_CONCURRENCY','1.5'),('MRPATCHY_AI_HTTP_CONNECTIONS','0'),('MRPATCHY_AI_HTTP_CONNECTIONS','65'),('MRPATCHY_AI_HTTP_CONNECTIONS','1.5')])
 def test_invalid_concurrency_refuses_start(env,value,monkeypatch):
     monkeypatch.setenv(env,value)
     with pytest.raises(ValueError,match=env):registry.Registration()
@@ -112,7 +115,6 @@ def test_scheduler_drain_releases_coordinator_finishes_assigned_and_resumes(admi
     monkeypatch.setattr(worker.operations,'collect_alerts',lambda:None)
     monkeypatch.setattr(worker.operations,'deliver_one',lambda:None)
     monkeypatch.setattr(worker,'poll_host',lambda *a:None)
-    monkeypatch.setattr(worker,'ai_cycle',lambda:None)
     with Session() as s:
         for n in range(3):
             host=Host(id='control-host-'+str(n),name='Control fixture',address='192.0.2.1',fingerprint='');s.add(host)

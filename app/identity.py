@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from sqlalchemy import String, Boolean, Integer
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base
-from .security import seal,unseal
+from .security import unseal
 
 actor=ContextVar('actor',default='system')
 class User(Base):
@@ -29,7 +29,11 @@ def code(secret,counter):
     offset=digest[-1]&15
     return str((struct.unpack('>I',digest[offset:offset+4])[0]&0x7fffffff)%1000000).zfill(6)
 
+def normalize_otp(value):
+    # Authenticator apps display codes as "123 456"; accept the grouping whitespace only.
+    return ''.join(value.split()) if isinstance(value,str) else value
 def consume_otp(user,value,now=None,pending=False):
+    value=normalize_otp(value)
     if not isinstance(value,str) or len(value)!=6 or not value.isascii() or not value.isdigit(): return False
     secret=user.otp_pending if pending else user.otp_secret
     if not secret: return False

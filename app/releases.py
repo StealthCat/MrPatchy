@@ -1,28 +1,21 @@
 """Release planning, AI configuration review, and resumable approved orchestration."""
-import base64
 import difflib
 import gzip
-import hashlib
 import json
-import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tarfile
 import time
-import uuid
 from urllib.parse import urlsplit
-import httpx
 from . import ai
-from sqlalchemy import select
 from . import apt,ssh
-from .db import Base,Session,Setting,Job,Host,config,audit
+from .db import Base,Setting,config
 from sqlalchemy.orm import Mapped,mapped_column
 from sqlalchemy import String,Text,Double
 from sqlalchemy.dialects.mysql import LONGTEXT
 from .security import seal,unseal
-from target.release import canonical,digest,parse_transaction,conffiles,validator,allowed_config
+from target.release import canonical,digest,parse_transaction,conffiles,validator
 
 class ReleasePlan(Base):
     __tablename__='release_plans'
@@ -144,6 +137,7 @@ def vendor_files(root,cfg,package,version,names):
     return found
 
 SECRET=re.compile(r'(?im)^(?!\s*[#;]).*(?:password|passwd|secret|token|authorization|api[_-]?key)[\w-]*[\"\']?\s*[:=\s]\s*\S+.*$|[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@|-----BEGIN [^-]*PRIVATE KEY-----')
+REVIEW_POLICY_VERSION=1
 def ai_review(s,target,path,current,vendor,news,host_id='',plan_id=''):
     from . import ai_policy
     ai_policy.require([host_id] if host_id else [])
@@ -187,6 +181,27 @@ def build(s,host,identifier):
         if len(names)>256:raise ValueError('More than 256 configuration files require review')
         configs=ssh.call(host,{'action':'release-configs','paths':names},timeout=120)['configs']
         if set(configs)!=set(names):raise ValueError('Incomplete target configuration inventory')
+        previous=body(row)
+        previous_progress=previous.get('review_progress',{}) if (
+            row.state=='planning' and row.digest and digest(canonical(previous))==row.digest) else {}
+        configuration_identity=[]
+        for name in names:
+            item=configs[name]
+            configuration_identity.append({'path':name,'package':item.get('package',''),
+                'sha256':item.get('sha256',''),'content_sha256':digest(str(item.get('content','')).encode()),
+                'mode':item.get('mode'),'uid':item.get('uid'),'gid':item.get('gid'),
+                'vendor_managed':item.get('vendor_managed') is True,'error':str(item.get('error',''))[:1000]})
+        base_hash=digest(canonical({'format':1,'review_policy':REVIEW_POLICY_VERSION,
+            'host_id':host.id,'target':plan['target'],'inventory_hash':plan['inventory_hash'],
+            'runner_sha256':plan['runner_sha256'],'ai_model':plan['ai_model'],'sources':plan['sources'],
+            'transaction':plan['transaction'],'services':plan['services'],
+            'execution_files':plan['execution_files'],'custom_validation':plan['custom_validation'],
+            'inspection_blockers':plan['blockers'],'configs':configuration_identity}))
+        cached=previous_progress.get('results',{}) if previous_progress.get('base_hash')==base_hash else {}
+        progress={'format':1,'base_hash':base_hash,'results':{}}
+        plan['review_progress']=progress
+        def checkpoint():
+            store(row,plan);row.state='planning';row.error='';s.commit()
         reviewed_packages={};ai_calls=0
         for name in names:
             item=configs[name]
@@ -206,7 +221,22 @@ def build(s,host,identifier):
                 plan['reviews'].append({'path':name,'reason':'Already matches the new vendor default','changed':False});continue
             ai_calls+=1
             if ai_calls>32:raise ValueError('AI review limit is 32 files per plan; split/prepare this migration first')
-            result=ai_review(s,plan['target'],name,item['content'],vendor,reviewed_packages[package].get('_news',''),host_id=host.id,plan_id=identifier)
+            news=reviewed_packages[package].get('_news','')
+            context_hash=digest(canonical({'base_hash':base_hash,'path':name,
+                'vendor_sha256':digest(vendor.encode()),'news_sha256':digest(news.encode())}))
+            saved=cached.get(name,{})
+            if saved.get('context_hash')==context_hash and isinstance(saved.get('result'),dict):
+                result=saved['result']
+                if (set(result)!= {'content','reason','blockers'} or not isinstance(result['content'],str)
+                    or not isinstance(result['reason'],str) or not isinstance(result['blockers'],list)
+                    or any(not isinstance(value,str) for value in result['blockers'])):
+                    raise ValueError('Saved release configuration review is invalid')
+            else:
+                # Seal all accepted earlier stages before another provider call. A
+                # controlled wait can therefore resume without repeating them.
+                checkpoint()
+                result=ai_review(s,plan['target'],name,item['content'],vendor,news,host_id=host.id,plan_id=identifier)
+            progress['results'][name]={'context_hash':context_hash,'result':result}
             plan['blockers'].extend(name+': '+x for x in result['blockers'])
             after=result['content'];modified=after!=item['content']
             plan['reviews'].append({'path':name,'reason':result['reason'],'changed':modified})
@@ -217,17 +247,27 @@ def build(s,host,identifier):
                 plan['edits'].append({'path':name,'before_sha256':item['sha256'],'vendor_sha256':digest(vendor.encode()),'after':after,
                     'mode':item['mode'],'uid':item['uid'],'gid':item['gid'],'reason':result['reason'],
                     'diff':''.join(difflib.unified_diff(item['content'].splitlines(True),after.splitlines(True),fromfile=name+' (current)',tofile=name+' (planned)'))})
+            checkpoint()
+        plan.pop('review_progress',None)
         if len(canonical(plan))>3_000_000:raise ValueError('Release plan exceeds 3 MiB')
     except Exception as error:
+        eligible=ai.defer_until(error)
+        if eligible is not None:
+            store(row,plan);row.state='planning';row.error=getattr(error,'diagnostic',str(error))[:1000];s.commit()
+            raise
         plan['blockers'].append(str(error)[:1000])
     finally:
         shutil.rmtree(apt.DATA/'apt'/('release-'+identifier),ignore_errors=True)
-    store(row,plan);row.state='blocked' if plan['blockers'] else 'ready';s.commit()
+    plan.pop('review_progress',None)
+    store(row,plan);row.state='blocked' if plan['blockers'] else 'ready';row.error='';s.commit()
     return {'plan_id':identifier,'state':row.state,'blockers':plan['blockers']}
 
 RECEIPT_PHASES={'accepted','snapshotting','upgrading','configuring','reboot_pending',
                 'rolling_back','rollback_reboot_pending','rolled_back','complete','recovery_required'}
 TRANSPORT_ERRORS=(OSError,RuntimeError,ValueError,ssh.paramiko.SSHException)
+
+class Refused(ValueError):
+    """The target cleanly refused a release command before changing anything."""
 
 def execute(s,host,job):
     """Resume observation after central restarts; accepted target jobs are never replayed."""
@@ -252,14 +292,39 @@ def execute(s,host,job):
         if job.payload.get('_release_receipt')!=small:
             job.payload={**job.payload,'_release_receipt':small};job.output=json.dumps(small);s.commit()
 
-    while time.time()<deadline:
+    # Always read the receipt once, even when resumed after the window: a finished
+    # upgrade must be reported as such, not as an expired observation.
+    if state is not None and time.time()>=deadline:
+        # A saved rollback receipt skips the read below; a no-reboot rollback may
+        # have finished while no worker was observing, so read the target once.
+        # Only a finished receipt replaces the saved one; no target action is taken.
+        try:seen=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+        except (ssh.RemoteFailure,)+TRANSPORT_ERRORS:seen=None
+        if isinstance(seen,dict) and seen.get('state') in ('complete','rolled_back'):state=seen
+    first=True
+    while first or time.time()<deadline:
+        first=False
         if state is None:
             try:state=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+            except ssh.RemoteFailure as refusal:
+                # A target-side refusal is not a lost connection; retrying silently hides it.
+                raise Refused(str(refusal)[:1000])
             except TRANSPORT_ERRORS:time.sleep(5);continue
         if state.get('state')=='absent':
             if submitted:raise RuntimeError('Target receipt disappeared after submission; refusing to replay release upgrade')
+            # Approved plans can wait in the queue past their expiry; the target would refuse.
+            if plan.get('expires',0)<time.time():raise Refused('Release plan expired before it could be started; create and approve a new plan')
             job.payload={**job.payload,'_release_submitted':True};s.commit();submitted=True
             try:state=ssh.call(host,{'action':'release-start','job_id':job.id,'plan':plan,'digest':row.digest},timeout=180)
+            except ssh.RemoteFailure as refusal:
+                # The target validates the plan before writing a receipt. A refusal
+                # with no receipt means nothing started, so report it plainly.
+                try:seen=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+                except TRANSPORT_ERRORS:seen=None
+                if seen is not None and seen.get('state')=='absent':
+                    job.payload={k:v for k,v in job.payload.items() if k!='_release_submitted'};s.commit()
+                    raise Refused(str(refusal)[:1000])
+                state=seen;time.sleep(5);continue
             except TRANSPORT_ERRORS:
                 # The detached process may have accepted the command before SSH
                 # disconnected. Query its receipt; never send start a second time.
@@ -270,6 +335,7 @@ def execute(s,host,job):
             if phase=='rolled_back':ssh.call(host,{'action':'release-restored','plan':plan},timeout=120)
             row.state=phase;s.commit();return {'outcome':phase,'release_plan':row.id}
         if phase=='recovery_required':raise RuntimeError(state.get('error','Release upgrade needs recovery'))
+        if time.time()>=deadline:break
         if phase in ('reboot_pending','rollback_reboot_pending'):
             key=phase+':'+str(state.get('boot_before',''))
             health=job.payload.get('_release_health',{})
@@ -284,6 +350,9 @@ def execute(s,host,job):
                         ssh.call(host,{'action':'release-restored','plan':plan},timeout=120)
                         state={**state,'state':'rolled_back','boot_after':boot['boot_id']};remember(state)
                         row.state='rolled_back';s.commit();return {'outcome':'rolled_back','release_plan':row.id}
+                    # A no-reboot rollback can finish with its reply lost; its receipt says so.
+                    seen=ssh.call(host,{'action':'release-status','job_id':job.id},timeout=15)
+                    if seen.get('state') in ('complete','rolled_back'):state=seen;continue
                 else:
                     completed=ssh.call(host,{'action':'release-verify','job_id':job.id},timeout=600)
                     if completed.get('state')=='complete':state=completed;continue
@@ -297,6 +366,7 @@ def execute(s,host,job):
                 state={**state,'state':'rollback_reboot_pending','boot_before':boot['boot_id'],'rollback_attempted':True}
                 remember(state)
                 try:state=ssh.call(host,{'action':'release-rollback','job_id':job.id},timeout=1900)
+                except ssh.RemoteFailure as refusal:raise RuntimeError('Release rollback refused: '+str(refusal)[:900])
                 except TRANSPORT_ERRORS:pass
                 continue
         time.sleep(5)

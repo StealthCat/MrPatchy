@@ -9,6 +9,22 @@ from .coordination import Lock
 
 scope=ContextVar('ai_server_scope',default=())
 PREFIX='server-ai:'
+MIN_CONCURRENCY=1
+DEFAULT_CONCURRENCY=2
+MAX_CONCURRENCY=4
+
+
+def investigation_limit(s,host_id):
+    row=s.get(Setting,PREFIX+host_id)
+    return investigation_limit_value(row.value if row else {})
+
+
+def investigation_limit_value(value):
+    raw=value.get('concurrency_limit')
+    if raw is None:return DEFAULT_CONCURRENCY
+    if type(raw) is int and MIN_CONCURRENCY<=raw<=MAX_CONCURRENCY:return raw
+    # A manually corrupted policy must reduce admission rather than widen it.
+    return MIN_CONCURRENCY
 
 
 def paused_ids():
@@ -20,6 +36,8 @@ def status(s,host_id):
     paused=value.get('paused',False) is not False
     cfg=config(s)
     return {**value,'paused':paused,'revision':value.get('revision',''),
+        'concurrency_limit':investigation_limit(s,host_id),
+        'concurrency_limit_min':MIN_CONCURRENCY,'concurrency_limit_max':MAX_CONCURRENCY,
         'state':'paused' if paused else 'eligible' if cfg['ai_enabled'] else 'globally_disabled',
         'global_enabled':bool(cfg['ai_enabled'])}
 
@@ -35,22 +53,40 @@ def require(host_ids):
 @contextmanager
 def provider():
     identifiers=sorted(set(scope.get()))
+    # A process-triage lease is the durable cross-worker in-flight fence. Use
+    # the short policy-change gate only for admission so independent subjects
+    # on one server can overlap. The administrator route rejects a policy
+    # change while any such lease is live.
+    from .ai_claims import current,check_current
+    lease=current.get()
+    if lease and identifiers==[lease.host_id]:
+        with ExitStack() as stack:
+            for identifier in identifiers:stack.enter_context(Lock('ai-policy-change:'+identifier))
+            require(identifiers);check_current()
+        yield
+        return
     with ExitStack() as stack:
         for identifier in identifiers:stack.enter_context(Lock('ai-provider:'+identifier))
         require(identifiers)
-        from .ai_claims import check_current
         check_current()
         yield
 
 
-def save(s,host,paused,expected,reason,actor):
+def save(s,host,paused,expected,reason,actor,concurrency_limit=None):
     if host.deleted_at:raise ValueError('Deleted server AI settings are read-only')
     current=status(s,host.id)
     if current['revision']!=expected:raise ValueError('AI state changed; refresh before saving')
     if len(reason.strip())<10:raise ValueError('Provide a meaningful reason')
-    value={'paused':paused,'revision':str(uuid.uuid4()),'updated':time.time(),'actor':actor,'reason':reason.strip()}
+    if concurrency_limit is None:concurrency_limit=current['concurrency_limit']
+    if type(concurrency_limit) is not int or not MIN_CONCURRENCY<=concurrency_limit<=MAX_CONCURRENCY:
+        raise ValueError('Process investigation capacity is outside the supported range')
+    value={'paused':paused,'concurrency_limit':concurrency_limit,'revision':str(uuid.uuid4()),
+        'updated':time.time(),'actor':actor,'reason':reason.strip()}
     row=s.get(Setting,PREFIX+host.id)
     if row:row.value=value
     else:s.add(Setting(key=PREFIX+host.id,value=value))
-    audit(s,'server AI paused' if paused else 'server AI resumed',host.id+' '+actor+' '+reason.strip());s.commit()
+    if paused!=current['paused']:action='server AI paused' if paused else 'server AI resumed'
+    elif concurrency_limit!=current['concurrency_limit']:action='server AI concurrency changed'
+    else:action='server AI policy reaffirmed'
+    audit(s,action,host.id+' '+actor+' '+str(concurrency_limit)+' slot(s) '+reason.strip());s.commit()
     return status(s,host.id)

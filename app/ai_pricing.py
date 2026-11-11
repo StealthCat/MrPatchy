@@ -8,9 +8,15 @@ from decimal import Decimal
 from decimal import ROUND_CEILING
 import json
 import re
+import time
 
 VERSION = '2026-10-26'
 SOURCE = 'https://developers.openai.com/api/docs/pricing'
+# Bundled catalogs are deliberately short-lived. Updating prices requires a
+# reviewed source change; an old build must not silently promise a spend cap
+# using rates that have not been reverified.
+VERIFIED_AT = 1792972800  # 2026-10-26T00:00:00Z
+EXPIRES_AT = 1795651200   # 2026-11-26T00:00:00Z
 # USD per million: ordinary input, cached input, output, 30-minute cache write.
 RATES = {
     'gpt-6-astra': ('10', '1', '50', '12.5'),
@@ -30,6 +36,23 @@ ALIASES = {
 }
 TOKEN_FIELDS = ('input_tokens', 'cached_tokens', 'cache_write_tokens', 'output_tokens', 'reasoning_tokens')
 CAP_MODES = ('daily_cap', 'rate_and_daily')
+
+
+def catalog_status(now=None):
+    """Return bounded public catalog metadata without exposing request data."""
+    now = time.time() if now is None else now
+    if now < VERIFIED_AT:
+        state = 'not_yet_valid'
+        reason = 'The controller clock predates this price catalog verification.'
+    elif now >= EXPIRES_AT:
+        state = 'expired'
+        reason = 'The bundled public-price catalog has expired and needs a reviewed update.'
+    else:
+        state = 'fresh'
+        reason = 'The bundled public-price catalog is within its reviewed validity window.'
+    return {'version': VERSION, 'source': SOURCE, 'verified_at': VERIFIED_AT,
+            'expires_at': EXPIRES_AT, 'state': state, 'fresh': state == 'fresh',
+            'reason': reason}
 
 
 def identifier(value):
@@ -79,10 +102,7 @@ def estimate(data, payload):
     if modern and 'cache_write_tokens' not in data['usage'].get('input_tokens_details', {}):
         result['reason'] = 'Cache-write usage was not returned; a reliable estimate is unavailable.'
         return result
-    # Old model priority/Flex prices are not inferred from modern multipliers.
-    multiplier = {'default': '1'}
-    if modern: multiplier.update(flex='0.5', priority='2', fast='2')
-    if model in ('gpt-6-astra', 'gpt-6.1-sol'): multiplier['ultrafast'] = '6'
+    multiplier = tier_multipliers(model)
     if result['service_tier'] not in multiplier:
         result['reason'] = 'The processing tier is missing or has no verified price.'
         return result
@@ -115,13 +135,29 @@ def estimate(data, payload):
     return result
 
 
-def reservation(payload):
+def tier_multipliers(model):
+    """Verified processing-tier price multipliers for a catalogued model.
+
+    Shared by estimate() and reservation() so the settled estimate and the
+    reservation ceiling cannot diverge. Old-model priority/Flex prices are not
+    inferred from modern multipliers.
+    """
+    multipliers = {'default': '1'}
+    if RATES[model][3] is not None: multipliers.update(flex='0.5', priority='2', fast='2')
+    if model in ('gpt-6-astra', 'gpt-6.1-sol'): multipliers['ultrafast'] = '6'
+    return multipliers
+
+
+def reservation(payload, now=None):
     """Return a conservative USD ceiling before a capped provider call.
 
     UTF-8 JSON bytes are a safe upper bound for token count for the bounded text
     requests Mr Patchy sends. Unknown models, tiers, output bounds, tool fees or
     long-context prices fail closed instead of becoming a zero-dollar estimate.
     """
+    catalog = catalog_status(now)
+    if not catalog['fresh']:
+        return {'ok': False, 'reason': catalog['reason'], 'catalog': catalog}
     requested = identifier(payload.get('model'))
     model = ALIASES.get(requested, requested)
     if model not in RATES:
@@ -133,9 +169,7 @@ def reservation(payload):
         return {'ok': False, 'reason': 'Tool fees are not available for a safe reservation.'}
     tier = payload.get('service_tier', 'default')
     rates = RATES[model]; modern = rates[3] is not None
-    multipliers = {'default': '1'}
-    if modern: multipliers.update(flex='0.5', priority='2', fast='2')
-    if model in ('gpt-6-astra', 'gpt-6.1-sol'): multipliers['ultrafast'] = '6'
+    multipliers = tier_multipliers(model)
     if tier not in multipliers:
         return {'ok': False, 'reason': 'The requested processing tier has no verified price for a safe reservation.'}
     excluded = {'model', 'store', 'max_output_tokens', 'service_tier', 'prompt_cache_options'}
