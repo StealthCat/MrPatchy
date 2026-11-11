@@ -47,40 +47,71 @@ _REQUIRED_FIELDS = (
 MAX_TEXT = 256
 
 
-def _text(value: Any) -> str | None:
+_ALLOWED_FIELDS = frozenset(_REQUIRED_FIELDS) | {'flags'}
+_OVERLONG = object()
+
+
+def _text(value: Any) -> Any:
+    """Return stripped text, ``None`` when absent, or ``_OVERLONG``.
+
+    Overlong values are never truncated: two distinct values sharing a prefix
+    must not bind to the same operation or verify as the same version.
+    """
     if not isinstance(value, str):
         return None
     value = value.strip()
-    return value[:MAX_TEXT] if value else None
+    if not value:
+        return None
+    return _OVERLONG if len(value) > MAX_TEXT else value
 
 
 def bind_operation(request: Any) -> dict[str, Any]:
     """Return ``{'ok', 'errors', 'operation_id'}`` for a requested operation.
 
     The operation ID is a digest over host/enrollment, device, action, exact
-    payload and policy digest, so any change to those invalidates approval.
-    Requests carrying force/ignore flags are rejected rather than stripped.
+    payload, policy digest and every permitted flag, so any change to those
+    invalidates approval. The request schema is strict: unknown keys are
+    rejected rather than ignored, overlong values are rejected rather than
+    truncated, and force/ignore flags are rejected rather than stripped.
     """
     if not isinstance(request, dict):
         return {'ok': False, 'errors': ['malformed_request'], 'operation_id': None}
     errors = []
-    fields = {}
+    if any(key not in _ALLOWED_FIELDS for key in request):
+        errors.append('unknown_field')
+    fields: dict[str, Any] = {}
     for name in _REQUIRED_FIELDS:
         value = _text(request.get(name))
         if value is None:
             errors.append(f'missing_{name}')
+        elif value is _OVERLONG:
+            errors.append(f'overlong_{name}')
+            value = None
         fields[name] = value
     if fields['action'] is not None and fields['action'] not in ACTIONS:
         errors.append('unsupported_action')
-    flags = request.get('flags') or []
-    if not isinstance(flags, list):
+    raw_flags = request.get('flags', [])
+    flags: set[str] = set()
+    if not isinstance(raw_flags, list):
         errors.append('malformed_flags')
-        flags = []
-    if any(isinstance(f, str) and f.strip().lower() in FORBIDDEN_FLAGS for f in flags):
-        errors.append('forbidden_flag')
+        raw_flags = []
+    for raw in raw_flags:
+        flag = _text(raw)
+        if flag is None:
+            errors.append('malformed_flags')
+        elif flag is _OVERLONG:
+            errors.append('overlong_flags')
+        elif flag.lower() in FORBIDDEN_FLAGS:
+            errors.append('forbidden_flag')
+        else:
+            flags.add(flag)
     if errors:
         return {'ok': False, 'errors': sorted(set(errors)), 'operation_id': None}
-    canonical = json.dumps(fields, sort_keys=True, separators=(',', ':'))
+    bound: dict[str, Any] = dict(fields)
+    # An empty flag list keeps the original digest so existing IDs stay valid.
+    if flags:
+        bound['flags'] = sorted(flags)
+    canonical = json.dumps(bound, sort_keys=True, separators=(',', ':'))
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     return {'ok': True, 'errors': [], 'operation_id': digest}
 
@@ -147,7 +178,8 @@ def classify_outcome(observation: Any) -> dict[str, Any]:
         return {'state': 'pending_activation', 'reason': 'activation_or_manual_action_pending'}
     expected = _text(observation.get('expected_version'))
     running = _text(observation.get('running_version'))
-    if expected and running == expected and observation.get('history_confirms') is True:
+    if (isinstance(expected, str) and running == expected
+            and observation.get('history_confirms') is True):
         return {'state': 'succeeded', 'reason': 'verified'}
     if observation.get('write_started'):
         return {'state': 'recovery_required', 'reason': 'unverified_after_write'}
