@@ -187,6 +187,8 @@ EXPECTED_ROLES = {
     ('POST','/api/operations/{host_id}/advisories'):'admin',
     ('PUT','/api/operations/{host_id}/observability'):'admin',
     ('PUT','/api/operations/{host_id}/recovery'):'admin',
+    ('GET','/api/operations/freezes'):'admin',
+    ('PUT','/api/operations/freezes'):'admin',
     ('GET','/api/operations/{host_id}/probes'):'viewer',
     ('PUT','/api/operations/{host_id}/probes'):'admin',
     ('PUT','/api/operations/{host_id}/spool'):'admin',

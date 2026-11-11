@@ -7,7 +7,7 @@ PR and remaining acceptance. Historical review documents (for example
 their text unchanged as checkpoints. Where they list a capability as unfinished,
 this matrix states the current position.
 
-Status as of v1.57.2, 2026-11-11. First written against
+Status as of v1.59.0, 2026-11-11. First written against
 `3ac8f68` (v1.37.10) and reconciled by the coordinator at integration. Tracks
 issue [#347](https://github.com/StealthCat/MrPatchy/issues/347).
 
@@ -63,7 +63,7 @@ each issue stays open for its remaining acceptance.
 | [#337](https://github.com/StealthCat/MrPatchy/issues/337) | Scoped service credentials and reliable external integrations | In review | [PR #494](https://github.com/StealthCat/MrPatchy/pull/494): pure idempotency-key contract. |
 | [#338](https://github.com/StealthCat/MrPatchy/issues/338) | Application-aware health gates for patch and reboot workflows | Partial | [PR #382](https://github.com/StealthCat/MrPatchy/pull/382) (v1.57.0): reviewed loopback HTTP/TCP probes that gate rollout patch stages. Replication/workload adapters, dependency groups, non-rollout patches and a probe editor UI remain. |
 | [#339](https://github.com/StealthCat/MrPatchy/issues/339) | Rollout rings, soak gates and service availability limits | Partial | [PR #392](https://github.com/StealthCat/MrPatchy/pull/392) (v1.57.2): pure rollout-ring planner with soak, failure and service/site availability limits (unwired). Runtime ring execution, soak enforcement and drain/rejoin remain. |
-| [#340](https://github.com/StealthCat/MrPatchy/issues/340) | Change freezes, holiday calendars and expiring patch exceptions | In review | [PR #352](https://github.com/StealthCat/MrPatchy/pull/352): administrator-managed change freezes in dispatch eligibility. |
+| [#340](https://github.com/StealthCat/MrPatchy/issues/340) | Change freezes, holiday calendars and expiring patch exceptions | Partial | [PR #352](https://github.com/StealthCat/MrPatchy/pull/352) (v1.59.0): audited administrator-managed fleet-wide change freezes (API only) that block scheduled, manual and urgent patch, repair and release-upgrade dispatch. Per-host/group scope, holiday calendars, package deferrals, emergency exceptions and UI remain. |
 | [#341](https://github.com/StealthCat/MrPatchy/issues/341) | Verified OS support lifecycle and migration planning queue | Partial | [PR #393](https://github.com/StealthCat/MrPatchy/pull/393) (v1.54.0): vendor-sourced lifecycle status on the server Overview. Migration queue, plans, fleet reports and alerts remain. |
 | [#343](https://github.com/StealthCat/MrPatchy/issues/343) | Incident case ownership, investigation notes and scoped exceptions | Partial | [PR #363](https://github.com/StealthCat/MrPatchy/pull/363) (v1.56.1): ownership and notes API. Severity/SLA, links, scoped exceptions, UI and notifications remain. |
 | [#344](https://github.com/StealthCat/MrPatchy/issues/344) | Saved fleet queries and evidence-backed patch compliance reports | Partial | [PR #377](https://github.com/StealthCat/MrPatchy/pull/377) (v1.53.0): saved fleet queries API. Further filters, reports, exports and UI remain. |
