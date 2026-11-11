@@ -171,7 +171,7 @@ OPERATIONAL_NOTIFICATIONS={
     'execution scan coverage':('execution-scan-coverage','medium','security'),
     'scheduled patching':('scheduled-patching','medium','patching'),
     'agent health':('agent-health','medium','agent'),
-    'startup baseline':('startup-baseline','medium','files'),
+    'startup baseline':('startup-baseline','medium','integrity'),
 }
 OPERATIONAL_NOTIFICATION_SOURCE='operations'
 OPERATIONAL_NOTIFICATION_SUBJECT='server'

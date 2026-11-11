@@ -3097,10 +3097,13 @@ publishes these allowlisted kinds in the same transaction as the `Alert` outbox:
 Each event uses source `operations`, a stable kind, the server as its subject, an
 explicit severity, the same count/ID-based message and an administrator-only
 recipient, which matches the existing admin-only alert API. Its deep link goes to the
-relevant server tab.
+relevant server tab; startup-baseline drift opens File integrity, where the reviewed
+baseline panel lives.
 
 - **Deduplication:** an unchanged condition adds no revision. A changed message
-  appends one revision, which resurfaces as unread.
+  appends one revision, which resurfaces as unread. Known limit: messages that embed a
+  live count (for example overdue service or response checks) resurface whenever the
+  count changes, even if the underlying condition persists.
 - **Resolution:** when the condition clears, or the server is disabled or deleted, a
   `resolved` revision is published. A recurrence reopens the event.
 - **Kept out of in-app delivery:** routine or raw-endpoint-text kinds (`stale`,

@@ -1,8 +1,10 @@
 """In-app notifications published from human-attention operational alerts."""
+import re
 import time
+from pathlib import Path
 from sqlalchemy import select
 from app import notifications, operations
-from app.db import Host, Job, Session
+from app.db import Host, Job, Session, Setting
 from app.identity import User
 
 HOST = '6f1c2a54-0d1e-4b4e-9e43-5a7d2f0c9b11'
@@ -147,8 +149,26 @@ def test_invalid_notification_payload_never_blocks_alert_collection(admin, monke
         assert operational_events(s) == []
 
 
+def test_startup_baseline_links_to_the_file_integrity_review_panel(admin):
+    # Review finding on #690: the reviewed-baseline panel is rendered by the File integrity
+    # tab (serverIntegrity), not File status, so the deep link must open `integrity`.
+    add_host()
+    with Session() as s:
+        # A configured but unverifiable baseline assesses as `unavailable`, which raises the alert.
+        s.add(Setting(key='persistence-baseline:' + HOST, value={'id': 'missing'}))
+        s.commit()
+    operations.collect_alerts()
+    with Session() as s:
+        [event] = operational_events(s)
+        revision = current(s, event)
+        assert event.kind == 'startup-baseline' and revision.lifecycle == 'active'
+        assert revision.deep_link == '#servers/' + HOST + '/integrity'
+        alert = s.query(operations.Alert).filter_by(kind='startup baseline').one()
+        assert revision.reason == alert.message and 'File integrity' in alert.message
+
+
 def test_allowlist_is_well_formed():
-    tabs = {'history', 'security', 'patching', 'agent', 'files'}
+    tabs = {'history', 'security', 'patching', 'agent', 'integrity'}
     kinds = [value[0] for value in operations.OPERATIONAL_NOTIFICATIONS.values()]
     assert len(kinds) == len(set(kinds))
     for notification_kind, severity, tab in operations.OPERATIONAL_NOTIFICATIONS.values():
@@ -156,3 +176,19 @@ def test_allowlist_is_well_formed():
         assert severity in notifications.SEVERITIES and tab in tabs
     for excluded in ('stale', 'integrity', 'repository', 'overdue', 'server disabled'):
         assert excluded not in operations.OPERATIONAL_NOTIFICATIONS
+
+
+def test_allowlisted_tabs_exist_and_baseline_review_lives_on_integrity():
+    # Deep links must name a real server tab; the startup-baseline review panel is rendered by the
+    # `integrity` view, so its notification must land there and not on `files` (File status).
+    source = (Path(__file__).resolve().parents[1] / 'app' / 'static' / 'server.js').read_text()
+    server_tabs = set(re.findall(r"\['([a-z]+)','[^']+'(?:,true)?\]", re.search(r'const SERVER_TABS=\[(.*?)\];', source).group(1)))
+    assert {'integrity', 'files', 'security', 'history', 'patching', 'agent'} <= server_tabs
+    for _, _, tab in operations.OPERATIONAL_NOTIFICATIONS.values():
+        assert tab in server_tabs
+    views = re.search(r'const views=\{(.*?)\};', source).group(1)
+    assert 'integrity:serverIntegrity' in views
+    integrity = source[source.index('async function serverIntegrity('):]
+    integrity = integrity[:integrity.index('\n}\n')]
+    assert 'renderPersistenceBaseline(' in integrity
+    assert operations.OPERATIONAL_NOTIFICATIONS['startup baseline'][2] == 'integrity'
