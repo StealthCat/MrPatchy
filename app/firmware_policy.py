@@ -10,6 +10,7 @@ is never treated as meeting a minimum.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -40,20 +41,34 @@ def parse_version(value: Any) -> tuple[int, ...] | None:
     return parts
 
 
-def _text_list(value: Any) -> list[str]:
+def _checked_text_list(value: Any) -> tuple[list[str], str | None]:
+    """Return ``(items, problem)``; items are never truncated or silently capped.
+
+    ``problem`` is ``'overlong_id'`` when any item exceeds ``MAX_TEXT``,
+    ``'too_many_ids'`` when there are more than ``MAX_ITEMS`` items and
+    ``'malformed_ids'`` for a non-list or a non-string/blank item. Callers
+    must fail closed on any problem instead of using a narrowed or
+    prefix-matched list, so a long ID can never authorize a different ID
+    that shares its prefix.
+    """
     if not isinstance(value, (list, tuple, set, frozenset)):
-        return []
+        return [], 'malformed_ids'
     out = []
     for item in value:
-        if isinstance(item, str) and item.strip():
-            out.append(item.strip()[:MAX_TEXT])
-        if len(out) >= MAX_ITEMS:
-            break
-    return sorted(set(out))
+        if not isinstance(item, str) or not item.strip():
+            return [], 'malformed_ids'
+        text = item.strip()
+        if len(text) > MAX_TEXT:
+            return [], 'overlong_id'
+        out.append(text)
+    if len(set(out)) > MAX_ITEMS:
+        return [], 'too_many_ids'
+    return sorted(set(out)), None
 
 
 def _is_num(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
 
 
 def _exception(raw: Any, now: float) -> dict[str, Any] | None:
@@ -76,9 +91,16 @@ def normalize_unattended(raw: Any, now: float) -> dict[str, Any]:
            'actions': [], 'releases': []}
     if not isinstance(raw, dict) or raw.get('enabled') is not True:
         return off
-    devices = _text_list(raw.get('devices'))
-    releases = _text_list(raw.get('releases'))
-    actions = [a for a in _text_list(raw.get('actions')) if a in UNATTENDED_ACTIONS]
+    scope = {}
+    for key in ('devices', 'releases', 'actions'):
+        if key not in raw:
+            return {**off, 'reason': 'unbounded_scope'}
+        items, problem = _checked_text_list(raw.get(key))
+        if problem:
+            return {**off, 'reason': f'{key}_{problem}'}
+        scope[key] = items
+    devices, releases = scope['devices'], scope['releases']
+    actions = [a for a in scope['actions'] if a in UNATTENDED_ACTIONS]
     if not devices or not actions or not releases:
         return {**off, 'reason': 'unbounded_scope'}
     expires = raw.get('expires_at')
@@ -93,8 +115,11 @@ def resolve_effective_policy(layers: Any, now: float) -> dict[str, Any]:
     """Merge layers broadest -> narrowest; narrower scalar values win.
 
     Exclusion is sticky (any layer excluding the device excludes it).
-    Unattended opt-in is never inherited: only the narrowest layer that
-    declares it counts. Contradictions are reported, not silently resolved.
+    Unattended opt-in is never inherited: it counts only when the narrowest
+    layer present declares it, so a broader opt-in does not apply to a
+    narrower layer that is silent. Contradictions and malformed values are
+    reported as conflicts (which block compliance and unattended work), not
+    silently resolved or dropped.
     """
     if not isinstance(layers, (list, tuple)):
         layers = []
@@ -102,6 +127,7 @@ def resolve_effective_policy(layers: Any, now: float) -> dict[str, Any]:
     values: dict[str, Any] = {}
     sources: dict[str, str] = {}
     excluded_by: list[str] = []
+    conflicts: list[str] = []
     channels: list[str] | None = None
     unattended_raw: Any = None
     unattended_src = None
@@ -111,15 +137,21 @@ def resolve_effective_policy(layers: Any, now: float) -> dict[str, Any]:
             if layer.get(key) is not None:
                 values[key] = layer[key]
                 sources[key] = scope
-        if layer.get('excluded') is True:
+        excluded = layer.get('excluded')
+        if excluded is True:
             excluded_by.append(scope)
+        elif excluded is not None and excluded is not False:
+            conflicts.append('excluded_invalid')
         if layer.get('approved_channels') is not None:
-            channels = _text_list(layer['approved_channels'])
+            channels, problem = _checked_text_list(layer['approved_channels'])
+            if problem:
+                conflicts.append(f'approved_channels_{problem}')
             sources['approved_channels'] = scope
-        if 'unattended' in layer:
-            unattended_raw, unattended_src = layer['unattended'], scope
+    narrowest = layers[-1] if layers else {}
+    if 'unattended' in narrowest:
+        unattended_raw = narrowest['unattended']
+        unattended_src = str(narrowest.get('scope') or 'unknown')[:MAX_TEXT]
 
-    conflicts: list[str] = []
     minimum = values.get('min_version')
     pin = values.get('pin_version')
     min_t, pin_t = parse_version(minimum), parse_version(pin)
@@ -134,6 +166,8 @@ def resolve_effective_policy(layers: Any, now: float) -> dict[str, Any]:
         conflicts.append('reboot_rule_invalid')
         rule = 'manual'
     deferred = values.get('deferred_until')
+    if deferred is not None and not _is_num(deferred):
+        conflicts.append('deferred_until_invalid')
     deferred = float(deferred) if _is_num(deferred) else None
     unattended = normalize_unattended(unattended_raw, now)
     return {
@@ -150,7 +184,7 @@ def resolve_effective_policy(layers: Any, now: float) -> dict[str, Any]:
         'unattended': unattended,
         'unattended_source': unattended_src,
         'sources': sources,
-        'conflicts': conflicts,
+        'conflicts': list(dict.fromkeys(conflicts)),
     }
 
 
