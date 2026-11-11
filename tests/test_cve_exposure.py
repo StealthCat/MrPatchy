@@ -153,6 +153,35 @@ def test_oversized_affected_list_is_uncertain():
     assert classify(record, '1.0')['status'] == ce.UNCERTAIN
 
 
+@pytest.mark.parametrize('value', ['0', '1.0', '2.5-1', '1:2.0', '3.0.11-1~deb12u2', '1.0~rc1', '2:1.2+dfsg-3.1',
+                                   '1.0-2-3', '1:2:3', '9.9+git20240101'])
+def test_valid_debian_version_syntax_is_accepted(value):
+    assert ce.valid_debian_version(value)
+
+
+@pytest.mark.parametrize('value', ['v2.0', 'abc', '', ' 1.0', '1.0 beta', '-1.0', '1.0-', ':1.0', 'a:1.0', '1:',
+                                   '1.0-r_1', '1.0_1', None, 7, '1.0-1:2'])
+def test_malformed_debian_version_syntax_is_rejected(value):
+    assert not ce.valid_debian_version(value)
+
+
+@pytest.mark.parametrize('events,installed', [
+    ([{'introduced': 'v2.0'}, {'fixed': '3.0'}], '2.5-1'),   # dpkg would sort v2.0 above 2.5-1 -> unaffected
+    ([{'introduced': '0'}, {'fixed': 'abc'}], '2.5-1'),      # dpkg would always call this affected
+    ([{'introduced': '0'}, {'fixed': '3.0'}], 'v2.5'),       # malformed installed version
+])
+def test_native_comparator_reports_malformed_versions_as_uncertain(events, installed):
+    record = vuln(entry(eco(*events)))
+    result = ce.classify(record, ECO, PKG, installed)
+    assert result['status'] == ce.UNCERTAIN and result['fixed_version'] is None
+
+
+def test_native_compare_rejects_malformed_syntax_before_invoking_dpkg(monkeypatch):
+    monkeypatch.setattr(ce, 'newer_flags', lambda pairs: pytest.fail('dpkg must not be consulted'))
+    with pytest.raises(ValueError):
+        ce.native_compare('v2.0', '2.5-1')
+
+
 @pytest.mark.skipif(not shutil.which('dpkg'), reason='native dpkg ordering unavailable')
 def test_native_debian_ordering_handles_epochs_tildes_and_backports():
     record = vuln(entry(eco({'introduced': '0'}, {'fixed': '3.0.11-1~deb12u2'})))

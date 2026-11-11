@@ -28,8 +28,40 @@ MAX_AFFECTED_ENTRIES = 64
 MAX_RANGE_EVENTS = 256
 
 
+_REVISION_CHARS = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.+~')
+_UPSTREAM_CHARS = _REVISION_CHARS | frozenset('-:')
+
+
+def valid_debian_version(value):
+    """Return whether ``value`` has valid Debian version syntax (as ``dpkg --validate-version``).
+
+    ``dpkg --compare-versions`` only warns about many malformed strings and still
+    orders them (``v2.0`` sorts above every numeric version), so the native
+    comparator must reject them itself to keep malformed advisories UNCERTAIN.
+    """
+    if not isinstance(value, str) or not value or value != value.strip() or any(ch.isspace() for ch in value):
+        return False
+    rest = value
+    if ':' in rest:
+        epoch, rest = rest.split(':', 1)
+        if not epoch or not epoch.isascii() or not epoch.isdigit() or not rest:
+            return False
+    upstream = rest
+    if '-' in rest:
+        upstream, revision = rest.rsplit('-', 1)
+        if not revision or not set(revision) <= _REVISION_CHARS:
+            return False
+    return bool(upstream) and upstream[0] in '0123456789' and set(upstream) <= _UPSTREAM_CHARS
+
+
 def native_compare(left, right):
-    """Return -1, 0 or 1 using the native ``dpkg --compare-versions`` ordering."""
+    """Return -1, 0 or 1 using the native ``dpkg --compare-versions`` ordering.
+
+    Raises ValueError for any version without valid Debian syntax, so callers
+    report UNCERTAIN instead of trusting dpkg's warn-and-continue ordering.
+    """
+    if not valid_debian_version(left) or not valid_debian_version(right):
+        raise ValueError('version does not have valid Debian version syntax')
     if left == right:
         return 0
     greater, lesser = newer_flags([(left, right), (right, left)])
@@ -160,6 +192,8 @@ def _classify(vuln, ecosystem, package, installed_version, compare, resolve_fix)
         if not versions and not ranges:
             problems.append('vendor entry lists no versions or ranges')
             continue
+        # Exact string match: OSV-normalized explicit lists spell each version
+        # canonically, so equivalent spellings (an explicit ``0:`` epoch) are not unified.
         if versions and installed_version in versions:
             is_affected = True
         for item in ranges or []:
