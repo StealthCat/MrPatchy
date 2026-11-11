@@ -1,3 +1,8 @@
+## 1.59.22 — 2026-11-11
+
+1. [PR #520](https://github.com/StealthCat/MrPatchy/pull/520): Add the administrator-only `GET /api/settings/ai-connections`. It reports the saved OpenAI connection and the model each current AI feature inherits, and distinguishes host features, connection tests and model discovery. Saved-settings completeness is reported separately from the enable switches. The read uses only the saved key record's name: it neither decrypts credentials nor contacts a provider, and a malformed legacy model is withheld.
+2. Compatibility and limits: an additive read-only API using the existing OpenAI configuration, with no schema migration. Host policy, request admission, pricing and audit still govern execution. This is a partial #290 increment: named connections, additional adapters, route writes, frozen dispatch and accounting integration, and the Settings UI remain open. This source update does not publish a Docker image.
+
 ## 1.59.21 — 2026-11-11
 
 1. [PR #518](https://github.com/StealthCat/MrPatchy/pull/518): Add a labelled **Find a setting** search to the Settings hub. As you type, the section cards are filtered. Every typed term must match a section name, description or keyword list, such as API key, repository checks, certificate, MySQL or retention. Results are announced through a polite live region, and an empty result suggests example terms.
