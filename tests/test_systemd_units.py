@@ -139,6 +139,76 @@ def test_alias_and_linked_unit():
     assert r['complete']
 
 
+def test_alias_and_canonical_share_dropins_from_every_name():
+    # systemd loads drop-ins for the canonical name and every alias (systemd.unit(5)).
+    obs = [
+        f(f'{VENDOR}/real.service', SVC),
+        ln(f'{ETC}/alias.service', f'{VENDOR}/real.service'),
+        f(f'{ETC}/real.service.d/10-local.conf', '[Service]\nExecStart=\nExecStart=/opt/replaced\n'),
+        f(f'{ETC}/alias.service.d/20-alias.conf', '[Service]\nUser=aliasuser\n'),
+    ]
+    r, u = run(obs)
+    for name in ('real.service', 'alias.service'):
+        d = u[name]
+        assert d['exec'] == {'ExecStart': ['/opt/replaced']}, name
+        assert d['account']['user'] == 'aliasuser', name
+        assert [x['path'] for x in d['dropins']] == [
+            f'{ETC}/real.service.d/10-local.conf', f'{ETC}/alias.service.d/20-alias.conf'], name
+        assert d['names'] == ['alias.service', 'real.service'], name
+    assert u['real.service']['dropins'][0]['scope'] == 'unit'
+    assert u['real.service']['dropins'][1]['scope'] == 'alias'
+    assert u['alias.service']['dropins'][0]['scope'] == 'alias'
+    assert u['alias.service']['dropins'][1]['scope'] == 'unit'
+    assert u['alias.service']['alias_of'] == 'real.service'
+    assert r['complete']
+
+
+def test_alias_dropin_same_file_name_uses_search_path_precedence_then_canonical():
+    obs = [
+        f(f'{VENDOR}/real.service', SVC),
+        ln(f'{ETC}/alias.service', f'{VENDOR}/real.service'),
+        f(f'{VENDOR}/real.service.d/50.conf', '[Service]\nUser=vendor\n'),
+        f(f'{ETC}/alias.service.d/50.conf', '[Service]\nUser=etc-alias\n'),
+        f(f'{ETC}/real.service.d/60.conf', '[Service]\nGroup=canon\n'),
+        f(f'{ETC}/alias.service.d/60.conf', '[Service]\nGroup=alias\n'),
+    ]
+    _, u = run(obs)
+    for name in ('real.service', 'alias.service'):
+        assert u[name]['account'] == {'user': 'etc-alias', 'group': 'canon'}, name
+
+
+def test_shadowed_or_masked_alias_contributes_no_dropins():
+    obs = [
+        f(f'{VENDOR}/real.service', SVC),
+        ln(f'{VENDOR}/alias.service', f'{VENDOR}/real.service'),
+        ln(f'{ETC}/alias.service', '/dev/null'),
+        f(f'{ETC}/alias.service.d/x.conf', '[Service]\nUser=nope\n'),
+    ]
+    _, u = run(obs)
+    assert u['real.service']['dropins'] == [] and u['real.service']['account']['user'] == 'demo'
+    assert u['real.service']['names'] == ['real.service']
+    assert u['alias.service']['state'] == 'masked'
+
+
+def test_alias_to_shadowed_canonical_is_a_gap_and_alias_enablement_is_not_foreign():
+    obs = [
+        f(f'{VENDOR}/real.service', SVC),
+        f(f'{ETC}/real.service', '[Service]\nExecStart=/etc/override\n'),
+        ln(f'{ETC}/alias.service', f'{VENDOR}/real.service'),
+        f(f'{VENDOR}/b.service', SVC),
+        ln(f'{ETC}/balias.service', f'{VENDOR}/b.service'),
+        ln(f'{ETC}/multi-user.target.wants/balias.service', f'{VENDOR}/b.service'),
+    ]
+    r, u = run(obs)
+    gap = [g for g in r['gaps'] if g['code'] == 'alias_target_shadowed']
+    assert gap == [{'code': 'alias_target_shadowed', 'path': f'{ETC}/alias.service',
+                    'detail': f'{ETC}/real.service'}]
+    assert u['alias.service']['incomplete'] and u['alias.service']['state'] == 'unknown'
+    assert not r['complete']
+    assert u['balias.service']['enabled_by'] and 'problem' not in u['balias.service']['enabled_by'][0]
+    assert not [g for g in r['gaps'] if g['code'] == 'foreign_link_target']
+
+
 def test_unreferenced_external_file_is_a_gap():
     r, _ = run([f('/opt/stray.service', SVC)])
     assert [g['code'] for g in r['gaps']] == ['outside_search_path']

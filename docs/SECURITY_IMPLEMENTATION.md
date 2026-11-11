@@ -2711,7 +2711,10 @@ search-path precedence (control, transient, generator.early, `/etc`, `/run`,
 generator, `/usr/local/lib`, `/usr/lib`, `/lib`, generator.late) and retains
 shadowed fragments. It detects masking (a `/dev/null` link or an empty fragment)
 and applies unit, template, dash-prefix and type-level drop-ins in file-name order
-with same-name shadowing. List settings honour empty-assignment resets. It records
+with same-name shadowing. Drop-ins are read for the canonical name and every
+effective alias, so canonical and alias records resolve the same configuration; an
+alias whose target is not the canonical name's winning fragment is a coverage gap.
+List settings honour empty-assignment resets. It records
 enablement links separately from vendor static dependencies, plus aliases, linked
 units, timer/socket/path trigger targets and `+`/`!` privileged Exec prefixes. Every
 unit carries an origin class (vendor location, overridden, custom, runtime,

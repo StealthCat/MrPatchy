@@ -20,6 +20,14 @@ Drop-ins are applied in lexicographic file-name order across every applicable
 drop-in directory; for one file name the copy in the highest-precedence search
 directory wins, and within one search directory the most specific directory
 (unit, then template, then longest dash prefix, then unit type) wins.
+
+A unit's names are its canonical name plus every effective alias (a winning
+fragment symlink whose target file has another unit name). systemd reads drop-in
+directories for all of those names, so the canonical record and every alias
+record apply the same drop-in set. For one file name within one search
+directory, a canonical-name directory outranks an alias-name directory of the
+same specificity. An alias whose target is not the canonical name's own winning
+fragment is reported as an ``alias_target_shadowed`` gap rather than guessed.
 """
 from __future__ import annotations
 
@@ -279,6 +287,8 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
         names.add(link['name'])
         names.add(link['owner'])
 
+    alias_target, aliases = _alias_map(fragments, by_path)
+
     units: list[dict[str, Any]] = []
     unit_index: dict[str, dict[str, Any]] = {}
     referenced: set[Any] = set()
@@ -286,7 +296,7 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
         parts = parse_name(name)
         if parts is None:
             continue
-        unit = _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps)
+        unit = _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps, alias_target, aliases)
         referenced.add(unit['fragment'])
         units.append(unit)
         unit_index[name] = unit
@@ -333,7 +343,45 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
     }
 
 
-def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps) -> dict[str, Any]:
+def _effective_path(rec: dict[str, Any] | None) -> str | None:
+    if rec is None:
+        return None
+    return rec['target'] if rec['kind'] == 'symlink' else rec['path']
+
+
+def _alias_map(fragments, by_path) -> tuple[dict[str, str], dict[str, set[str]]]:
+    """Map each effective alias name to its canonical name, and canonical to aliases.
+
+    An alias is effective only when its winning fragment is a symlink to an
+    observed file whose base name is a different valid, non-template unit name.
+    """
+    alias_target: dict[str, str] = {}
+    aliases: dict[str, set[str]] = {}
+    for name, recs in fragments.items():
+        winner = min(recs, key=lambda r: r['rank'])
+        if winner['kind'] != 'symlink' or winner['target'] == '/dev/null':
+            continue
+        linked = by_path.get(winner['target'])
+        if linked is None or linked.get('kind') != 'file':
+            continue
+        canonical = posixpath.basename(winner['target'])
+        parts = parse_name(name)
+        cparts = parse_name(canonical)
+        if (canonical == name or parts is None or cparts is None or cparts['type'] != parts['type']
+                or parts['instance'] or cparts['instance']
+                or canonical == parts['template_name']):
+            continue
+        alias_target[name] = canonical
+        aliases.setdefault(canonical, set()).add(name)
+    return alias_target, aliases
+
+
+def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps,
+                  alias_target=None, aliases=None) -> dict[str, Any]:
+    alias_target = alias_target or {}
+    aliases = aliases or {}
+    canonical = alias_target.get(name, name)
+    all_names = [canonical] + sorted(aliases.get(canonical, set()) - {canonical})
     cands = sorted(fragments.get(name, []), key=lambda r: r['rank'])
     fragment_parts = parts
     if not cands and parts['instance']:
@@ -373,6 +421,14 @@ def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps) -> dict
             if text.strip() == '' and not incomplete:
                 state = 'masked'
 
+    if canonical != name and state != 'masked':
+        canon_cands = fragments.get(canonical, [])
+        canon_winner = min(canon_cands, key=lambda r: r['rank']) if canon_cands else None
+        if canon_winner is not None and _effective_path(canon_winner) != fragment_path:
+            gaps.append(_gap('alias_target_shadowed', winner['path'] if winner else name,
+                             _effective_path(canon_winner) or ''))
+            incomplete = True
+
     layers = []
     problems: list[str] = []
     if text and state != 'masked':
@@ -382,8 +438,20 @@ def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps) -> dict
 
     applied: list[dict[str, str]] = []
     if state != 'masked':
-        dirs = _dropin_dirs(parts)
-        spec = {d: i for i, d in enumerate(dirs)}
+        spec: dict[str, tuple[int, int, int]] = {}
+        scopes: dict[str, str] = {}
+        for ni, n in enumerate(all_names):
+            nparts = parse_name(n)
+            if nparts is None:
+                continue
+            for pos, d in enumerate(_dropin_dirs(nparts)):
+                scope = _scope(d, nparts)
+                if scope == 'unit' and n != name:
+                    scope = 'alias'
+                key = (_SCOPE_ORDER[scope], ni, pos)
+                if d not in spec or key < spec[d]:
+                    spec[d] = key
+                    scopes[d] = scope
         chosen: dict[str, dict[str, Any]] = {}
         for (dname, fname), recs in dropins.items():
             if dname not in spec:
@@ -400,7 +468,7 @@ def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps) -> dict
             sec, probs = parse_unit_text(r.get('text', ''))
             layers.append(sec)
             problems.extend(probs)
-            applied.append({'path': r['path'], 'origin': r['origin'], 'scope': _scope(r['_dir'], parts)})
+            applied.append({'path': r['path'], 'origin': r['origin'], 'scope': scopes[r['_dir']]})
     config = _merge(layers) if state != 'masked' else {}
     if problems:
         incomplete = True
@@ -417,7 +485,7 @@ def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps) -> dict
         tbase = posixpath.basename(link['target'])
         if link['target'] == '/dev/null':
             entry['problem'] = 'masked_link'
-        elif tbase not in (name, parts['template_name']):
+        elif tbase not in (name, parts['template_name'], canonical):
             entry['problem'] = 'foreign_target'
             gaps.append(_gap('foreign_link_target', link['path'], link['target']))
         (enabled_by if link['origin'] in _ENABLEMENT_ORIGINS else static_deps).append(entry)
@@ -459,7 +527,8 @@ def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps) -> dict
         'name': name, 'type': parts['type'], 'template': parts['template'],
         'instance': parts['instance'], 'state': state, 'origin': origin,
         'classification': classification, 'package_verified': False,
-        'fragment': fragment_path, 'alias_of': alias_of, 'shadowed': shadowed,
+        'fragment': fragment_path, 'alias_of': alias_of, 'names': sorted(all_names),
+        'shadowed': shadowed,
         'dropins': applied, 'override_origins': override_origins,
         'enabled_by': enabled_by, 'static_dependencies': static_deps,
         'exec': {k: svc[k] for k in sorted(svc) if k.startswith('Exec') and svc[k]},
@@ -475,6 +544,9 @@ def _privileged(value: str) -> bool:
     m = re.match(r'^[-@:+!|]*', value)
     prefix = m.group(0) if m else ''
     return '+' in prefix or '!' in prefix
+
+
+_SCOPE_ORDER = {'unit': 0, 'alias': 0, 'template': 1, 'prefix': 2, 'type': 3}
 
 
 def _scope(dname: str, parts: dict[str, Any]) -> str:
