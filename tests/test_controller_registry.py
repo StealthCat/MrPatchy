@@ -119,8 +119,10 @@ def test_live_controller_listed_before_retained_history(admin):
     assert [r['id'] for r in data['items'][1:4]] == ['old79', 'old78', 'old77']
     assert data['more'] and not data['truncated']
     rest = registry.page(offset=50, now=1000)['items']
-    assert rest[-1]['id'] == 'future' and rest[-1]['state'] == 'unknown'
-    assert len(data['items']) + len(rest) == 82
+    # The app lifespan's own registration has a real-clock heartbeat, i.e. "future" relative to now=1000.
+    ids = [r['id'] for r in data['items'] + rest if r['id'] == 'live' or r['id'] == 'future' or r['id'].startswith('old')]
+    assert len(ids) == 82 and ids.index('future') > ids.index('old0')
+    assert next(r for r in rest if r['id'] == 'future')['state'] == 'unknown'
 
 
 def test_pagination_roles_and_no_network(admin, monkeypatch):
