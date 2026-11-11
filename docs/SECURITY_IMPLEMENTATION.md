@@ -2954,7 +2954,9 @@ leader-only periodic reconciler (`app/plan_notifications.py`) publishes one
 admin-only `ai-plans` notification for each security-incident or
 startup-change plan that is still `draft`, younger than the 24-hour approval
 window and on an active server. Payloads use fixed text, `medium` severity and
-a `#servers/<host>/security` link; AI severity and plan text are never copied.
+a link to the tab where the plan is reviewed (`#servers/<host>/security` for
+security plans, `#servers/<host>/integrity` for startup-change plans); AI
+severity and plan text are never copied.
 Approval, supersession, expiry, plan deletion and server deletion or
 deactivation each publish one `resolved` revision. Unchanged passes publish
 nothing. Drafts that are still reviewable but beyond the bounded pass are left

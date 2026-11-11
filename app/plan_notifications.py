@@ -34,8 +34,13 @@ RESOLVED_REASON = {
 }
 
 
-def _link(host_id):
-    return '#servers/' + host_id + '/security'
+# Security plans are reviewed on the Security tab; startup-change plans are
+# reviewed with their persistence incidents on the File integrity tab.
+REVIEW_TAB = {'security-plan': 'security', 'startup-plan': 'integrity'}
+
+
+def _link(kind, host_id):
+    return '#servers/' + host_id + '/' + REVIEW_TAB[kind]
 
 
 def _pending(session, now):
@@ -103,7 +108,7 @@ def sync(session, now=None):
         _, created = notifications.publish(
             session, source=SOURCE, kind=kind, subject_type=SUBJECT_TYPE,
             subject_id=plan_id, subject_revision=plan_id, severity='medium',
-            reason=PENDING_REASON[kind], deep_link=_link(host_id), host_id=host_id,
+            reason=PENDING_REASON[kind], deep_link=_link(kind, host_id), host_id=host_id,
             minimum_role='admin', now=now)
         published += created
     for event in _active_events(session):
@@ -116,7 +121,7 @@ def sync(session, now=None):
             session, source=SOURCE, kind=event.kind, subject_type=SUBJECT_TYPE,
             subject_id=event.subject_id, subject_revision=event.subject_id + ':' + outcome,
             severity='info', reason=RESOLVED_REASON[outcome],
-            deep_link=_link(event.host_id) if event.host_id else '', host_id=event.host_id,
+            deep_link=_link(event.kind, event.host_id) if event.host_id else '', host_id=event.host_id,
             minimum_role='admin', lifecycle='resolved', now=now)
         resolved += created
     return published, resolved

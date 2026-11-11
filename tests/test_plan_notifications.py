@@ -59,8 +59,10 @@ def test_draft_plans_publish_fixed_admin_only_review_notifications(admin):
         assert rows[0].deep_link == '#servers/plan-host/security'
         # AI text and AI severity never reach the payload.
         assert 'rm -rf' not in rows[0].reason and 'critical' not in rows[0].reason
-        startup, _ = revisions(s, 'plan-2')
+        startup, startup_rows = revisions(s, 'plan-2')
         assert startup.kind == 'startup-plan'
+        # Startup-change plans are reviewed on the File integrity tab.
+        assert startup_rows[0].deep_link == '#servers/plan-host/integrity'
         # Repeated passes over unchanged plans publish nothing new.
         assert sync(s, NOW + 30) == (0, 0)
         assert s.scalar(select(func.count()).select_from(notifications.NotificationRevision)) == 2
