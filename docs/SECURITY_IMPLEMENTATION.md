@@ -2704,6 +2704,24 @@ requirement.
 - Feed evidence-supported suspicious findings into the planned malware investigation/response policy. A custom entry or AI suspicion alone does not authorize quarantine, termination or deletion; reuse the established evidence and response-policy checks.
 - Validate native Debian/RPM and supported init/cron layouts, per-user/root jobs, unit precedence/drop-ins, transient/generated entries, package defaults versus legitimate edits, malicious and benign lookalikes, prompt injection/redaction, referenced-file changes, large inventories, offline/permission gaps and AI pause. Include real-target acceptance and migration/helper documentation. Do not mark this requirement complete solely because the existing metadata inventory or manual AI plan exists.
 
+Worker checkpoint (issue #702): a pure, I/O-free contract
+(`app/systemd_units.py`) resolves captured read-only observations of the system
+unit search directories into effective-unit records. It applies documented
+search-path precedence (control, transient, generator.early, `/etc`, `/run`,
+generator, `/usr/local/lib`, `/usr/lib`, `/lib`, generator.late) and retains
+shadowed fragments. It detects masking (a `/dev/null` link or an empty fragment)
+and applies unit, template, dash-prefix and type-level drop-ins in file-name order
+with same-name shadowing. List settings honour empty-assignment resets. It records
+enablement links separately from vendor static dependencies, plus aliases, linked
+units, timer/socket/path trigger targets and `+`/`!` privileged Exec prefixes. Every
+unit carries an origin class (vendor location, overridden, custom, runtime,
+generated or transient), and `package_verified` is always false. Uncollected search
+directories, unreadable, oversized or malformed input, invalid names, unresolved,
+dangling or foreign links, missing trigger targets and over-cap input all become
+explicit coverage gaps. The result carries a deterministic digest. Runtime unit
+state, per-user units, specifier expansion, read-only collection wiring, package
+provenance, UI and AI classification remain open, so roadmap F is not complete.
+
 
 ## v0.3.0 — opt-in cross-source advisory AI evidence
 
