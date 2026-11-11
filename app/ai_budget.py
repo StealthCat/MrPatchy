@@ -195,6 +195,44 @@ def status(session,now=None):
         'pricing_catalog':ai_pricing.catalog_status(now)}
 
 
+DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
+
+
+def publish_cap_notification(session,cfg,now):
+    """Publish admin attention while the current capped window has no remaining spend.
+
+    The revision is bound to the budget window (timezone and reset), never to
+    amounts, so further reservations or reconciliation in the same window do not
+    create new revisions. This reads the same conservative total that admission
+    uses but neither reserves, releases nor authorizes anything. It runs in the
+    caller's transaction and adds no SMTP/webhook alert.
+    """
+    from . import notifications
+    from .notifications import NotificationEvent, NotificationRevision
+    capped=bool(cfg.get('ai_enabled')) and cfg['ai_control_mode'] in ai_pricing.CAP_MODES
+    if capped:
+        _enabled,name,_start,reset,_groups,counted,cap=_state(session,cfg,now)
+        if counted>=cap:
+            reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
+            message=('The shared daily AI spend cap of $'+_money(cap)+' ('+name+' day) has no remaining safe reservation. '
+                'New paid AI work, including triage, scoring and plans, is deferred, not discarded, until the reset at '+reset_text+
+                ' or until an administrator changes the cap or mode. Counted spend conservatively includes reserved and '
+                'uncertain charges; it is a local estimate, not a provider invoice.')
+            notifications.publish(session,**DAILY_CAP_NOTIFICATION,
+                subject_revision='exhausted:'+name+':'+repr(float(reset))+':'+_money(cap),
+                severity='medium',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
+            return True
+    event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
+        for key,value in DAILY_CAP_NOTIFICATION.items())))
+    if event is not None:
+        current=session.get(NotificationRevision,(event.id,event.revision))
+        if current is None or current.lifecycle!='resolved':
+            notifications.publish(session,**DAILY_CAP_NOTIFICATION,subject_revision='resolved',
+                severity='info',reason='The shared daily AI spend cap no longer blocks new paid AI work.',
+                deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+    return False
+
+
 def history(session,days=30,now=None,*,timezone_name=None):
     """Return bounded aggregate spend windows from the retained accounting ledger."""
     if isinstance(days,bool) or not isinstance(days,int) or not 1<=days<=90:

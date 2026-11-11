@@ -6,7 +6,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_pricing,host_lifecycle,notifications
+from . import ai_budget,ai_pricing,host_lifecycle,notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -164,6 +164,7 @@ def collect_alerts(now=None):
                 if alert.state=='resolved' or (reopen_on_change and changed):
                     alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
         _pricing_catalog_alert(s,cfg,record,now)
+        ai_budget.publish_cap_notification(s,cfg,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine
