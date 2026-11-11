@@ -56,8 +56,20 @@ Start the controller first and build both projects from the same checkout. Worke
 keep `MRPATCHY_REQUIRE_CONTROLLER_STATE=1`, so a worker that can't verify the
 controller receipt, schema contract and matching encryption key admits no work.
 The controller disables its embedded scheduler. Background jobs therefore wait
-until at least one worker is running. List fixed worker IDs in the controller's
-`MRPATCHY_EXPECTED_WORKER_IDS` only if you also assign them yourself.
+until at least one worker is running. Leave `MRPATCHY_EXPECTED_WORKER_IDS` empty
+with these files: `compose.worker.yaml` never assigns a fixed worker ID, so any IDs
+listed there (for example from an earlier single-machine `.env`) are reported as
+missing workers.
+
+To move an existing `compose.yaml` installation to the role files, keep the project
+name so the controller reuses the `mrpatchy_app-data` volume, and remove the bundled
+worker in the same step. Compose only warns about the old `worker` container; without
+`--remove-orphans` it keeps running beside the new worker replicas, with any fixed
+`MRPATCHY_WORKER_ID` from `.env`:
+
+```sh
+docker compose -p mrpatchy -f compose.controller.yaml up -d --build --wait --remove-orphans
+```
 
 To scale, rerun the worker command with a new `--scale` value. Before planned
 maintenance, drain workers in the UI and verify their state; `docker compose stop`
