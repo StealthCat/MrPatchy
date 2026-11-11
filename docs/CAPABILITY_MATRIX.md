@@ -7,7 +7,7 @@ PR and remaining acceptance. Historical review documents (for example
 their text unchanged as checkpoints. Where they list a capability as unfinished,
 this matrix states the current position.
 
-Status as of main `a46c5de` (v1.56.1), 2026-11-10. First written against
+Status as of v1.56.4, 2026-11-10. First written against
 `3ac8f68` (v1.37.10) and reconciled by the coordinator at integration. Tracks
 issue [#347](https://github.com/StealthCat/MrPatchy/issues/347).
 
@@ -68,7 +68,7 @@ each issue stays open for its remaining acceptance.
 | [#343](https://github.com/StealthCat/MrPatchy/issues/343) | Incident case ownership, investigation notes and scoped exceptions | Partial | [PR #363](https://github.com/StealthCat/MrPatchy/pull/363) (v1.56.1): ownership and notes API. Severity/SLA, links, scoped exceptions, UI and notifications remain. |
 | [#344](https://github.com/StealthCat/MrPatchy/issues/344) | Saved fleet queries and evidence-backed patch compliance reports | Partial | [PR #377](https://github.com/StealthCat/MrPatchy/pull/377) (v1.53.0): saved fleet queries API. Further filters, reports, exports and UI remain. |
 | [#345](https://github.com/StealthCat/MrPatchy/issues/345) | Recovery readiness dashboard and verifiable restore evidence | Partial | [PR #355](https://github.com/StealthCat/MrPatchy/pull/355) (v1.56.0): drill-receipt readiness API. UI, adapter examples and scheduled verification remain. |
-| [#346](https://github.com/StealthCat/MrPatchy/issues/346) | External secret custody and recoverable encryption-key rotation | In review | [PR #364](https://github.com/StealthCat/MrPatchy/pull/364): secret custody inventory and key-rotation migration contract. |
+| [#346](https://github.com/StealthCat/MrPatchy/issues/346) | External secret custody and recoverable encryption-key rotation | Partial | [PR #364](https://github.com/StealthCat/MrPatchy/pull/364) (v1.56.4): secret custody inventory and key-rotation migration contract (design only). The provider interface, versioned envelopes, rotation, retirement and backup key-id manifests remain. |
 | [#347](https://github.com/StealthCat/MrPatchy/issues/347) | This matrix | Partial | Delivered by the PR that adds this file. Coordinator-checklist maintenance remains. |
 
 Later roadmap issues (for example #359–#362, #396–#402, #405, #444–#454 and #512 onward) are not yet indexed here. Adding them remains part of #347.
