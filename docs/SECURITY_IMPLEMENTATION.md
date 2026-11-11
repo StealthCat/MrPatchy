@@ -6700,6 +6700,17 @@ response authorization are unchanged. Full SQLite/MySQL race/failover acceptance
 the broader faster-AI roadmap remain incomplete.
 
 
+### Configurable AI benchmark follow-up load — worker checkpoint #674
+
+The disposable serial/parallel benchmark accepts `--follow-up-runs` from zero
+through `--runs`. Omitting it keeps the alternating workload. Use the same
+count on both sides of a comparison to vary follow-up evidence load while
+preserving the request fingerprint. A stage with no observations reports null
+percentiles and comparison deltas. These synthetic fixtures exercise measured
+workload equivalence. Production latency and full faster-triage acceptance
+remain open.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
