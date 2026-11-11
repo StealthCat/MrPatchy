@@ -24,7 +24,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -55,11 +55,13 @@ async def lifespan(app):
         try:
             yield
         finally:
-            worker.stop.set()
-            if background: background.join()
-            ai.transport.close()
-            presence.close()
-APP_VERSION = "1.57.2"
+            try:
+                worker.stop.set()
+                if background: background.join()
+                ai.transport.close()
+            finally:
+                presence.close()
+APP_VERSION = "1.59.1"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -354,6 +356,17 @@ def notification_list(unread_only:bool=False,include_dismissed:bool=False,
             raise HTTPException(400,str(error))
         return {'items':items,'offset':offset,'limit':limit,'total':total,
                 'more':offset+len(items)<total}
+
+@app.get('/api/notifications/arrivals')
+def notification_arrivals(after:int|None=None,limit:int=50,user=Depends(self_user)):
+    """Return visible revisions committed after a durable arrival cursor."""
+    with Session() as s:
+        try:
+            result=notification_events.arrivals_for_user(
+                s,user['username'],after=after,limit=limit)
+        except ValueError as error:
+            raise HTTPException(400,str(error))
+        return result or {'items':[],'cursor':0,'more':False,'reset':False}
 
 @app.get('/api/notifications/unread-count')
 def notification_unread_count(user=Depends(self_user)):
@@ -1484,6 +1497,36 @@ def get_window(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'window:'+host_id)
         return row.value if row else {'windows':[]}
+
+class FreezeInput(BaseModel):
+    model_config={'extra':'forbid'}
+    freezes:list[dict]=Field(default_factory=list,max_length=50)
+    expected_revision:str=Field(default='',pattern=r'^(?:[a-f0-9]{64})?$')
+def freeze_view(s):
+    now=time.time()
+    base={'revision':freezes.revision(s),
+          'precedence':'A change freeze blocks scheduled, manual and urgent patch/repair/release-upgrade dispatch until it ends; maintenance windows and holds apply afterwards.'}
+    try:
+        rows=freezes.load(s);active=freezes.active(s,now);clear_at=freezes.clear_at(s,now)
+    except (ValueError,TypeError,OverflowError):
+        return {**base,'freezes':[],'active':[],'clear_at':None,'blocked':True,'policy_valid':False,
+                'error':'Saved change freeze policy is malformed; dispatch remains blocked until an administrator repairs it.'}
+    return {**base,'freezes':rows,'active':active,'clear_at':clear_at,'blocked':bool(active),'policy_valid':True}
+@app.get('/api/operations/freezes')
+def get_freezes(user=Depends(admin_user)):
+    with Session() as s: return freeze_view(s)
+@app.put('/api/operations/freezes')
+def save_freezes(body:FreezeInput,user=Depends(admin_user)):
+    try: rows=freezes.clean(body.freezes,user['username'])
+    except ValueError as error: raise HTTPException(400,str(error))
+    with worker.Lock('change-freeze-config'),Session() as s:
+        if body.expected_revision!=freezes.revision(s):raise HTTPException(409,'Change freeze policy changed; reload it before editing')
+        old=s.get(Setting,freezes.KEY)
+        before=old.value.get('freezes',[]) if old and isinstance(old.value,dict) else []
+        s.merge(Setting(key=freezes.KEY,value={'freezes':rows}))
+        audit(s,'change freezes',json.dumps({'actor':user['username'],'before':before,'after':rows,'previous_revision':body.expected_revision},sort_keys=True))
+        s.commit()
+        return freeze_view(s)
 
 class NotificationInput(BaseModel):
     enabled:bool=False

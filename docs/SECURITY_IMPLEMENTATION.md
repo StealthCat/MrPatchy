@@ -3052,6 +3052,49 @@ milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client a
 connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
 two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
 
+Worker checkpoint (issue #668): a bounded milestone-2 increment adds a durable
+arrival sequence. Every newly created notification revision appends one unsequenced row to
+`notification_arrivals` in the publisher's transaction. Identical repeated
+observations append nothing. `GET /api/notifications/arrivals` is available to any
+signed-in role:
+
+- Without `after` it returns only a baseline cursor.
+- With `after` it returns, in arrival order, current revisions committed after that
+  cursor. Items use the list API shape plus `arrival`, and the response carries a
+  `more` flag and a new cursor.
+
+Results apply the caller's current role, and read and dismissed flags are reported,
+not filtered. Superseded revisions and hidden events are skipped, but the cursor
+still advances past them. A cursor beyond the retained sequence resets to a fresh
+baseline and sets `reset`.
+
+Discovery is independent of producer timestamps and list ordering. A newly
+committed revision is found even when its producer clock lags, or when 100 or more
+newer unread events of the same severity crowd it out of a bounded page. Those are
+the two gaps the live-toast reviews reproduced.
+
+Arrival numbers are assigned only after the producer commits. Before reading,
+the arrivals endpoint runs a short sequencing transaction. It first writes the
+single `notification_arrival_head` row, which serializes sequencers on SQLite and
+MySQL. It then numbers the committed unsequenced rows densely above the head and
+commits them atomically. So every reader snapshot sees a gap-free committed
+prefix:
+
+- A slow lower transaction that commits after a faster higher one is numbered
+  above any cursor already returned, so it is never skipped.
+- A rolled-back publish never appears and leaves no gap.
+- A baseline covers every revision committed before the request, however many
+  there are. This removes the earlier 60-second gap hold, its clock-skew limit and
+  the 500-row partial baseline that the #669 reviews reproduced.
+
+The sequencing transaction itself is the only serialization point; publishers do
+not wait on it.
+
+This is additive: SSE payloads, list/count APIs, read/dismiss/acknowledgement
+semantics and response authorization are unchanged. Client adoption by the live
+toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
+do arrival retention/pruning and multi-controller acceptance.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 

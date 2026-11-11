@@ -105,6 +105,24 @@ def test_expected_controllers(admin, monkeypatch):
         assert data['expected'] == [] and 'invalid' in data['expectation_error']
 
 
+def test_live_controller_listed_before_retained_history(admin):
+    # Default installs register a new random identity per start; retained stopped rows must not push
+    # the reporting controller off the only page the UI fetches (keys sort as SHA-256, i.e. randomly).
+    with Session() as s:
+        for n in range(80):
+            s.add(Setting(key=registry.record_key('old%d' % n), value={'id': 'old%d' % n, 'heartbeat': 100 + n, 'state': 'stopped', 'version': APP_VERSION}))
+        s.add(Setting(key=registry.record_key('future'), value={'id': 'future', 'heartbeat': 5000, 'state': 'reporting', 'version': APP_VERSION}))
+        s.add(Setting(key=registry.record_key('live'), value={'id': 'live', 'heartbeat': 999, 'state': 'reporting', 'version': APP_VERSION}))
+        s.commit()
+    data = registry.page(now=1000)
+    assert data['items'][0]['id'] == 'live' and data['items'][0]['state'] == 'reporting'
+    assert [r['id'] for r in data['items'][1:4]] == ['old79', 'old78', 'old77']
+    assert data['more'] and not data['truncated']
+    rest = registry.page(offset=50, now=1000)['items']
+    assert rest[-1]['id'] == 'future' and rest[-1]['state'] == 'unknown'
+    assert len(data['items']) + len(rest) == 82
+
+
 def test_pagination_roles_and_no_network(admin, monkeypatch):
     from app import ai, ssh
     monkeypatch.setattr(ai, 'request', lambda *a, **k: pytest.fail('AI must not run'))

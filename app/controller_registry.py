@@ -19,6 +19,7 @@ from .worker_registry import FRESH_SECONDS, source_version
 log = logging.getLogger(__name__)
 PREFIX = 'controller-node:'  # 16 + 64 hex fits settings.key String(80)
 INTERVAL = 15
+SCAN_LIMIT = 2000  # bounded registration scan for newest-first ordering
 IDENTITY = r'[A-Za-z0-9_.:-]{1,48}'
 GAPS = [
     'Controller web instances self-report that they reached the shared database. HTTP serving, TLS/Caddy routing, readiness and load-balancer membership are not assessed.',
@@ -101,6 +102,11 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
 
 
+def _rank(value, now):
+    heartbeat = _number(value.get('heartbeat')) if isinstance(value, dict) else None
+    return heartbeat if heartbeat is not None and heartbeat <= now + 5 else -1
+
+
 def report_state(data, now):
     heartbeat = _number(data.get('heartbeat'))
     age = now - heartbeat if heartbeat is not None else None
@@ -124,7 +130,13 @@ def page(offset=0, now=None):
         raise ValueError('Invalid controller page')
     now = time.time() if now is None else now
     with Session() as s:
-        rows = list(s.scalars(select(Setting).where(Setting.key.startswith(PREFIX)).order_by(Setting.key).offset(offset).limit(51)))
+        # Order newest report first so a live controller is never pushed off the first page by retained
+        # stopped/stale history (default installs register a new random identity on every start). Heartbeats
+        # live in JSON, so sort a bounded scan in Python; a future or invalid heartbeat ranks last.
+        scanned = list(s.scalars(select(Setting).where(Setting.key.startswith(PREFIX)).order_by(Setting.key).limit(SCAN_LIMIT + 1)))
+        truncated = len(scanned) > SCAN_LIMIT
+        scanned = sorted(scanned[:SCAN_LIMIT], key=lambda row: (-_rank(row.value, now), row.key))
+        rows = scanned[offset:offset + 51]
         items = []
         for row in rows[:50]:
             data = row.value if isinstance(row.value, dict) else {}
@@ -144,7 +156,7 @@ def page(offset=0, now=None):
             item.update(state=state, reason=reason, age_seconds=max(0, age) if age is not None else None, readiness='not_assessed')
             items.append(item)
     expected, error = expected_controllers(now)
-    return {'items': items, 'more': len(rows) > 50, 'fresh_seconds': FRESH_SECONDS, 'gaps': GAPS,
+    return {'items': items, 'more': len(rows) > 50, 'truncated': truncated, 'fresh_seconds': FRESH_SECONDS, 'gaps': GAPS,
             'expected': expected, 'expectation_error': error}
 
 
