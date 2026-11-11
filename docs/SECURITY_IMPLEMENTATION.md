@@ -3080,6 +3080,40 @@ semantics and response authorization are unchanged. Client adoption by the live
 toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
 do arrival retention/pruning and multi-controller acceptance.
 
+Worker checkpoint (issue #689): a bounded milestone-1 producer increment publishes
+human-attention server alerts as in-app notifications. `operations.collect_alerts()`
+publishes these allowlisted kinds in the same transaction as the `Alert` outbox:
+
+- recovery-required operations;
+- file, process, publication and service response holds;
+- disabled-server recovery holds;
+- failed or blocked scheduled patching;
+- response integrity and verification;
+- service health and coverage;
+- execution-scan coverage;
+- agent health;
+- startup-baseline drift.
+
+Each event uses source `operations`, a stable kind, the server as its subject, an
+explicit severity, the same count/ID-based message and an administrator-only
+recipient, which matches the existing admin-only alert API. Its deep link goes to the
+relevant server tab.
+
+- **Deduplication:** an unchanged condition adds no revision. A changed message
+  appends one revision, which resurfaces as unread.
+- **Resolution:** when the condition clears, or the server is disabled or deleted, a
+  `resolved` revision is published. A recurrence reopens the event.
+- **Kept out of in-app delivery:** routine or raw-endpoint-text kinds (`stale`,
+  `integrity`, `repository`, `overdue` and `server disabled`). They stay on
+  SMTP/webhook.
+- **Fail-safe:** a rejected notification payload is logged and skipped, and never
+  blocks alert collection.
+- **Unchanged:** alert acknowledgement, SMTP/webhook delivery, read/dismiss state and
+  response authorization.
+
+Milestone 1 still needs significant triage, malware, CVE and startup-classification
+producers, and AI configuration/budget blockers beyond the pricing catalog.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
