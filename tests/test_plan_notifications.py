@@ -144,6 +144,39 @@ def test_still_reviewable_plans_beyond_the_batch_are_not_resolved(admin, monkeyp
             assert [r.lifecycle for r in rows] == ['active']
 
 
+def test_bounded_scans_progress_past_unchanged_pages(admin, monkeypatch):
+    # Unchanged drafts and still-reviewable active events must not hold the
+    # bounded page forever: newer drafts publish and approvals resolve.
+    monkeypatch.setattr(plan_notifications, 'BATCH', 1)
+    with Session() as s:
+        seed(s, plan_id='a', created=NOW - 300)
+        assert sync(s) == (1, 0)
+        seed(s, plan_id='b', created=NOW - 200)
+        assert sync(s, NOW + 1) == (1, 0)
+        s.get(Plan, 'b').state = 'approved'
+        s.commit()
+        seed(s, plan_id='c', created=NOW - 100)
+        results = [sync(s, NOW + 2 + tick) for tick in range(3)]
+        assert results == [(1, 1), (0, 0), (0, 0)]
+        assert [r.lifecycle for r in revisions(s, 'a')[1]] == ['active']
+        assert [r.lifecycle for r in revisions(s, 'b')[1]] == ['active', 'resolved']
+        assert [r.lifecycle for r in revisions(s, 'c')[1]] == ['active']
+
+
+def test_reenabled_server_reopens_its_still_reviewable_plan(admin):
+    with Session() as s:
+        seed(s, host='flappy', plan_id='plan-1')
+        assert sync(s) == (1, 0)
+        s.get(Host, 'flappy').enabled = False
+        s.commit()
+        assert sync(s, NOW + 10) == (0, 1)
+        s.get(Host, 'flappy').enabled = True
+        s.commit()
+        assert sync(s, NOW + 20) == (1, 0)
+        assert sync(s, NOW + 30) == (0, 0)
+        assert [r.lifecycle for r in revisions(s)[1]] == ['active', 'resolved', 'active']
+
+
 def test_tick_commits_its_own_session(admin):
     with Session() as s:
         seed(s, plan_id='plan-1', created=time.time() - 60)

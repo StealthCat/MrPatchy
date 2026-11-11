@@ -43,32 +43,50 @@ def _link(kind, host_id):
     return '#servers/' + host_id + '/' + REVIEW_TAB[kind]
 
 
+def _active_current():
+    """Active plan-review events whose current revision is still active."""
+    event, revision = notifications.NotificationEvent, notifications.NotificationRevision
+    return (select(event)
+            .join(revision, (revision.event_id == event.id) & (revision.revision == event.revision))
+            .where(event.source == SOURCE, event.subject_type == SUBJECT_TYPE,
+                   revision.lifecycle == 'active'))
+
+
 def _pending(session, now):
-    """Return ``{plan_id: (kind, host_id)}`` for bounded reviewable drafts."""
+    """Return ``{plan_id: (kind, host_id)}`` for bounded reviewable drafts.
+
+    Drafts that already have an active notification are excluded in SQL, so
+    each pass's bounded page only holds drafts that still need publishing and
+    unchanged drafts can never starve newer ones.
+    """
     active_hosts = host_lifecycle.active_ids()
+    notified = _active_current().with_only_columns(notifications.NotificationEvent.subject_id)
     found = {}
     for kind, model in (('security-plan', Incident), ('startup-plan', PersistenceIncident)):
         rows = session.execute(
             select(Plan.id, model.host_id)
             .join(model, model.id == Plan.incident_id)
             .where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW,
-                   model.host_id.in_(active_hosts))
+                   model.host_id.in_(active_hosts), Plan.id.not_in(notified))
             .order_by(Plan.created, Plan.id).limit(BATCH))
         for plan_id, host_id in rows:
             found.setdefault(plan_id, (kind, host_id))
     return found
 
 
-def _active_events(session):
-    current = (notifications.NotificationRevision.event_id == notifications.NotificationEvent.id) & (
-        notifications.NotificationRevision.revision == notifications.NotificationEvent.revision)
+def _active_events(session, now):
+    """Return bounded active events whose plan may no longer be reviewable.
+
+    Events for drafts that are still reviewable on an active server are
+    excluded in SQL; every returned row is then resolved (or, in the rare
+    host-mismatch case, rechecked), so unchanged events cannot hold the page.
+    """
+    event = notifications.NotificationEvent
+    reviewable = select(Plan.id).where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW)
     return session.execute(
-        select(notifications.NotificationEvent)
-        .join(notifications.NotificationRevision, current)
-        .where(notifications.NotificationEvent.source == SOURCE,
-               notifications.NotificationEvent.subject_type == SUBJECT_TYPE,
-               notifications.NotificationRevision.lifecycle == 'active')
-        .order_by(notifications.NotificationEvent.updated, notifications.NotificationEvent.id)
+        _active_current()
+        .where(~(event.subject_id.in_(reviewable) & event.host_id.in_(host_lifecycle.active_ids())))
+        .order_by(event.updated, event.id)
         .limit(BATCH)).scalars().all()
 
 
@@ -111,7 +129,7 @@ def sync(session, now=None):
             reason=PENDING_REASON[kind], deep_link=_link(kind, host_id), host_id=host_id,
             minimum_role='admin', now=now)
         published += created
-    for event in _active_events(session):
+    for event in _active_events(session, now):
         if event.subject_id in pending:
             continue
         outcome = _resolution(session, event.subject_id, now)
