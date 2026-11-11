@@ -2315,6 +2315,19 @@ and compute the quote while holding the lock. This checkpoint removes one
 shared lock acquisition per request that begins budget admission uncapped.
 End-to-end throughput and broader shared-controls acceptance remain open.
 
+Changes to AI admission and spend controls are revision-checked (#709).
+`GET /api/settings` returns an opaque `ai_controls_revision`. It is a SHA-256
+of the stored mode, shared rate, daily cap, reset timezone, legacy hourly limits
+and update-scoring opt-in. Both AI settings save endpoints accept
+`expected_ai_controls_revision` under the existing settings lock. A stale value
+returns 409 and writes no settings or settings audit entry. The Settings form
+always sends the revision it loaded and keeps the entered values when a save
+conflicts. Requests that omit the field keep their previous behaviour. A partial
+`PUT /api/settings/ai` now keeps omitted stored values, so it can no longer
+silently reset the mode, cap, timezone or scoring opt-in to defaults (#708).
+The revision check does not cover the separate API-key, patching and history
+sections.
+
 Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
 history query to legacy mode. Shared modes still queue at most ten plans per tick
 and enforce shared admission at execution. The legacy combined security/startup
