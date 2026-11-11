@@ -201,6 +201,64 @@ def schedule_tick(now=None):
             enqueue(s,host_id,'security-inspect',payload)
 
 
+# In-app notification for the startup-change incident lifecycle. Reasons are fixed
+# text: endpoint-supplied paths, hashes and link targets never reach the bell.
+NOTIFICATION_SOURCE='file-integrity'
+NOTIFICATION_KIND='startup-change'
+NOTIFICATION_SUBJECT='startup-incident'
+CLOSED_STATES=('resolved','false_positive')
+NOTIFICATION_REASONS={
+    'opened':'A startup inspection on this server differs from the approved startup baseline. Review the changed startup entries; a change is not a malware verdict.',
+    'reopened':'A previously closed startup change on this server was observed again. Review the changed startup entries; a change is not a malware verdict.',
+    'review-reopened':'An administrator reopened a startup change on this server. Review the changed startup entries; a change is not a malware verdict.',
+    'resolved':'This startup change was closed by administrator review.',
+    'server-deleted':'The server was deleted; its startup change no longer needs attention here.',
+}
+
+
+def _notification_link(host_id):
+    return '#servers/'+host_id+'/integrity'
+
+
+def notify(s,row,change,revision):
+    """Publish one durable, admin-only notification revision for a startup incident.
+
+    Advisory only: it never acknowledges, transitions, approves plans, changes a
+    baseline or remediates. Closing an incident that never published (legacy
+    history) adds nothing. The caller owns the surrounding transaction.
+    """
+    from . import notifications
+    closing=change=='resolved'
+    if closing and not s.get(notifications.NotificationEvent,notifications._event_id(
+            NOTIFICATION_SOURCE,NOTIFICATION_KIND,NOTIFICATION_SUBJECT,row.id,row.host_id)):return
+    notifications.publish(s,source=NOTIFICATION_SOURCE,kind=NOTIFICATION_KIND,
+        subject_type=NOTIFICATION_SUBJECT,subject_id=row.id,host_id=row.host_id,
+        subject_revision=change+':'+revision,severity='info' if closing else 'medium',
+        reason=NOTIFICATION_REASONS[change],deep_link=_notification_link(row.host_id),
+        minimum_role='admin',lifecycle='resolved' if closing else 'active')
+
+
+def notify_review(s,row,previous):
+    """Notify review transitions across the closed boundary; acknowledgement is silent."""
+    revision=repr(row.updated)
+    if row.state in CLOSED_STATES and previous not in CLOSED_STATES:notify(s,row,'resolved',revision)
+    elif row.state not in CLOSED_STATES and previous in CLOSED_STATES:notify(s,row,'review-reopened',revision)
+
+
+def resolve_host_notifications(s,host_id):
+    """Resolve still-active startup-change notifications for a deleted server."""
+    from sqlalchemy import select
+    from . import notifications
+    N=notifications.NotificationEvent;R=notifications.NotificationRevision
+    rows=s.execute(select(N.subject_id).join(R,(R.event_id==N.id)&(R.revision==N.revision)).where(
+        N.source==NOTIFICATION_SOURCE,N.kind==NOTIFICATION_KIND,N.host_id==host_id,R.lifecycle=='active')).scalars().all()
+    for incident_id in rows:
+        notifications.publish(s,source=NOTIFICATION_SOURCE,kind=NOTIFICATION_KIND,
+            subject_type=NOTIFICATION_SUBJECT,subject_id=incident_id,host_id=host_id,
+            subject_revision='server-deleted',severity='info',reason=NOTIFICATION_REASONS['server-deleted'],
+            deep_link=_notification_link(host_id),minimum_role='admin',lifecycle='resolved')
+
+
 def record_changes(s,host_id,inspection_id):
     import time
     from .incidents import PersistenceIncident,PersistenceDetection,digest
@@ -212,9 +270,13 @@ def record_changes(s,host_id,inspection_id):
     stable=[{**c,**{side:({k:v for k,v in c[side].items() if k!='mtime_ns'} if c[side] else None) for side in ('before','after')}} for c in changes]
     identifier=digest({'host':host_id,'baseline':baseline_id,'changes':stable})
     row=s.get(PersistenceIncident,identifier)
+    previous=row.state if row else None
     if row:
         row.updated=max(time.time(),row.updated+.000001);row.state='open'
     else:
         row=PersistenceIncident(id=identifier,host_id=host_id,baseline_id=baseline_id,evidence={'changes':changes,'classification':'startup_change_not_malware_verdict'})
         s.add(row)
+    # Repeat detections of an open/acknowledged incident are unchanged observations.
+    if previous is None:notify(s,row,'opened',inspection_id)
+    elif previous in CLOSED_STATES:notify(s,row,'reopened',inspection_id)
     s.add(PersistenceDetection(inspection_id=inspection_id,incident_id=identifier))

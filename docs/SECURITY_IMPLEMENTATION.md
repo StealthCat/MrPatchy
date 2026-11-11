@@ -3080,6 +3080,31 @@ semantics and response authorization are unchanged. Client adoption by the live
 toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
 do arrival retention/pruning and multi-controller acceptance.
 
+Worker checkpoint (issue #704): a milestone-1 producer for startup-change
+(persistence) incidents. In the same transaction as the incident change,
+`persistence.notify()` publishes one admin-only event per incident (source
+`file-integrity`, kind `startup-change`, subject `startup-incident`), deep-linked
+to the server's File integrity tab:
+
+- A newly recorded startup-change incident publishes a `medium`, active revision.
+- Repeat detections of an open or acknowledged incident publish nothing.
+- A repeat detection of a resolved or false-positive incident publishes a
+  reopened revision, so it is unread again.
+- Administrator review that closes an incident publishes an `info`, resolved
+  revision. Review from a closed state to open or acknowledged publishes an
+  active revision. Acknowledgement and moves between closed states publish
+  nothing. Closing a legacy incident that never published adds nothing.
+- Deleting a server resolves its still-active startup-change notifications.
+
+Reasons are fixed text and state that a change is not a malware verdict.
+Endpoint-supplied paths, hashes and link targets never reach the payload. The
+producer needs incident recording to be enabled. It makes no AI calls, so it keeps
+working while AI is paused or disabled. It never acknowledges or transitions
+incidents, approves plans, changes baselines or remediates. Rolled-back
+detections announce nothing. No schema, UI or SMTP/webhook change. Classifying
+startup entries as suspicious (roadmap F) remains separate; this producer
+notifies baseline drift only.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
