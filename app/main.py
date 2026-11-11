@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION = "1.56.2"
+APP_VERSION = "1.56.6"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1033,10 +1033,12 @@ def settings(user=Depends(admin_user)):
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
 
 @app.get('/api/settings/ai-spend-history')
-def ai_spend_history(days:int=30,user=Depends(admin_user)):
+def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)):
     from . import ai_budget
     if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
-    with Session() as s:return ai_budget.history(s,days)
+    if timezone is not None and not ai_budget.valid_timezone(timezone):
+        raise HTTPException(400,'Select a valid IANA budget timezone.')
+    with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
 
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)

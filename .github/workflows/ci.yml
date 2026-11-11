@@ -144,7 +144,9 @@ jobs:
 
   mysql:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Shards have taken 12-19 minutes overall and swing by several minutes on runner
+    # variance alone, so 20 minutes cancelled passing runs mid-progress (#666).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +181,8 @@ jobs:
           bash .github/scripts/configure-ci-apt.sh
           sudo apt-get update && sudo apt-get install -y --no-install-recommends restic mariadb-client
       - run: pip install -r requirements-dev.txt
-      - run: python -m pytest -q
+      # --durations keeps per-test timing in the log so shard imbalance stays visible.
+      - run: python -m pytest -q --durations=25
 
   ssh-enrollment:
     runs-on: ubuntu-24.04
