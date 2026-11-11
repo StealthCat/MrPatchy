@@ -253,7 +253,7 @@ def review(s,row,state,reason,actor,expected_updated):
     # Acknowledgement is not read/dismiss and leaves the notification unchanged.
     revision=repr(row.updated)
     if state in CLOSED_STATES and previous not in CLOSED_STATES:notify(s,row,'resolved',revision)
-    elif state=='open' and previous in CLOSED_STATES:notify(s,row,'review-reopened',revision)
+    elif state not in CLOSED_STATES and previous in CLOSED_STATES:notify(s,row,'review-reopened',revision)
     audit(s,'security incident reviewed',row.id+' '+actor+' '+state)
 
 

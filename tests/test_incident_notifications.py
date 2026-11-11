@@ -94,6 +94,22 @@ def test_administrator_reopen_republishes_and_acknowledge_changes_nothing(admin)
     assert item['lifecycle'] == 'active' and item['revision'] == 3 and 'reopened' in item['reason']
 
 
+def test_administrator_reopen_to_acknowledged_republishes_active(admin):
+    # Regression: a review from a closed state straight to acknowledged makes
+    # the incident active again, so its notification must not stay resolved.
+    incident_id = seed()
+    review(admin, incident_id, 'resolved')
+    [item] = items(admin)
+    assert item['lifecycle'] == 'resolved' and item['revision'] == 2
+    review(admin, incident_id, 'acknowledged')
+    [item] = items(admin)
+    assert item['lifecycle'] == 'active' and item['severity'] == 'high' and item['revision'] == 3
+    assert not item['read'] and 'reopened' in item['reason']
+    # Acknowledged -> open is not a new attention event.
+    review(admin, incident_id, 'open')
+    assert items(admin)[0]['revision'] == 3
+
+
 def test_closing_legacy_incident_without_notification_adds_nothing(admin):
     incident_id = seed()
     with Session() as s:
