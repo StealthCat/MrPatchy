@@ -18,7 +18,7 @@ module.exports=async(page,capture)=>{
   if(request.method()!=='GET'&&(id||p.startsWith('/api/investigations/'))){writes.push({path:p,body:request.postDataJSON()});return route.fulfill({json:{ok:true,detail:'Queued'}});}
   if(id&&p.endsWith('/summary')){
    if(id===alpha&&lateStarted){const started=lateStarted;lateStarted=null;started();await new Promise(resolve=>lateRelease=resolve);}
-   return route.fulfill({json:{host:hosts.find(h=>h.id===id),system:{os:'PRETTY_NAME="Debian GNU/Linux 13"',architecture:'amd64',package_manager:id===alpha?'apt':'rpm',machine_id:scope(id)+'-machine',collected:now},collector:{collected:now,hashed_at:now,processes:143,managed_files:8},counts:{packages:1432,updates:1,held:2,overdue:0,unapproved:1,pending_ai:1,investigations:1},jobs:{queued:1,recovery_required:recoveryCount},last_patch:{state:'complete',created:now-86400}}});
+   return route.fulfill({json:{host:hosts.find(h=>h.id===id),system:{os:'PRETTY_NAME="Debian GNU/Linux 13"',architecture:'amd64',package_manager:id===alpha?'apt':'rpm',machine_id:scope(id)+'-machine',collected:now},collector:{collected:now,hashed_at:now,processes:143,managed_files:8},counts:{packages:1432,updates:1,held:2,overdue:0,unapproved:1,pending_ai:1,investigations:1},jobs:{queued:1,recovery_required:recoveryCount},last_patch:{state:'complete',created:now-86400},lifecycle:{state:'standard',coverage:'vendor_standard',vendor:'Debian',release:'13',label:'Debian 13 (trixie)',standard_until:'2028-08-09',extended_until:'2030-06-30',catalog_reviewed:'2026-11-04',coverage_gaps:[],message:'The vendor reports this release in standard support.',source:{name:'Debian releases',url:'https://www.debian.org/releases/',reviewed:'2026-11-04'}}}});
   }
   if(id&&p.endsWith('/security/ai-policy'))return route.fulfill({json:{paused:false,state:'eligible',global_enabled:true,revision:'',reason:''}});
   if(id&&p.endsWith('/packages'))return route.fulfill({json:[packageRow(id)]});
@@ -41,6 +41,9 @@ module.exports=async(page,capture)=>{
  try{
   await page.locator('[data-nav=servers]').click();await page.locator('.server-name').filter({hasText:'Atlas'}).click();
   await page.getByText('Atlas-machine',{exact:true}).waitFor();assert.equal(new URL(page.url()).hash,'#servers/'+alpha+'/overview');
+  await page.getByRole('heading',{name:'OS lifecycle',exact:true}).waitFor();
+  await page.getByText('Debian 13 (trixie)',{exact:true}).waitFor();
+  assert.equal(await page.locator('[data-os-lifecycle=standard]').count(),1);
   assert.equal(await page.locator('[data-nav=servers]').getAttribute('aria-current'),'page');
 
   const originalName=hosts[0].name,originalArchitecture=hosts[0].architecture;
@@ -129,6 +132,12 @@ module.exports=async(page,capture)=>{
   await page.locator('#server-workspace-select').selectOption(alpha);await page.getByRole('heading',{name:'Atlas · Production',exact:true}).waitFor();await page.locator('.snapshot-list').waitFor();
   await open('Repositories');await page.getByText('/etc/apt/sources.list',{exact:true}).waitFor();
   await open('Connection');await page.locator('#server-connection-form').waitFor();
+  assert.equal(await page.locator('#pinned-fingerprint').textContent(),'SHA256:fixture');await page.getByRole('link',{name:'Download / rerun installer',exact:false}).waitFor();
+  const fingerprintInput=page.locator('#server-fingerprint-form [name=fingerprint]');const mismatch=()=>fingerprintInput.evaluate(el=>el.validity.patternMismatch);
+  await fingerprintInput.fill('SHA256:not-a-fingerprint');assert.equal(await mismatch(),true);
+  await fingerprintInput.fill('SHA256:'+'a/b+'.repeat(10)+'c/d');assert.equal(await mismatch(),false);
+  await fingerprintInput.fill('SHA256:'+'c'.repeat(43));await page.locator('#server-fingerprint-form [name=replace_existing]').check();await page.getByRole('button',{name:'Replace pinned fingerprint',exact:true}).click();
+  await page.getByText('Fingerprint saved.',{exact:false}).waitFor();assert.equal(writes.at(-1).body.replace_existing,true);assert.equal(await page.locator('#pinned-fingerprint').textContent(),'SHA256:'+'c'.repeat(43));
   await page.locator('#server-connection-form [name=transport]').selectOption('gcp_iap');
   await page.locator('#server-connection-form [name=project]').fill('test-project');
   await page.locator('#server-connection-form [name=zone]').fill('us-central1-a');

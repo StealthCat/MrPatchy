@@ -5,7 +5,7 @@ import json
 import math
 import time
 import uuid
-from sqlalchemy import String, JSON, Double, Text, select
+from sqlalchemy import String, JSON, Double, Text, select, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Setting, audit
 
@@ -206,6 +206,36 @@ def review(s,row,state,reason,actor,expected_updated):
     audit(s,'security incident reviewed',row.id+' '+actor+' '+state)
 
 
+def case_state(s,row):
+    """Case ownership derived from the append-only timeline; revision counts owner changes."""
+    owner='';revision=0
+    for e in s.scalars(select(IncidentEvent).where(IncidentEvent.incident_id==row.id,IncidentEvent.kind=='assign').order_by(IncidentEvent.created,IncidentEvent.id)):
+        owner=e.details.get('to','');revision+=1
+    return {'owner':owner,'revision':revision}
+
+
+def assign(s,row,owner,reason,actor,expected_revision):
+    """Record the responsible administrator. Never changes state, evidence, plans or `updated`."""
+    from .identity import User
+    current=case_state(s,row)
+    if current['revision']!=expected_revision:raise ValueError('Case ownership changed; refresh before assigning')
+    owner=owner.strip();reason=reason.strip()
+    if not 10<=len(reason)<=4000:raise ValueError('Provide an assignment reason of 10–4000 characters')
+    if owner==current['owner']:raise ValueError('Incident already has this owner')
+    if owner:
+        user=s.get(User,owner)
+        if not user or not user.enabled or user.role!='admin':raise ValueError('Owner must be an enabled administrator')
+    event(s,row.id,actor,'assign',{'from':current['owner'],'to':owner,'reason':reason})
+    audit(s,'security incident assigned',row.id+' '+actor+' '+(owner or 'unassigned'))
+
+
+def add_note(s,row,note,actor):
+    note=note.strip()
+    if not 1<=len(note)<=4000:raise ValueError('Provide a note of 1–4000 characters')
+    event(s,row.id,actor,'note',{'note':note})
+    audit(s,'security incident note added',row.id+' '+actor)
+
+
 def auto_plan_tick(now=None):
     """Opt-in proposals only. One automatic attempt per incident evidence revision."""
     from .coordination import Lock
@@ -216,8 +246,10 @@ def auto_plan_tick(now=None):
         with Session() as s:
             cfg=config(s)
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not s.get(Setting,'openai_key'):return
-            recent=list(s.scalars(select(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600)))
-            remaining=10-len(recent) if cfg['ai_control_mode']=='legacy' else 10
+            remaining=10
+            if cfg['ai_control_mode']=='legacy':
+                recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
+                remaining-=recent
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
             from . import ai_policy
@@ -238,11 +270,24 @@ def auto_plan_tick(now=None):
                 rows+=[r for r in batch if r.evidence.get('scan_context',{}).get('engine')!='YARA']
                 if len(batch)<100:break
                 offset+=100
-            for row in rows[:100]:
+            candidates=rows[:100]
+            if not candidates:return
+            occupied=select(Job.id).where(
+                Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
+                Job.state.in_(['queued','running'])).exists()
+            eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
+                select(Incident.host_id,Host.id,occupied).join(Host,Host.id==Incident.host_id)
+                .where(Incident.id.in_([row.id for row in candidates])))}
+            occupied_hosts=set()
+            for row in candidates:
                 if remaining<=0:break
-                pending=s.scalar(select(Job.id).where(Job.host_id==row.host_id,Job.action.in_(['security-plan','startup-plan']),Job.state.in_(['queued','running'])).limit(1))
-                if pending or not s.get(Host,row.host_id):continue
-                try:enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True});remaining-=1
+                status=eligibility.get(row.host_id)
+                if not status:continue
+                canonical_host,has_active_plan=status
+                if has_active_plan or canonical_host in occupied_hosts:continue
+                try:
+                    enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
+                    occupied_hosts.add(canonical_host);remaining-=1
                 except ValueError:continue
 
 
@@ -279,6 +324,17 @@ def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
     from .persistence import record_changes
     record_changes(s,host_id,job_id)
     audit(s,'security inspection receipt',host_id+' '+job_id)
+    if vendor_authenticated:
+        from .file_trust import assess
+        from .file_status import repositories
+        proofs = repositories(s,host_id)
+        for path, proof in proofs.items():
+            if proof['inspection_id'] != job_id:
+                continue
+            finding = proof['finding'] or {}
+            checksum = (finding.get('observed_sha256') if finding else
+                        proof['expected_sha256'] if proof['receipt_state'] == 'matches_artifact_bytes' else None)
+            assess(s,host_id,path,checksum,proofs)
 
 
 class PersistenceBaseline(Base):

@@ -2,6 +2,7 @@
 """Encrypted off-host app/TLS/DB recovery through restic. Run with all app/workers stopped."""
 import argparse
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -83,7 +84,7 @@ def tree_inventory(source):
 
 def copy_tree(source,destination,private=False):
     before=tree_inventory(source)
-    shutil.copytree(source,destination)
+    shutil.copytree(source,destination,dirs_exist_ok=True)
     if tree_inventory(destination)!=before:raise ValueError('Recovery directory changed during copy')
     if private:
         Path(destination).chmod(0o700)
@@ -140,6 +141,13 @@ def mysql_options(url,directory):
         if not ca:raise ValueError('Remote MySQL backup/restore requires MYSQL_SSL_CA (MariaDB client)')
         options+='ssl-ca='+escape(ca)+'\nssl-verify-server-cert=1\n'
     return private_file(path,options)
+CONTAINER_DATA_DIR='/data'
+def host_sqlite_url(url,data):
+    """Profiles store container paths (/data/...); this script runs on the host, so rebase them onto --data."""
+    if url.get_backend_name()!='sqlite' or not url.database or url.database==':memory:':return url
+    base=os.path.normpath(CONTAINER_DATA_DIR);path=os.path.normpath(url.database)
+    if path==base or not path.startswith(base+os.sep):raise ValueError('Active SQLite database must be inside the container data directory')
+    return url.set(database=str(Path(data)/os.path.relpath(path,base)))
 def active_database_url(data):
     data=Path(data)
     profile=data/'database-active.json'
@@ -147,12 +155,22 @@ def active_database_url(data):
         from cryptography.fernet import Fernet
         try:
             value=json.loads(Fernet((data/'secret.key').read_bytes()).decrypt(json.loads(profile.read_text())['encrypted'].encode()))
-            return make_url(value['url'])
+            url=make_url(value['url'])
         except Exception:raise ValueError('Cannot read active database profile; restore the matching secret.key') from None
+        return host_sqlite_url(url,data)
     return make_url(os.getenv('DATABASE_URL') or 'sqlite:///'+str(data/'mrpatchy.db'))
 
 def backup(data,tls,caddy_data,caddy_config):
     remote()
+    # Every live app and worker holds a shared lock on this file, so an exclusive
+    # lock proves the deployment is offline instead of trusting --app-stopped (#409).
+    descriptor=os.open(Path(data)/'database-maintenance.lock',os.O_RDWR|os.O_CREAT,0o600)
+    try:
+        try:fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except OSError:raise ValueError('Stop all app and worker replicas before backup: the maintenance lock is held') from None
+        backup_locked(data,tls,caddy_data,caddy_config)
+    finally:os.close(descriptor)
+def backup_locked(data,tls,caddy_data,caddy_config):
     with tempfile.TemporaryDirectory(prefix='mrpatchy-recovery-') as temporary:
         root=Path(temporary);bundle=root/'bundle';bundle.mkdir(mode=0o700)
         data=Path(data);url=active_database_url(data)
@@ -195,7 +213,9 @@ def backup(data,tls,caddy_data,caddy_config):
         read_manifest(bundle)
         # Stable relative archive path independent of temporary directory.
         run(['restic','backup','--tag','mrpatchy','bundle'],cwd=root)
-        run(['restic','check','--read-data'])
+        # Reading every pack of every snapshot grows with history; the explicit
+        # `check` action still does the full --read-data verification.
+        run(['restic','check'])
 def restore(snapshot,destination):
     remote();destination=Path(destination)
     if destination.exists() and any(destination.iterdir()):raise ValueError('Restore destination must be empty')
@@ -232,7 +252,19 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
             hosts|=sqlite_key_hosts(db)
             if manifest['format']==2:check_archives(bundle,sqlite_verified_archives(db))
     check_ssh(bundle/'ssh',hosts)
-    data.mkdir(mode=0o700,parents=True,exist_ok=True)
+    # Prove every destination is usable before any irreversible write, so a
+    # mounted or read-only volume cannot leave a half-activated deployment (#151).
+    destinations=(data,tls,Path(caddy_data),Path(caddy_config))
+    # Inspect all existing roots before creating or writing *any* destination.
+    # Path.exists() follows symlinks (and misses dangling ones); lstat does not.
+    for location in destinations:
+        if os.path.lexists(location) and not stat.S_ISDIR(location.lstat().st_mode):
+            raise ValueError('Unsafe activation destination: '+str(location))
+    for location in destinations:
+        location.mkdir(mode=0o700,parents=True,exist_ok=True)
+        try:
+            with tempfile.TemporaryFile(dir=location):pass
+        except OSError as error:raise ValueError('Activation destination is not writable: '+str(location)+' ('+str(error)+')') from None
     if manifest['database']=='mysql':
         url=make_url(os.environ['DATABASE_URL'])
         with tempfile.TemporaryDirectory() as temp:
@@ -246,12 +278,9 @@ def activate(bundle,data,tls,caddy_data,caddy_config,uid=10001):
         for name in DURABLE_STATE:
             if manifest['durable_state'][name] is not None:copy_tree(bundle/name,data/name,private=True)
     copy_tree(bundle/'ssh',data/'ssh');(data/'ssh').chmod(0o700)
-    if tls.exists():tls.rmdir()
+    # Fill the existing empty directories in place: mount points cannot be removed.
     copy_tree(bundle/'tls',tls)
-    for name,location in (('caddy-data',caddy_data),('caddy-config',caddy_config)):
-        location=Path(location)
-        if location.exists():location.rmdir()
-        copy_tree(bundle/name,location)
+    for name,location in (('caddy-data',caddy_data),('caddy-config',caddy_config)):copy_tree(bundle/name,Path(location))
     if os.geteuid()==0:
         for root in (data,tls):
             os.chown(root,uid,uid)

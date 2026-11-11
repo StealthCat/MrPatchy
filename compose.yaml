@@ -11,6 +11,7 @@ services:
       COOKIE_SECURE: "true"
       DISABLE_SCHEDULER: "1"
       MRPATCHY_EXPECTED_WORKER_IDS: ${MRPATCHY_EXPECTED_WORKER_IDS:-}
+      MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
       MRPATCHY_DEPLOYMENT_TYPE: docker
       # Trust only our dedicated Caddy hop, never arbitrary management clients.
       FORWARDED_ALLOW_IPS: ${CADDY_CONTROL_IP:-172.30.254.2}
@@ -44,6 +45,9 @@ services:
     build: .
     command: [python, -m, app.worker]
     restart: unless-stopped
+    # SIGTERM drains active jobs; patch SSH calls may run up to 7500 s, so allow that plus margin
+    # instead of Docker's 10 s default, which SIGKILLs the worker mid-operation.
+    stop_grace_period: ${MRPATCHY_WORKER_STOP_GRACE_PERIOD:-8100s}
     depends_on:
       app:
         condition: service_healthy
@@ -53,6 +57,7 @@ services:
       MRPATCHY_JOB_CONCURRENCY: ${MRPATCHY_JOB_CONCURRENCY:-2}
       MRPATCHY_POLL_CONCURRENCY: ${MRPATCHY_POLL_CONCURRENCY:-8}
       MRPATCHY_AI_CONCURRENCY: ${MRPATCHY_AI_CONCURRENCY:-4}
+      MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
       MRPATCHY_DEPLOYMENT_TYPE: docker
       # Set only for a single instance; replicas default to unique boot identities.
       MRPATCHY_WORKER_ID: ${MRPATCHY_WORKER_ID:-}
