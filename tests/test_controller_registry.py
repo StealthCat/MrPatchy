@@ -48,6 +48,11 @@ def test_presence_exclusive_heartbeat_and_graceful_stop(admin, monkeypatch):
         second.close()
 
 
+def test_record_key_fits_settings_column():
+    from app.db import Setting
+    assert len(registry.record_key('x' * 48)) <= Setting.__table__.c.key.type.length
+
+
 def test_invalid_identity_and_deployment_are_refused(monkeypatch):
     monkeypatch.setenv('MRPATCHY_CONTROLLER_ID', 'bad id!')
     with pytest.raises(ValueError, match='MRPATCHY_CONTROLLER_ID'):

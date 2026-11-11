@@ -17,7 +17,7 @@ from .db import Session, Setting, audit
 from .worker_registry import FRESH_SECONDS, source_version
 
 log = logging.getLogger(__name__)
-PREFIX = 'controller-registry:'
+PREFIX = 'controller-node:'  # 16 + 64 hex fits settings.key String(80)
 INTERVAL = 15
 IDENTITY = r'[A-Za-z0-9_.:-]{1,48}'
 GAPS = [
