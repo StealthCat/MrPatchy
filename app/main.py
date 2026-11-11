@@ -45,13 +45,20 @@ async def lifespan(app):
         with Session() as s:
             if not s.get(User,'admin'):
                 s.add(User(username='admin',password=s.get(Setting,'admin').value['hash'],role='admin'));s.commit()
-        background=worker.start() if os.getenv('DISABLE_SCHEDULER')!='1' else None
+        from .controller_registry import Presence
+        scheduler=os.getenv('DISABLE_SCHEDULER')!='1'
+        presence=Presence(scheduler).start()
+        try:
+            background=worker.start() if scheduler else None
+        except BaseException:
+            presence.close();raise
         try:
             yield
         finally:
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
+            presence.close()
 APP_VERSION = "1.57.2"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
@@ -986,6 +993,12 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
 def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page
     return page(offset)
+
+@app.get('/api/operations/controllers')
+def registered_controllers(offset:int=0,user=Depends(admin_user)):
+    from .controller_registry import page
+    try:return page(offset)
+    except ValueError as error:raise HTTPException(400,str(error))
 
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
