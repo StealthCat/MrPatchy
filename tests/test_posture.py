@@ -32,14 +32,26 @@ def test_missing_setting_is_unknown_not_compliant():
 
 
 def test_unusable_evidence_is_never_compliant():
-    for evidence in (None,'x',{},ev(error='permission denied'),ev(collected_at=NOW-90000),ev(collected_at=NOW+10000),ev(collected_at=True),ev(collected_at=float('nan')),ev(settings=[])):
+    absent={'applicable':False,'source':'sshd -T'}
+    for evidence in (None,'x',{},ev(error='permission denied'),ev(collected_at=NOW-90000),ev(collected_at=NOW+10000),ev(collected_at=True),ev(collected_at=float('nan')),ev(settings=[]),
+                     absent,{**absent,'collected_at':NOW-365*86400},{**absent,'collected_at':NOW+10**7},{**absent,'collected_at':float('inf')},
+                     ev(applicable=False),ev(applicable=False,settings={**GOOD,'passwordauthentication':'yes','permitrootlogin':'yes'}),ev(applicable=False,settings=['x'])):
         report=posture.evaluate_ssh(evidence,NOW)
         assert report['state']=='unknown' and report['counts']['pass']==0 and report['collected_at'] is None
 
 
 def test_not_applicable_when_daemon_absent():
-    report=posture.evaluate_ssh({'applicable':False},NOW)
-    assert report['state']=='not_applicable' and report['counts']['not_applicable']==len(posture.SSH_RULES)
+    for settings in (None,{}):
+        evidence={'applicable':False,'collected_at':NOW-60,'source':'sshd -T'}
+        if settings is not None:evidence['settings']=settings
+        report=posture.evaluate_ssh(evidence,NOW)
+        assert report['state']=='not_applicable' and report['counts']['not_applicable']==len(posture.SSH_RULES) and report['collected_at']==NOW-60
+
+
+def test_non_string_setting_value_is_unknown_with_type_reason():
+    report=posture.evaluate_ssh(ev(settings={**GOOD,'maxauthtries':3}),NOW)
+    r={x['setting']:x for x in report['results']}
+    assert r['maxauthtries']['state']=='unknown' and r['maxauthtries']['reason']=='Setting has an unsupported value type' and report['state']=='unknown'
 
 
 def test_collection_error_overrides_not_applicable_flag():

@@ -36,12 +36,16 @@ def _evidence_problem(evidence,now,max_age):
     """Return (state,reason) when the evidence cannot support a verdict, else None."""
     if not isinstance(evidence,dict):return 'unknown','No evidence collected'
     if evidence.get('error'):return 'unknown','Collection failed: '+str(evidence['error'])[:200]
-    if evidence.get('applicable') is False:return 'not_applicable','SSH daemon is not present on this target'
     at=evidence.get('collected_at')
     if type(at) not in (int,float) or not math.isfinite(at):return 'unknown','Evidence has no valid collection time'
     if at>now+FUTURE_SKEW:return 'unknown','Evidence collection time is in the future'
     if now-at>max_age:return 'unknown','Evidence is stale'
-    if not isinstance(evidence.get('settings'),dict):return 'unknown','Evidence has no settings'
+    settings=evidence.get('settings')
+    if evidence.get('applicable') is False:
+        # Absence is only trusted when it is fresh and not contradicted by reported settings.
+        if settings not in (None,{}):return 'unknown','Evidence reports settings for an absent SSH daemon'
+        return 'not_applicable','SSH daemon is not present on this target'
+    if not isinstance(settings,dict):return 'unknown','Evidence has no settings'
     return None
 
 
@@ -53,11 +57,12 @@ def evaluate_ssh(evidence,now,max_age=DEFAULT_MAX_AGE):
     for rule in SSH_RULES:
         if problem:results.append(_result(rule,problem[0],None,problem[1]));continue
         raw=settings.get(rule[1])
-        if not isinstance(raw,str) or not raw.strip():results.append(_result(rule,'unknown',None,'Setting not reported'));continue
+        if raw is not None and not isinstance(raw,str):results.append(_result(rule,'unknown',None,'Setting has an unsupported value type'));continue
+        if raw is None or not raw.strip():results.append(_result(rule,'unknown',None,'Setting not reported'));continue
         value=raw.strip().lower()[:200]
         ok=rule[3](value)
         results.append(_result(rule,'pass' if ok else 'fail',value,'Matches expected value' if ok else 'Does not match expected value'))
     counts={s:sum(r['state']==s for r in results) for s in STATES}
     overall='fail' if counts['fail'] else 'unknown' if counts['unknown'] else 'not_applicable' if counts['not_applicable']==len(results) else 'pass'
     return {'ruleset':'ssh','version':RULESET_VERSION,'state':overall,'counts':counts,'results':results,
-            'collected_at':evidence.get('collected_at') if problem is None else None,'source':str(evidence.get('source',''))[:100] if isinstance(evidence,dict) else ''}
+            'collected_at':evidence.get('collected_at') if problem is None or problem[0]=='not_applicable' else None,'source':str(evidence.get('source',''))[:100] if isinstance(evidence,dict) else ''}
