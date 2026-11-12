@@ -1,3 +1,17 @@
+## 1.59.43 — 2026-11-12
+
+1. [PR #681](https://github.com/StealthCat/MrPatchy/pull/681): Controller web instances now register themselves in the shared database. Administrators see them in a new **Controllers** section on **Activity → Workers**, backed by the admin-only, paginated `GET /api/operations/controllers`.
+   - Each controller self-reports its identity, boot, version, reported deployment type, embedded or disabled scheduler, start time and uptime, refreshing its heartbeat every 15 seconds. A failed refresh shows as stale and never stops the web process.
+   - States are reporting, stale, stopped, version mismatch and unknown. Future, invalid or mismatched records are never shown as healthy.
+   - The optional `MRPATCHY_EXPECTED_CONTROLLER_IDS` lists controllers that never registered as missing. `MRPATCHY_CONTROLLER_ID` sets a stable identity, and a duplicate live identity is refused.
+   - Registration and graceful stop are audited, and records older than 7 days are pruned at controller start. Closes #680.
+2. Compatibility and limits: no schema change, since records use the existing settings table, and the two environment variables are optional. A controller record reports database reachability only. It is not readiness, load-balancer membership, serving-role or failover evidence and authorizes nothing. As with workers, an invalid `MRPATCHY_CONTROLLER_ID` or `MRPATCHY_DEPLOYMENT_TYPE` stops the web process at startup. This source update does not publish a Docker image.
+
+## 1.59.42 — 2026-11-12
+
+1. [PR #679](https://github.com/StealthCat/MrPatchy/pull/679): The AI worker status card shows the eligible, unclaimed triage backlog from the existing administrator status fields: an **eligible, unclaimed** count, and the oldest eligible unclaimed observation's first-seen time with an approximate age. The card explains that this is observation age, not time since the item became eligible, and that shared rate, budget and provider admission and available worker capacity may still delay dispatch. Closes #678.
+2. Compatibility and limits: a client-only status card addition, with no API, schema or admission change. This source update does not publish a Docker image.
+
 ## 1.59.41 — 2026-11-12
 
 1. [PR #677](https://github.com/StealthCat/MrPatchy/pull/677): Add fixed `compose.controller.yaml` and `compose.worker.yaml` files for same-Docker-host split deployments. The controller file runs the app and Caddy by extending `compose.yaml`. The worker file runs scalable workers (`--scale worker=N`) as a separate Compose project on the controller's existing data volume, named by the required `MRPATCHY_CONTROLLER_DATA_VOLUME`. Workers keep the hardening, health check and drain grace period from `compose.yaml`, and each replica gets a unique boot identity. `docs/COMPOSE_CONFIGURATION.md` covers migration from `compose.yaml` with `--remove-orphans`, and CI validates both files. Refs #676.
