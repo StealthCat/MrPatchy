@@ -6587,6 +6587,15 @@ catalog lifecycle and complete multi-controller failover/reset acceptance remain
 planned. Coordinator integration, exact-head SQLite/MySQL/browser/full-suite checks
 and fresh code scanning are still required before delivery.
 
+### Bounded investigation status for read-only roles
+
+Viewer and operator investigation status reads only the global AI flag,
+pending behavior count and oldest pending observation. It shares the
+administrator pending predicate, including approval and host lifecycle checks.
+The non-admin route skips administrator retry, worker, lease, spend and
+planning aggregates. The API shape is unchanged. This reduces dashboard read
+work without changing investigation scheduling or broader faster-AI acceptance.
+
 ### AI pricing catalog lifecycle alerts — worker checkpoint #370
 
 This bounded faster-AI increment warns administrators through the existing durable
