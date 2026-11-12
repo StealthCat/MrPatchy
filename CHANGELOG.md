@@ -1,3 +1,13 @@
+## 1.59.59 — 2026-11-12
+
+1. [PR #718](https://github.com/StealthCat/MrPatchy/pull/718): Add a pure, I/O-free SysV contract (`app/sysv_init.py`) that turns captured SysV boot material into typed, bounded records.
+   - `parse_init_script()` reports the interpreter, execute bit, full-text SHA-256 and size, and the LSB `INIT INFO` fields, never the script body.
+   - `parse_rc_links()` resolves start and stop links, with their order numbers, from captured runlevel directories.
+   - `effective_services()` reports enabled runlevels, start orders, orphan links, and observations (not verdicts) such as start and stop links in one runlevel, links that differ from LSB defaults, and start links to non-executable scripts.
+   - `parse_rc_local()` returns bounded logical commands with digests, background flags, and the top-level `exit` with the commands after it flagged. An `exit` inside a conditional, loop or function is not treated as top-level, and invalid text becomes a gap instead of an error.
+   - Closes #717.
+2. Compatibility and limits: an unwired contract only. No collection, schema, API or UI change. Native collection, inventory wiring and provenance remain open in roadmap F. This source update does not publish a Docker image.
+
 ## 1.59.58 — 2026-11-12
 
 1. [PR #721](https://github.com/StealthCat/MrPatchy/pull/721): The notification bell panel shows a live-update status line and the last synchronization time.
