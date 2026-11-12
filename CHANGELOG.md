@@ -1,3 +1,8 @@
+## 1.59.66 — 2026-11-12
+
+1. [PR #732](https://github.com/StealthCat/MrPatchy/pull/732): A failed operator-initiated patch, repository change, signing-key change, package repair, OS release upgrade or agent update now raises an operator-visible, medium-severity in-app notification linking to the job in Activity. Previously it appeared only in Activity. There is one event per server and action. A repeat failure adds an unread revision linking the newest job, and a later successful run of the same action resolves it. Scheduled patch runs and `recovery_required` jobs, which existing alerts already cover, publish nothing, and neither do cancelled jobs, read-only actions or jobs for deleted servers. Reasons use fixed wording, so job output never enters the payload. Publishing runs in the transaction that records the final job state, and a notification error is contained in a savepoint without changing the outcome. Closes #731.
+2. Compatibility and limits: an additive notification producer with no schema, API or role change. It retries, acknowledges and authorizes nothing. This source update does not publish a Docker image.
+
 ## 1.59.65 — 2026-11-12
 
 1. [PR #730](https://github.com/StealthCat/MrPatchy/pull/730): When one account has several Mr Patchy tabs open, each new high or critical notification revision shows its toast in only one tab.
