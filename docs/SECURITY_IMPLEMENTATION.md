@@ -2331,7 +2331,7 @@ explicitly requested or the entry no longer matches/is no longer valid.
 - Validate exact cross-server hits with zero provider calls, same-name/different-hash and same-hash/different-behavior misses, script/config/provenance/privilege changes, incomplete/unverified evidence, revoked entries, concurrent first encounters, manual re-triage, changed follow-up evidence, log retention and role isolation on SQLite/MySQL. Preserve per-host observations/audit and existing explicit approval boundaries.
 
 Worker checkpoint #749 adds an **estimate** of avoided provider work to the
-same summary and panel. Each retained reuse assessment is attributed to its
+known-good summary endpoint and Fleet known-good cache panel. Each retained reuse assessment is attributed to its
 candidate's originating AI investigation run. Avoided calls are that run's
 recorded call count. Avoided USD sums the run's priced receipts only when every
 call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
