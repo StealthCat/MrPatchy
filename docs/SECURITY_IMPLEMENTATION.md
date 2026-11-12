@@ -7064,6 +7064,17 @@ This is an additive administrator API change with no schema/configuration
 migration, provider call, scheduling change, UI change or response-authorization
 change. Matched production throughput and the broader dashboard remain open.
 
+The administrator AI worker status card on Investigations now renders these
+fields (#678). It shows the eligible-unclaimed count beside the existing queue
+facts, with malformed or missing values shown as Unavailable. When a timestamp
+exists, it shows when the oldest qualifying observation was first seen and its
+approximate age. The text says this is observation age, not time since the
+observation became eligible, and that shared admission and worker capacity may
+still delay dispatch. This is a presentation-only change: there is no API,
+schema, scheduling, provider-call or response-authorization change. Settings and
+worker-health placement, matched throughput and broader dashboard acceptance
+remain open.
+
 ### Authoritative shared AI control snapshot — worker checkpoint #546
 
 This bounded faster-AI increment adds an administrator-only read of every currently
