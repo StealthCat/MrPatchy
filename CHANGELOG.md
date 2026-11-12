@@ -1,3 +1,8 @@
+## 1.59.61 — 2026-11-12
+
+1. [PR #742](https://github.com/StealthCat/MrPatchy/pull/742): Fix capped-AI tests depending on the wall clock being inside the bundled price catalog's validity window. CI on main and on every PR would otherwise have started failing at 2026-11-26 00:00 UTC, when the catalog expires. An autouse test fixture now pins a catalog window that covers both the bundled reviewed window and the current clock. Tests marked `bundled_pricing_catalog` opt out. A regression guard confirms that the source constants are unchanged and that a genuinely expired catalog still refuses capped admission without a ledger row. Fixes #741.
+2. Compatibility and limits: test-suite change only. Runtime behaviour is unchanged, and the bundled catalog's expiry still fails closed in production. This source update does not publish a Docker image.
+
 ## 1.59.60 — 2026-11-12
 
 1. [PR #722](https://github.com/StealthCat/MrPatchy/pull/722): Add a pure startup-entry provenance contract (`app/startup_provenance.py`). It classifies one startup file and its entries (crontab, anacrontab, systemd unit, drop-in or override, SysV script or `rc.local`) as `verified_default`, `modified`, `unverifiable`, `custom` or `unknown`. Each result carries its basis, verification strength, explicit gaps, a separate baseline field and `safety: not_assessed`. Package ownership or a match against the target's own package database alone is never `verified_default`. Evidence for another package or version is recorded as a gap. Entries in a modified file are classified individually, and default entries whose execution context is unverified or changed are reported as modified. Closes #720.

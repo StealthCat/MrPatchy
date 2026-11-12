@@ -7187,6 +7187,21 @@ updates, reconcile provider invoices, add provider-derived billing truth or comp
 the remaining multi-controller/reset acceptance. Final delivery still requires the
 coordinator's exact-head full test matrix and fresh code scan.
 
+### Date-independent capped-AI tests — worker checkpoint #741
+
+The capped-admission test suite no longer depends on the wall clock falling inside the
+bundled price catalog's reviewed window. A shared autouse test fixture
+(`tests/pricing_catalog.py`, wired in `tests/conftest.py`) patches
+`ai_pricing.VERIFIED_AT`/`EXPIRES_AT` for each test to a window that covers both the
+bundled reviewed window and the real clock. Expiry, staleness and lifecycle-alert tests
+already derive their clocks from those attributes, so they still exercise the exact
+boundaries. Tests can opt out with the `bundled_pricing_catalog` marker.
+
+Runtime catalog dates, expiry semantics and fail-closed capped admission are unchanged;
+refreshing prices remains a separate reviewed source change. A regression guard checks
+that the real expired catalog still refuses capped admission and that the pinned window
+admits the same reservation after the bundled expiry.
+
 ### Compose memory bounding — partial #201 checkpoint
 
 The production Compose `app`, `worker` and `caddy` services set `mem_limit` with
