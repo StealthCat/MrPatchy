@@ -2307,6 +2307,15 @@ after revocation. These counts describe retained records and do not verify
 current context, measure misses, or estimate provider calls, billing or
 performance. Dashboard presentation and matched production acceptance remain open.
 
+Worker checkpoint #713 adds an administrator-only **Fleet known-good cache**
+panel to fleet AI logs. It loads the summary on demand and shows the four
+retained counts. When reuse assessments are linked to revoked candidates, it
+says those assessments need review. Malformed counts render as Unavailable,
+failures keep individual runs usable, and other roles never request the
+endpoint. The panel adds presentation only: lookup, publication, revocation,
+role, approval and response boundaries are unchanged. Hit/miss reasons,
+saved-call or cost estimates and matched production acceptance remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless

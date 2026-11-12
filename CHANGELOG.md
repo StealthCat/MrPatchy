@@ -1,3 +1,8 @@
+## 1.59.55 — 2026-11-12
+
+1. [PR #714](https://github.com/StealthCat/MrPatchy/pull/714): Fleet AI logs gain an administrator-only **Fleet known-good cache** panel, loaded on demand from the existing `GET /api/ai/known-good/summary`. It shows active and revoked candidates, retained reuse assessments and reuse assessments on revoked candidates. When reuse is linked to revoked candidates, a review note explains that the original results are unchanged and how to request Re-triage. The panel states that these are record counts only: they do not verify context, count misses or estimate savings, and reuse grants no approval. Malformed counts render as "Unavailable", a failed request shows a fixed retryable message, and stale responses after navigation are discarded. Closes #713.
+2. Compatibility and limits: a client-only addition using an existing administrator API, with no API or schema change. Viewers never request the endpoint. This source update does not publish a Docker image.
+
 ## 1.59.54 — 2026-11-12
 
 1. [PR #707](https://github.com/StealthCat/MrPatchy/pull/707): Administrators are notified when an AI-proposed security-incident or startup-change response plan awaits review. A leader-only periodic reconciler publishes one administrator-only, medium-severity notification per reviewable draft (younger than 24 hours, on an active server). It links to the server tab where the plan is reviewed: Security for incident plans and File integrity for startup-change plans. Approval, supersession, the 24-hour expiry, plan deletion and server deletion or deactivation each resolve the notification exactly once. The plan's own severity and text never reach the payload, and unchanged passes add no revisions. Closes #706.
