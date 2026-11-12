@@ -563,9 +563,15 @@ def invalidate_contradiction(s, row, revoked_at=None):
         return None
     reason = (f'Retained AI assessment {row.id} classified the same exact '
         f'verified context as {risk}; every linked assessment requires review.')
-    return _invalidate(s, hit['fingerprint'], hit['version'],
+    revoked = _invalidate(s, hit['fingerprint'], hit['version'],
         'assessment:'+row.id, reason, revoked_at,
         'invalidate contradicted known-good candidate')
+    revoked = {**revoked, 'source_assessment_id': hit['assessment_id'],
+        'source_subject': hit['source_subject']}
+    # Same transaction as the revocation: a rolled-back save announces nothing.
+    from . import known_good_notifications
+    known_good_notifications.publish_contradiction(s, revoked, risk, now=revoked_at)
+    return revoked
 
 
 def _contradiction(s, saved):

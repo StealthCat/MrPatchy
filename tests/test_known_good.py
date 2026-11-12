@@ -449,6 +449,18 @@ def test_fresh_provider_contradiction_invalidates_exact_candidate_and_links_revi
 
     with Session() as s:
         assert known_good.lookup(s,current,'gpt-fixture',[policy_hash]) is None
+        # The verdict save also announced the automatic revocation to administrators,
+        # linking to the original candidate's review page (#744).
+        from app import notifications
+        announced=[(row.source,row.kind,row.subject_id,row.host_id,row.minimum_role)
+            for row in s.scalars(select(notifications.NotificationEvent).where(
+                notifications.NotificationEvent.source=='ai-known-good'))]
+        link=s.scalar(select(notifications.NotificationRevision.deep_link).join(
+            notifications.NotificationEvent,
+            notifications.NotificationEvent.id==notifications.NotificationRevision.event_id).where(
+            notifications.NotificationEvent.source=='ai-known-good'))
+    assert announced==[('ai-known-good','candidate-contradicted',published['fingerprint'],'','admin')]
+    assert link=='#investigations/item/behavior-one/history/'+source.id
 
 
 def test_incomplete_or_contextually_different_result_does_not_invalidate_candidate(client):
