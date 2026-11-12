@@ -1,3 +1,8 @@
+## 1.59.45 — 2026-11-12
+
+1. [PR #688](https://github.com/StealthCat/MrPatchy/pull/688): Notification arrival records no longer grow without bound. The leader's hourly cleanup prunes arrivals older than the existing `history_days` retention, in separately committed batches of at most 5,000. It deletes only the oldest contiguous sequenced prefix, stopping at the first arrival still inside the window, and leaves the durable head untouched. `GET /api/notifications/arrivals` now reads its head from the durable head row, so pruning never moves live cursors backwards. A cursor older than the oldest retained arrival gets a fresh baseline with `reset: true, reset_reason: "pruned"`, so clients resynchronize instead of silently skipping pruned revisions. A cursor beyond the head reports `reset_reason: "ahead"`. A pruning failure is logged and does not block the rest of the cleanup. Closes #687.
+2. Compatibility and limits: no schema change. The response adds an optional `reset_reason`, and the live toast client already re-baselines on `reset`. Retention follows `history_days`. This source update does not publish a Docker image.
+
 ## 1.59.44 — 2026-11-12
 
 1. [PR #683](https://github.com/StealthCat/MrPatchy/pull/683): Add a pure malware automatic-containment eligibility contract (`app/malware_response.py`). It decides whether a malware detection may trigger automatic file quarantine and/or verified process termination under an administrator policy.
