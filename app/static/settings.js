@@ -93,7 +93,7 @@ function renderAISettings(data,revision,container){
   appliedTimezone=historyTimezone.value.trim();
   loadHistory();
  };
- let keyRevision=data.api_key_revision||'',listGeneration=0,busy=false;
+ let keyRevision=data.api_key_revision||'',controlsRevision=data.ai_controls_revision||'',listGeneration=0,busy=false;
  const chosen=()=>select.value==='__manual__'?manual.value.trim():select.value;
  const toggleManual=()=>{const enabled=select.value==='__manual__';$('#ai-manual-label').hidden=!enabled;manual.required=enabled;manual.disabled=!enabled;};
  const markChanged=()=>{saveResult.textContent='Unsaved changes.';testResult.textContent='';toggleManual();};
@@ -132,10 +132,11 @@ function renderAISettings(data,revision,container){
   const test=event.submitter?.id==='ai-test',f=new FormData(form),model=chosen();
   if(test&&!model){saveResult.textContent='Select or enter a model to test.';return;}
   const body={ai_model:model,ai_enabled:f.has('ai_enabled'),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:f.get('ai_budget_timezone').trim()};
+  if(controlsRevision)body.expected_ai_controls_revision=controlsRevision;
   ++listGeneration;refresh.disabled=false;setBusy(true);saveResult.textContent='Saving AI settings…';testResult.textContent='';
   try{
    const response=await api('/settings/ai','PUT',body);if(!alive())return;
-   keyRevision=response.api_key_revision;
+   keyRevision=response.api_key_revision;if(response.ai_controls_revision)controlsRevision=response.ai_controls_revision;
    $('#ai-saved-model').textContent='Saved model: '+(response.ai_model||'None');
    saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';
    if(test){
@@ -145,7 +146,7 @@ function renderAISettings(data,revision,container){
      if(alive())testResult.textContent=result.detail;
     }catch(error){if(alive())testResult.textContent='Connection test failed. '+error.message+' The AI settings save succeeded.';}
    }
-  }catch(error){if(alive())saveResult.textContent='AI settings were not saved. '+error.message;}
+  }catch(error){if(alive())saveResult.textContent='AI settings were not saved. '+error.message+(error.status===409?' Your entries are still in the form; reload Settings to compare them with the current saved controls.':'');}
   finally{if(alive())setBusy(false);}
  };
  loadHistory();if(data.api_key_configured)load();
