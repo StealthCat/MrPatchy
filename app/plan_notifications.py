@@ -8,7 +8,7 @@ are never copied, so model significance stays advisory.
 """
 import time
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from . import host_lifecycle, incidents, notifications
 from .db import Host, Session
@@ -41,6 +41,28 @@ STARTUP_REVIEWABLE = ('open', 'acknowledged')
 # Security plans are reviewed on the Security tab; startup-change plans are
 # reviewed with their persistence incidents on the File integrity tab.
 REVIEW_TAB = {'security-plan': 'security', 'startup-plan': 'integrity'}
+
+
+# Leader-local keyset cursors for bounded scans whose rows can stay unchanged
+# between passes (still-current startup events, stale-evidence startup drafts).
+# Each pass reads one page after the saved key and wraps to the start after a
+# short page, so every row is revisited within ceil(rows / BATCH) passes and
+# unchanged rows can never hold the page.  A restart begins a new rotation.
+_cursors = {}
+
+
+def _rotate(session, name, query, keys, key_of):
+    """Return one ``BATCH`` page of ``query`` ordered by ``keys`` after the saved cursor.
+
+    ``key_of(row)`` returns the row's ``keys`` values as a 2-tuple.
+    """
+    after = _cursors.get(name)
+    if after is not None:
+        (first, second), (first_after, second_after) = keys, after
+        query = query.where(or_(first > first_after, and_(first == first_after, second > second_after)))
+    rows = session.execute(query.order_by(*keys).limit(BATCH)).all()
+    _cursors[name] = tuple(key_of(rows[-1])) if len(rows) >= BATCH else None
+    return rows
 
 
 def _link(kind, host_id):
@@ -83,20 +105,24 @@ def _pending(session, now, cache):
 
     Drafts that already have an active notification are excluded in SQL, so
     each pass's bounded page only holds drafts that still need publishing and
-    unchanged drafts can never starve newer ones.
+    unchanged drafts can never starve newer ones.  Startup drafts that approval
+    would refuse are skipped after the page is read, so that scan rotates and
+    a page of stale-evidence drafts cannot hold it.
     """
     active_hosts = host_lifecycle.active_ids()
     notified = _active_current().with_only_columns(notifications.NotificationEvent.subject_id)
     found = {}
     for kind, model in (('security-plan', Incident), ('startup-plan', PersistenceIncident)):
-        query = (select(Plan.id, model.host_id)
+        query = (select(Plan.id, model.host_id, Plan.created)
                  .join(model, model.id == Plan.incident_id)
                  .where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW,
                         model.host_id.in_(active_hosts), Plan.id.not_in(notified)))
         if model is PersistenceIncident:
             query = query.where(model.state.in_(STARTUP_REVIEWABLE))
-        rows = session.execute(query.order_by(Plan.created, Plan.id).limit(BATCH))
-        for plan_id, host_id in rows:
+            rows = _rotate(session, 'pending-startup', query, (Plan.created, Plan.id), lambda row: (row[2], row[0]))
+        else:
+            rows = session.execute(query.order_by(Plan.created, Plan.id).limit(BATCH)).all()
+        for plan_id, host_id, *_ in rows:
             if kind == 'startup-plan' and not _startup_current(session, session.get(Plan, plan_id), cache):
                 continue  # Approval would already refuse it; never announce it.
             found.setdefault(plan_id, (kind, host_id))
@@ -126,17 +152,19 @@ def _live_startup_events(session, now):
 
     Their evidence digest is rechecked each pass so a newer inspection or
     incident revision that makes approval refuse the plan resolves the event.
+    Still-current events keep their sort key, so the scan rotates instead of
+    rereading the same first page.
     """
     event = notifications.NotificationEvent
     reviewable = (select(Plan.id).join(PersistenceIncident, PersistenceIncident.id == Plan.incident_id)
                   .where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW,
                          PersistenceIncident.state.in_(STARTUP_REVIEWABLE)))
-    return session.execute(
-        _active_current()
-        .where(event.kind == 'startup-plan', event.subject_id.in_(reviewable),
-               event.host_id.in_(host_lifecycle.active_ids()))
-        .order_by(event.updated, event.id)
-        .limit(BATCH)).scalars().all()
+    query = (_active_current()
+             .where(event.kind == 'startup-plan', event.subject_id.in_(reviewable),
+                    event.host_id.in_(host_lifecycle.active_ids())))
+    rows = _rotate(session, 'live-startup', query, (event.updated, event.id),
+                   lambda row: (row[0].updated, row[0].id))
+    return [row[0] for row in rows]
 
 
 def _resolution(session, plan_id, now, cache):

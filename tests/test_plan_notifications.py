@@ -30,6 +30,12 @@ def seed(session, *, host='plan-host', kind='security', plan_id='plan-1', create
     session.commit()
 
 
+@pytest.fixture(autouse=True)
+def fresh_rotation(monkeypatch):
+    # The leader-local scan cursors are module state; isolate them per test.
+    monkeypatch.setattr(plan_notifications, '_cursors', {})
+
+
 @pytest.fixture
 def fake_startup_digest(monkeypatch):
     """Stand in for real startup evidence: closed incidents refuse approval and a
@@ -263,3 +269,42 @@ def test_real_startup_evidence_digest_drives_resolution(admin):
         _, rows = revisions(s, 'real-plan')
         assert [r.lifecycle for r in rows] == ['active', 'resolved']
         assert rows[-1].reason == plan_notifications.RESOLVED_REASON['stale']
+
+
+def test_still_current_startup_events_cannot_starve_a_stale_one(admin, fake_startup_digest, monkeypatch):
+    # #707 review: a still-current startup event keeps its (updated, id) key,
+    # so a non-rotating bounded scan would reread it forever and an
+    # evidence-stale event after it would wait until expiry.
+    monkeypatch.setattr(plan_notifications, 'BATCH', 1)
+    with Session() as s:
+        seed(s, kind='startup', plan_id='current', created=NOW - 300)
+        assert sync(s) == (1, 0)
+        seed(s, kind='startup', plan_id='stale', created=NOW - 200)
+        assert sync(s, NOW + 1) == (1, 0)
+        stale = s.get(PersistenceIncident, s.get(Plan, 'stale').incident_id)
+        stale.evidence = {**stale.evidence, 'fixture_digest': 'e' * 64}
+        s.commit()
+        results = [sync(s, NOW + 2 + tick) for tick in range(4)]
+        assert sum(resolved for _, resolved in results) == 1
+        assert sum(published for published, _ in results) == 0
+        assert [r.lifecycle for r in revisions(s, 'current')[1]] == ['active']
+        _, rows = revisions(s, 'stale')
+        assert [r.lifecycle for r in rows] == ['active', 'resolved']
+        assert rows[-1].reason == plan_notifications.RESOLVED_REASON['stale']
+
+
+def test_stale_evidence_startup_drafts_cannot_hold_the_pending_page(admin, fake_startup_digest, monkeypatch):
+    # #707 review: LIMIT is applied before stale-evidence drafts are skipped in
+    # Python, so without rotation an older stale draft would block newer ones.
+    monkeypatch.setattr(plan_notifications, 'BATCH', 1)
+    with Session() as s:
+        seed(s, kind='startup', plan_id='born-stale', created=NOW - 300)
+        stale = s.get(PersistenceIncident, s.get(Plan, 'born-stale').incident_id)
+        stale.evidence = {**stale.evidence, 'fixture_digest': 'e' * 64}
+        s.commit()
+        seed(s, kind='startup', plan_id='fresh', created=NOW - 100)
+        results = [sync(s, NOW + tick) for tick in range(4)]
+        assert sum(published for published, _ in results) == 1
+        assert sum(resolved for _, resolved in results) == 0
+        assert [r.lifecycle for r in revisions(s, 'fresh')[1]] == ['active']
+        assert revisions(s, 'born-stale') == (None, [])
