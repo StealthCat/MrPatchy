@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tools.compare_ai_benchmarks import compare
 
 
@@ -62,14 +64,43 @@ def test_queue_age_is_bounded_before_starting_the_fixture():
         assert '--queue-age-seconds must be between 0 and 86400' in result.stderr
 
 
-def run_benchmark(concurrency, retained_history_rows=0, *, same_server=False):
+def run_benchmark(concurrency, retained_history_rows=0, *, same_server=False, follow_up_runs=None):
     layout = ['--same-server'] if same_server else []
+    stage_mix = [] if follow_up_runs is None else ['--follow-up-runs', str(follow_up_runs)]
     result=subprocess.run(
         [sys.executable,str(BENCHMARK),'--runs','4','--concurrency',str(concurrency),
          '--provider-delay-ms','1','--persistence-delay-ms','5',
-         '--retained-history-rows',str(retained_history_rows),*layout],
+         '--retained-history-rows',str(retained_history_rows),*layout,*stage_mix],
         cwd=ROOT,capture_output=True,text=True,timeout=60,check=True)
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('follow_up_runs', [0, 1, 4])
+def test_configured_follow_up_runs_preserve_matched_workload(follow_up_runs):
+    serial = run_benchmark(1, follow_up_runs=follow_up_runs)
+    parallel = run_benchmark(4, follow_up_runs=follow_up_runs)
+    comparison = compare(serial, parallel)
+    assert comparison['capability_equivalent'] is True
+    unobserved = {0: ('two_stage', 'ssh_evidence'), 4: ('one_stage',)}
+    for stage in unobserved.get(follow_up_runs, ()):
+        assert comparison['deltas']['stages'][stage] == {'p50_ms': None, 'p95_ms': None}
+        assert serial['stages'][stage] == {'count': 0, 'p50_ms': None, 'p95_ms': None}
+        assert parallel['stages'][stage] == serial['stages'][stage]
+    for report in (serial, parallel):
+        assert report['provider_calls'] == 4 + follow_up_runs
+        assert report['stages']['ssh_evidence']['count'] == follow_up_runs
+        assert report['stages']['two_stage']['count'] == follow_up_runs
+        assert report['stages']['one_stage']['count'] == 4 - follow_up_runs
+
+
+@pytest.mark.parametrize('follow_up_runs', ['-1', '3'])
+def test_follow_up_runs_are_bounded_before_starting_the_fixture(follow_up_runs):
+    result = subprocess.run(
+        [sys.executable, str(BENCHMARK), '--runs', '2', '--follow-up-runs', follow_up_runs],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 2
+    assert '--follow-up-runs must be between 0 and --runs' in result.stderr
 
 
 def test_same_server_serial_and_parallel_preserve_workload():
