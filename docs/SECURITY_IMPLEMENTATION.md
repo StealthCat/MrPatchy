@@ -2413,8 +2413,9 @@ fails closed. Before this checkpoint nothing showed that in advance.
   with `reservation()`. An `ok` result never promises that a call is admitted:
   tier, tools, output bound and context size are still checked per call.
 - **Start-gate snapshot:** `GET /api/settings/ai-control-status` adds an
-  indefinite `pricing` blocker in cap modes when a saved model cannot be priced
-  or the catalog is not valid. `can_start_now` is then false and there is no
+  indefinite `pricing` blocker while AI is enabled in a cap mode and a saved
+  model cannot be priced or the catalog is not valid. Disabled AI reports only
+  the existing `disabled` gate. `can_start_now` is then false and there is no
   automatic next start. The message is fixed and omits the model ID.
 - **Notification:** `operations.collect_alerts()` publishes one admin-only
   `ai-budget`/`unpriced-model` notification (high severity, `#settings/ai`)

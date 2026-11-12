@@ -80,6 +80,20 @@ def test_snapshot_reports_stale_catalog_and_omits_gate_when_priced_or_uncapped(a
     assert 'configuration' in codes and 'pricing' not in codes
 
 
+def test_snapshot_pricing_gate_requires_enabled_ai(admin):
+    # #735 criterion 2: disabled AI reports only the `disabled` gate, and enabling
+    # AI with the same unpriced model in a cap mode surfaces the pricing gate.
+    configure(enabled=False)
+    with Session() as session:
+        disabled = ai_control_status.snapshot(session, NOW)
+    assert [item['code'] for item in disabled['blockers']] == ['disabled']
+    configure(enabled=True)
+    with Session() as session:
+        enabled = ai_control_status.snapshot(session, NOW)
+    assert [item['code'] for item in enabled['blockers']] == ['pricing']
+    assert not enabled['can_start_now'] and enabled['next_start_at'] is None
+
+
 def test_unpriced_model_notifies_once_dedupes_and_is_admin_only(admin):
     configure()
     operations.collect_alerts(NOW)

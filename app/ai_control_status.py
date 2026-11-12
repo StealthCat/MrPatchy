@@ -43,7 +43,8 @@ def snapshot(session, now=None):
         add('disabled', 'Central AI provider calls are disabled by an administrator.')
     if not settings['ai_model'] or session.get(Setting, 'openai_key') is None:
         add('configuration', 'A saved model and API key are required before provider calls can start.')
-    if budget['enabled'] and settings['ai_model']:
+    if settings['ai_enabled'] and budget['enabled'] and settings['ai_model']:
+        # Disabled AI is already explained by the `disabled` gate (#735 criterion 2).
         # Capped admission must quote every paid call from the bundled catalog;
         # an unpriced model or a stale catalog refuses all of them indefinitely.
         pricing = ai_pricing.model_status(settings['ai_model'], now)
