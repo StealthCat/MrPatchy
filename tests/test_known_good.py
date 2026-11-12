@@ -3,7 +3,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app import ai, ai_assessments, ai_runs, known_good, worker
 from app.db import Audit, Behavior, Host, Session, Setting
@@ -193,6 +193,64 @@ def test_lookup_revalidates_exact_context_policy_and_active_state(client):
         assert known_good.lookup(s,changed,'gpt-fixture',[sha('9')]) is None
         s.get(known_good.Entry,published['fingerprint']).active=False;s.commit()
         assert known_good.lookup(s,complete(),'gpt-fixture',[sha('9')]) is None
+
+
+def test_lookup_batches_two_policy_candidates_and_preserves_order(client):
+    first=retained(id='assessment-first',subject='behavior-first')
+    first.policy_hash=sha('8')
+    second=retained(id='assessment-second',subject='behavior-second')
+    second.policy_hash=sha('9')
+    with Session() as s:
+        s.add_all([first,second])
+        first_status=known_good.publish(s,first)
+        second_status=known_good.publish(s,second)
+        s.commit()
+        # Keep the first entry active but invalidate its retained provenance.
+        first.result={**first.result,'explanation':'Changed after publication'}
+        s.commit()
+
+    reads=[]
+    def capture(conn,cursor,statement,parameters,context,executemany):
+        if not statement.lstrip().upper().startswith('SELECT'):return
+        for table in ('ai_known_good_entries','ai_behavior_assessments','ai_known_good_observations'):
+            if 'FROM '+table in statement:
+                reads.append(table)
+
+    with Session() as s:
+        event.listen(s.get_bind(),'before_cursor_execute',capture)
+        try:hit=known_good.lookup(s,complete(),'gpt-fixture',[sha('8'),sha('9')])
+        finally:event.remove(s.get_bind(),'before_cursor_execute',capture)
+    assert first_status['fingerprint']!=second_status['fingerprint']
+    assert hit and hit['assessment_id']==second.id
+    assert reads==['ai_known_good_entries','ai_behavior_assessments','ai_known_good_observations']
+
+
+def test_lookup_skips_database_when_no_policy_candidate_is_eligible(client):
+    snapshot=complete()
+    snapshot['investigation']['details']['known_good_context']['coverage']['complete']=False
+    reads=[]
+    def capture(conn,cursor,statement,parameters,context,executemany):
+        if statement.lstrip().upper().startswith('SELECT'):reads.append(statement)
+    with Session() as s:
+        event.listen(s.get_bind(),'before_cursor_execute',capture)
+        try:assert known_good.lookup(s,snapshot,'gpt-fixture',[sha('8'),sha('9')]) is None
+        finally:event.remove(s.get_bind(),'before_cursor_execute',capture)
+    assert reads==[]
+
+
+def test_lookup_bounds_set_reads_to_one_hundred_candidates(client,monkeypatch):
+    fingerprints=iter(f'{index:064x}' for index in range(101))
+    monkeypatch.setattr(known_good,'_safe_probe',lambda snapshot,model,policy_hash: {
+        'eligible':True,'fingerprint':next(fingerprints),'version':1})
+    batch_sizes=[]
+    def capture(conn,cursor,statement,parameters,context,executemany):
+        if 'FROM ai_known_good_entries' in statement:batch_sizes.append(len(parameters))
+    with Session() as s:
+        event.listen(s.get_bind(),'before_cursor_execute',capture)
+        try:hit=known_good.lookup(s,{},'gpt-fixture',list(range(101)))
+        finally:event.remove(s.get_bind(),'before_cursor_execute',capture)
+    assert hit is None
+    assert batch_sizes==[100,1]
 
 
 def test_worker_exact_match_reuses_without_provider_call_and_retains_host_provenance(client,monkeypatch):
