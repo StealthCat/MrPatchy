@@ -1,3 +1,12 @@
+## 1.59.64 — 2026-11-12
+
+1. [PR #728](https://github.com/StealthCat/MrPatchy/pull/728): The administrator Investigations page shows a **Shared AI start gates** card below the AI worker status, read from the existing `GET /api/settings/ai-control-status`.
+   - When the gates are open, it says so with the snapshot's limitations and never promises that a particular call will start.
+   - When blocked, it lists each blocker with its next eligible time, a reset recheck boundary marked as not a promised start, or a statement that an administrator must act. It also shows the overall next eligible start, or that there is none while an indefinite hold applies.
+   - An unavailable snapshot shows a retryable notice and is never shown as permission to start.
+   - Closes #727.
+2. Compatibility and limits: a client-only, administrator-only card using an existing API, with no API, schema or admission change. This source update does not publish a Docker image.
+
 ## 1.59.63 — 2026-11-12
 
 1. [PR #726](https://github.com/StealthCat/MrPatchy/pull/726): Add a pure CVE-exploitation containment eligibility contract (`app/cve_containment.py`). It decides whether one exploitation detection may automatically quarantine the artifact and/or terminate the process under a per-CVE policy, with modes `disabled`, `monitor_only` and `enforce`, bounded thresholds and exclusions.

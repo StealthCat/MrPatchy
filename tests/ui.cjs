@@ -201,6 +201,7 @@ const assert=require('assert/strict');
     await require('./ui_ai_costs.cjs')(page,capture);
     await require('./ui_ai_retry.cjs')(page,capture);
     await require('./ui_ai_unclaimed_backlog.cjs')(page,capture);
+    await require('./ui_ai_control_gates.cjs')(page,capture);
     await require('./ui_ai_timing_summary.cjs')(page,capture);
     await require('./ui_known_good_summary.cjs')(page,capture);
     await require('./ui_assessments.cjs')(page,capture);
