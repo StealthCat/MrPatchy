@@ -187,6 +187,7 @@ EXPECTED_ROLES = {
     ('GET','/api/operations/workers'):'admin',
     ('GET','/api/operations/controllers'):'admin',
     ('POST','/api/operations/workers/control'):'admin',
+    ('POST','/api/operations/workers/remove'):'admin',
     ('GET','/api/operations/{host_id}/advisories'):'admin',
     ('POST','/api/operations/{host_id}/advisories'):'admin',
     ('PUT','/api/operations/{host_id}/observability'):'admin',

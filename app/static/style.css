@@ -452,7 +452,9 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 /* Keep cooperative worker controls beside identity, reachable before horizontal scrolling. */
 .worker-registry-table td:first-child { min-width:180px; }
-.worker-registry-table .worker-control { margin-top:10px; }
+.worker-registry-table .worker-control, .worker-registry-table .worker-remove { margin-top:10px; }
+.worker-registry-table .worker-remove { display:block; }
+button.danger { border-color: var(--red); color: var(--red); }
 .badge.draining { color:var(--amber);background:#f7cf8a14; }
 .badge.drained { color:var(--mint);background:#9ee8d114; }
 

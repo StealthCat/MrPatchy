@@ -22,7 +22,7 @@ POOL_CAPACITY={'jobs':2,'polls':8,'ai':4}
 CONTROL_PREFIX='worker-control:'
 GAPS=[
     'Self-reported scheduler-loop liveness; storage, secrets, target access and operational readiness are not independently assessed.',
-    'Expected worker identities come from controller configuration; unconfigured nodes, endpoint agents and GCP integration nodes are not inventoried here. Controller web instances are listed separately below.',
+    'Expected worker identities come from MRPATCHY_EXPECTED_WORKER_IDS when configured; otherwise they are inferred from retained registrations, so a worker that never registered is not expected. Endpoint agents and GCP integration nodes are not inventoried here. Controller web instances are listed separately below.',
     'Drain is boot-specific and cooperative: assigned work finishes; it does not stop a process or certify safe maintenance. Remote shared state and cross-host maintenance acceptance remain planned.',
 ]
 
@@ -170,16 +170,56 @@ def page(offset=0,now=None):
             item['controller_state']=data.get('controller_state') if data.get('controller_state') in ('verified','not_checked') else 'unknown'
             item['control']=control
             item['controllable']=state in ('reporting','draining','drained') and bool(re.fullmatch(r'[0-9a-f]{32}',str(data.get('boot_id','')))) and row.key==record_key(item['id']) and control['revision'] is not None
+            item['removable']=removable(row,data,state)
             item.update(state=state,reason=reason,age_seconds=max(0,age) if age is not None else None,readiness='not_assessed')
             items.append(item)
     expected,error=expected_workers(now)
-    return {'items':items,'more':len(rows)>50,'fresh_seconds':FRESH_SECONDS,'gaps':GAPS,'expected':expected,'expectation_error':error}
+    source='configuration' if configured() else 'registrations'
+    return {'items':items,'more':len(rows)>50,'fresh_seconds':FRESH_SECONDS,'gaps':GAPS,'expected':expected,'expectation_error':error,
+            'expectation_source':source,'expected_count':len(expected),'inferred_limit':INFERRED_LIMIT}
 
 
-def expected_workers(now):
-    # Controller deployment configuration only. Never infer an absent process is stopped.
+INFERRED_LIMIT=500
+LIVE_STATES=('reporting','draining','drained','version_mismatch')
+BOOT_PATTERN=r'([0-9a-f]{32})?'
+
+
+def configured():
+    return bool(os.getenv('MRPATCHY_EXPECTED_WORKER_IDS','').strip())
+
+
+def removable(row,data,state):
+    # Only an identifiable registration with no fresh heartbeat may be removed; live workers would re-register.
+    identity=data.get('id')
+    return (state not in LIVE_STATES and isinstance(identity,str) and bool(re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',identity))
+            and row.key==record_key(identity) and bool(re.fullmatch(BOOT_PATTERN,str(data.get('boot_id') or ''))))
+
+
+def inferred_workers(now):
+    # Every retained, identifiable registration stays expected (including stale and stopped ones) until an
+    # administrator removes it. Keys are hashes of the identity, so each worker ID is counted once.
+    items=[]
+    with Session() as s:
+        rows=list(s.scalars(select(Setting).where(Setting.key.startswith(PREFIX)).order_by(Setting.key).limit(INFERRED_LIMIT+1)))
+    if len(rows)>INFERRED_LIMIT:
+        return [],'More than '+str(INFERRED_LIMIT)+' worker registrations are retained, so expected workers cannot be inferred. Remove obsolete registrations or configure MRPATCHY_EXPECTED_WORKER_IDS on the controller.'
+    seen=set()
+    for row in rows:
+        data=row.value if isinstance(row.value,dict) else {}
+        identity=data.get('id')
+        if not isinstance(identity,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',identity) or row.key!=record_key(identity) or identity in seen:continue
+        seen.add(identity)
+        state,reason,age=report_state(data,now)
+        items.append({'id':identity,'registered':True,'state':state,'reason':reason,'age_seconds':max(0,age) if age is not None else None,'readiness':'not_assessed'})
+    items.sort(key=lambda item:item['id'])
+    return items,None
+
+
+def expected_workers(now,infer=True):
+    # An explicit controller configuration is authoritative. Otherwise infer from retained registrations
+    # (infer=False returns no expectations). Never infer that an absent process is stopped.
     raw=os.getenv('MRPATCHY_EXPECTED_WORKER_IDS','')
-    if not raw.strip():return [],None
+    if not raw.strip():return inferred_workers(now) if infer else ([],None)
     identities=[value.strip() for value in raw.split(',')]
     if len(raw)>5000 or len(identities)>100 or any(not re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',value) for value in identities) or len(set(identities))!=len(identities):
         return [],'Expected-worker configuration is invalid. Use at most 100 unique, case-sensitive worker IDs (1–48 letters, numbers, dot, underscore, colon or hyphen), separated by commas.'
@@ -193,6 +233,23 @@ def expected_workers(now):
             else:state,reason,age='missing','No matching registration is available. The process may be absent, misconfigured or unable to reach this database; inspect the deployment.',None
             items.append({'id':identity,'registered':registered,'state':state,'reason':reason,'age_seconds':max(0,age) if age is not None else None,'readiness':'not_assessed'})
     return items,None
+
+
+def remove_registration(identity,boot,username):
+    """Delete one obsolete registration. Does not edit configuration, stop a process or alter claims."""
+    if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',identity):raise HTTPException(400,'Invalid worker identity')
+    if not re.fullmatch(BOOT_PATTERN,boot):raise HTTPException(400,'Invalid worker boot')
+    with Lock('worker-control:'+identity),Session() as s:
+        row=s.get(Setting,record_key(identity));data=row.value if row and isinstance(row.value,dict) else {}
+        if not row or data.get('id')!=identity or str(data.get('boot_id') or '')!=boot:raise HTTPException(409,'Worker registration changed or is unavailable; refresh before removing it')
+        state,_,_=report_state(data,time.time())
+        if not removable(row,data,state):raise HTTPException(409,'Worker is reporting recently; it would register again. Stop or retire it before removing its registration')
+        s.delete(row)
+        control=s.get(Setting,control_key(identity))
+        if control:s.delete(control)
+        audit(s,'worker registration removed',username+' '+identity+' '+(boot or 'no-boot')+' '+state)
+        s.commit()
+    return {'ok':True,'id':identity,'state':state}
 
 
 # Expected-worker attention notifications (roadmap H/J). Admin-only, advisory text;
@@ -232,7 +289,9 @@ def publish_notifications(now=None,started=None):
     now=time.time() if now is None else now
     started=PROCESS_STARTED if started is None else started
     grace=now-started<FRESH_SECONDS
-    expected,error=expected_workers(now)
+    # Inferred expectations are page-only: until worker IDs survive restarts (#754), each restart leaves a
+    # stopped registration, and notifying on those would flood administrators.
+    expected,error=expected_workers(now,infer=False)
     published=0
     with Session() as s:
         active=_active_worker_events(s)
