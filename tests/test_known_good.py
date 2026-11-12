@@ -284,6 +284,15 @@ def test_worker_exact_match_reuses_without_provider_call_and_retains_host_proven
     assert event and published['fingerprint'] in event.detail
 
 
+def test_empty_known_good_summary(admin):
+    response = admin.get('/api/ai/known-good/summary')
+    assert response.status_code == 200
+    assert response.json() == {
+        'active_entries': 0, 'revoked_entries': 0,
+        'retained_reuse_assessments': 0, 'reuse_assessments_on_revoked_entries': 0,
+    }
+
+
 def test_admin_revocation_blocks_reuse_and_marks_every_linked_assessment_for_review(admin):
     current=complete();current['host_id']='host-two'
     current['investigation']['details']['known_good_context']['observation']={
@@ -298,13 +307,26 @@ def test_admin_revocation_blocks_reuse_and_marks_every_linked_assessment_for_rev
         published=known_good.publish(s,source);s.flush()
         hit=known_good.lookup(s,current,'gpt-fixture',[sha('9')])
         reused=ai_assessments.record_reuse(s,behavior_two,hit);s.flush()
-        known_good.link_reuse(s,reused,hit);s.commit()
+        known_good.link_reuse(s,reused,hit)
+        other=retained(id='other-assessment',subject='other-behavior')
+        other.model='other-model'
+        s.add(other);known_good.publish(s,other);s.commit()
+
+    summary = '/api/ai/known-good/summary'
+    assert admin.get(summary).json() == {
+        'active_entries': 2, 'revoked_entries': 0,
+        'retained_reuse_assessments': 1, 'reuse_assessments_on_revoked_entries': 0,
+    }
 
     reason='A new deterministic detector requires fleet review'
     response=admin.post('/api/ai/known-good/'+published['fingerprint']+'/revoke',json={
         'expected_version':1,'reason':reason})
     assert response.status_code==200
     assert response.json()['linked_assessments']==2 and response.json()['review_required']
+    assert admin.get(summary).json() == {
+        'active_entries': 1, 'revoked_entries': 1,
+        'retained_reuse_assessments': 1, 'reuse_assessments_on_revoked_entries': 1,
+    }
     with Session() as s:
         entry=s.get(known_good.Entry,published['fingerprint'])
         event=s.scalar(select(Audit).where(Audit.action=='revoke known-good candidate'))

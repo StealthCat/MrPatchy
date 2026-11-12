@@ -346,6 +346,8 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
     assert state['ai_control_mode']=='rate_and_daily'
     assert state['ai_budget']['cap_usd']=='12.5'
     assert state['ai_budget']['timezone']=='America/New_York'
+    assert state['ai_budget']['unreconciled_call_count']==0
+    assert state['ai_budget']['oldest_unreconciled_reservation_at'] is None
     assert state['ai_budget']['pricing_catalog']['state']=='fresh'
     assert state['ai_budget']['pricing_catalog']['expires_at']==ai_pricing.EXPIRES_AT
     body['ai_budget_timezone']='Not/A_Zone'
@@ -406,8 +408,37 @@ def test_status_totals_use_sql_aggregates_without_loading_ledger(admin):
     assert result['settled_usd']=='0.0000009'
     assert result['reserved_usd']=='0.4'
     assert result['uncertain_usd']=='0.35'
+    assert result['unreconciled_call_count']==100
+    assert result['oldest_unreconciled_reservation_at']==now
     assert result['counted_usd']=='0.7500009'
     assert result['remaining_usd']=='99.2499991'
+
+
+def test_reconciliation_summary_keeps_still_counted_prior_windows(admin):
+    from datetime import datetime, timezone
+
+    now=datetime(2026,3,9,0,30,tzinfo=timezone.utc).timestamp()
+    configure(mode='daily_cap',cap=Decimal('100'),timezone='UTC')
+    rows=[
+        ('sent-prior','sent',now-7200,now+3600),
+        ('uncertain-current','uncertain',now-60,now+86400),
+        ('sent-expired','sent',now-14400,now-3600),
+        ('unknown-prior','legacy_pending',now-10800,now+3600),
+    ]
+    with Session() as session:
+        session.add_all([
+            ai_budget.BudgetEntry(id=identifier,created=created,updated=now,reset_at=reset,
+                timezone='America/New_York',model='m',status=status,reservation_usd=Decimal('1'),
+                pricing_version='v',pricing_source='s')
+            for identifier,status,created,reset in rows
+        ])
+        session.commit()
+        result=ai_budget.status(session,now)
+
+    assert result['counted_usd']=='3'
+    assert result['uncertain_usd']=='2'
+    assert result['unreconciled_call_count']==2
+    assert result['oldest_unreconciled_reservation_at']==now-7200
 
 
 def test_unrecognized_status_rows_stay_counted_and_block_admission(admin):
@@ -473,10 +504,30 @@ def test_spend_history_validates_range_role_and_bounds_group_rows(admin):
         session.add_all([ai_budget.BudgetEntry(id=f'history-{i}',created=now-60,updated=now-30,reset_at=now+i+1,
             timezone='UTC',model='m',status='reserved',reservation_usd=Decimal('0.01'),
             pricing_version='v',pricing_source='s') for i in range(12)])
+        session.add_all([
+            ai_budget.BudgetEntry(id=identifier,created=now-3600,updated=now-30,reset_at=now-60,
+                timezone=zone,model='m',status='reserved',reservation_usd=Decimal(amount),
+                pricing_version='v',pricing_source='s')
+            for identifier,zone,amount in [
+                ('history-match','America/New_York','0.25'),
+                ('history-other-case','america/new_york','9.00'),
+            ]
+        ])
         session.commit()
     assert admin.get('/api/settings/ai-spend-history?days=0').status_code==400
     assert admin.get('/api/settings/ai-spend-history?days=91').status_code==400
     result=admin.get('/api/settings/ai-spend-history?days=1').json()
     assert result['max_windows']==4 and result['truncated'] and len(result['windows'])==4
+    assert all(row['timezone']=='UTC' for row in result['windows'])
+    base='/api/settings/ai-spend-history?days=1'
+    filtered=admin.get(base+'&timezone=America%2FNew_York')
+    assert filtered.status_code==200
+    data=filtered.json()
+    assert not data['truncated'] and len(data['windows'])==1
+    row=data['windows'][0]
+    assert row['timezone']=='America/New_York' and row['call_count']==1
+    assert row['reserved_usd']=='0.25' and row['counted_usd']=='0.25'
+    assert admin.get(base+'&timezone=Europe%2FLondon').json()['windows']==[]
+    assert admin.get(base+'&timezone=Invalid%2FTimezone').status_code==400
     with Session() as session:session.get(User,'admin').role='viewer';session.commit()
-    assert admin.get('/api/settings/ai-spend-history').status_code==403
+    assert admin.get(base+'&timezone=America%2FNew_York').status_code==403

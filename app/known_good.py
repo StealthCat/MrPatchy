@@ -15,7 +15,7 @@ import math
 import re
 import time
 
-from sqlalchemy import Boolean, Double, Integer, JSON, String, func, select
+from sqlalchemy import Boolean, Double, Integer, JSON, String, case, func, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
@@ -493,6 +493,24 @@ def publish(s, row):
         audit(s, 'link known-good observation',
             f'{observation.fingerprint} {observation.assessment_id} {observation.host_id}')
     return {**status, 'published': bool(saved.active)}
+
+
+def summary(s):
+    """Count published state and retained reuse links without loading evidence."""
+    from .ai_assessments import Assessment
+
+    entries = select(
+        func.count(case((Entry.active.is_(True), 1))).label('active_entries'),
+        func.count(case((Entry.active.is_(False), 1))).label('revoked_entries'),
+    ).select_from(Entry).subquery()
+    reuse = select(
+        func.count().label('retained_reuse_assessments'),
+        func.count(case((Entry.active.is_(False), 1))).label('reuse_assessments_on_revoked_entries'),
+    ).select_from(Observation).join(Entry, Entry.fingerprint == Observation.fingerprint).join(
+        Assessment, Assessment.id == Observation.assessment_id,
+    ).where(Assessment.source == 'known_good').subquery()
+    statement = select(entries, reuse).select_from(entries.join(reuse, true()))
+    return dict(s.execute(statement).mappings().one())
 
 
 def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action):

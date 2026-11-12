@@ -68,10 +68,12 @@ def _window_start(reset_at,name):
         return None
 
 
-def _state(session,cfg,now):
+def _state(session,cfg,now,*,include_reconciliation=False):
     mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
     groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
+    unreconciled_count=0
+    oldest_reservation=None
     if enabled:
         # At most five result rows, regardless of receipt amounts or unknown statuses.
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
@@ -81,21 +83,27 @@ def _state(session,cfg,now):
         total=_aggregate(session,amount)
         # A row also counts while the window it was admitted under (its own reset_at) is still
         # open, so changing the reset timezone cannot hand back spend from that window.
-        query=select(bucket,total).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+        metrics=(func.count(),func.min(BudgetEntry.created)) if include_reconciliation else ()
+        query=select(bucket,total,*metrics).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
-        for key,value in session.execute(query):
+        for key,value,*summary in session.execute(query):
             total=Decimal(value or 0);counted+=total
             if key in groups:groups[key]+=total
+            if summary and key in ('sent','uncertain'):
+                call_count,oldest=summary
+                unreconciled_count+=call_count
+                if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
+                    oldest_reservation=oldest
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
-    return enabled,name,start,reset,groups,counted,cap
+    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation)
 
 
 def waiting(session,now,payload=None,*,settings=None):
     """Read-only preflight; final atomic reserve still owns spending authority."""
     if settings is None:settings=config(session)
-    enabled,_name,_start,reset,_groups,counted,cap=_state(session,settings,now)
+    enabled,_name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,settings,now)
     if not enabled:return 0
     if counted>=cap:return reset
     if payload is not None:
@@ -119,7 +127,7 @@ def reserve(payload):
             quote=ai_pricing.reservation(payload)
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
-            now=time.time();enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
+            now=time.time();enabled,name,start,reset,groups,counted,cap,_reconciliation=_state(session,cfg,now)
             amount=quote['amount_usd']
             if counted+amount>cap:
                 raise AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
@@ -184,18 +192,28 @@ def mark_uncertain(identifier,reason):
 
 def status(session,now=None):
     now=time.time() if now is None else now;cfg=config(session)
-    enabled,name,start,reset,groups,counted,cap=_state(session,cfg,now)
+    enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
+    unreconciled_count,oldest=reconciliation
+    # A timezone change can leave a previously admitted window open beyond the
+    # configured reset.  In that case the configured boundary is useful for a
+    # recheck, but it cannot promise that recorded headroom will be available.
+    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
+        else_=BudgetEntry.reservation_usd)
+    overlapping=(enabled and session.scalar(select(BudgetEntry.id).where(
+        BudgetEntry.reset_at>reset,BudgetEntry.created<=now,BudgetEntry.status!='released',amount>0).limit(1)) is not None)
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
         'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
-        'next_reset':reset if enabled else None,'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
+        'unreconciled_call_count':unreconciled_count,'oldest_unreconciled_reservation_at':oldest,
+        'next_reset':reset if enabled else None,'next_reset_authoritative':enabled and not overlapping,
+        'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
         'pricing_catalog':ai_pricing.catalog_status(now)}
 
 
-def history(session,days=30,now=None):
+def history(session,days=30,now=None,*,timezone_name=None):
     """Return bounded aggregate spend windows from the retained accounting ledger."""
     if isinstance(days,bool) or not isinstance(days,int) or not 1<=days<=90:
         raise ValueError('AI spend history must cover 1 to 90 days')
@@ -211,11 +229,15 @@ def history(session,days=30,now=None):
         return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
     recognized=('reserved','sent','settled','uncertain')
     other=_aggregate(session,case((~BudgetEntry.status.in_(recognized),amount),else_=zero))
+    filters=[BudgetEntry.reset_at>cutoff,BudgetEntry.created<=now,BudgetEntry.status!='released']
+    if timezone_name is not None:
+        # Compare encoded bytes so MySQL's text collation cannot fold case.
+        filters.append(func.hex(BudgetEntry.timezone)==timezone_name.encode('utf-8').hex().upper())
     query=(select(BudgetEntry.timezone,BudgetEntry.reset_at,func.count(BudgetEntry.id).label('call_count'),
         bucket('settled').label('settled_usd'),bucket('reserved').label('reserved_usd'),
         bucket('sent').label('sent_usd'),bucket('uncertain').label('uncertain_usd'),
         other.label('other_usd'),_aggregate(session,amount).label('counted_usd'))
-        .where(BudgetEntry.reset_at>cutoff,BudgetEntry.created<=now,BudgetEntry.status!='released')
+        .where(*filters)
         .group_by(BudgetEntry.timezone,BudgetEntry.reset_at)
         .order_by(BudgetEntry.reset_at.desc(),BudgetEntry.timezone.asc()).limit(max_windows+1))
     rows=session.execute(query).mappings().all()

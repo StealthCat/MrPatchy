@@ -32,6 +32,7 @@ class AIRun(Base):
 
 
 ACTIVE_RUN_INDEX = Index('ix_ai_runs_purpose_state_started', AIRun.purpose, AIRun.state, AIRun.started)
+RECENT_RUN_INDEX = Index('ix_ai_runs_purpose_started', AIRun.purpose, AIRun.started)
 
 
 class AIEvent(Base):
@@ -359,7 +360,9 @@ def status(s):
     recent_count,recent_min=s.execute(select(func.count(),func.min(Behavior.attempted)).where(Behavior.attempted>now-3600)).one()
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
     running_stage,last_run,last_error=_status_run_details(s)
-    active_count=s.scalar(select(func.count()).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now))
+    active_count,active_lease_expires=s.execute(select(
+        func.count(),func.min(ai_claims.Claim.expires),
+    ).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now)).one()
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
     run_count,oldest_run=s.execute(select(func.count(),func.min(AIRun.started)).where(
@@ -378,10 +381,20 @@ def status(s):
     # Retained malformed markers must match the public API's `is True` contract.
     marker_type=(func.json_type(Job.payload,'$._ai_deferred')=='true' if s.get_bind().dialect.name=='sqlite' else
         func.json_type(func.json_extract(Job.payload,'$._ai_deferred'))=='BOOLEAN')
-    plan_where=(Job.action.in_(('release-plan','security-plan','startup-plan')),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
+    plan_actions=('release-plan','security-plan','startup-plan')
+    plan_where=(Job.action.in_(plan_actions),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
         marker_type,Job.payload['_ai_deferred'].as_boolean()==True)
-    plan_deferred,plan_next=s.execute(select(func.count(),func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where)).one()
-    plan_ready=s.scalar(select(func.count()).where(*plan_where,Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids())))
+    plan_ready_sql=and_(Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids()))
+    plan_by_action={action:{'deferred':0,'ready':0,'next_at':None} for action in plan_actions}
+    # Canonical labels preserve the existing action predicate under MySQL collations.
+    plan_action=case(*[(Job.action==action,action) for action in plan_actions]).label('plan_action')
+    plan_rows=s.execute(select(plan_action,func.count(),counted(plan_ready_sql),
+        func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where).group_by('plan_action'))
+    for action,deferred,eligible,next_at in plan_rows:
+        plan_by_action[action]={'deferred':deferred,'ready':eligible,'next_at':next_at}
+    plan_deferred=sum(row['deferred'] for row in plan_by_action.values())
+    plan_ready=sum(row['ready'] for row in plan_by_action.values())
+    plan_next=min((row['next_at'] for row in plan_by_action.values() if row['next_at'] is not None),default=None)
     if scoring_next and scoring_next>now:retry=min([value for value in (retry,scoring_next) if value is not None])
     if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
     if provider_backoff['blocked']:
@@ -409,10 +422,12 @@ def status(s):
             'enabled':cfg['ai_enabled'],'reason':reason,'message':message,'ready':ready,'retry_at':retry,'worker_seen':seen,
             'blocked':blocked,'paused':paused,
             'eligible_unclaimed':waiting,'oldest_eligible_unclaimed_observation_at':oldest_waiting,
-            'active':active_count,'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,
+            'active':active_count,'active_lease_expires_at':active_lease_expires,
+            'queued':max(0,pending_count-active_count),'reported_capacity':capacity or None,
             'per_server_limit':ai_policy.DEFAULT_CONCURRENCY,
             'per_server_limit_min':ai_policy.MIN_CONCURRENCY,'per_server_limit_max':ai_policy.MAX_CONCURRENCY,
             'recent_attempts':used,'last_error':last_error,
             'last_run':last_run,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
-            'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next}
+            'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next,
+            'plan_deferred_by_action':plan_by_action}

@@ -86,6 +86,7 @@ def test_deferred_plan_counts_only_native_json_true(admin,marker):
     expected=1 if marker is True else 0
     assert status['plan_deferred']==expected
     assert (status['plan_next_at'] is not None)==bool(expected)
+    assert status['plan_deferred_by_action']['security-plan']['deferred']==expected
     response=admin.get('/api/jobs/marker-job',params={'host_id':'marker-host'})
     assert response.status_code==200 and response.json()['ai_deferred']==bool(expected)
 
