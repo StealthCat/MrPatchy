@@ -1,3 +1,8 @@
+## 1.59.30 — 2026-11-11
+
+1. [PR #555](https://github.com/StealthCat/MrPatchy/pull/555): Administrators can filter fleet and server AI activity by run state: running, complete, failed, deferred or interrupted. The state filter combines with the purpose and server filters, and changing either filter resets the page. Returning from a run restores both filters and the page for that scope. An empty filtered result says that no runs match. `GET /api/ai/runs` accepts an optional, validated `state`, applied in SQL before pagination. Fixes #553.
+2. Compatibility and limits: an optional query parameter and a filter control, with no schema change. Existing calls and the response shape are unchanged, and direct, shared and legacy server associations stay in scope. This source update does not publish a Docker image.
+
 ## 1.59.29 — 2026-11-11
 
 1. [PR #548](https://github.com/StealthCat/MrPatchy/pull/548): Add the administrator-only `GET /api/settings/ai-control-status`. It returns one redacted, read-only snapshot of every current global shared-AI blocker: disabled or incomplete configuration, provider backoff, a smooth-rate wait and an exhausted daily cap. It reports the latest finite gate as `next_start_at`, and any indefinite hold suppresses a claimed start time. The budget status adds `next_reset_authoritative`. When a retained prior window outlives the configured reset after a timezone change, that reset is reported only as a recheck boundary. Fixes #546.
