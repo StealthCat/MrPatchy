@@ -1,3 +1,8 @@
+## 1.59.40 — 2026-11-12
+
+1. [PR #686](https://github.com/StealthCat/MrPatchy/pull/686): Fix the investigations queue notice, which showed the legacy hourly limit to administrators even in rate, daily-cap and unthrottled admission modes. The notice now names the control that actually gates new AI work: shared starts per hour (plus the daily spend cap in combined mode), the daily spend cap, unthrottled, or the legacy attempts limit in legacy mode. The AI worker status card uses the same helper. Fixes #685.
+2. Compatibility and limits: a client-only display fix, with no API, schema, admission or authorization change. Legacy mode output is unchanged, and the notice stays administrator-only. This source update does not publish a Docker image.
+
 ## 1.59.39 — 2026-11-12
 
 1. [PR #675](https://github.com/StealthCat/MrPatchy/pull/675): `tools/benchmark_ai.py` accepts `--follow-up-runs` (0 to the run count), so serial and parallel AI triage benchmarks can compare matched workloads with no, sparse or universal follow-up evidence requests. Explicit counts are distributed deterministically across the fixture subjects, and omitting the option keeps the existing alternating workload. The benchmark verifies provider requests, SSH requests and persisted call counts against the selected workload. A stage with no observations reports `count: 0` and null percentiles, which `tools/compare_ai_benchmarks.py` accepts and reports as unobserved instead of failing. Fixes #674.
