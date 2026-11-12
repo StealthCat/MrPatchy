@@ -18,6 +18,19 @@ import pytest
 from fastapi.testclient import TestClient
 from app.main import app,login_attempts
 from app.db import Base,engine
+from tests.pricing_catalog import pin_fresh_pricing_catalog
+@pytest.fixture(autouse=True)
+def fresh_pricing_catalog(request,monkeypatch):
+    """Keep capped-AI tests independent of the bundled catalog's calendar expiry.
+
+    Expiry/staleness tests keep working because they derive their clocks from
+    ai_pricing.VERIFIED_AT/EXPIRES_AT. Mark a test `bundled_pricing_catalog` to see the
+    unmodified bundled window instead.
+    """
+    if request.node.get_closest_marker('bundled_pricing_catalog'):return
+    pin_fresh_pricing_catalog(monkeypatch)
+def pytest_configure(config):
+    config.addinivalue_line('markers','bundled_pricing_catalog: use the unmodified bundled AI price-catalog validity window')
 @pytest.fixture
 def client():
     login_attempts.clear()
