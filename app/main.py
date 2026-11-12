@@ -1129,6 +1129,12 @@ def registered_controllers(offset:int=0,user=Depends(admin_user)):
     try:return page(offset)
     except ValueError as error:raise HTTPException(400,str(error))
 
+@app.get('/api/operations/agents')
+def endpoint_agent_health(offset:int=0,user=Depends(admin_user)):
+    from .agent_fleet_health import page
+    try:return page(offset)
+    except ValueError as error:raise HTTPException(400,str(error))
+
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
     boot_id:str=Field(pattern=r'^[0-9a-f]{32}$')

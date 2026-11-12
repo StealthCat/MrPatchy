@@ -3145,6 +3145,27 @@ or response authority, which remains with #451. Still planned for this
 requirement: endpoint-agent and GCP-node inventory, readiness and HTTPS/Caddy
 checks, resource metrics, alerts and the unified dashboard acceptance.
 
+Implementation checkpoint (issue #737): Activity → Workers adds an admin-only
+**Endpoint agents** section backed by `GET /api/operations/agents`
+(`app/agent_fleet_health.py`). The section covers enabled, non-deleted servers
+and is built from the retained read-only agent verification receipt and the
+telemetry collection time. Each row is classified, worst first, as:
+
+- **offline:** live verification was unavailable, or the server is marked offline.
+- **degraded:** helpers are outdated, drifted or blocked, or the agent is verified
+  but telemetry is stale or missing (older than 15 minutes).
+- **unknown:** there is no receipt, the receipt is invalid, stale (older than
+  600 seconds) or future-dated, or enrollment is incomplete.
+- **healthy:** the agent is verified current and telemetry is fresh.
+
+The deployment type is shown as `systemd` only when the receipt names the
+expected `mrpatchy-agent.service` unit. Otherwise it is "not verified".
+Responses carry fixed reasons and an issue count only, with no receipt hashes,
+paths, addresses or telemetry. Settings rows are read in bounded batches rather
+than once per server. The view never inspects, repairs or authorizes anything.
+Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
+unified dashboard acceptance remain open.
+
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
 Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint below.
