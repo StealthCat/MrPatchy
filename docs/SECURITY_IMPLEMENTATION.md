@@ -2316,19 +2316,6 @@ endpoint. The panel adds presentation only: lookup, publication, revocation,
 role, approval and response boundaries are unchanged. Hit/miss reasons,
 saved-call or cost estimates and matched production acceptance remain open.
 
-Worker checkpoint #749 adds an **estimate** of avoided provider work to the
-same summary and panel. Each retained reuse assessment is attributed to its
-candidate's originating AI investigation run. Avoided calls are that run's
-recorded call count. Avoided USD sums the run's priced receipts only when every
-call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
-partly priced, pruned, unlinked or still running is counted separately and
-never treated as free, so incomplete coverage makes the figures lower bounds.
-The estimate reads candidates in bounded batches without loading evidence or
-snapshots. It is not a provider invoice, does not measure misses and does not
-predict what a fresh investigation would cost today. Lookup, publication,
-revocation, pause, budget, role, approval and response boundaries are
-unchanged. Hit/miss reasons and matched production acceptance remain open.
-
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -2342,6 +2329,19 @@ explicitly requested or the entry no longer matches/is no longer valid.
 - Add an explicit administrator **Re-triage** action for completed/cached safe items, separate from retrying failed work. It bypasses cache lookup for the selected observation while respecting pause, data-sharing, throttling, daily reservations and current evidence. Show whether the user is refreshing one observation or revoking/replacing the shared entry, require explicit scope for fleet trust changes and audit both. Preserve prior assessments; a new suspicious/unknown result revokes the corresponding reusable safe entry and schedules linked review.
 - Keep cache records and their minimum provenance independent of ordinary AI-log pruning; unavailable source evidence must never leave an unverifiable trusted hit. Respect fleet/tenant access boundaries, protect cached evidence and expose cache hit/miss/invalidation reasons and saved calls/cost estimates. Cache lookup may serve retained/local assessments while provider AI is paused; it cannot bypass a restriction on sharing evidence or making a new call.
 - Validate exact cross-server hits with zero provider calls, same-name/different-hash and same-hash/different-behavior misses, script/config/provenance/privilege changes, incomplete/unverified evidence, revoked entries, concurrent first encounters, manual re-triage, changed follow-up evidence, log retention and role isolation on SQLite/MySQL. Preserve per-host observations/audit and existing explicit approval boundaries.
+
+Worker checkpoint #749 adds an **estimate** of avoided provider work to the
+same summary and panel. Each retained reuse assessment is attributed to its
+candidate's originating AI investigation run. Avoided calls are that run's
+recorded call count. Avoided USD sums the run's priced receipts only when every
+call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
+partly priced, pruned, unlinked or still running is counted separately and
+never treated as free, so incomplete coverage makes the figures lower bounds.
+The estimate reads candidates in bounded batches without loading evidence or
+snapshots. It is not a provider invoice, does not measure misses and does not
+predict what a fresh investigation would cost today. Lookup, publication,
+revocation, pause, budget, role, approval and response boundaries are
+unchanged. Hit/miss reasons and matched production acceptance remain open.
 
 ### Throttling, daily cap and unthrottled operation
 
