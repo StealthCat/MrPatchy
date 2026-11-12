@@ -48,6 +48,23 @@ module.exports=async(page,capture)=>{
   await page.waitForFunction(()=>document.getElementById('notification-sync').dataset.state==='live');
   assert.match(await text(),/Live updates: Live\. Last synchronized/,'a delivered event and successful catch-up restore live state');
 
+  // A refused stream (HTTP 429 at capacity, proxy 502/503) is CLOSED and never retried by the browser.
+  await page.evaluate(()=>{const s=window.notificationStreams[0];s.readyState=2;s.onerror();});
+  assert.match(await text(),/Live updates: Unavailable, polling only\./,'a permanently failed stream is not reported as reconnecting');
+  assert.equal(await sync.getAttribute('data-state'),'unavailable');
+  assert.ok(await page.evaluate(()=>window.notificationStreams[0].closed),'the refused stream is released');
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await page.waitForFunction(()=>/Last synchronized/.test(document.getElementById('notification-sync').textContent));
+  assert.equal(await page.evaluate(()=>window.notificationStreams.length),1,'no immediate reconnect storm before the retry delay');
+  assert.match(await text(),/Live updates: Unavailable, polling only\./);
+  await page.evaluate(()=>{window.__realNow=Date.now;Date.now=()=>window.__realNow()+31000;});
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await page.waitForFunction(()=>window.notificationStreams.length===2);
+  await page.evaluate(()=>{Date.now=window.__realNow;});
+  assert.match(await text(),/Live updates: Connecting\./,'a successful poll after the retry delay retries the stream once');
+  await page.evaluate(()=>window.notificationStreams[1].onopen());
+  assert.match(await text(),/Live updates: Live\./,'capacity relief restores live delivery');
+
   await page.getByRole('button',{name:/Notifications/}).click();
   await sync.waitFor();
   await capture('notification-sync');

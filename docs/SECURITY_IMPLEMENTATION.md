@@ -3125,11 +3125,15 @@ toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and 
 do arrival retention/pruning and multi-controller acceptance.
 
 Worker checkpoint (issue #719): the bell panel now shows the live-update state
-(Connecting, Live, Reconnecting, Polling only or Delayed) and the time of the last
+(Connecting, Live, Reconnecting, Unavailable/polling only, Polling only or
+Delayed) and the time of the last
 successful authoritative list/count refresh, or "Not yet synchronized". The line
 states that it describes notification delivery only, not collector, agent or AI
 health. It is built client-side with text nodes; logout/reset clears both values,
-and a failed refresh never advances the time. This is frontend-only and does not
+and a failed refresh never advances the time. A permanently refused stream
+(non-200 such as 429 at capacity or a proxy 502/503, which EventSource never
+retries) is shown as unavailable rather than reconnecting, and is retried only
+after a successful poll with a 30-second to 10-minute doubling backoff. This is frontend-only and does not
 complete milestones 2–4: Caddy flushing measurements, slow-client and failover
 drills and two-browser SQLite/MySQL acceptance remain.
 
