@@ -46,42 +46,77 @@ APPLICABILITY_STATUSES = (AFFECTED, FIXED, UNAFFECTED, UNCERTAIN)
 SUPPORTING_KINDS = ('execution', 'process', 'file_change', 'integrity_mismatch', 'service', 'network', 'log')
 MIN_SUPPORTING_FLOOR = 1
 MAX_RULE_AGE_LIMIT = 30 * 86400
+MAX_APPLICABILITY_AGE_LIMIT = 30 * 86400
+MAX_TIMESTAMP = 253402300799  # 9999-12-31T23:59:59Z
 MAX_POLICY_CVES = 256
-_CVE = re.compile(r'CVE-\d{4}-\d{4,7}')
+_CVE = re.compile(r'CVE-[0-9]{4}-[0-9]{4,7}')
 _MAX_LIST = 256
 
 
 def _cve(value):
-    return isinstance(value, str) and bool(_CVE.fullmatch(value))
+    return type(value) is str and bool(_CVE.fullmatch(value))
+
+
+def _num(value):
+    # Exact int/float only; huge ints that overflow ``math.isfinite`` fail closed.
+    try:
+        return _mr._num(value)
+    except OverflowError:
+        return False
+
+
+def _choice(value, options):
+    return type(value) is str and value in options
+
+
+def _plain(value, depth=0):
+    """Require JSON-shaped exact builtin types so subclasses cannot override comparisons."""
+    if depth > 8:
+        raise Invalid('input nested too deeply')
+    kind = type(value)
+    if kind is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise Invalid('non-string key')
+            _plain(item, depth + 1)
+    elif kind is list:
+        for item in value:
+            _plain(item, depth + 1)
+    elif kind not in (str, int, float, bool, type(None)):
+        raise Invalid('unsupported value type')
 
 
 def _sha(value):
-    return isinstance(value, str) and bool(_mr._SHA256.fullmatch(value))
+    return type(value) is str and bool(_mr._SHA256.fullmatch(value))
 
 
 def _time(value):
-    return _mr._num(value) and value >= 0
+    return _num(value) and 0 <= value <= MAX_TIMESTAMP
 
 
 def normalize_policy(policy):
     """Validate an administrator per-CVE policy; raise ``Invalid`` on any defect."""
-    if not isinstance(policy, dict):
+    if type(policy) is not dict:
         raise Invalid('policy must be an object')
+    _plain(policy)
     allowed = {'mode', 'cve_ids', 'actions', 'min_rule_confidence', 'min_supporting_kinds',
-               'max_rule_age_seconds', 'allow_uncertain_applicability', 'excluded_paths', 'excluded_sha256'}
+               'max_rule_age_seconds', 'max_applicability_age_seconds', 'allow_uncertain_applicability',
+               'excluded_paths', 'excluded_sha256'}
     if set(policy) - allowed:
         raise Invalid('unsupported policy fields')
     mode = policy.get('mode', 'disabled')
-    if mode not in MODES:
+    if not _choice(mode, MODES):
         raise Invalid('unsupported policy mode')
     cves = policy.get('cve_ids', [])
-    if not isinstance(cves, list) or len(cves) > MAX_POLICY_CVES or any(not _cve(c) for c in cves):
+    if not isinstance(cves, list) or len(cves) > MAX_POLICY_CVES or any(not _cve(c) for c in cves) \
+            or len(set(cves)) != len(cves):
         raise Invalid('invalid cve_ids')
     actions = policy.get('actions', [])
-    if not isinstance(actions, list) or any(a not in ACTIONS for a in actions) or len(set(actions)) != len(actions):
+    if not isinstance(actions, list) or any(not _choice(a, ACTIONS) for a in actions) \
+            or len(set(actions)) != len(actions):
         raise Invalid('invalid actions')
     confidence = policy.get('min_rule_confidence', 'high')
-    if confidence not in RULE_CONFIDENCES or \
+    if not _choice(confidence, RULE_CONFIDENCES) or \
             RULE_CONFIDENCES.index(confidence) < RULE_CONFIDENCES.index(MIN_RULE_CONFIDENCE_FLOOR):
         raise Invalid('min_rule_confidence out of range')
     supporting = policy.get('min_supporting_kinds', MIN_SUPPORTING_FLOOR)
@@ -90,6 +125,9 @@ def normalize_policy(policy):
     age = policy.get('max_rule_age_seconds', 7 * 86400)
     if not _mr._int(age, 1, MAX_RULE_AGE_LIMIT):
         raise Invalid('max_rule_age_seconds out of range')
+    applicability_age = policy.get('max_applicability_age_seconds', 86400)
+    if not _mr._int(applicability_age, 1, MAX_APPLICABILITY_AGE_LIMIT):
+        raise Invalid('max_applicability_age_seconds out of range')
     uncertain = policy.get('allow_uncertain_applicability', False)
     if type(uncertain) is not bool:
         raise Invalid('allow_uncertain_applicability must be boolean')
@@ -102,6 +140,7 @@ def normalize_policy(policy):
     return {
         'mode': mode, 'cve_ids': frozenset(cves), 'actions': tuple(a for a in ACTIONS if a in actions),
         'min_rule_confidence': confidence, 'min_supporting_kinds': supporting, 'max_rule_age_seconds': age,
+        'max_applicability_age_seconds': applicability_age,
         'allow_uncertain_applicability': uncertain,
         'excluded_paths': tuple(sorted({_mr._path(p) for p in paths})), 'excluded_sha256': frozenset(hashes),
     }
@@ -109,8 +148,9 @@ def normalize_policy(policy):
 
 def normalize_detection(detection):
     """Validate one CVE exploitation detection; raise ``Invalid`` on any defect."""
-    if not isinstance(detection, dict):
+    if type(detection) is not dict:
         raise Invalid('detection must be an object')
+    _plain(detection)
     required = {'server_id', 'evidence_revision', 'observed_at', 'cve_id', 'artifact_sha256', 'rule',
                 'applicability'}
     allowed = required | {'supporting', 'file', 'process', 'ai'}
@@ -136,13 +176,13 @@ def normalize_detection(detection):
         raise Invalid('invalid detection rule identity')
     if type(rule['authenticated']) is not bool or not _time(rule['updated_at']):
         raise Invalid('invalid detection-rule provenance')
-    if rule['confidence'] not in RULE_CONFIDENCES or not _sha(rule['matched_sha256']):
+    if not _choice(rule['confidence'], RULE_CONFIDENCES) or not _sha(rule['matched_sha256']):
         raise Invalid('invalid detection-rule match')
     out['rule'] = dict(rule)
     applicability = detection['applicability']
     if not isinstance(applicability, dict) or set(applicability) != {'status', 'server_id', 'cve_id', 'assessed_at'}:
         raise Invalid('incomplete applicability assessment')
-    if applicability['status'] not in APPLICABILITY_STATUSES or not _mr._token(applicability['server_id']) \
+    if not _choice(applicability['status'], APPLICABILITY_STATUSES) or not _mr._token(applicability['server_id']) \
             or not _cve(applicability['cve_id']) or not _time(applicability['assessed_at']):
         raise Invalid('invalid applicability assessment')
     out['applicability'] = dict(applicability)
@@ -154,12 +194,14 @@ def normalize_detection(detection):
         if not isinstance(item, dict) or set(item) != {'kind', 'event_id', 'server_id', 'evidence_revision',
                                                        'artifact_sha256', 'observed_at'}:
             raise Invalid('invalid supporting evidence item')
-        if item['kind'] not in SUPPORTING_KINDS or not _mr._token(item['event_id']) \
+        if not _choice(item['kind'], SUPPORTING_KINDS) or not _mr._token(item['event_id']) \
                 or not _mr._token(item['server_id']) or not _mr._token(item['evidence_revision']):
             raise Invalid('invalid supporting evidence item')
         if not _sha(item['artifact_sha256']) or not _time(item['observed_at']):
             raise Invalid('invalid supporting evidence binding')
         items.append(dict(item))
+    if len({item['event_id'] for item in items}) != len(items):
+        raise Invalid('duplicate supporting evidence event')
     out['supporting'] = items
     # AI enrichment is accepted only so that it can be explicitly ignored.
     ai = detection.get('ai')
@@ -170,7 +212,13 @@ def normalize_detection(detection):
 
 
 def binding_digest(detection):
-    """Stable digest of the identities an authorization is bound to."""
+    """Stable digest of the identities an authorization is bound to.
+
+    This is a target-identity key for suppressing duplicate *executions* of an
+    already authorized action. It deliberately excludes applicability and
+    supporting evidence, so it must not be used to suppress a later decision
+    whose classification differs from an earlier one.
+    """
     return _digest(normalize_detection(detection))
 
 
@@ -197,6 +245,9 @@ def _classify(d, p, now, reasons, gaps):
     if rule['updated_at'] > now or now - rule['updated_at'] > p['max_rule_age_seconds']:
         reasons.append('rule_stale')
         return 'unverified_rule'
+    if rule['updated_at'] > d['observed_at']:
+        reasons.append('rule_newer_than_observation')
+        return 'unverified_rule'
     if rule['cve_id'] != d['cve_id']:
         reasons.append('rule_not_bound_to_cve')
         return 'unverified_rule'
@@ -209,6 +260,9 @@ def _classify(d, p, now, reasons, gaps):
         return 'unverified_applicability'
     if applicability['assessed_at'] > now:
         reasons.append('applicability_in_future')
+        return 'unverified_applicability'
+    if now - applicability['assessed_at'] > p['max_applicability_age_seconds']:
+        reasons.append('applicability_stale')
         return 'unverified_applicability'
     if applicability['status'] in (FIXED, UNAFFECTED):
         reasons.append(f"endpoint_{applicability['status']}")
@@ -253,7 +307,7 @@ def evaluate(policy, detection, *, now):
     result = {'version': CONTRACT_VERSION, 'mode': 'disabled', 'classification': 'invalid', 'cve_id': None,
               'authorized': [], 'would_authorize': [], 'withheld': [], 'reasons': [], 'coverage_gaps': [],
               'binding': None}
-    if not _mr._num(now):
+    if not _num(now) or not 0 <= now <= MAX_TIMESTAMP:
         result['reasons'].append('invalid_evaluation_context')
         return result
     try:

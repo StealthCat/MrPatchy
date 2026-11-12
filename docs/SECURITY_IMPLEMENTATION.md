@@ -2757,6 +2757,7 @@ storage or executor. Nothing calls it yet, so runtime behavior is unchanged.
   - the action scope and a minimum rule confidence (`medium` at the lowest);
   - a minimum number of distinct supporting evidence kinds (at least one);
   - a maximum rule age (30 days at most);
+  - a maximum applicability-assessment age (one day by default, 30 days at most);
   - path and hash exclusions and an `allow_uncertain_applicability` opt-in.
 - Only `confirmed_exploitation` can authorize anything, and it requires all of
   the following:
@@ -2789,7 +2790,13 @@ storage or executor. Nothing calls it yet, so runtime behavior is unchanged.
   Each action is decided independently. The binding digest covers the CVE and the
   rule version, for duplicate suppression.
 - Malformed or injection-shaped policies, detections and evaluation times fail
-  closed with no authorized action.
+  closed with no authorized action. This covers non-ASCII CVE digits, overflowing
+  integers, duplicate CVEs, `str`/`dict` subclasses, and one evidence event
+  reused under several kinds.
+- A rule version dated after the observation is refused.
+- The binding is a target-identity key for suppressing duplicate executions. It
+  is not a decision key, so it must not suppress a later decision with a
+  different classification.
 
 Remaining for requirement D:
 - advisory ingestion and stored per-endpoint exposure records;

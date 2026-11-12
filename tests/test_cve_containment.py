@@ -284,3 +284,90 @@ def test_inputs_are_not_mutated_and_targets_are_copies():
     r['authorized'][0]['target']['path'] = '/etc/passwd'
     assert d['file']['path'] == FILE['path']
     assert r['would_authorize'][0]['target']['path'] == FILE['path']
+
+
+def test_one_observation_cannot_count_as_several_kinds():
+    same_event = [support('execution', event_id='ev-1'), support('process', event_id='ev-1')]
+    r = cc.evaluate(dict(ENFORCE, min_supporting_kinds=2), detection(supporting=same_event), now=NOW)
+    assert r['classification'] == 'invalid' and r['authorized'] == []
+
+
+def test_stale_applicability_is_refused_and_age_is_configurable():
+    old = with_applicability(assessed_at=NOW - 2 * 86400)
+    r = cc.evaluate(ENFORCE, old, now=NOW)
+    assert r['classification'] == 'unverified_applicability' and 'applicability_stale' in r['reasons']
+    assert cc.evaluate(dict(ENFORCE, max_applicability_age_seconds=3 * 86400), old, now=NOW)['authorized']
+    ancient = cc.evaluate(dict(ENFORCE, max_applicability_age_seconds=cc.MAX_APPLICABILITY_AGE_LIMIT),
+                          with_applicability(assessed_at=0), now=NOW)
+    assert ancient['classification'] == 'unverified_applicability' and ancient['authorized'] == []
+    for bad in (0, 31 * 86400, True, 1.5):
+        assert cc.evaluate(dict(ENFORCE, max_applicability_age_seconds=bad), detection(), now=NOW)[
+            'classification'] == 'invalid'
+
+
+def test_rule_version_newer_than_observation_is_refused():
+    d = detection(observed_at=NOW - 100)
+    d['rule']['updated_at'] = NOW - 1
+    r = cc.evaluate(ENFORCE, d, now=NOW)
+    assert r['classification'] == 'unverified_rule' and 'rule_newer_than_observation' in r['reasons']
+
+
+def test_huge_integers_fail_closed_without_raising():
+    huge = 10 ** 400
+    assert cc.evaluate(ENFORCE, detection(), now=huge)['reasons'] == ['invalid_evaluation_context']
+    assert cc.evaluate(ENFORCE, detection(), now=True)['reasons'] == ['invalid_evaluation_context']
+    for d in (detection(observed_at=huge), with_rule(updated_at=huge), with_applicability(assessed_at=huge),
+              detection(supporting=[support(observed_at=huge)])):
+        r = cc.evaluate(ENFORCE, d, now=NOW)
+        assert r['classification'] == 'invalid' and r['authorized'] == []
+        with pytest.raises(cc.Invalid):
+            cc.binding_digest(d)
+
+
+@pytest.mark.parametrize('cve', ['CVE-٢٠٢٦-١٢٣٤٥',
+                                 'CVE-２０２６-１２３４５'])
+def test_non_ascii_cve_digits_are_rejected(cve):
+    d = detection(cve_id=cve)
+    d['rule']['cve_id'] = cve
+    d['applicability']['cve_id'] = cve
+    r = cc.evaluate(dict(ENFORCE, cve_ids=[cve]), d, now=NOW)
+    assert r['classification'] == 'invalid' and r['authorized'] == []
+
+
+def test_duplicate_policy_cves_are_rejected():
+    assert cc.evaluate(dict(ENFORCE, cve_ids=[CVE, CVE]), detection(), now=NOW)['classification'] == 'invalid'
+
+
+class _AlwaysEqual(str):
+    def __eq__(self, other):
+        return True
+
+    def __ne__(self, other):
+        return False
+
+    __hash__ = str.__hash__
+
+
+class _Dict(dict):
+    pass
+
+
+def test_subclassed_inputs_fail_closed():
+    assert cc.evaluate(dict(ENFORCE, mode=_AlwaysEqual('auto')), detection(), now=NOW)['classification'] == 'invalid'
+    spoof = detection(server_id=_AlwaysEqual('srv-1'))
+    assert cc.evaluate(ENFORCE, spoof, now=NOW)['classification'] == 'invalid'
+    assert cc.evaluate(_Dict(ENFORCE), detection(), now=NOW)['classification'] == 'invalid'
+    assert cc.evaluate(ENFORCE, _Dict(detection()), now=NOW)['classification'] == 'invalid'
+    nested = detection()
+    nested['applicability'] = _Dict(nested['applicability'])
+    assert cc.evaluate(ENFORCE, nested, now=NOW)['classification'] == 'invalid'
+
+
+def test_authorized_and_would_authorize_targets_are_distinct_objects():
+    r = cc.evaluate(ENFORCE, detection(), now=NOW)
+    for a, w in zip(r['authorized'], r['would_authorize']):
+        assert a['target'] == w['target'] and a['target'] is not w['target']
+
+
+def test_binding_is_documented_as_target_identity_not_decision_key():
+    assert 'must not be used to suppress a later decision' in cc.binding_digest.__doc__
