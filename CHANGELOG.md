@@ -1,3 +1,8 @@
+## 1.59.27 — 2026-11-11
+
+1. [PR #545](https://github.com/StealthCat/MrPatchy/pull/545): In capped modes, AI Settings shows how many counted transmitted AI calls await reconciliation and the oldest retained reservation time among them. The current-budget summary adds `unreconciled_call_count` and `oldest_unreconciled_reservation_at`, aggregated in the existing grouped SQL read. Sent and uncertain calls are counted, including those from still-counted prior windows after a timezone change. Settled, reserved, released and unknown-status calls are excluded. With no qualifying calls the API returns zero and null, and Settings shows an empty state. Fixes #544.
+2. Compatibility and limits: an additive response field pair and Settings text, with no schema change. Budget membership, dollar totals, admission, roles and retention are unchanged, and no call identifiers, prompts or evidence are returned. The time shown is the reservation time, because the ledger keeps no separate transmission timestamp. This source update does not publish a Docker image.
+
 ## 1.59.26 — 2026-11-11
 
 1. [PR #538](https://github.com/StealthCat/MrPatchy/pull/538): Add the administrator-only `GET /api/ai/known-good/summary`. It reports active and revoked published known-good entries, retained cache-reuse assessments and the subset linked to a revoked entry. A provider assessment linked at publication is not counted as reuse, historical reuse stays visible after revocation, and empty counts are zero. One aggregate statement returns only the four counters, without loading evidence, payloads or host identifiers. Fixes #537.
