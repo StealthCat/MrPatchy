@@ -2393,6 +2393,30 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
 
+Worker checkpoint #733 adds an AI configuration-blocker notification producer.
+A non-transient provider failure (rejected key, unavailable quota, unsupported
+model) leaves each affected process investigation `blocked`, with no automatic
+retry until the model or key changes or an administrator retries. While AI is
+enabled and at least one pending, unapproved behavior on an active, unpaused
+server is blocked under the current configuration, `operations.collect_alerts()`
+publishes one admin-only `ai-triage`/`configuration-blocked` notification that
+links to `#investigations`.
+- **Predicate:** it matches the blocked count in `ai_runs.status()`. Rows blocked
+  under an earlier model/key are eligible again and are not counted.
+- **Revision binding:** each revision is bound to a re-hashed digest of the
+  current configuration signature, never to counts, so more blocked items under
+  the same configuration add no revision. A later configuration that is also
+  rejected resurfaces as unread. The payload is fixed text: no provider message,
+  key material, path or evidence.
+- **Resolution:** one `resolved` revision is published when nothing remains
+  blocked, AI is disabled, or the affected servers are paused, disabled, deleted
+  or their behaviors approved. A recurrence reopens the event.
+- **Unchanged:** the producer only reads. It never retries, unblocks, reserves
+  spend or changes authorization, and it adds no SMTP/webhook alert.
+- **Limitation:** blocked update-scoring and advisory-plan work is not covered
+  yet. Neither is a missing or undecryptable saved key that never reaches a
+  provider call.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
