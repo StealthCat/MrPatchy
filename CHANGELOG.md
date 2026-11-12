@@ -1,3 +1,13 @@
+## 1.59.52 — 2026-11-12
+
+1. [PR #703](https://github.com/StealthCat/MrPatchy/pull/703): Add a pure systemd effective-unit contract (`app/systemd_units.py`). It turns captured read-only observations of systemd system-unit search directories into effective-unit records, trigger relationships, explicit coverage gaps and a deterministic digest.
+   - It follows the system manager's search-path precedence and records shadowed fragments.
+   - It resolves masking, and applies unit, template, dash-prefix and type-level `.conf` drop-ins in order, with empty-assignment list resets. Drop-ins are read for the canonical name and every effective alias.
+   - It separates enablement links (`.wants`, `.requires`, `.upholds` in `/etc`, `/run`, generator and transient directories) from vendor static dependencies, and reports dangling or foreign links as gaps.
+   - It resolves aliases, linked units and template instances, and maps timer, socket and path units to their targets.
+   - Refs #702.
+2. Compatibility and limits: an unwired contract only. No collection, agent, storage, API or UI change. User units, generated and transient runtime state, and live wiring into the startup inventory remain open in #702. This source update does not publish a Docker image.
+
 ## 1.59.51 — 2026-11-12
 
 1. [PR #701](https://github.com/StealthCat/MrPatchy/pull/701): Scanner-created security incidents now reach the in-app bell and notification center. A new malware detection publishes a high-severity, administrator-only event that matches the incident API and links to the server's Security tab. The reason is fixed text: endpoint paths, rule names and engine output never appear in it. A repeat match on a closed incident reopens the event, and an administrator reopening a closed incident does the same. Repeat matches on an open incident add nothing. Administrator closure (resolved or false positive) or deleting the server resolves the event. Acknowledgement leaves it unchanged. Closes #700.
