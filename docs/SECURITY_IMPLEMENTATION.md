@@ -3487,6 +3487,31 @@ baseline panel lives.
 Milestone 1 still needs significant triage, malware, CVE and startup-classification
 producers, and AI configuration/budget blockers beyond the pricing catalog.
 
+Worker checkpoint (issue #704): a milestone-1 producer for startup-change
+(persistence) incidents. In the same transaction as the incident change,
+`persistence.notify()` publishes one admin-only event per incident (source
+`file-integrity`, kind `startup-change`, subject `startup-incident`), deep-linked
+to the server's File integrity tab:
+
+- A newly recorded startup-change incident publishes a `medium`, active revision.
+- Repeat detections of an open or acknowledged incident publish nothing.
+- A repeat detection of a resolved or false-positive incident publishes a
+  reopened revision, so it is unread again.
+- Administrator review that closes an incident publishes an `info`, resolved
+  revision. Review from a closed state to open or acknowledged publishes an
+  active revision. Acknowledgement and moves between closed states publish
+  nothing. Closing a legacy incident that never published adds nothing.
+- Deleting a server resolves its still-active startup-change notifications.
+
+Reasons are fixed text and state that a change is not a malware verdict.
+Endpoint-supplied paths, hashes and link targets never reach the payload. The
+producer needs incident recording to be enabled. It makes no AI calls, so it keeps
+working while AI is paused or disabled. It never acknowledges or transitions
+incidents, approves plans, changes baselines or remediates. Rolled-back
+detections announce nothing. No schema, UI or SMTP/webhook change. Classifying
+startup entries as suspicious (roadmap F) remains separate; this producer
+notifies baseline drift only.
+
 
 Worker checkpoint (issue #691): a bounded milestone-1 producer increment publishes
 significant AI process-triage verdicts to the notification center. The publish
