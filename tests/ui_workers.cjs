@@ -6,6 +6,9 @@ module.exports=async(page,capture)=>{
  const identity=async route=>{const response=await route.fetch();return route.fulfill({response,json:{...await response.json(),role}});};
  const workers=route=>{calls++;const offset=new URL(route.request().url()).searchParams.get('offset');return route.fulfill({json:{items:empty?[]:offset==='50'?[item('last-worker','stopped')]:[item(workerId,workerState),item(inject?'<img src=x onerror="window.__workerInjected=true">':'worker-two','stale'),item('worker-old-version','version_mismatch')],expected:expectationsConfigured?[{id:inject?'<img src=x onerror=window.__expectedInjected=true>':'worker-expected-east',state:'missing',reason:'No matching registration; inspect deployment and database access.',registered:false,age_seconds:null},{id:'worker-expected-west',state:'stale',reason:'Heartbeat expired; outcomes unknown.',registered:true,age_seconds:180}]:[],expectation_error:expectationError,more:!empty&&offset!=='50',fresh_seconds:120,gaps:['Only self-reported loops; operational readiness is not assessed.','Configured expected worker identities are listed; controllers, endpoint agents and GCP integration nodes remain outside this inventory.']}});};
  const control=route=>{submitted.push(route.request().postDataJSON());if(conflict)return route.fulfill({status:409,json:{detail:'Worker boot changed; refresh before controlling it'}});desired=submitted.at(-1).action;revision++;return route.fulfill({json:{ok:true,revision,action:desired}});};
+ let controllerFailure=false;const controllerCalls=[];
+ const controllers=route=>{controllerCalls.push(route.request().url());if(controllerFailure)return route.fulfill({status:500,json:{detail:'Controller registry unavailable'}});return route.fulfill({json:{items:[{id:'controller-east',boot_id:'b'.repeat(32),deployment_type:'docker',scheduler:'disabled',version:sourceVersion,started:now-60,heartbeat:now-5,uptime_seconds:60,state:'reporting',reason:'Controller process wrote to the shared database recently; serving readiness is not assessed.',age_seconds:5,readiness:'not_assessed'},{id:'<img src=x onerror="window.__controllerInjected=true">',boot_id:null,deployment_type:null,scheduler:null,version:null,started:null,heartbeat:null,uptime_seconds:null,state:'unknown',reason:'Heartbeat is missing.',age_seconds:null,readiness:'not_assessed'}],more:false,fresh_seconds:120,gaps:['Controller self-reports only.'],expected:[{id:'controller-west',registered:false,state:'missing',reason:'No matching registration is available.',age_seconds:null,readiness:'not_assessed'}],expectation_error:null,truncated:true}});};
+ await page.route('**/api/operations/controllers*',controllers);
  await page.route('**/api/operations/workers/control',control);
  await page.route('**/api/identity',identity);await page.route('**/api/operations/workers?*',workers);
  try{
@@ -13,6 +16,17 @@ module.exports=async(page,capture)=>{
   await page.getByRole('link',{name:'Workers',exact:true}).click();await page.getByRole('heading',{name:'Registered runtimes',exact:true}).waitFor();
   assert.equal(await page.locator('#content img[src=x]').count(),0);assert.equal(await page.evaluate(()=>window.__workerInjected),undefined);
   assert.equal(await page.locator('.worker-registry-table tbody tr').count(),3);
+  await page.locator('#controller-registrations').getByRole('heading',{name:'Controllers',exact:true}).waitFor();
+  assert.equal(await page.locator('.controller-registry-table tbody tr').count(),2);
+  await page.locator('.controller-registry-table').getByText('controller-east',{exact:true}).waitFor();
+  await page.locator('.controller-registry-table').getByText('Scheduler: disabled in this process',{exact:false}).waitFor();
+  await page.locator('#controller-registrations .expected-worker').getByText('controller-west',{exact:true}).waitFor();
+  await page.locator('#controller-registrations .controller-registry-truncated').getByText('This instance and expected controllers are always included',{exact:false}).waitFor();
+  assert.equal(await page.locator('#controller-registrations img').count(),0);assert.equal(await page.evaluate(()=>window.__controllerInjected),undefined);
+  for(const width of [320,768,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await capture('controller-registrations-'+width);}
+  await page.setViewportSize({width:1440,height:1000});
+  controllerFailure=true;await page.locator('#refresh-page').click();await page.locator('#controller-registrations [role=alert]').filter({hasText:'Controller registry unavailable'}).waitFor();
+  assert.equal(await page.locator('.worker-registry-table tbody tr').count(),3,'Worker registrations still render when the controller list fails');controllerFailure=false;
   await page.getByText('AI tasks: 3 / 4 capacity',{exact:false}).first().waitFor();
   await page.getByText('AI HTTP connections: 16 process limit',{exact:false}).first().waitFor();
   await page.getByText('Transport ceiling, not provider or task capacity',{exact:false}).first().waitFor();
@@ -50,7 +64,7 @@ module.exports=async(page,capture)=>{
   expectationError='Expected-worker configuration is invalid.';await page.locator('#refresh-page').click();await page.locator('#expected-workers [role=alert]').filter({hasText:expectationError}).waitFor();expectationError=null;expectationsConfigured=false;await page.locator('#refresh-page').click();await page.getByRole('heading',{name:'Worker expectations not configured',exact:true}).waitFor();
   empty=true;await page.locator('#refresh-page').click();await page.getByRole('heading',{name:'No workers registered yet',exact:true}).waitFor();
   for(const nextRole of ['operator','viewer']){
-   role=nextRole;const before=calls;await page.reload();await page.getByRole('heading',{name:'Administrator access required',exact:true}).waitFor();assert.equal(calls,before,'Unauthorized view must not fetch worker records');
+   role=nextRole;const before=calls,controllerBefore=controllerCalls.length;await page.reload();await page.getByRole('heading',{name:'Administrator access required',exact:true}).waitFor();assert.equal(calls,before,'Unauthorized view must not fetch worker records');assert.equal(controllerCalls.length,controllerBefore,'Unauthorized view must not fetch controller records');
   }
- }finally{await page.unroute('**/api/operations/workers/control',control);await page.unroute('**/api/identity',identity);await page.unroute('**/api/operations/workers?*',workers);await page.setViewportSize({width:1440,height:1000});await page.goto(new URL('/#activity',page.url()).href);}
+ }finally{await page.unroute('**/api/operations/controllers*',controllers);await page.unroute('**/api/operations/workers/control',control);await page.unroute('**/api/identity',identity);await page.unroute('**/api/operations/workers?*',workers);await page.setViewportSize({width:1440,height:1000});await page.goto(new URL('/#activity',page.url()).href);}
 };
