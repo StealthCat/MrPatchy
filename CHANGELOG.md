@@ -1,3 +1,8 @@
+## 1.59.60 — 2026-11-12
+
+1. [PR #722](https://github.com/StealthCat/MrPatchy/pull/722): Add a pure startup-entry provenance contract (`app/startup_provenance.py`). It classifies one startup file and its entries (crontab, anacrontab, systemd unit, drop-in or override, SysV script or `rc.local`) as `verified_default`, `modified`, `unverifiable`, `custom` or `unknown`. Each result carries its basis, verification strength, explicit gaps, a separate baseline field and `safety: not_assessed`. Package ownership or a match against the target's own package database alone is never `verified_default`. Evidence for another package or version is recorded as a gap. Entries in a modified file are classified individually, and default entries whose execution context is unverified or changed are reported as modified. Closes #720.
+2. Compatibility and limits: an unwired contract only. It feeds later wiring of the startup parsers, which still report provenance as `not_assessed`. No collection, schema, API or UI change, and provenance is not a safety verdict. This source update does not publish a Docker image.
+
 ## 1.59.59 — 2026-11-12
 
 1. [PR #718](https://github.com/StealthCat/MrPatchy/pull/718): Add a pure, I/O-free SysV contract (`app/sysv_init.py`) that turns captured SysV boot material into typed, bounded records.
