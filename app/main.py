@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION = "1.59.28"
+APP_VERSION = "1.59.29"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1169,6 +1169,11 @@ def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)
     if timezone is not None and not ai_budget.valid_timezone(timezone):
         raise HTTPException(400,'Select a valid IANA budget timezone.')
     with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
+
+@app.get('/api/settings/ai-control-status')
+def ai_control_status(user=Depends(admin_user)):
+    from . import ai_control_status
+    with Session() as s:return ai_control_status.snapshot(s)
 
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
