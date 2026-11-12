@@ -1,3 +1,8 @@
+## 1.59.32 — 2026-11-11
+
+1. [PR #563](https://github.com/StealthCat/MrPatchy/pull/563): Viewer and operator requests to `GET /api/investigation-status` no longer run the administrator-only status aggregates. They return the same three fields (`pending`, `oldest` and `enabled`) from one SQL aggregate. It uses the same approval and host-lifecycle predicate as the administrator dashboard, which now shares that predicate. Fixes #562.
+2. Compatibility and limits: the response shape for each role is unchanged, with no schema or authorization change. This reduces database work for non-administrator dashboards. This source update does not publish a Docker image.
+
 ## 1.59.31 — 2026-11-11
 
 1. [PR #559](https://github.com/StealthCat/MrPatchy/pull/559): The server AI policy panel shows how many live AI investigation leases the server holds and the earliest lease expiry if no renewal arrives. It states that this snapshot does not guarantee global capacity, and that lowering the concurrency limit leaves active leases in place. The administrator server AI policy read and save responses add `active_lease_count` and `earliest_lease_expires_at`, counting only unexpired leases for that server. Fixes #558.
