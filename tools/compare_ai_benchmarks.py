@@ -57,6 +57,8 @@ def _summary(report, stage, queue_age):
     if not isinstance(value, dict):
         raise ComparisonError(f'stages.{stage} must be an object')
     count = _integer(value.get('count'), f'stages.{stage}.count')
+    if count == 0 and all(key in value and value[key] is None for key in ('p50_ms', 'p95_ms')):
+        return {'count': 0, 'p50_ms': None, 'p95_ms': None}
     # Observed queue age includes the seed and time spent in the fixture.
     max_ms = MAX_STAGE_MS + queue_age * 1000 if stage == 'queue_age' else MAX_STAGE_MS
     p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, max_ms)
@@ -314,7 +316,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
                 stage: {
                     'p50_ms': _delta(base['stages'][stage]['p50_ms'], current['stages'][stage]['p50_ms']),
                     'p95_ms': _delta(base['stages'][stage]['p95_ms'], current['stages'][stage]['p95_ms']),
-                }
+                } if base['stages'][stage]['count'] else {'p50_ms': None, 'p95_ms': None}
                 for stage in STAGES
             },
         },

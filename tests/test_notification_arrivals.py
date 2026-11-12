@@ -4,7 +4,7 @@ import threading
 import time
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app import notifications
 from app.db import Session
@@ -299,7 +299,8 @@ def test_cursor_beyond_retained_sequence_resets_to_baseline(admin):
     login(admin, 'reader')
     current = baseline(admin)
     body = admin.get(f'/api/notifications/arrivals?after={current + 1000}').json()
-    assert body == {'items': [], 'cursor': current, 'more': False, 'reset': True}
+    assert body == {'items': [], 'cursor': current, 'more': False, 'reset': True,
+                    'reset_reason': 'ahead'}
 
 
 @pytest.mark.parametrize('query', ['after=-1', 'after=x', 'limit=0', 'limit=101'])
@@ -317,3 +318,117 @@ def test_arrival_time_does_not_trust_producer_timestamp(admin):
         session.commit()
         row = session.scalar(select(notifications.NotificationArrival))
     assert abs(row.created - time.time()) < 60
+
+
+# Bounded arrival retention (#687).
+
+def publish_aged(subjects, created):
+    """Publish and sequence arrivals, then backdate their arrival time."""
+    with Session() as session:
+        for subject in subjects:
+            publish(session, subject)
+        session.commit()
+    notifications.sequence_arrivals()
+    with Session() as session:
+        session.execute(update(notifications.NotificationArrival)
+                        .where(notifications.NotificationArrival.seq.is_not(None),
+                               notifications.NotificationArrival.created > 10**9)
+                        .values(created=created)
+                        .execution_options(synchronize_session=False))
+        session.commit()
+
+
+def retained():
+    with Session() as session:
+        return session.scalars(select(notifications.NotificationArrival.seq)
+                               .order_by(notifications.NotificationArrival.id)).all()
+
+
+def head():
+    with Session() as session:
+        return session.scalar(select(notifications.NotificationArrivalHead.head))
+
+
+def test_prune_removes_old_prefix_and_keeps_head_and_live_cursors(admin):
+    add_user('reader', 'viewer')
+    publish_aged(['old-1', 'old-2', 'old-3'], created=100)
+    publish_aged(['new-1'], created=10_000)
+    login(admin, 'reader')
+    cursor = baseline(admin)
+    assert notifications.prune_arrivals(5000) == 3
+    assert retained() == [4]
+    assert head() == 4
+    # Pruning never moves the head back, so the live cursor stays valid.
+    assert baseline(admin) == cursor == 4
+    with Session() as session:
+        fresh = publish(session, 'fresh').id
+        session.commit()
+    body = admin.get(f'/api/notifications/arrivals?after={cursor}').json()
+    assert [item['id'] for item in body['items']] == [fresh]
+    assert body['reset'] is False and 'reset_reason' not in body
+
+
+def test_cursor_older_than_retained_prefix_discloses_pruned_reset(admin):
+    add_user('reader', 'viewer')
+    publish_aged(['old-1', 'old-2', 'old-3'], created=100)
+    publish_aged(['new-1', 'new-2'], created=10_000)
+    notifications.prune_arrivals(5000)
+    login(admin, 'reader')
+    stale = admin.get('/api/notifications/arrivals?after=1').json()
+    assert stale == {'items': [], 'cursor': 5, 'more': False, 'reset': True,
+                     'reset_reason': 'pruned'}
+    # A cursor immediately below the oldest retained arrival lost nothing.
+    exact = admin.get('/api/notifications/arrivals?after=3').json()
+    assert [item['arrival'] for item in exact['items']] == [4, 5]
+    assert exact['reset'] is False
+
+
+def test_fully_pruned_sequence_keeps_head_cursor_and_resets_older_ones(admin):
+    add_user('reader', 'viewer')
+    publish_aged(['old-1', 'old-2'], created=100)
+    assert notifications.prune_arrivals(5000) == 2
+    assert retained() == []
+    login(admin, 'reader')
+    assert baseline(admin) == 2
+    current = admin.get('/api/notifications/arrivals?after=2').json()
+    assert current == {'items': [], 'cursor': 2, 'more': False, 'reset': False}
+    older = admin.get('/api/notifications/arrivals?after=0').json()
+    assert older['reset'] is True and older['reset_reason'] == 'pruned'
+    assert older['cursor'] == 2
+
+
+def test_prune_stops_at_first_retained_row_despite_lagging_clock(admin):
+    publish_aged(['old-1'], created=100)
+    publish_aged(['new-1'], created=10_000)
+    publish_aged(['lagging-old'], created=100)  # numbered later, older clock
+    assert notifications.prune_arrivals(5000) == 1
+    assert retained() == [2, 3]
+
+
+def test_prune_never_removes_unsequenced_arrivals(admin):
+    publish_aged(['old-1'], created=100)
+    with Session() as session:
+        publish(session, 'pending')
+        session.commit()
+        session.execute(update(notifications.NotificationArrival)
+                        .where(notifications.NotificationArrival.seq.is_(None))
+                        .values(created=100)
+                        .execution_options(synchronize_session=False))
+        session.commit()
+    assert notifications.prune_arrivals(5000) == 1
+    assert retained() == [None]
+    assert notifications.sequence_arrivals() == 2
+    assert retained() == [2]
+
+
+def test_prune_runs_in_bounded_batches(admin):
+    publish_aged([f'old-{index}' for index in range(7)], created=100)
+    publish_aged(['new-1'], created=10_000)
+    assert notifications.prune_arrivals(5000, batch=2) == 7
+    assert retained() == [8]
+    with pytest.raises(ValueError):
+        notifications.prune_arrivals(5000, batch=0)
+
+
+def test_prune_without_head_is_a_no_op(admin):
+    assert notifications.prune_arrivals(time.time()) == 0

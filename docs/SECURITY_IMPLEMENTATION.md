@@ -2374,6 +2374,25 @@ logical work item's start. This removes one lock acquisition per start that does
 not use shared pacing. Production throughput and broader shared-controls
 acceptance remain open.
 
+Worker checkpoint #694 adds the first AI budget-blocker notification producer.
+In an enabled cap mode, `operations.collect_alerts()` publishes one admin-only
+`ai-budget`/`daily-cap` in-app notification when counted spend reaches the cap.
+Counted spend is the same conservative settled, reserved and uncertain total that
+admission uses. The notification states the cap, budget timezone and next reset,
+says deferred work is kept rather than discarded, and links to `#settings/ai`.
+- **Revision binding:** each revision is bound to the budget window and cap, so
+  further spend or reconciliation within one window creates no new revision.
+  Exhaustion in a later window resurfaces as unread.
+- **Resolution:** one `resolved` revision is published when the window resets,
+  the cap is raised, the mode becomes uncapped or AI is disabled.
+- **Unchanged:** the producer reads the ledger but never reserves, releases or
+  authorizes spend. It adds no SMTP/webhook alert. Pause, read, dismiss and
+  acknowledgement semantics are unchanged.
+- **Limitation:** near-exhaustion is not detected. When some headroom remains
+  but it is smaller than the next call's quote, admission defers that call
+  without a notification, because no call payload is available here. Other
+  blocker producers (missing key, unknown pricing, provider backoff) remain open.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
@@ -2418,6 +2437,16 @@ Other transport timeouts, interrupted workers and lost replies retain conservati
 charges when the provider outcome is unknown. The existing transient backoff still
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
+
+### Active admission control in the investigations queue notice — worker checkpoint #685
+
+The administrator's Investigations queue notice now names the admission control
+that actually gates new AI work, reusing the AI worker status card's wording:
+shared starts/hour (with the daily spend cap when combined), daily spend cap,
+unthrottled by Mr Patchy, or legacy attempts against the legacy hourly limit.
+Previously it always advertised the legacy investigation limit, which only
+applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
+and authorization behavior are unchanged. A browser regression covers every mode.
 
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
@@ -2569,6 +2598,37 @@ does not diagnose provider availability, reconcile uncertain charges, bypass pro
 limits or complete the broader shared-controls/faster-AI program. Exact-head
 SQLite/MySQL, browser, full-suite and coordinator integration checks remain required.
 
+Worker checkpoint (issue #696): the shared provider floor is now also an in-app
+notification producer, adding to the roadmap J "AI configuration/budget blockers"
+producers. Each alert-collection pass runs `ai_provider_backoff.publish_notification()`
+in its own transaction. It publishes one admin-only `ai-provider`/`provider-backoff`
+event linked to AI Settings in two cases:
+
+- **`high`:** the active floor came from a provider Retry-After over 24 hours that
+  was capped, which the reviewed Clear action exists for.
+- **`medium`:** at least five consecutive transient failures fell inside the
+  one-hour failure-reset window.
+
+A single short transient backoff stays silent. The payload is fixed text keyed only
+by that state, so further failures within one episode add no revision. Escalating
+from sustained to capped adds one revision. A later shorter transient failure
+never lowers the floor, so while the capped floor still dominates it keeps the
+capped reason (and the `high` event and AI Settings review cue) until it lifts or is
+cleared.
+
+The event gets one `resolved` revision in any of these cases: a successful provider
+response, an administrator Clear, the episode going idle past the reset window, or AI
+being disabled. A later episode reopens it as unread.
+
+The following are unchanged:
+
+- No provider text, timing or error body enters the notification.
+- No SMTP/webhook `Alert` is added.
+- Backoff timing, admission, Clear semantics, read/dismiss/acknowledgement and
+  response authorization stay as they were.
+
+Missing-key and unknown-pricing blocker producers remain open.
+
 
 ### Durable cross-server process-triage fairness — worker checkpoint #388
 
@@ -2682,6 +2742,59 @@ until the corresponding detection and response milestones are completed.
 - Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
 - Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
 
+### Applicability and exposure-window contract — worker checkpoint #672
+
+The first bounded increment adds the pure `app/cve_exposure.py` contract. It has
+no schema, route, UI, producer, AI or response changes, so runtime behavior is
+unchanged.
+
+- **Applicability:** `classify()` reads only the OSV entries for the endpoint's
+  exact ecosystem (for example `Debian:12`) and source package. It applies the
+  OSV ECOSYSTEM range algorithm (`introduced`/`fixed`/`last_affected`) and the
+  explicit `versions` lists through an injected comparator; production uses
+  native `dpkg --compare-versions`, so epochs, tildes and distribution backports
+  follow vendor ordering. Each result is `affected`, `fixed`, `unaffected` or
+  `uncertain`. An `affected` result names a fixed version only when the complete
+  matching vendor data classifies that version as `fixed` or `unaffected`, so a
+  fix that ends one range but sits inside an overlapping range, an explicit
+  affected version or an unevaluable sibling is never reported. The following
+  all yield `uncertain` rather than `unaffected`:
+  - another release's or upstream ecosystem's entry;
+  - GIT/SEMVER-only or `limit` ranges;
+  - malformed or oversized data, including non-string explicit versions;
+  - an unknown installed version;
+  - a comparator failure.
+
+  An affected range wins over an unevaluable sibling, but a `fixed` result is
+  only reported when every range was evaluated.
+- **Exposure window:** `exposure_window()` computes `not_applicable`, `open`,
+  `pending_activation` or `closed` from recorded applicability, fix-availability,
+  install, activation and reintroduction events. Exposure is returned as explicit
+  intervals, each keeping its own closure, and the duration is their sum, so a
+  verified-fixed period before a reopen is never counted.
+  - Exposure starts at the first applicability observation only when monitoring
+    covered the whole interval since publication without a gap
+    (`start_basis: first_observed`). Otherwise it conservatively starts at
+    publication (`start_basis: publication`) with a note.
+  - Only a verified installation closes it. A failed, partial or unverified
+    install does not.
+  - A required restart or reboot keeps it in `pending_activation` until a later
+    activation is recorded.
+  - Rollback or reintroduction reopens it, and the reopen is counted. Producers
+    should emit `reintroduced`, but a post-closure `applicable` event also
+    reopens the window, so a producer that only re-reports applicability cannot
+    hide renewed exposure.
+  - Late enrollment, missing monitoring and offline periods are clipped to the
+    exposed intervals and returned as explicit gaps; a gap inside a
+    verified-fixed period is not an exposure gap. Future-dated or malformed
+    timestamps are rejected.
+
+This does not complete requirement D. Advisory ingestion for every supported
+distribution, stored per-endpoint exposure records and producers, CVE-specific
+exploitation detectors, typed automatic containment, server/fleet views,
+notifications and real-target acceptance remain planned. A vulnerable version, an
+advisory match or AI output still authorizes no containment.
+
 
 ## Planned: known and unknown malware detection with automatic response
 
@@ -2712,6 +2825,79 @@ signature or an active CVE exposure window, and continue after patch installatio
 - Deliver maintained known-malware detection, cross-source AI triage, general automatic response and recovery/UI integration as tracked milestones. Update this checkpoint with implemented scope and remaining limitations after each milestone.
 - Validate known-malware fixtures, controlled unknown-behavior simulations and benign administrative lookalikes, false-positive restoration, AI outages/pause and prompt-injection attempts, evidence changes, process reuse, file replacement, concurrent/replayed detections and partial response failures. Include supported-platform real-target response drills; document measured detection limits without claiming universal detection or a clean endpoint.
 
+### In-app malware-detection notifications — worker checkpoint #700
+
+A scan finding that creates a security incident now publishes one durable,
+admin-only in-app notification. Signature scans, YARA scans and
+execution-triggered scoped scans all count. The notification has source
+`security-scan`, kind `malware-detection`, severity `high` and a deep link to the
+server's Security tab. The reason is fixed text: endpoint-supplied paths, rule
+names and engine output never reach the bell.
+
+How the notification follows the incident:
+
+- **Repeat detections.** Repeat detections of an open or acknowledged incident
+  add no revision.
+- **Recurrence.** A recurrence after `resolved` or `false_positive`, or an
+  administrator review back to `open`, adds an active, unread revision.
+- **Closing.** Closing the incident adds one `resolved` revision. Acknowledging
+  it changes nothing.
+- **Server deletion.** Deleting a server resolves its active detection
+  notifications. The incident record itself is retained.
+
+Incidents recorded before this change gain no retroactive events. The
+notification is advisory only: it does not acknowledge or transition incidents,
+and it does not approve, contain or remediate. SMTP and webhook delivery are
+unchanged. Known-versus-AI-discovered classification, automatic response and
+the remaining delivery and acceptance items above remain open.
+
+
+### Automatic-containment eligibility contract — worker checkpoint #682
+
+Status: **first bounded slice; requirement E remains planned/incomplete.**
+`app/malware_response.py` is a pure, deterministic contract with no I/O, provider call,
+storage or executor. Nothing calls it yet, so runtime behavior is unchanged.
+
+- `evaluate(policy, detection, now=, ai_available=)` classifies a detection as one of:
+  - `known_malware`: an authenticated, fresh ClamAV, YARA or hash-indicator match
+    bound to the exact artifact sha256;
+  - `evidence_supported_unknown_malware`: an AI `malicious` verdict at or above the
+    policy confidence. The verdict must be bound to the same server, evidence
+    revision and artifact sha256, with at least two (or the policy minimum)
+    distinct corroborating evidence kinds bound to that same server, revision and
+    artifact. Corroboration bound elsewhere is ignored and reported as a coverage gap;
+  - `suspected`, `unknown`, `unverified_signature` or `invalid`.
+
+  A bare model verdict never authorizes an action, and neither a known signature
+  nor a CVE is required.
+- File quarantine and process termination are decided independently.
+  - Quarantine requires a complete, hash-matched file identity (path, sha256,
+    device, inode) outside pseudo-filesystems and policy exclusions.
+  - Termination requires a hash-matched process identity (pid ≥ 2, start ticks,
+    PID namespace, boot ID, executable sha256 and verified executable path).
+    Policy path exclusions are checked against the executable path and any file
+    identity, so a process-only detection cannot bypass an exclusion.
+  - Known-signature detections need no extra corroboration: the authenticated,
+    fresh, artifact-hash-bound signature is the corroborating deterministic
+    evidence. Only AI-discovered classifications need corroborating observations.
+  - Each action states what it does not achieve.
+- `disabled` mode authorizes nothing, and `monitor_only` reports the would-be
+  actions without authorizing them. `enforce` authorizes only actions in that
+  class's policy scope, and unknown-malware response also needs explicit
+  `allow_unknown`.
+- Malformed or injection-shaped policies and detections fail closed. AI pause is
+  reported as a coverage gap while the deterministic known path continues.
+- `binding_digest` supports duplicate suppression. `still_bound` rejects PID reuse,
+  reboot and file replacement immediately before execution.
+
+Remaining for requirement E:
+- maintained signature and indicator ingestion with freshness reporting;
+- correlated behavioral collectors and structured AI triage;
+- persisted, audited per-server and group policies with an administrator UI;
+- typed executors that reuse the quarantine and process-response pipelines,
+  sharing the CVE containment work in requirement D;
+- alerts and incidents, false-positive recovery, and real-target and
+  benign-lookalike acceptance drills.
 
 ## Planned: comprehensive startup and scheduled-task awareness
 
@@ -2771,6 +2957,66 @@ not collect from targets, show anything in the UI, attest package defaults,
 classify entries or authorize any response. Agent collection, inventory/UI
 wiring, provenance, AI classification and native acceptance remain open, so
 roadmap F is still incomplete.
+
+Worker checkpoint (issue #702): a pure, I/O-free contract
+(`app/systemd_units.py`) resolves captured read-only observations of the system
+unit search directories into effective-unit records. It applies documented
+search-path precedence (control, transient, generator.early, `/etc`, `/run`,
+generator, `/usr/local/lib`, `/usr/lib`, `/lib`, generator.late) and retains
+shadowed fragments. It detects masking (a `/dev/null` link or an empty fragment)
+and applies unit, template, dash-prefix and type-level drop-ins in file-name order
+with same-name shadowing. Drop-ins are read for the canonical name and every
+effective alias, so canonical and alias records resolve the same configuration; an
+alias whose target is not the canonical name's winning fragment is a coverage gap.
+A drop-in directory naming an instance of an observed template resolves that
+instance even without an enablement link (on-demand activation needs none), and
+any drop-in that applies to no resolved unit is an `unattached_dropin` gap.
+List settings honour empty-assignment resets. It records
+enablement links separately from vendor static dependencies, plus aliases, linked
+units, timer/socket/path trigger targets and `+`/`!` privileged Exec prefixes. Every
+unit carries an origin class (vendor location, overridden, custom, runtime,
+generated or transient), and `package_verified` is always false. Uncollected search
+directories, unreadable, oversized or malformed input, invalid names, unresolved,
+dangling or foreign links, missing trigger targets and over-cap input all become
+explicit coverage gaps. The result carries a deterministic digest. Runtime unit
+state, per-user units, specifier expansion, read-only collection wiring, package
+provenance, UI and AI classification remain open, so roadmap F is not complete.
+
+
+### Individual cron jobs from crontab files — worker checkpoint #664
+
+Discovery increment only; the startup-awareness requirement remains incomplete.
+The target agent now parses individual jobs from the crontab-format files that are
+already in the built-in startup scope: `/etc/crontab`, `/etc/cron.d/*`,
+`/var/spool/cron/crontabs/*` and `/var/spool/cron/*`. It parses the same bytes it
+hashes, and it never executes or sources anything.
+
+**Reported per job**
+- source line number and schedule (five fields or a recognised `@special`)
+- execution account: the sixth field for system crontabs, or the spool file name for user crontabs
+- effective command line, with credentials redacted (password/token/secret/key/auth-style arguments, URL userinfo, bearer tokens and MySQL `-p` passwords) and truncated to 512 characters
+
+**Counted only**
+- Environment assignments are counted, and their values are never exported.
+- Malformed lines are counted, not guessed.
+- Lines end only at `\n` and fields split only on spaces and tabs, as cron does. Other control characters are shown escaped (for example `\x0b`), so the displayed command is the text cron passes to the shell. A line containing NUL is counted as unparsed, so it can never make the controller reject the whole inspection receipt.
+- Text after the first unescaped `%` is the job's standard input. It is not stored; the job is only flagged.
+- Redaction is best-effort and pattern-based. It covers key/flag credential forms, URL userinfo, query keys, `Bearer` tokens, `-u`/`--user user:pass`, `-U user\%pass`, `sshpass -p` and MySQL/MariaDB `-p<pass>`. Unusual positional credentials can remain.
+- Job detail is reported only when the controller asks for it (`cron_jobs: true`). Older controllers never ask, so their receipts and incident evidence stay metadata-only after an agent upgrade.
+
+**Limits**
+- At most 64 jobs per file and 256 per inventory.
+- When a limit is reached, the file is flagged as truncated rather than being marked as an incomplete inventory.
+
+**Controller and view**
+- The controller strictly validates the optional `cron` detail. Older agent receipts remain valid.
+- Inventory comparisons and startup-incident evidence strip the detail, so they remain metadata-only. An agent upgrade does not create a spurious change.
+- AI startup-plan payloads are unchanged.
+- The administrator-only **Startup files** view shows a jobs table per file and a parsed/unparsed summary on **Coverage**. It can search by account and redacted command. It identifies crontab files whose agent did not report jobs.
+
+**Not covered:** `run-parts` directories (`cron.daily` and similar), anacron, at queues, referenced-script inspection, cron.d naming rules, PATH/SHELL effects, daemon state, systemd units/timers, package-default provenance and AI classification.
+
+Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
 
 
 ## v0.3.0 — opt-in cross-source advisory AI evidence
@@ -2888,6 +3134,22 @@ and the shared-local-volume deployment are prerequisites. Deliver deployment
 separation and supported remote-worker setup as one coherent feature, with
 incremental milestones where needed.
 
+### Fixed role Compose files — worker checkpoint #676
+
+`compose.controller.yaml` (app and Caddy, extending the `compose.yaml` services) and
+`compose.worker.yaml` (workers only) now exist next to the unchanged complete
+`compose.yaml`. The worker file has no local app dependency, web/TLS mount, port or
+fixed container name. It uses the controller project's existing data volume through
+the required, external `MRPATCHY_CONTROLLER_DATA_VOLUME`, and keeps fail-closed
+controller-state preflight. It supports replicas on the controller's Docker host.
+`tests/test_compose_roles.py` keeps the worker definition in sync with `compose.yaml`
+and compares the rendered hardening, environment, networks and volumes through
+`docker compose config`. CI renders both files.
+
+Still open for this requirement: remote-machine provisioning of keys, SSH identities,
+artifacts and locking state; installer modes; split files combined with the GCP
+override; and multi-host MySQL, drain, failure and recovery acceptance.
+
 ### Deployment files and runtime roles
 
 | File | Supported deployment |
@@ -2941,6 +3203,21 @@ separation feature with a unified operational view of the Mr Patchy installation
 - Isolate Google Cloud CLI dependencies and cloud credential/configuration state in the integration runtime, with explicit least-privilege IAM/federation setup, persistent-state handling and rotation/backup documentation. Use fixed supported operations rather than caller/model-provided arbitrary cloud or shell commands. Return actionable redacted auth, permission, API and tunnel failures without exposing credentials.
 - Update GCP installation/upgrade tooling and documentation for the dedicated node, including migration from the existing GCP-ready app/worker image arrangement, clear connectivity tests and supported version combinations. Preserve existing GCP connection functionality during migration.
 - Validate controller and remote-worker routing, credential expiry/missing permissions, node outage/restart, tunnel interruption, duplicate requests and honest incomplete/recovery outcomes. Include non-production live-GCP acceptance; successful container startup alone does not complete the integration.
+
+Implementation checkpoint (issue #680): each controller web process now registers
+a bounded self-report (`app/controller_registry.py`): identity
+(`MRPATCHY_CONTROLLER_ID` or a random ID, guarded by the existing identity lock),
+boot, version, reported deployment type, embedded/disabled scheduler, start time,
+uptime and a heartbeat refreshed every 15 seconds from a daemon thread. A graceful
+stop is retained and both registration and stop are audited. The admin-only
+`GET /api/operations/controllers` page and the Activity → Workers **Controllers**
+section classify each record as reporting, stale, stopped, version mismatch or
+unknown. Future, invalid or key-mismatched records are never shown as healthy.
+Optional `MRPATCHY_EXPECTED_CONTROLLER_IDS` lists controllers that never
+registered as missing. The display carries no readiness, serving-role, failover
+or response authority, which remains with #451. Still planned for this
+requirement: endpoint-agent and GCP-node inventory, readiness and HTTPS/Caddy
+checks, resource metrics, alerts and the unified dashboard acceptance.
 
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
@@ -3174,6 +3451,140 @@ cross-tab toast deduplication (each open tab shows its own toast), producer and
 retention coverage, and the milestone 2 and 4 transport and end-to-end acceptance
 listed above.
 
+Worker checkpoint (issue #687): a bounded milestone-2 increment retains arrival
+records for the existing `history_days` setting. The leader's hourly cleanup calls
+`prune_arrivals`, which deletes only the oldest contiguous prefix of sequenced
+arrivals older than the cutoff. It works in short batches of at most 5,000 rows,
+each committed separately. Two rules keep the sequence safe:
+
+- Pruning stops at the first arrival still inside the retention window. A later
+  arrival with a lagging controller clock therefore never leaves a hole below
+  newer retained rows.
+- Unsequenced rows are never removed.
+
+The cursor head now comes from the durable `notification_arrival_head` row rather
+than `max(seq)`, so pruning never moves it back or resets a current cursor. A
+cursor older than the oldest retained arrival receives a fresh baseline with
+`reset: true` and `reset_reason: "pruned"`, rather than silently skipping pruned
+revisions. A cursor beyond the head reports `reset_reason: "ahead"`. On either
+reset the client resynchronizes from the authoritative list and count APIs.
+
+Notification events, revisions, per-user state, list/count/SSE APIs,
+acknowledgement and response authorization are unchanged. Retention of events and
+revisions, client gap disclosure in the toast UI, and multi-controller acceptance
+remain open.
+
+Worker checkpoint (issue #689): a bounded milestone-1 producer increment publishes
+human-attention server alerts as in-app notifications. `operations.collect_alerts()`
+publishes these allowlisted kinds in the same transaction as the `Alert` outbox:
+
+- recovery-required operations;
+- file, process, publication and service response holds;
+- disabled-server recovery holds;
+- failed or blocked scheduled patching;
+- response integrity and verification;
+- service health and coverage;
+- execution-scan coverage;
+- agent health;
+- startup-baseline drift.
+
+Each event uses source `operations`, a stable kind, the server as its subject, an
+explicit severity, the same count/ID-based message and an administrator-only
+recipient, which matches the existing admin-only alert API. Its deep link goes to the
+relevant server tab; startup-baseline drift opens File integrity, where the reviewed
+baseline panel lives.
+
+- **Deduplication:** an unchanged condition adds no revision. A changed message
+  appends one revision, which resurfaces as unread. Known limit: messages that embed a
+  live count (for example overdue service or response checks) resurface whenever the
+  count changes, even if the underlying condition persists.
+- **Resolution:** when the condition clears, or the server is disabled or deleted, a
+  `resolved` revision is published. A recurrence reopens the event.
+- **Kept out of in-app delivery:** routine or raw-endpoint-text kinds (`stale`,
+  `integrity`, `repository`, `overdue` and `server disabled`). They stay on
+  SMTP/webhook.
+- **Fail-safe:** a rejected notification payload is logged and skipped, and never
+  blocks alert collection.
+- **Unchanged:** alert acknowledgement, SMTP/webhook delivery, read/dismiss state and
+  response authorization.
+
+Milestone 1 still needs significant triage, malware, CVE and startup-classification
+producers, and AI configuration/budget blockers beyond the pricing catalog.
+
+Worker checkpoint (issue #704): a milestone-1 producer for startup-change
+(persistence) incidents. In the same transaction as the incident change,
+`persistence.notify()` publishes one admin-only event per incident (source
+`file-integrity`, kind `startup-change`, subject `startup-incident`), deep-linked
+to the server's File integrity tab:
+
+- A newly recorded startup-change incident publishes a `medium`, active revision.
+- Repeat detections of an open or acknowledged incident publish nothing.
+- A repeat detection of a resolved or false-positive incident publishes a
+  reopened revision, so it is unread again.
+- Administrator review that closes an incident publishes an `info`, resolved
+  revision. Review from a closed state to open or acknowledged publishes an
+  active revision. Acknowledgement and moves between closed states publish
+  nothing. Closing a legacy incident that never published adds nothing.
+- Deleting a server resolves its still-active startup-change notifications.
+
+Reasons are fixed text and state that a change is not a malware verdict.
+Endpoint-supplied paths, hashes and link targets never reach the payload. The
+producer needs incident recording to be enabled. It makes no AI calls, so it keeps
+working while AI is paused or disabled. It never acknowledges or transitions
+incidents, approves plans, changes baselines or remediates. Rolled-back
+detections announce nothing. No schema, UI or SMTP/webhook change. Classifying
+startup entries as suspicious (roadmap F) remains separate; this producer
+notifies baseline drift only.
+
+
+Worker checkpoint (issue #691): a bounded milestone-1 producer increment publishes
+significant AI process-triage verdicts to the notification center. The publish
+happens in the same transaction that saves the verdict, so a rolled-back save
+never announces anything.
+
+The significance policy is explicit and advisory:
+
+- A `medium` or `high` provider verdict publishes source `ai-triage`, kind
+  `process-verdict` for that exact behavior and server, with the matching
+  severity, viewer visibility (the same as the Investigations list) and a link to
+  the server's Investigations tab.
+- An unchanged risk adds no revision. A changed risk adds one, so escalations
+  resurface as unread.
+- A later `low` verdict, including an exact known-good cache reuse, resolves an
+  active event and otherwise publishes nothing, so safe cache hits cause no
+  storm. A later significant verdict reopens the event.
+- `unknown` leaves the event unchanged.
+
+Payloads carry fixed text only. Executable paths and model output stay on the
+escaped Investigations page. Read/dismiss, approval semantics, acknowledgement and
+response authorization are unchanged. An administrator approval resolves an active
+event in the approval's own transaction, and revoking it while the verdict is still
+medium/high re-publishes the event as active; the notification never grants or
+withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
+
+Worker checkpoint (issue #698): a bounded milestone-1 producer covers expected-worker
+health. When `MRPATCHY_EXPECTED_WORKER_IDS` is configured, the elected coordinator's
+30-second tick publishes one admin-only `deployment`/`worker-health` event per
+expected worker that is `missing`, `stale` or `stopped` (high) or `unknown` or
+`version_mismatch` (medium). Each event links to Activity → Workers. The text is
+fixed and contains only the validated worker ID and state.
+
+- An unchanged state adds no revision. A state change adds a new unread revision.
+- Returning to `reporting`, or an intentional `draining`/`drained`, resolves the
+  event. Removing the ID from the configuration also resolves it.
+- An invalid configuration publishes one separate controller-wide medium event
+  and leaves the earlier worker events unchanged, because removal cannot be proven.
+- A startup grace of one freshness window suppresses new attention while
+  co-started workers register. Resolutions still apply during the grace.
+- The producer runs in its own transaction after `collect_alerts()`. A failure is
+  logged and does not stop the tick.
+
+There are no SMTP/webhook, schema, API or UI changes. The event never drains,
+recovers or authorizes anything.
+
+Known limit: if no worker runs, no coordinator publishes, so the Workers page
+remains authoritative. Controller web instances, endpoint agents and GCP nodes are
+not covered by this producer.
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -6870,6 +7281,17 @@ response authorization are unchanged. Full SQLite/MySQL race/failover acceptance
 the broader faster-AI roadmap remain incomplete.
 
 
+### Configurable AI benchmark follow-up load — worker checkpoint #674
+
+The disposable serial/parallel benchmark accepts `--follow-up-runs` from zero
+through `--runs`. Omitting it keeps the alternating workload. Use the same
+count on both sides of a comparison to vary follow-up evidence load while
+preserving the request fingerprint. A stage with no observations reports null
+percentiles and comparison deltas. These synthetic fixtures exercise measured
+workload equivalence. Production latency and full faster-triage acceptance
+remain open.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
@@ -6961,6 +7383,17 @@ capacity may still delay dispatch.
 This is an additive administrator API change with no schema/configuration
 migration, provider call, scheduling change, UI change or response-authorization
 change. Matched production throughput and the broader dashboard remain open.
+
+The administrator AI worker status card on Investigations now renders these
+fields (#678). It shows the eligible-unclaimed count beside the existing queue
+facts, with malformed or missing values shown as Unavailable. When a timestamp
+exists, it shows when the oldest qualifying observation was first seen and its
+approximate age. The text says this is observation age, not time since the
+observation became eligible, and that shared admission and worker capacity may
+still delay dispatch. This is a presentation-only change: there is no API,
+schema, scheduling, provider-call or response-authorization change. Settings and
+worker-health placement, matched throughput and broader dashboard acceptance
+remain open.
 
 ### Authoritative shared AI control snapshot — worker checkpoint #546
 

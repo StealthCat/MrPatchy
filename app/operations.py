@@ -2,11 +2,12 @@
 import datetime
 import hashlib
 import json
+import logging
 import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_pricing,host_lifecycle,notifications
+from . import ai_budget,ai_pricing,host_lifecycle,notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -150,9 +151,65 @@ def _pricing_catalog_alert(s,cfg,record,now):
             severity='info',reason='The AI public-price catalog no longer needs administrator attention.',
             deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
 
+# Human-attention server alerts mirrored into in-app notifications:
+# alert kind -> (notification kind, severity, server tab for the deep link).
+# Messages for these kinds are composed from counts, states and record IDs only.
+# Routine or raw-endpoint-text kinds (stale, integrity, repository, overdue,
+# server disabled) stay SMTP/webhook-only so endpoint text and polling noise
+# never reach the bell.
+OPERATIONAL_NOTIFICATIONS={
+    'recovery':('recovery-required','high','history'),
+    'disabled server recovery':('disabled-server-recovery','high','security'),
+    'file response hold':('file-response-hold','high','security'),
+    'process response hold':('process-response-hold','high','security'),
+    'publication hold':('publication-hold','high','security'),
+    'service hold':('service-hold','high','security'),
+    'response integrity':('response-integrity','high','security'),
+    'response verification':('response-verification','medium','security'),
+    'service health':('service-health','medium','security'),
+    'service coverage':('service-coverage','medium','security'),
+    'execution scan coverage':('execution-scan-coverage','medium','security'),
+    'scheduled patching':('scheduled-patching','medium','patching'),
+    'agent health':('agent-health','medium','agent'),
+    'startup baseline':('startup-baseline','medium','integrity'),
+}
+OPERATIONAL_NOTIFICATION_SOURCE='operations'
+OPERATIONAL_NOTIFICATION_SUBJECT='server'
+
+def _operational_notification(s,host_id,kind,message,now):
+    """Publish one allowlisted server alert as a durable active notification."""
+    notification_kind,severity,tab=OPERATIONAL_NOTIFICATIONS[kind]
+    notifications.publish(s,source=OPERATIONAL_NOTIFICATION_SOURCE,kind=notification_kind,
+        subject_type=OPERATIONAL_NOTIFICATION_SUBJECT,subject_id=host_id,host_id=host_id,
+        subject_revision='message-sha256:'+hashlib.sha256(message.encode()).hexdigest(),
+        severity=severity,reason=message[:2000],deep_link='#servers/'+host_id+'/'+tab,
+        minimum_role='admin',now=now)
+
+def _resolve_operational_notifications(s,published,now):
+    """Resolve active operations notifications whose alert condition cleared."""
+    current=s.execute(select(notifications.NotificationEvent.id,notifications.NotificationEvent.kind,
+        notifications.NotificationEvent.host_id)
+        .join(notifications.NotificationRevision,(notifications.NotificationRevision.event_id==notifications.NotificationEvent.id)
+              &(notifications.NotificationRevision.revision==notifications.NotificationEvent.revision))
+        .where(notifications.NotificationEvent.source==OPERATIONAL_NOTIFICATION_SOURCE,
+               notifications.NotificationEvent.subject_type==OPERATIONAL_NOTIFICATION_SUBJECT,
+               notifications.NotificationRevision.lifecycle=='active')).all()
+    tabs={notification_kind:tab for notification_kind,_,tab in OPERATIONAL_NOTIFICATIONS.values()}
+    for _,notification_kind,host_id in current:
+        if (host_id,notification_kind) in published or notification_kind not in tabs:continue
+        notifications.publish(s,source=OPERATIONAL_NOTIFICATION_SOURCE,kind=notification_kind,
+            subject_type=OPERATIONAL_NOTIFICATION_SUBJECT,subject_id=host_id,host_id=host_id,
+            subject_revision='resolved',severity='info',
+            reason='This server condition no longer needs administrator attention.',
+            deep_link='#servers/'+host_id+'/'+tabs[notification_kind],
+            minimum_role='admin',lifecycle='resolved',now=now)
+
 def collect_alerts(now=None):
     with Session() as s:
-        now=time.time() if now is None else now;cfg=config(s);active=set()
+        now=time.time() if now is None else now;cfg=config(s);active=set();published=set()
+        # One fleet read fills the identity map, so per-alert publish lookups issue no queries.
+        _operational_events=s.scalars(select(notifications.NotificationEvent).where(
+            notifications.NotificationEvent.source==OPERATIONAL_NOTIFICATION_SOURCE)).all()
         def record(host,kind,message,reopen_on_change=False):
             host_id=host if isinstance(host,str) else host.id
             key=hashlib.sha256((host_id+kind).encode()).hexdigest();active.add(key)
@@ -163,7 +220,14 @@ def collect_alerts(now=None):
                 alert.message=message
                 if alert.state=='resolved' or (reopen_on_change and changed):
                     alert.state='open';alert.notified=0;alert.attempts=0;alert.attempted=0;alert.created=now
+            if kind in OPERATIONAL_NOTIFICATIONS and not isinstance(host,str):
+                published.add((host_id,OPERATIONAL_NOTIFICATIONS[kind][0]))
+                # publish() validates before adding rows, so a rejected payload
+                # leaves the session untouched and never blocks SMTP/webhook alerts.
+                try:_operational_notification(s,host_id,kind,message,now)
+                except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
         _pricing_catalog_alert(s,cfg,record,now)
+        ai_budget.publish_cap_notification(s,cfg,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine
@@ -237,8 +301,12 @@ def collect_alerts(now=None):
             if host.id in overdue_hosts:
                 count=sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in s.scalars(select(Package).where(Package.host_id==host.id,Package.candidate!='')))
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
+        # In-app only: the shared provider floor never had an SMTP/webhook alert.
+        from . import ai_provider_backoff
+        ai_provider_backoff.publish_notification(s,cfg,now)
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
+        _resolve_operational_notifications(s,published,now)
         s.commit()
 
 def delivery_error(error):

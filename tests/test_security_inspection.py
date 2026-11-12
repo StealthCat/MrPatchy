@@ -94,7 +94,7 @@ def test_inspection_api_worker_history_scope_permissions(admin,monkeypatch):
     assert admin.post(path,json={'packages':[]}).status_code==409
     receipt={'version':1,'trust_basis':'target_local_package_database','state':'collected','packages':[],'persistence':None}
     def call(host,request,**kwargs):
-        assert request=={'action':'security-inspect','packages':['base-files'],'persistence':False}
+        assert request=={'action':'security-inspect','packages':['base-files'],'persistence':False,'cron_jobs':True}
         return receipt
     monkeypatch.setattr(worker.ssh,'call',call)
     job_id=queued.json()['job_id'];worker.execute(job_id)

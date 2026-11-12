@@ -22,7 +22,7 @@ POOL_CAPACITY={'jobs':2,'polls':8,'ai':4}
 CONTROL_PREFIX='worker-control:'
 GAPS=[
     'Self-reported scheduler-loop liveness; storage, secrets, target access and operational readiness are not independently assessed.',
-    'Expected worker identities come from controller configuration; unconfigured nodes, controllers, endpoint agents and GCP integration nodes are not inventoried here.',
+    'Expected worker identities come from controller configuration; unconfigured nodes, endpoint agents and GCP integration nodes are not inventoried here. Controller web instances are listed separately below.',
     'Drain is boot-specific and cooperative: assigned work finishes; it does not stop a process or certify safe maintenance. Remote shared state and cross-host maintenance acceptance remain planned.',
 ]
 
@@ -193,3 +193,77 @@ def expected_workers(now):
             else:state,reason,age='missing','No matching registration is available. The process may be absent, misconfigured or unable to reach this database; inspect the deployment.',None
             items.append({'id':identity,'registered':registered,'state':state,'reason':reason,'age_seconds':max(0,age) if age is not None else None,'readiness':'not_assessed'})
     return items,None
+
+
+# Expected-worker attention notifications (roadmap H/J). Admin-only, advisory text;
+# delivery/read state never drains, recovers or authorizes anything.
+NOTIFY_SOURCE='deployment'
+NOTIFY_KIND='worker-health'
+NOTIFY_CONFIG_KIND='worker-expectation'
+NOTIFY_LINK='#activity/workers'
+NOTIFY_SEVERITY={'missing':'high','stale':'high','stopped':'high','unknown':'medium','version_mismatch':'medium'}
+NOTIFY_TEXT={
+    'missing':'has no matching registration. The process may be absent, misconfigured or unable to reach the database.',
+    'stale':'stopped sending heartbeats. Its liveness and in-flight outcomes are unknown; review operations before recovery.',
+    'stopped':'reported a graceful stop and is not running scheduled work.',
+    'unknown':'has a missing, invalid, future-dated or unrecognized report. Check clocks and runtime logs.',
+    'version_mismatch':'reports a different version from the controller; compatibility is not certified.',
+}
+PROCESS_STARTED=time.time()
+
+
+def _active_worker_events(s):
+    # Filter on the current revision's lifecycle so retained resolved history never crowds out active events.
+    from . import notifications
+    Event,Revision=notifications.NotificationEvent,notifications.NotificationRevision
+    rows=s.execute(select(Event.kind,Event.subject_id).join(Revision,(Revision.event_id==Event.id)&(Revision.revision==Event.revision)).where(
+        Event.source==NOTIFY_SOURCE,Event.kind.in_((NOTIFY_KIND,NOTIFY_CONFIG_KIND)),Revision.lifecycle=='active').limit(500))
+    return {(kind,subject) for kind,subject in rows}
+
+
+def publish_notifications(now=None,started=None):
+    """Publish/resolve in-app events for configured expected workers.
+
+    Runs from the elected coordinator's tick in its own transaction. A startup
+    grace of one freshness window suppresses new attention while co-started
+    workers register; resolutions always apply. Returns published revisions.
+    """
+    from . import notifications
+    now=time.time() if now is None else now
+    started=PROCESS_STARTED if started is None else started
+    grace=now-started<FRESH_SECONDS
+    expected,error=expected_workers(now)
+    published=0
+    with Session() as s:
+        active=_active_worker_events(s)
+        def emit(kind,subject_type,subject_id,revision,severity,reason,lifecycle='active'):
+            nonlocal published
+            _,created=notifications.publish(s,source=NOTIFY_SOURCE,kind=kind,subject_type=subject_type,subject_id=subject_id,
+                subject_revision=revision,severity=severity,reason=reason,deep_link=NOTIFY_LINK,minimum_role='admin',lifecycle=lifecycle,now=now)
+            published+=created
+        config=(NOTIFY_CONFIG_KIND,'MRPATCHY_EXPECTED_WORKER_IDS')
+        if error:
+            if not grace or config in active:
+                emit(NOTIFY_CONFIG_KIND,'deployment-config',config[1],'invalid','medium',
+                     'The expected-worker configuration (MRPATCHY_EXPECTED_WORKER_IDS) is invalid, so expected workers cannot be checked. Correct it in the controller deployment.')
+        else:
+            if config in active:
+                emit(NOTIFY_CONFIG_KIND,'deployment-config',config[1],'resolved','info',
+                     'The expected-worker configuration is valid or cleared.',lifecycle='resolved')
+            seen=set()
+            for item in expected:
+                identity=item['id'];state=item['state'];seen.add(identity)
+                key=(NOTIFY_KIND,identity)
+                if state in NOTIFY_SEVERITY:
+                    if grace and key not in active:continue
+                    emit(NOTIFY_KIND,'worker',identity,state,NOTIFY_SEVERITY[state],'Expected worker '+identity+' '+NOTIFY_TEXT[state])
+                elif key in active:
+                    emit(NOTIFY_KIND,'worker',identity,'resolved:'+state,'info',
+                         'Expected worker '+identity+' is now '+state.replace('_',' ')+'; it no longer needs attention.',lifecycle='resolved')
+            # An invalid configuration leaves earlier events untouched: removal is unknown.
+            for kind,identity in active:
+                if kind==NOTIFY_KIND and identity not in seen:
+                    emit(NOTIFY_KIND,'worker',identity,'resolved:not-expected','info',
+                         'Worker '+identity+' is no longer in the expected-worker configuration.',lifecycle='resolved')
+        s.commit()
+    return published
