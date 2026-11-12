@@ -2392,6 +2392,13 @@ still reads current settings after the queue lock, and the provider reservation
 remains authoritative. This reduces repeated settings reads. Production
 throughput remains unverified.
 
+The server activity guard reads lifecycle state and revision in bounded batches
+after acquiring its existing ordered locks. Multi-server update scoring can
+check the batch in one database read without loading server inventory or
+telemetry. The guard still refuses disabled and deleted servers and omits
+revisions for unpersisted bootstrap hosts. This reduces admission I/O. Native
+parallelism and measured production throughput remain separate acceptance work.
+
 1. **Baseline, transport and known-good reuse:** record queue/admission/provider/SSH/persistence stage timing, p50/p95 end-to-end latency, throughput, calls/tokens/cost, errors and backlog age for representative one/two-stage workloads; add safe client pooling, evidence deduplication and the fleet-wide exact-match known-good cache with explicit re-triage, without changing the capability contract.
 2. **Threaded execution:** deliver configurable concurrent tasks, atomic claims/leases, context/session isolation, fair scheduling, pause-safe same-host/cross-host admission, drain and recovery. Compare serial and parallel execution on identical delayed I/O fixtures: four eligible independent investigations must actually overlap and complete materially faster than their serial sum without lost work or reduced checks. Report measured production limits separately.
 3. **Shared controls and UI:** deliver pacing, daily cap and unthrottled settings, conservative migration, complete billable-path coverage, reservations/reconciliation and clear queue/spend diagnostics. Document operator tuning and upgrade behavior; changing a label or merely raising existing limits does not complete this milestone.
@@ -6572,6 +6579,15 @@ catalog lifecycle and complete multi-controller failover/reset acceptance remain
 planned. Coordinator integration, exact-head SQLite/MySQL/browser/full-suite checks
 and fresh code scanning are still required before delivery.
 
+### Bounded investigation status for read-only roles
+
+Viewer and operator investigation status reads only the global AI flag,
+pending behavior count and oldest pending observation. It shares the
+administrator pending predicate, including approval and host lifecycle checks.
+The non-admin route skips administrator retry, worker, lease, spend and
+planning aggregates. The API shape is unchanged. This reduces dashboard read
+work without changing investigation scheduling or broader faster-AI acceptance.
+
 ### AI pricing catalog lifecycle alerts — worker checkpoint #370
 
 This bounded faster-AI increment warns administrators through the existing durable
@@ -6923,3 +6939,17 @@ also still required before delivery.
 ### Mark shown notifications read — worker checkpoint #715
 
 The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
+
+### Batched outbound AI pause-policy reads — worker checkpoint #573
+
+The existing outbound provider guard reads scoped server pause settings in
+batches of at most 200 distinct keys and checks global AI enablement once.
+A five-server scoring-sized scope uses two SELECTs in the disposable SQLite
+regression, compared with 12 on the previous path. Missing policy rows retain
+the default, any paused or malformed row blocks before global enablement is
+checked, and an empty scope keeps the provider setup path available.
+
+Provider locks, lease ownership checks, shared admission, budget accounting,
+and response authorization continue to apply. This is an admission database
+read improvement. Native integration and end-to-end performance acceptance
+for the faster-AI program remain open.

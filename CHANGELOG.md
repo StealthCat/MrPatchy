@@ -1,3 +1,18 @@
+## 1.59.34 — 2026-11-11
+
+1. [PR #574](https://github.com/StealthCat/MrPatchy/pull/574): Scoped outbound AI provider calls read server pause policies in bounded batches. Five scoring-sized server IDs, including one without a policy row, now use one policy SELECT, at most 200 servers per query, plus one global enablement lookup, instead of a full status read per server. Pause still takes precedence over global disablement. A corrupt stored policy is treated as paused, failing closed, and an empty scope skips the checks as before. Fixes #573.
+2. Compatibility and limits: a read-path optimisation with no schema, API or authorization change. Scoped provider and lease locks are unchanged. This source update does not publish a Docker image.
+
+## 1.59.33 — 2026-11-11
+
+1. [PR #571](https://github.com/StealthCat/MrPatchy/pull/571): The server activity guard reads lifecycle state in bounded batches. After acquiring the ordered per-server locks, it fetches only IDs, enabled flags, deletion timestamps and lifecycle revisions, in one query per 200 distinct servers, instead of loading each server row separately. A five-server scoring batch now uses one SELECT. Disabled and deleted servers are still refused with the acquired locks released, and absent bootstrap records still contribute no revision. Fixes #569.
+2. Compatibility and limits: a read-path optimisation with no schema, API, authorization or lifecycle-semantics change. On MySQL, a server ID not matched by the batched query falls back to an exact-equality lookup, which preserves collation behaviour. This source update does not publish a Docker image.
+
+## 1.59.32 — 2026-11-11
+
+1. [PR #563](https://github.com/StealthCat/MrPatchy/pull/563): Viewer and operator requests to `GET /api/investigation-status` no longer run the administrator-only status aggregates. They return the same three fields (`pending`, `oldest` and `enabled`) from one SQL aggregate. It uses the same approval and host-lifecycle predicate as the administrator dashboard, which now shares that predicate. Fixes #562.
+2. Compatibility and limits: the response shape for each role is unchanged, with no schema or authorization change. This reduces database work for non-administrator dashboards. This source update does not publish a Docker image.
+
 ## 1.59.31 — 2026-11-11
 
 1. [PR #559](https://github.com/StealthCat/MrPatchy/pull/559): The server AI policy panel shows how many live AI investigation leases the server holds and the earliest lease expiry if no renewal arrives. It states that this snapshot does not guarantee global capacity, and that lowering the concurrency limit leaves active leases in place. The administrator server AI policy read and save responses add `active_lease_count` and `earliest_lease_expires_at`, counting only unexpired leases for that server. Fixes #558.
