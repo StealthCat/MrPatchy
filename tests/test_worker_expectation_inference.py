@@ -84,6 +84,27 @@ def test_live_registration_cannot_be_removed(admin,state,version):
     with Session() as s:assert s.get(Setting,registry.record_key('live')) is not None
 
 
+@pytest.mark.parametrize('offset,state,version',[(60,'reporting',APP_VERSION),(0,'reporting','9.9'),(0,'paused',APP_VERSION)])
+def test_fresh_unknown_registration_is_not_removable(admin,offset,state,version):
+    # Review finding on #756: a heartbeating worker whose clock runs ahead, or whose report state/version is
+    # unrecognized, reports `unknown` but is live; removing it would drop its pending control record.
+    now=time.time()
+    report('live',now+offset,state=state,version=version)
+    with Session() as s:s.add(Setting(key=registry.control_key('live'),value={'boot_id':BOOT,'revision':1,'action':'drain','requested':now}));s.commit()
+    row=[row for row in admin.get('/api/operations/workers').json()['items'] if row['id']=='live'][0]
+    assert row['state']=='unknown' and row['removable'] is False
+    assert admin.post('/api/operations/workers/remove',json={'worker_id':'live','boot_id':BOOT}).status_code==409
+    with Session() as s:
+        assert s.get(Setting,registry.record_key('live')) is not None and s.get(Setting,registry.control_key('live')) is not None
+
+
+def test_unknown_registration_without_heartbeat_is_removable(admin):
+    with Session() as s:s.add(Setting(key=registry.record_key('nobeat'),value={'id':'nobeat','boot_id':BOOT}));s.commit()
+    row=[row for row in admin.get('/api/operations/workers').json()['items'] if row['id']=='nobeat'][0]
+    assert row['state']=='unknown' and row['removable'] is True
+    assert admin.post('/api/operations/workers/remove',json={'worker_id':'nobeat','boot_id':BOOT}).status_code==200
+
+
 def test_remove_requires_matching_boot_and_existing_registration(admin):
     report('old',time.time()-600)
     assert admin.post('/api/operations/workers/remove',json={'worker_id':'old','boot_id':'b'*32}).status_code==409

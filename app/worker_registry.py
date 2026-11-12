@@ -170,7 +170,7 @@ def page(offset=0,now=None):
             item['controller_state']=data.get('controller_state') if data.get('controller_state') in ('verified','not_checked') else 'unknown'
             item['control']=control
             item['controllable']=state in ('reporting','draining','drained') and bool(re.fullmatch(r'[0-9a-f]{32}',str(data.get('boot_id','')))) and row.key==record_key(item['id']) and control['revision'] is not None
-            item['removable']=removable(row,data,state)
+            item['removable']=removable(row,data,state,age)
             item.update(state=state,reason=reason,age_seconds=max(0,age) if age is not None else None,readiness='not_assessed')
             items.append(item)
     expected,error=expected_workers(now)
@@ -180,7 +180,6 @@ def page(offset=0,now=None):
 
 
 INFERRED_LIMIT=500
-LIVE_STATES=('reporting','draining','drained','version_mismatch')
 BOOT_PATTERN=r'([0-9a-f]{32})?'
 
 
@@ -188,10 +187,16 @@ def configured():
     return bool(os.getenv('MRPATCHY_EXPECTED_WORKER_IDS','').strip())
 
 
-def removable(row,data,state):
+def obsolete(state,age):
+    # Removability is positive: only stale or stopped registrations, or unknown ones with no usable heartbeat.
+    # A fresh `unknown` report (worker clock ahead, unrecognized state or version) is a live worker and is kept.
+    return state in ('stale','stopped') or (state=='unknown' and age is None)
+
+
+def removable(row,data,state,age):
     # Only an identifiable registration with no fresh heartbeat may be removed; live workers would re-register.
     identity=data.get('id')
-    return (state not in LIVE_STATES and isinstance(identity,str) and bool(re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',identity))
+    return (obsolete(state,age) and isinstance(identity,str) and bool(re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',identity))
             and row.key==record_key(identity) and bool(re.fullmatch(BOOT_PATTERN,str(data.get('boot_id') or ''))))
 
 
@@ -242,8 +247,8 @@ def remove_registration(identity,boot,username):
     with Lock('worker-control:'+identity),Session() as s:
         row=s.get(Setting,record_key(identity));data=row.value if row and isinstance(row.value,dict) else {}
         if not row or data.get('id')!=identity or str(data.get('boot_id') or '')!=boot:raise HTTPException(409,'Worker registration changed or is unavailable; refresh before removing it')
-        state,_,_=report_state(data,time.time())
-        if not removable(row,data,state):raise HTTPException(409,'Worker is reporting recently; it would register again. Stop or retire it before removing its registration')
+        state,_,age=report_state(data,time.time())
+        if not removable(row,data,state,age):raise HTTPException(409,'Worker is reporting recently; it would register again. Stop or retire it before removing its registration')
         s.delete(row)
         control=s.get(Setting,control_key(identity))
         if control:s.delete(control)
