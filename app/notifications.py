@@ -359,6 +359,74 @@ def mark_read(session, username, event_id, revision, *, now=None):
     return state
 
 
+READ_BATCH_LIMIT = 100
+_EVENT_ID = re.compile(r'^[0-9a-f]{64}$')
+
+
+def mark_read_batch(session, username, items, *, now=None):
+    """Mark exactly the displayed revisions read for one user.
+
+    ``items`` are ``(event_id, revision)`` pairs the client rendered.  Each pair
+    follows ``mark_read`` semantics, so a revision published after the client
+    loaded its page stays unread.  Events that no longer exist or are hidden
+    from the user's current role are skipped without writing or disclosing
+    which.  Malformed input rejects the whole batch before any write.  Read
+    state never acknowledges, resolves, approves or remediates anything.
+    """
+    if not isinstance(items, (list, tuple)) or not 1 <= len(items) <= READ_BATCH_LIMIT:
+        raise ValueError(f'Provide between 1 and {READ_BATCH_LIMIT} notifications')
+    pairs = []
+    for item in items:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError('Invalid notification batch item')
+        event_id, revision = item
+        if not isinstance(event_id, str) or not _EVENT_ID.match(event_id):
+            raise ValueError('Invalid notification id')
+        if type(revision) is not int or revision < 1:
+            raise ValueError('Invalid notification revision')
+        pairs.append((event_id, revision))
+    if len({event_id for event_id, _ in pairs}) != len(pairs):
+        raise ValueError('Duplicate notification id')
+    user = _user(session, username)
+    if not user:
+        raise PermissionError('Notification unavailable')
+    roles = set(_allowed_roles(user.role))
+    events = {event.id: event for event in session.scalars(
+        select(NotificationEvent).where(
+            NotificationEvent.id.in_([event_id for event_id, _ in pairs])))}
+    visible = []
+    for event_id, revision in pairs:
+        event = events.get(event_id)
+        if not event or event.minimum_role not in roles:
+            continue
+        if revision > event.revision:
+            raise ValueError('Invalid notification revision')
+        visible.append((event_id, revision))
+    states = {state.event_id: state for state in session.scalars(
+        select(NotificationUserState).where(
+            NotificationUserState.username == username,
+            NotificationUserState.event_id.in_([event_id for event_id, _ in visible])))
+    } if visible else {}
+    stamp = time.time() if now is None else now
+    marked = 0
+    for event_id, revision in visible:
+        state = states.get(event_id)
+        if not state:
+            state = NotificationUserState(
+                event_id=event_id, username=username, read_revision=0,
+                dismissed_revision=0, updated=stamp)
+            session.add(state)
+        if state.read_revision < revision:
+            state.read_revision = revision
+            state.updated = stamp
+            marked += 1
+    if marked:
+        audit(session, 'read notifications',
+              f'{username} marked {marked} shown notification revision(s) read')
+    return {'marked': marked, 'already_read': len(visible) - marked,
+            'unavailable': len(pairs) - len(visible)}
+
+
 def dismiss(session, username, event_id, revision, *, now=None):
     event, state = _state(session, username, event_id, revision)
     state.dismissed_revision = max(state.dismissed_revision, revision)

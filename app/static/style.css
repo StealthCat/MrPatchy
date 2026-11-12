@@ -113,7 +113,9 @@ main { margin-left: calc(var(--sidebar) + 32px); padding: 0 32px; max-width: 190
 .notification-empty { padding:24px 8px 12px;text-align:center; }
 .notification-empty p { margin:5px 0; }
 .notification-coverage { margin:10px 0 0;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;line-height:1.5; }
-.notification-center-link { display:block;margin-top:10px;text-align:center; }
+.notification-panel-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:10px; }
+.notification-panel-actions>* { flex:1 1 auto; }
+.notification-center-link { display:block;text-align:center; }
 .notification-center-controls { margin-bottom:14px; }
 .notification-center-controls .actions { margin-top:12px; }
 #notification-center-list { display:grid;gap:10px; }

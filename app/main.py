@@ -548,6 +548,27 @@ def _notification_state(event_id,body,user,mutation):
 def notification_read(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
     return _notification_state(event_id,body,user,notification_events.mark_read)
 
+class NotificationBatchItem(BaseModel):
+    id:str=Field(max_length=64)
+    revision:int=Field(strict=True,ge=1)
+
+class NotificationReadBatchInput(BaseModel):
+    items:list[NotificationBatchItem]=Field(min_length=1,max_length=notification_events.READ_BATCH_LIMIT)
+
+@app.post('/api/notifications/read-batch')
+def notification_read_batch(body:NotificationReadBatchInput,user=Depends(self_user)):
+    """Mark exactly the shown revisions read; newer revisions stay unread."""
+    with Session() as s:
+        try:
+            result=notification_events.mark_read_batch(
+                s,user['username'],[(item.id,item.revision) for item in body.items])
+        except PermissionError:
+            raise HTTPException(404,'Notification not found')
+        except ValueError as error:
+            raise HTTPException(400,str(error))
+        s.commit()
+        return result
+
 @app.post('/api/notifications/{event_id}/dismiss')
 def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
     return _notification_state(event_id,body,user,notification_events.dismiss)

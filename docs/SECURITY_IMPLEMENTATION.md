@@ -6919,3 +6919,7 @@ faster-AI acceptance. UI integration, call-specific preview, provider-invoice tr
 multi-controller failover/reset acceptance and fresh code-scanning verification remain
 required. Coordinator integration and exact-head SQLite/MySQL/full-suite checks are
 also still required before delivery.
+
+### Mark shown notifications read — worker checkpoint #715
+
+The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
