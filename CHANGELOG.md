@@ -1,3 +1,67 @@
+## 1.59.46 — 2026-11-12
+
+1. [PR #690](https://github.com/StealthCat/MrPatchy/pull/690): Server conditions that need an administrator now also appear in the in-app bell and notification center, not only in the SMTP/webhook alert outbox. Alert collection publishes an allowlisted set of alert kinds as durable, administrator-only notification events in the same transaction:
+   - recovery-required operations, file, process, publication and service holds, and disabled-server recovery;
+   - failed scheduled patching, response integrity and verification, service health and coverage, execution-scan coverage, agent health and startup baseline.
+
+   Each event has a stable kind, explicit severity, a controller-composed message and a same-origin deep link to the server tab. Unchanged conditions add no revision. A changed message resurfaces as unread, a cleared condition (or a disabled or deleted server) resolves the event, and a recurrence reopens it. Closes #689.
+2. Compatibility and limits: kinds that could carry raw endpoint text stay outbox-only, never reaching notification reasons: stale, raw integrity JSON, repository errors, overdue and server disabled. Alert acknowledgement and notification read/dismiss stay independent, and SMTP/webhook delivery is unchanged. A rejected notification payload is logged and skipped without blocking alert collection. This source update does not publish a Docker image.
+
+## 1.59.45 — 2026-11-12
+
+1. [PR #688](https://github.com/StealthCat/MrPatchy/pull/688): Notification arrival records no longer grow without bound. The leader's hourly cleanup prunes arrivals older than the existing `history_days` retention, in separately committed batches of at most 5,000. It deletes only the oldest contiguous sequenced prefix, stopping at the first arrival still inside the window, and leaves the durable head untouched. `GET /api/notifications/arrivals` now reads its head from the durable head row, so pruning never moves live cursors backwards. A cursor older than the oldest retained arrival gets a fresh baseline with `reset: true, reset_reason: "pruned"`, so clients resynchronize instead of silently skipping pruned revisions. A cursor beyond the head reports `reset_reason: "ahead"`. A pruning failure is logged and does not block the rest of the cleanup. Closes #687.
+2. Compatibility and limits: no schema change. The response adds an optional `reset_reason`, and the live toast client already re-baselines on `reset`. Retention follows `history_days`. This source update does not publish a Docker image.
+
+## 1.59.44 — 2026-11-12
+
+1. [PR #683](https://github.com/StealthCat/MrPatchy/pull/683): Add a pure malware automatic-containment eligibility contract (`app/malware_response.py`). It decides whether a malware detection may trigger automatic file quarantine and/or verified process termination under an administrator policy.
+   - **Known malware** qualifies only with an authenticated ClamAV, YARA or hash-indicator signature that is fresh, not future-dated and hash-matched.
+   - **Unknown malware** qualifies only when the policy allows it, AI is available, and a bound `malicious` verdict meets the confidence threshold with at least two distinct corroborating evidence kinds from the same evidence revision and artifact. A bare model verdict never authorizes an action.
+   - Quarantine and termination are decided independently against complete file and process identities. Protected pseudo-filesystems and excluded paths are refused, including for process-only detections.
+   - Modes are `disabled` (the default), `monitor_only` and `enforce`. Malformed input fails closed with no action.
+   - A stable `binding_digest` and a `still_bound()` pre-execution recheck reject PID reuse, reboot and file replacement.
+   - Includes the review fixes from #684: fail-closed process exclusions and artifact-bound AI corroboration. Refs #682.
+2. Compatibility and limits: an unwired contract only. No detector, policy storage, executor, API, UI, schema or configuration change, and no response action is authorized at runtime. This is a partial #682 increment. This source update does not publish a Docker image.
+
+## 1.59.43 — 2026-11-12
+
+1. [PR #681](https://github.com/StealthCat/MrPatchy/pull/681): Controller web instances now register themselves in the shared database. Administrators see them in a new **Controllers** section on **Activity → Workers**, backed by the admin-only, paginated `GET /api/operations/controllers`.
+   - Each controller self-reports its identity, boot, version, reported deployment type, embedded or disabled scheduler, start time and uptime, refreshing its heartbeat every 15 seconds. A failed refresh shows as stale and never stops the web process.
+   - States are reporting, stale, stopped, version mismatch and unknown. Future, invalid or mismatched records are never shown as healthy.
+   - The optional `MRPATCHY_EXPECTED_CONTROLLER_IDS` lists controllers that never registered as missing. `MRPATCHY_CONTROLLER_ID` sets a stable identity, and a duplicate live identity is refused.
+   - Registration and graceful stop are audited, and records older than 7 days are pruned at controller start. Closes #680.
+2. Compatibility and limits: no schema change, since records use the existing settings table, and the two environment variables are optional. A controller record reports database reachability only. It is not readiness, load-balancer membership, serving-role or failover evidence and authorizes nothing. As with workers, an invalid `MRPATCHY_CONTROLLER_ID` or `MRPATCHY_DEPLOYMENT_TYPE` stops the web process at startup. This source update does not publish a Docker image.
+
+## 1.59.42 — 2026-11-12
+
+1. [PR #679](https://github.com/StealthCat/MrPatchy/pull/679): The AI worker status card shows the eligible, unclaimed triage backlog from the existing administrator status fields: an **eligible, unclaimed** count, and the oldest eligible unclaimed observation's first-seen time with an approximate age. The card explains that this is observation age, not time since the item became eligible, and that shared rate, budget and provider admission and available worker capacity may still delay dispatch. Closes #678.
+2. Compatibility and limits: a client-only status card addition, with no API, schema or admission change. This source update does not publish a Docker image.
+
+## 1.59.41 — 2026-11-12
+
+1. [PR #677](https://github.com/StealthCat/MrPatchy/pull/677): Add fixed `compose.controller.yaml` and `compose.worker.yaml` files for same-Docker-host split deployments. The controller file runs the app and Caddy by extending `compose.yaml`. The worker file runs scalable workers (`--scale worker=N`) as a separate Compose project on the controller's existing data volume, named by the required `MRPATCHY_CONTROLLER_DATA_VOLUME`. Workers keep the hardening, health check and drain grace period from `compose.yaml`, and each replica gets a unique boot identity. `docs/COMPOSE_CONFIGURATION.md` covers migration from `compose.yaml` with `--remove-orphans`, and CI validates both files. Refs #676.
+2. Compatibility and limits: additive deployment files; `compose.yaml` is unchanged. Only the same-Docker-host topology is supported. Multi-host MySQL deployment, drain, failure and recovery acceptance, and live start and scale validation of these files remain open in #676. This source update does not publish a Docker image.
+
+## 1.59.40 — 2026-11-12
+
+1. [PR #686](https://github.com/StealthCat/MrPatchy/pull/686): Fix the investigations queue notice, which showed the legacy hourly limit to administrators even in rate, daily-cap and unthrottled admission modes. The notice now names the control that actually gates new AI work: shared starts per hour (plus the daily spend cap in combined mode), the daily spend cap, unthrottled, or the legacy attempts limit in legacy mode. The AI worker status card uses the same helper. Fixes #685.
+2. Compatibility and limits: a client-only display fix, with no API, schema, admission or authorization change. Legacy mode output is unchanged, and the notice stays administrator-only. This source update does not publish a Docker image.
+
+## 1.59.39 — 2026-11-12
+
+1. [PR #675](https://github.com/StealthCat/MrPatchy/pull/675): `tools/benchmark_ai.py` accepts `--follow-up-runs` (0 to the run count), so serial and parallel AI triage benchmarks can compare matched workloads with no, sparse or universal follow-up evidence requests. Explicit counts are distributed deterministically across the fixture subjects, and omitting the option keeps the existing alternating workload. The benchmark verifies provider requests, SSH requests and persisted call counts against the selected workload. A stage with no observations reports `count: 0` and null percentiles, which `tools/compare_ai_benchmarks.py` accepts and reports as unobserved instead of failing. Fixes #674.
+2. Compatibility and limits: development tooling only, with no application, schema or API change. Results remain fixture-only measurements, not production performance. This source update does not publish a Docker image.
+
+## 1.59.38 — 2026-11-12
+
+1. [PR #673](https://github.com/StealthCat/MrPatchy/pull/673): Add a pure CVE applicability and exposure-window contract (`app/cve_exposure.py`).
+   - `classify()` reads only the OSV entries for the exact distribution release and source package. It applies OSV ecosystem ranges and explicit version lists through an injected comparator (native `dpkg --compare-versions` in production), and reports `affected`, `fixed`, `unaffected` or `uncertain`.
+   - A fixed version is named only when the complete matching data classifies it as fixed or unaffected.
+   - Another release's or upstream data, GIT/SEMVER-only or `limit` ranges, malformed or oversized data, an unknown installed version and comparator failures all give `uncertain`, never `unaffected`.
+   - `exposure_window()` computes explicit exposure intervals. Exposure starts at the first applicability observation only when monitoring covered the whole period since publication, and at publication otherwise.
+   - Only a verified install closes a window. A required restart or reboot keeps it pending until activation, and reintroduction, or re-reported applicability while pending or closed, reopens it. Coverage gaps are clipped, and future-dated or malformed clocks are rejected.
+2. Compatibility and limits: an unwired contract only. No advisory feed, storage, detector, UI, scheduler or containment action is added, and no response action is authorized. This is a partial #672 increment. This source update does not publish a Docker image.
+
 ## 1.59.37 — 2026-11-12
 
 1. [PR #665](https://github.com/StealthCat/MrPatchy/pull/665): **Startup files** now lists individual cron jobs parsed by updated target agents from the crontab-format files already in scope: `/etc/crontab`, `/etc/cron.d/*` and the user spool crontabs. Each job shows its line, schedule, account and a bounded command, parsed from exactly the bytes that were hashed. Credentials in commands are redacted on the target: URL user:password, Bearer and Authorization headers, secret-named options and query parameters, `-u`/`--user` values, and `sshpass`/MySQL `-p`. Standard input after cron's first unescaped `%` is flagged but not stored, and control characters are shown escaped. Environment assignments are counted but not exported, and malformed lines are counted rather than guessed. The controller strictly validates the optional job data (at most 64 jobs per file and 256 in total). Refs #664.

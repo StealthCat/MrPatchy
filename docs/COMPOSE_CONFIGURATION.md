@@ -22,6 +22,66 @@ It does not start containers, create a database, copy secrets, modify `.env`, or
 change a running installation. It creates a new configuration; it does not import
 arbitrary hand-edited Compose files.
 
+## Fixed controller and worker files
+
+Without the generator, the repository also provides two fixed role files next to
+the complete single-machine `compose.yaml`:
+
+| File | Services | Use |
+|---|---|---|
+| `compose.yaml` | app, worker, Caddy | Complete single-machine installation (unchanged) |
+| `compose.controller.yaml` | app, Caddy | Controller with workers deployed separately |
+| `compose.worker.yaml` | worker | Workers only, scaled on the controller's Docker host |
+
+`compose.controller.yaml` extends the `app` and `caddy` services from `compose.yaml`.
+It therefore keeps the same environment, health checks, capability limits, read-only
+roots, memory/PID limits, networks and volume names. `compose.worker.yaml` repeats
+the `compose.yaml` worker definition without the dependency on a local app, and a
+test keeps the two in sync. It has no Caddy, TLS mount, published port, admin
+password or fixed container name. `MRPATCHY_WORKER_ID` is always empty in this file,
+so every replica gets a unique boot identity.
+
+```sh
+# Controller (project "mrpatchy", data volume "mrpatchy_app-data").
+docker compose -p mrpatchy -f compose.controller.yaml up -d --build --wait
+
+# Three workers on the same Docker host, as a separate project.
+MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data \
+  docker compose -p mrpatchy-workers -f compose.worker.yaml up -d --build --scale worker=3
+```
+
+The worker file requires `MRPATCHY_CONTROLLER_DATA_VOLUME`. Compose refuses to render
+without it and marks the volume external, so it never creates an empty replacement.
+Start the controller first and build both projects from the same checkout. Workers
+keep `MRPATCHY_REQUIRE_CONTROLLER_STATE=1`, so a worker that can't verify the
+controller receipt, schema contract and matching encryption key admits no work.
+The controller disables its embedded scheduler. Background jobs therefore wait
+until at least one worker is running. Leave `MRPATCHY_EXPECTED_WORKER_IDS` empty
+with these files: `compose.worker.yaml` never assigns a fixed worker ID, so any IDs
+listed there (for example from an earlier single-machine `.env`) are reported as
+missing workers.
+
+To move an existing `compose.yaml` installation to the role files, keep the project
+name so the controller reuses the `mrpatchy_app-data` volume, and remove the bundled
+worker in the same step. Compose only warns about the old `worker` container; without
+`--remove-orphans` it keeps running beside the new worker replicas, with any fixed
+`MRPATCHY_WORKER_ID` from `.env`:
+
+```sh
+docker compose -p mrpatchy -f compose.controller.yaml up -d --build --wait --remove-orphans
+```
+
+To scale, rerun the worker command with a new `--scale` value. Before planned
+maintenance, drain workers in the UI and verify their state; `docker compose stop`
+also drains active jobs within the worker's long stop grace period.
+
+The following remain unsupported in this increment:
+- Workers on another machine: a Docker volume name doesn't share the encryption key, SSH identities, artifacts or locking state across hosts.
+- Combining the role files with `compose.gcp.yaml`, which also defines a worker.
+- Network-mounted SQLite.
+
+Use `compose.yaml` (optionally with `compose.gcp.yaml`) for those installations.
+
 ## Use the generated YAML
 
 Prepare `.env` from `.env.example`, following the normal installation instructions.

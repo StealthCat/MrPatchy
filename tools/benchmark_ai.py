@@ -38,6 +38,8 @@ def workload_fingerprint(provider_requests, ssh_requests):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runs', type=int, default=8)
+    parser.add_argument('--follow-up-runs', type=int,
+                        help='number of investigations requesting follow-up evidence (default: every second run)')
     parser.add_argument('--concurrency', type=int, default=1)
     parser.add_argument('--same-server', action='store_true',
                         help='place distinct subjects on one server using its maximum supported slots')
@@ -51,6 +53,15 @@ def main():
                         help='number of older completed observations to seed (default: 0)')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
+    if args.follow_up_runs is not None and not 0 <= args.follow_up_runs <= args.runs:
+        parser.error('--follow-up-runs must be between 0 and --runs')
+    if args.follow_up_runs is None:
+        follow_up_indices = range(1, args.runs, 2)
+    else:
+        follow_up_indices = {
+            index for index in range(args.runs)
+            if (index + 1) * args.follow_up_runs // args.runs > index * args.follow_up_runs // args.runs
+        }
     if not 1<=args.concurrency<=8:parser.error('--concurrency must be between 1 and 8')
     if not 1<=args.provider_delay_ms<=1000:parser.error('--provider-delay-ms must be between 1 and 1000')
     if not 0<=args.persistence_delay_ms<=1000:parser.error('--persistence-delay-ms must be between 0 and 1000')
@@ -158,7 +169,7 @@ def main():
                     ])
                 first_seen=time.time()-args.queue_age_seconds
                 for index, subject in enumerate(subjects):
-                    evidence = {'executable':'/fixture/artifact','sha256':'a'*64,'identity_verified':True,'two_stage':bool(index%2)}
+                    evidence = {'executable':'/fixture/artifact','sha256':'a'*64,'identity_verified':True,'two_stage':index in follow_up_indices}
                     if args.same_server:
                         evidence['uid'] = str(1000 + index)
                     s.add(Behavior(id=subject,host_id=expected_hosts[subject],first_seen=first_seen+index*.0001,
@@ -184,7 +195,8 @@ def main():
                 assert len(runs) == args.runs and all(run.state == 'complete' for run in runs)
                 observed_hosts = {run.subject: run.host_id for run in runs}
                 assert observed_hosts == expected_hosts
-                assert sum(run.calls for run in runs)==len(requests)==args.runs+args.runs//2
+                assert sum(run.calls for run in runs) == len(requests) == args.runs + len(follow_up_indices)
+                assert len(ssh_requests) == len(follow_up_indices)
                 receipts = ai_runs.call_receipts(s, [run.id for run in runs])
                 assert all(len(receipts[run.id]) == run.calls for run in runs)
                 costs = [ai_runs.cost_summary(run, receipts[run.id]) for run in runs]
@@ -195,6 +207,8 @@ def main():
                     persisted_timings.setdefault(stage,[]).append(float(event.message.split(': ',1)[1].split(' ms;',1)[0]))
             assert all(p['model']=='fixture-model' and p['max_output_tokens']==1600 and p['text']['format']['schema']==ai.SCHEMA for p in requests)
             def summary(values):
+                if not values:
+                    return {'count': 0, 'p50_ms': None, 'p95_ms': None}
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
             print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),

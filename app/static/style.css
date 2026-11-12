@@ -441,6 +441,9 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .worker-registry-table { min-width:850px; }
 .worker-registry-table td { max-width:260px;overflow-wrap:anywhere; }
 .worker-registry-table td small { white-space:normal; }
+.controller-registry-table { min-width:700px; }
+.controller-registry-table td { max-width:260px;overflow-wrap:anywhere; }
+.controller-registry-table td small { white-space:normal; }
 .badge.reporting { color:var(--mint);background:#9ee8d114; }
 .badge.stale,.badge.unknown,.badge.version_mismatch { color:var(--amber);background:#f7cf8a14; }
 .badge.stopped { color:var(--muted);background:#a7bdc714; }
