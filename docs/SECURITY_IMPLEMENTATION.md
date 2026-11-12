@@ -2885,10 +2885,15 @@ exactly one class with its basis, verification strength (`authenticated`,
   artifact's. A changed context gives `modified_outside_entries`, and a missing one
   gives `entry_context_not_compared` (or `modified_outside_entries` when the entries
   are unchanged but the file differs). In both cases the matching entries are
-  `modified`, and added entries are `custom`.
+  `modified`, and added entries are `custom`. Matched default entries must also keep
+  the authenticated order, because systemd `Exec*` order and an empty `ExecStart=`
+  reset are significant; reordering gives `default_entries_reordered`. When the entries
+  and context are identical but the file bytes still differ, the result discloses
+  `file_differs_outside_compared_content`.
 - A declined (`accepted: false`) or malformed baseline record never blocks
-  classification. A non-finite acceptance time is dropped, and paths or names that
-  contain control characters fail closed.
+  classification. A non-finite or out-of-range acceptance time is dropped. Paths or
+  names that contain C0/C1 control characters, DEL, or Unicode line or paragraph
+  separators fail closed.
 - Drop-ins and overrides are classified on their own bytes and report the unit they
   modify. Administrator baseline acceptance is a separate field and never changes the
   class. Every result carries `safety: not_assessed`.

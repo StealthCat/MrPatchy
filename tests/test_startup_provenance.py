@@ -273,3 +273,36 @@ def test_control_characters_in_path_fail_closed(path):
 def test_malformed_context_digest_fails_closed(changes):
     result = sp.classify(evidence(**changes))
     assert result['provenance'] == 'unknown' and result['gaps']
+
+
+def test_huge_integer_baseline_time_fails_closed_without_crashing():
+    result = sp.classify(evidence(baseline={'accepted': True, 'by': 'admin', 'at': 10 ** 400}))
+    assert result['baseline']['at'] is None
+    assert len(sp.classify_many([evidence(baseline={'accepted': True, 'at': 10 ** 400})])['records']) == 1
+
+
+@pytest.mark.parametrize('path', ['/etc/cron.d/x\x85y', '/x y', '/x y', '/x\x9b31m'])
+def test_c1_controls_and_unicode_line_separators_fail_closed(path):
+    result = sp.classify(evidence(path=path))
+    assert result['provenance'] == 'unknown' and result['path'] is None
+
+
+def test_reordered_default_entries_are_not_verified():
+    a, b = h('ExecStartPre=/bin/true'), h('ExecStart=/usr/sbin/sshd')
+    result = sp.classify(evidence(observed_sha256=h('reordered'), entry_sha256=[b, a], context_sha256=h('ctx'),
+                                  authenticated_artifact=artifact(entry_sha256=[a, b], context_sha256=h('ctx'))))
+    assert [e['provenance'] for e in result['entries']] == ['modified', 'modified']
+    assert {e['basis'] for e in result['entries']} == {'default_entry_order_changed'}
+    assert [g['code'] for g in result['gaps']] == ['default_entries_reordered']
+    # An inserted custom entry does not count as reordering the defaults.
+    added = sp.classify(evidence(observed_sha256=h('added'), entry_sha256=[a, h('new'), b], context_sha256=h('ctx'),
+                                 authenticated_artifact=artifact(entry_sha256=[a, b], context_sha256=h('ctx'))))
+    assert [e['provenance'] for e in added['entries']] == ['verified_default', 'custom', 'verified_default']
+
+
+def test_identical_entries_and_context_in_a_differing_file_disclose_the_difference():
+    a = h('job')
+    result = sp.classify(evidence(observed_sha256=h('job + comment'), entry_sha256=[a], context_sha256=h('ctx'),
+                                  authenticated_artifact=artifact(entry_sha256=[a], context_sha256=h('ctx'))))
+    assert [e['provenance'] for e in result['entries']] == ['verified_default']
+    assert [g['code'] for g in result['gaps']] == ['file_differs_outside_compared_content']

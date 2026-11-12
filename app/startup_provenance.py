@@ -34,7 +34,8 @@ Fail-closed rules:
 - A matching entry inside a modified file is ``verified_default`` only when the
   content outside the entries (environment, section headers) has an authenticated
   matching ``context_sha256``. Otherwise it is ``modified`` with a disclosed gap,
-  because ``PATH=/tmp:...`` changes what an unchanged job line runs.
+  because ``PATH=/tmp:...`` changes what an unchanged job line runs. Matched
+  default entries must also keep the authenticated order.
 - A drop-in or override is classified on its own bytes. Its ``modifies`` unit
   name is reported, and the vendor unit's own classification is unaffected.
 """
@@ -58,9 +59,10 @@ MAX_RECORDS = 4096
 MAX_GAPS = 32
 
 _HEX = re.compile(r'[0-9a-f]+')
-# C0 controls and DEL are never valid in evidence text: they would let a path or
-# name forge extra lines in later logs, JSON consumers or UI rendering.
-_CONTROL = re.compile(r'[\x00-\x1f\x7f]')
+# C0/C1 controls, DEL and Unicode line/paragraph separators are never valid in
+# evidence text: they would let a path or name forge extra lines in later logs,
+# JSON consumers or UI rendering.
+_CONTROL = re.compile('[\x00-\x1f\x7f-\x9f\u2028\u2029]')
 # Debian/RPM package names and versions; anything else is malformed evidence.
 _PACKAGE = re.compile(r'[A-Za-z0-9][A-Za-z0-9+._:-]*')
 _VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9+.~:_-]*')
@@ -113,6 +115,12 @@ def _entry_digests(value: Any, gaps: list[dict[str, str]], what: str) -> list[st
     return digests  # type: ignore[return-value]
 
 
+def _in_order(sequence: list[str], defaults: list[str]) -> bool:
+    """True when ``sequence`` is a subsequence of ``defaults`` in order."""
+    iterator = iter(defaults)
+    return all(any(item == default for default in iterator) for item in sequence)
+
+
 def _optional_digest(source: dict[str, Any], key: str, gaps: list[dict[str, str]], what: str) -> str | None:
     value = source.get(key)
     if value is None:
@@ -146,7 +154,10 @@ def _baseline(value: Any, result: dict[str, Any]) -> None:
         _gap(gaps, 'malformed_baseline', 'Baseline acceptance is not a recorded acceptance; it was ignored.')
         return
     by, at = _text(value.get('by'), MAX_NAME), value.get('at')
-    valid_at = isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at)
+    try:
+        valid_at = isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at)
+    except OverflowError:  # an int too large for a float
+        valid_at = False
     result['baseline'] = {'accepted': True, 'affects_provenance': False, 'by': by,
                           'at': at if valid_at else None}
 
@@ -185,13 +196,30 @@ def _entries(result: dict[str, Any], observed: list[str] | None, defaults: list[
                 _gap(result['gaps'], 'entry_context_not_compared',
                      'No authenticated digest of the content outside the entries was compared; '
                      'default entries are not verified.')
+        matched = []
         for index, digest in enumerate(observed):
             if remaining[digest] > 0:
                 remaining[digest] -= 1
-                if context_state == 'match':
-                    entry_provenance, basis = 'verified_default', 'authenticated_default_entry'
-                else:
-                    entry_provenance, basis = 'modified', f'default_entry_context_{context_state}'
+                matched.append(index)
+        # Order matters (systemd ExecStartPre/ExecStart sequences, an empty
+        # ``ExecStart=`` reset), so matched entries must keep the default order.
+        if context_state == 'match' and not _in_order([observed[i] for i in matched], defaults):
+            context_state = 'reordered'
+            _gap(result['gaps'], 'default_entries_reordered',
+                 'Default entries appear in a different order from the authenticated artifact.')
+        if context_state == 'match' and Counter(observed) == Counter(defaults):
+            _gap(result['gaps'], 'file_differs_outside_compared_content',
+                 'Entries and context match the authenticated artifact but the file bytes differ '
+                 '(for example comments or whitespace).')
+        if context_state == 'match':
+            entry_provenance, basis = 'verified_default', 'authenticated_default_entry'
+        elif context_state == 'reordered':
+            entry_provenance, basis = 'modified', 'default_entry_order_changed'
+        else:
+            entry_provenance, basis = 'modified', f'default_entry_context_{context_state}'
+        matched_set = set(matched)
+        for index, digest in enumerate(observed):
+            if index in matched_set:
                 result['entries'].append({'index': index, 'sha256': digest, 'provenance': entry_provenance,
                                           'basis': basis})
             else:
