@@ -1,3 +1,8 @@
+## 1.59.33 — 2026-11-11
+
+1. [PR #571](https://github.com/StealthCat/MrPatchy/pull/571): The server activity guard reads lifecycle state in bounded batches. After acquiring the ordered per-server locks, it fetches only IDs, enabled flags, deletion timestamps and lifecycle revisions, in one query per 200 distinct servers, instead of loading each server row separately. A five-server scoring batch now uses one SELECT. Disabled and deleted servers are still refused with the acquired locks released, and absent bootstrap records still contribute no revision. Fixes #569.
+2. Compatibility and limits: a read-path optimisation with no schema, API, authorization or lifecycle-semantics change. On MySQL, a server ID not matched by the batched query falls back to an exact-equality lookup, which preserves collation behaviour. This source update does not publish a Docker image.
+
 ## 1.59.32 — 2026-11-11
 
 1. [PR #563](https://github.com/StealthCat/MrPatchy/pull/563): Viewer and operator requests to `GET /api/investigation-status` no longer run the administrator-only status aggregates. They return the same three fields (`pending`, `oldest` and `enabled`) from one SQL aggregate. It uses the same approval and host-lifecycle predicate as the administrator dashboard, which now shares that predicate. Fixes #562.
