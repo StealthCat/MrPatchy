@@ -38,6 +38,7 @@ def test_distinct_receipts_return_bounded_totals(admin, monkeypatch, capsys, cou
         def observed(statement, *args, **kwargs):
             result=execute(statement, *args, **kwargs)
             if 'ai_budget_entries' in str(statement):
+                assert len(statement.selected_columns)==2
                 values=result.all(); rows.extend(values); return values
             return result
         monkeypatch.setattr(session, 'execute', observed)

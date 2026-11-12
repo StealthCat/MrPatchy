@@ -85,6 +85,7 @@ module.exports=async(page,capture)=>{
  await page.reload();await page.locator('#ai-settings-form').waitFor();
  assert.equal(await page.locator('[name=ai_daily_cap_usd]').inputValue(),'10');
  assert.match(await page.locator('#ai-settings-form').textContent(),/remaining \$10(?:\s|$)/);
+ await page.getByText('No transmitted AI calls await reconciliation.',{exact:true}).waitFor();
  assert.match(await page.locator('#ai-settings-form').textContent(),/Price catalog current.*2026-10-26.*expires/s);
  await page.locator('[name=ai_control_mode]').selectOption('rate_and_daily');
  await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
@@ -115,6 +116,14 @@ module.exports=async(page,capture)=>{
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,section+' overflows at '+width);
   }
  }
+ const budgetFixture=route=>route.fulfill({json:{...aiState,ai_budget:{
+  ...aiState.ai_budget,unreconciled_call_count:2,oldest_unreconciled_reservation_at:1793404800,
+ }}});
+ await page.route('**/api/settings',budgetFixture);
+ try{
+  await page.locator('[href="#settings/ai"]').first().click();
+  await page.getByText('2 transmitted AI calls await reconciliation · Oldest reservation',{exact:false}).waitFor();
+ }finally{await page.unroute('**/api/settings',budgetFixture);}
  await page.locator('[data-nav=settings]').click();
  await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
  await page.unroute('**/api/settings',settingsHandler);
