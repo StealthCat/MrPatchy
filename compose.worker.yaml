@@ -1,0 +1,51 @@
+# Workers only, deployed separately from a controller started with compose.controller.yaml.
+# Run this file as its own Compose project on the controller's Docker host and scale
+# replicas with --scale worker=N. See docs/COMPOSE_CONFIGURATION.md for supported topologies.
+# The worker service mirrors compose.yaml without the local app dependency;
+# tests/test_compose_roles.py keeps the two definitions in sync.
+services:
+  worker:
+    build: .
+    command: [python, -m, app.worker]
+    restart: unless-stopped
+    # SIGTERM drains active jobs; patch SSH calls may run up to 7500 s, so allow that plus margin
+    # instead of Docker's 10 s default, which SIGKILLs the worker mid-operation.
+    stop_grace_period: ${MRPATCHY_WORKER_STOP_GRACE_PERIOD:-8100s}
+    environment:
+      MRPATCHY_RUNTIME_ROLE: worker
+      MRPATCHY_REQUIRE_CONTROLLER_STATE: "1"
+      MRPATCHY_JOB_CONCURRENCY: ${MRPATCHY_JOB_CONCURRENCY:-2}
+      MRPATCHY_POLL_CONCURRENCY: ${MRPATCHY_POLL_CONCURRENCY:-8}
+      MRPATCHY_AI_CONCURRENCY: ${MRPATCHY_AI_CONCURRENCY:-4}
+      MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
+      MRPATCHY_DEPLOYMENT_TYPE: docker
+      # Always empty here so every replica gets a unique boot identity, even when .env sets one.
+      MRPATCHY_WORKER_ID: ""
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mrpatchy.db}
+    volumes:
+      - app-data:/data
+    networks: [management]
+    healthcheck:
+      # Passes only while the loop keeps completing registry heartbeats (file in the /tmp tmpfs).
+      test: [CMD, python, -m, app.worker_health]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    # Bound fork bombs; generous for thread pools and subprocess fan-out.
+    pids_limit: 1024
+    # Bound memory exhaustion; raise via the environment variable on large fleets.
+    mem_limit: ${MRPATCHY_WORKER_MEM_LIMIT:-4g}
+    # Immutable root filesystem; writable state is only the named volumes and the /tmp tmpfs.
+    read_only: true
+    tmpfs: [/tmp]
+volumes:
+  # The controller project's existing data volume: encryption key, SSH identities and SQLite data.
+  app-data:
+    external: true
+    name: ${MRPATCHY_CONTROLLER_DATA_VOLUME:?Set MRPATCHY_CONTROLLER_DATA_VOLUME to the controller's app-data volume, for example mrpatchy_app-data}
+networks:
+  management: {}

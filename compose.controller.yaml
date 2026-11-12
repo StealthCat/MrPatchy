@@ -1,0 +1,21 @@
+# Controller only: the web app and Caddy, with workers deployed separately.
+# Start workers with compose.worker.yaml; see docs/COMPOSE_CONFIGURATION.md.
+# Services extend compose.yaml so hardening, health checks and environment stay in one place.
+services:
+  app:
+    extends: {file: compose.yaml, service: app}
+  caddy:
+    extends: {file: compose.yaml, service: caddy}
+volumes:
+  app-data:
+  tls-config:
+  caddy-data:
+  caddy-config:
+networks:
+  control:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${CONTROL_SUBNET:-172.30.254.0/24}
+  management: {}
+  edge: {}
