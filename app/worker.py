@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle,response_status,worker_health, app_probes
+from . import host_lifecycle,response_status,worker_health, app_probes, notifications
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -528,7 +528,8 @@ def execute_locked(job_id):
                     policy=monitor_policy(s,h.id)
                     if not policy['enabled'] or policy['revision']!=job.payload['_persistence_policy']:
                         raise ValueError('Persistence monitoring policy changed; scheduled inspection cancelled before remote access')
-                request={'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence']}
+                # Opt in to parsed crontab jobs: controllers that strip them from change evidence ask for them.
+                request={'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence'],'cron_jobs':True}
                 paths=job.payload.get('custom_paths',[])
                 if paths:
                     from target.agent import validate_custom_paths
@@ -998,6 +999,9 @@ def _loop(reporter):
                         for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%') | Setting.key.like('oidc-state:%'))):
                             if entry.value.get('expires',now+1)<now: s.delete(entry)
                         s.commit()
+                    # Separate short batches; never holds the cleanup transaction.
+                    try:notifications.prune_arrivals(cutoff)
+                    except Exception:log.exception('Notification arrival pruning failed')
                     last_cleanup=now
                 if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
                 if now-last_ai>=5:

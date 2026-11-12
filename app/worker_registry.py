@@ -22,7 +22,7 @@ POOL_CAPACITY={'jobs':2,'polls':8,'ai':4}
 CONTROL_PREFIX='worker-control:'
 GAPS=[
     'Self-reported scheduler-loop liveness; storage, secrets, target access and operational readiness are not independently assessed.',
-    'Expected worker identities come from controller configuration; unconfigured nodes, controllers, endpoint agents and GCP integration nodes are not inventoried here.',
+    'Expected worker identities come from controller configuration; unconfigured nodes, endpoint agents and GCP integration nodes are not inventoried here. Controller web instances are listed separately below.',
     'Drain is boot-specific and cooperative: assigned work finishes; it does not stop a process or certify safe maintenance. Remote shared state and cross-host maintenance acceptance remain planned.',
 ]
 

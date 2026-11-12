@@ -419,6 +419,8 @@ Compose separates the web app, worker and Caddy services. Keep one web process. 
 docker compose up -d --build --scale worker=3
 ```
 
+For a controller with separately scaled workers on the same Docker host, use the fixed `compose.controller.yaml` (app and Caddy) and `compose.worker.yaml` (workers on the controller's existing data volume) files. See *Fixed controller and worker files* in [Compose configuration](docs/COMPOSE_CONFIGURATION.md).
+
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
 
 Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
@@ -553,7 +555,7 @@ coverage gaps, retains an inspectable evidence snapshot and rejects changed evid
 at generation/approval. Automatic plans remain scanner-only; no AI plan executes a
 response. See the [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md).
 
-Use **File integrity → Browse startup files** to search bounded stored startup metadata, review baseline-change labels and inspect mechanism/collection gaps. Origin and job-level discovery remain unassessed.
+Use **File integrity → Browse startup files** to search bounded stored startup metadata, review baseline-change labels and inspect mechanism/collection gaps. Updated agents also list individual cron jobs parsed from `/etc/crontab`, `/etc/cron.d` and user crontabs: line, schedule, account and a bounded command. Credential redaction of the command is best-effort and pattern-based, and standard input after an unescaped `%` is not stored. Comparisons, incidents and AI evidence stay metadata-only. Run-parts scripts, anacron and at queues, referenced scripts and origin remain unassessed.
 
 After **Finish and verify installation**, Mr Patchy follows the deployment job and opens that server’s Overview only after backend verification succeeds. This tab retains the success notice and restores pending progress after reload. Failures stay on the verification step with Activity and explicit retry controls. An unconfirmed submission is checked against server job history rather than replayed; ambiguous results require Activity review. Closing the dialog does not cancel work. **Stop tracking** clears only this tab’s progress, not the server or job. Progress is scoped to the signed-in account in browser session storage; a different browser/tab can use Manage → Finish / verify installation and existing active deployment jobs.
 
