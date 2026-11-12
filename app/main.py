@@ -61,7 +61,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.29"
+APP_VERSION = "1.59.30"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2166,11 +2166,15 @@ def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depend
 
 
 @app.get('/api/ai/runs')
-def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(admin_user)):
-    if purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
+def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,state:str='',user=Depends(admin_user)):
+    if (purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker')
+            or state not in ('','running','complete','error','deferred','interrupted')
+            or offset<0 or not 1<=limit<=100):
+        raise HTTPException(400,'Invalid log filter')
     with Session() as s:
         query=select(ai_runs.AIRun)
         if purpose:query=query.where(ai_runs.AIRun.purpose==purpose)
+        if state:query=query.where(ai_runs.AIRun.state==state)
         if host_id:
             host_or_404(s,host_id)
             query=query.where((ai_runs.AIRun.host_id==host_id)|ai_runs.AIRun.id.in_(
