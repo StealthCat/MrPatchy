@@ -106,7 +106,37 @@ window.NotificationShell=(()=>{
   return {from,cursor,items:found,baseline:false};
  }
  function arrivalCursor(page){if(!Number.isInteger(page?.cursor)||page.cursor<0)throw new Error('Notification arrival cursor unavailable');return page.cursor;}
- function noteToasts(current,arrivals){
+ // Cross-tab deduplication: every tab keeps its own arrival cursor, so tabs of the
+ // same account claim each (event, revision) in shared same-origin storage before
+ // showing it. Web Locks make the check-and-claim atomic; without them a
+ // best-effort read-modify-write still dedupes non-concurrent tabs. Claims hold
+ // only event IDs and revisions, are bounded, belong to one account and are
+ // cleared on reset. Unusable storage fails open to this tab's own toasts.
+ const TOAST_CLAIM_KEY='mrpatchy-notification-toasts',TOAST_CLAIM_LIMIT=500,TOAST_CLAIM_MS=86400000;
+ function toastAccount(){return typeof currentUser!=='undefined'&&currentUser&&typeof currentUser.username==='string'?currentUser.username:'';}
+ function claimStored(account,candidates){
+  const now=Date.now(),raw=localStorage.getItem(TOAST_CLAIM_KEY);
+  let stored=null;try{stored=JSON.parse(raw||'null');}catch{stored=null;}
+  let entries=stored&&stored.v===1&&stored.account===account&&Array.isArray(stored.entries)?stored.entries.filter(entry=>Array.isArray(entry)&&typeof entry[0]==='string'&&Number.isFinite(entry[1])&&Number.isFinite(entry[2])&&now-entry[2]<TOAST_CLAIM_MS&&entry[2]<=now+60000):[];
+  const claimed=new Map(entries.map(entry=>[entry[0],entry[1]])),mine=[];
+  for(const item of candidates){
+   const revision=Number(item.revision)||0,known=claimed.get(item.id);
+   if(known!==undefined&&known>=revision)continue;
+   claimed.set(item.id,revision);mine.push(item);
+   entries=entries.filter(entry=>entry[0]!==item.id);entries.push([item.id,revision,now]);
+  }
+  if(mine.length)localStorage.setItem(TOAST_CLAIM_KEY,JSON.stringify({v:1,account,entries:entries.slice(-TOAST_CLAIM_LIMIT)}));
+  return mine;
+ }
+ async function claimToasts(candidates){
+  const account=toastAccount();
+  if(!candidates.length||!account)return candidates;
+  const attempt=()=>{try{return claimStored(account,candidates);}catch{return candidates;}};
+  try{if(navigator.locks&&typeof navigator.locks.request==='function')return await navigator.locks.request(TOAST_CLAIM_KEY,attempt);}catch{return candidates;}
+  return attempt();
+ }
+ function clearToastClaims(){try{localStorage.removeItem(TOAST_CLAIM_KEY);}catch{}}
+ async function noteToasts(current,arrivals,run=generation){
   // Without a fresh arrival result the bell still updates; existing toasts are
   // pruned but nothing new is admitted and the cursor is kept for a retry.
   const fresh=[];
@@ -124,10 +154,16 @@ window.NotificationShell=(()=>{
    while(toastSeen.revisions.size>TOAST_SEEN_LIMIT)toastSeen.revisions.delete(toastSeen.revisions.keys().next().value);
   }
   if(!toastSeen)return;
-  fresh.sort((a,b)=>(Number(b.created)||0)-(Number(a.created)||0)||(String(a.id)<String(b.id)?-1:1));
-  const stack=toastStack();
+  let stack=toastStack();
   for(const card of [...stack.querySelectorAll('[data-event-id]')]){const item=current.find(candidate=>candidate.id===card.dataset.eventId);if(item&&(item.read||item.dismissed))removeToast(card);}
   if(!fresh.length){showStack(stack);return;}
+  // Another open tab of this account may already have shown these revisions.
+  const claimed=await claimToasts(fresh);
+  if(run!==generation||!started)return;
+  fresh.splice(0,fresh.length,...claimed);
+  stack=toastStack();
+  if(!fresh.length){showStack(stack);return;}
+  fresh.sort((a,b)=>(Number(b.created)||0)-(Number(a.created)||0)||(String(a.id)<String(b.id)?-1:1));
   if(fresh.length>TOAST_LIMIT){
    clearToasts();
    const severity=fresh.some(item=>item.severity==='critical')?'critical':'high';
@@ -158,7 +194,7 @@ window.NotificationShell=(()=>{
   try{
    const [count,page,arrivals]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8'),toastArrivals().catch(()=>null)]);
    if(run!==generation||request!==requestRevision)return;
-   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();noteToasts(items,arrivals);
+   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();await noteToasts(items,arrivals,run);if(run!==generation)return;
    status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
    if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){
@@ -188,7 +224,7 @@ window.NotificationShell=(()=>{
   open=true;panel().hidden=false;button().setAttribute('aria-expanded','true');refresh();
  }
  function reset(){
-  generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;toastSeen=null;clearToasts();
+  generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;toastSeen=null;clearToasts();clearToastClaims();
   if(stream){stream.close();stream=null;}
   panel().hidden=true;button().setAttribute('aria-expanded','false');setCount(null,[]);
   status('');node('notification-list').replaceChildren();Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});

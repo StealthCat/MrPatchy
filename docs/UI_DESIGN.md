@@ -456,7 +456,9 @@ summary linking to the center. Toasts announce through a polite live region, nev
 take focus, pause auto-hide on hover or focus and fade in only when motion is
 allowed. Inside an open dialog they mount in the dialog's top layer so Hide and Open
 stay usable. Hide does not mark the notification read or dismissed. Events present at
-load are a baseline and never toast. Cross-tab toast deduplication remains planned.
+load are a baseline and never toast. Issue #729 shows each new revision's toast in
+only one open tab of the same account. A tab that catches up later skips toasts
+another tab already showed, while the bell and center still list the notification.
 
 
 ### v1.24.0 — Exact-match readiness on assessment detail
