@@ -114,6 +114,21 @@ The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
 
+### AI provider connection inventory (partial #290)
+
+Administrators can read `GET /api/settings/ai-connections` to see the existing
+OpenAI connection, saved default model and settings eligibility for each AI
+feature. Connection testing and model discovery are listed separately from
+host work. Model discovery has no selected execution model. The endpoint checks
+for the saved key record by name and returns allowlisted metadata. It does not
+decrypt credentials, contact a provider or change a route.
+
+Configuration completeness describes saved settings only. Actual calls still
+apply host policy, lifecycle, admission, budget and provider validation at
+their existing boundaries. Remaining #290 milestones include provider adapters
+and named connections, configuration migration, persisted and audited feature
+and item routes, queue/retry identity binding, accounting and Settings UI.
+
 ### Enrollment installer downloads (partial #202)
 
 Enrollment links retain their one-hour expiry and support repeated downloads for
@@ -2283,6 +2298,15 @@ state still scales with the eligible fleet. Production throughput remains open.
 
 ### Fleet-wide exact-match known-good cache
 
+The administrator-only `GET /api/ai/known-good/summary` endpoint counts active and
+revoked published entries, retained assessments with a cache-reuse link, and
+the subset of those assessments linked to revoked entries. Ordinary provider
+assessments linked at publication are excluded from the reuse counts. A single
+aggregate SQL statement returns only counts and preserves historical reuse
+after revocation. These counts describe retained records and do not verify
+current context, measure misses, or estimate provider calls, billing or
+performance. Dashboard presentation and matched production acceptance remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -2314,6 +2338,19 @@ reserve spend if the cap still applies. Capped requests add one settings read
 and compute the quote while holding the lock. This checkpoint removes one
 shared lock acquisition per request that begins budget admission uncapped.
 End-to-end throughput and broader shared-controls acceptance remain open.
+
+Changes to AI admission and spend controls are revision-checked (#709).
+`GET /api/settings` returns an opaque `ai_controls_revision`. It is a SHA-256
+of the stored mode, shared rate, daily cap, reset timezone, legacy hourly limits
+and update-scoring opt-in. Both AI settings save endpoints accept
+`expected_ai_controls_revision` under the existing settings lock. A stale value
+returns 409 and writes no settings or settings audit entry. The Settings form
+always sends the revision it loaded and keeps the entered values when a save
+conflicts. Requests that omit the field keep their previous behaviour. A partial
+`PUT /api/settings/ai` now keeps omitted stored values, so it can no longer
+silently reset the mode, cap, timezone or scoring opt-in to defaults (#708).
+The revision check does not cover the separate API-key, patching and history
+sections.
 
 Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
 history query to legacy mode. Shared modes still queue at most ten plans per tick
@@ -3036,6 +3073,49 @@ closes the stream and clears account-scoped client data. This is not completion 
 milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client and
 connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
 two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
+
+Worker checkpoint (issue #668): a bounded milestone-2 increment adds a durable
+arrival sequence. Every newly created notification revision appends one unsequenced row to
+`notification_arrivals` in the publisher's transaction. Identical repeated
+observations append nothing. `GET /api/notifications/arrivals` is available to any
+signed-in role:
+
+- Without `after` it returns only a baseline cursor.
+- With `after` it returns, in arrival order, current revisions committed after that
+  cursor. Items use the list API shape plus `arrival`, and the response carries a
+  `more` flag and a new cursor.
+
+Results apply the caller's current role, and read and dismissed flags are reported,
+not filtered. Superseded revisions and hidden events are skipped, but the cursor
+still advances past them. A cursor beyond the retained sequence resets to a fresh
+baseline and sets `reset`.
+
+Discovery is independent of producer timestamps and list ordering. A newly
+committed revision is found even when its producer clock lags, or when 100 or more
+newer unread events of the same severity crowd it out of a bounded page. Those are
+the two gaps the live-toast reviews reproduced.
+
+Arrival numbers are assigned only after the producer commits. Before reading,
+the arrivals endpoint runs a short sequencing transaction. It first writes the
+single `notification_arrival_head` row, which serializes sequencers on SQLite and
+MySQL. It then numbers the committed unsequenced rows densely above the head and
+commits them atomically. So every reader snapshot sees a gap-free committed
+prefix:
+
+- A slow lower transaction that commits after a faster higher one is numbered
+  above any cursor already returned, so it is never skipped.
+- A rolled-back publish never appears and leaves no gap.
+- A baseline covers every revision committed before the request, however many
+  there are. This removes the earlier 60-second gap hold, its clock-skew limit and
+  the 500-row partial baseline that the #669 reviews reproduced.
+
+The sequencing transaction itself is the only serialization point; publishers do
+not wait on it.
+
+This is additive: SSE payloads, list/count APIs, read/dismiss/acknowledgement
+semantics and response authorization are unchanged. Client adoption by the live
+toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
+do arrival retention/pruning and multi-controller acceptance.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
@@ -5530,7 +5610,11 @@ Operation list/detail APIs now expose one explicit `ai_deferred` Boolean derived
 the internal marker while continuing to exclude the complete payload. Activity reads
 only that safe projection. Status counts eligible advisory plans separately and gives
 eligible work precedence over another plan's future timestamp while preserving the
-future `plan_next_at`. Incident and startup handlers distinguish a controlled zero
+future `plan_next_at`. The administrator status also groups deferred counts, due
+unpaused counts, and earliest recorded future retry times by release, incident
+and startup plan. One grouped query yields the three totals without returning job
+payloads or host identities. A recorded retry time does not override pause or
+shared admission controls. Incident and startup handlers distinguish a controlled zero
 eligibility from `None`; the durable run becomes `deferred` with a bounded resume
 message while the job remains queued at `next_at=0`. Every later execution still
 rechecks host lifecycle, global/per-server pause, evidence, provider, rate and spend
@@ -6448,6 +6532,12 @@ retained public-price usage estimate; reserved, transmitted, uncertain and unkno
 unreleased states keep their conservative ceilings. Released unsent attempts do not
 count. The report contains only aggregate amounts, counts and window boundaries—no
 model names, keys, prompts, evidence, provider responses or pricing-source URLs.
+
+The current-budget summary also reports the number of counted transmitted calls
+awaiting reconciliation and the oldest retained reservation time among them.
+It includes sent and uncertain rows from still-counted prior windows. The
+display uses reservation time because the ledger has no separate transmission
+timestamp. No call identifiers or diagnostic evidence are needed.
 
 The administrator API validates a trailing 1–90 day range and performs fixed-precision
 SQL aggregation without materializing individual ledger records. Result groups are

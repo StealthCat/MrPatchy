@@ -39,9 +39,9 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed loopback application probes that gate rollout stages, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, live lease expiry with recovery and billing caveats, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
-| Fleet analysis | API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
+| Fleet analysis | **Available patches** view of every pending package update across the fleet, opened from navigation or the Overview **Updates available** card, with server-side paging, search and server, priority, status and disabled-server filters; API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
-| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
+| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; durable signed-in arrival cursor for newly committed visible revisions; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
 [Quick start](#quick-start) · [Enrollment](#enroll-a-server-in-three-steps) · [Release upgrades](#distribution-release-upgrades) · [Recovery](#workers-databases-and-backups) · [Documentation](#documentation)
@@ -51,6 +51,8 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 Overview summary cards reflow to the available content width. Decorative imagery stays clear of text and actions, and multi-line link buttons retain a complete border on narrow screens.
 
 The 30-second Fleet Overview and Servers background refresh keeps the current view visible while it fetches, preserves scroll position and keyboard focus, and reuses the existing DOM when the rendered result is unchanged. An open details panel defers that background refresh; manual refresh, navigation and Retry still show their normal loading state.
+
+Select **Available patches** in the navigation, or the **Updates available** card on **Overview**, to list every available package update across active servers without opening servers one at a time. The list pages on the server, with no per-server cap, and can be searched by package and filtered by server, priority and status. Each row shows the server (linked to its Packages tab), package and architecture, installed and candidate versions, priority, policy deadline, status (available, queued, held or not installable) and repository-check freshness. The unfiltered total matches the Overview count. Switch the scope to list retained candidates on disabled servers separately; deleted servers never appear. The view is read-only: installation is still reviewed and approved per server.
 
 Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
 
@@ -216,7 +218,7 @@ bearer tokens; preparation does not prove completed delivery or execution.
 
 The web UI reports readable HTTP-status errors when a proxy or server returns an empty or non-JSON error body. Empty successful responses are accepted; stale-session responses are still discarded.
 
-Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
+Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. On the hub, **Find a setting** filters the sections as you type. Every typed term must match a section name, description or keyword, such as API key, repository checks, certificate, MySQL or retention. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
 
 ## Review and install updates
 
@@ -238,6 +240,8 @@ Explicit installation refreshes target metadata and requests the recorded exact 
 Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates with a newer candidate default to high; others default to normal. Resetting a package to **auto** uses the same rule; a package without a newer candidate stays normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
+
+Administrators can configure fleet-wide change freezes through `GET /api/operations/freezes` and `PUT /api/operations/freezes`. Supply start and end timestamps with explicit UTC offsets and a reason for each interval. Include the current `revision` from GET as `expected_revision` when saving. Active freezes block the start of patch, repair and release-upgrade jobs, including urgent jobs with a maintenance-window bypass. Existing schedules still apply their approved start deadlines.
 
 After a reviewed staged rollout is queued, its dialog closes and a confirmation reports the queued server count. Approval is disabled while submission is in flight. Each server job records a `queue patch` audit entry alongside the rollout batch audit. Submission remains one transaction: a server queue at the 50-operation limit rejects the whole rollout without partially queueing it.
 
@@ -326,7 +330,7 @@ The collector hashes Mr Patchy's managed files and readable running executables.
 
 Optional bpftrace exec capture retains short-lived observations. Unverifiable identities stay marked unverified through central processing. Enabling eBPF relaxes the collector sandbox for kernel tracing; kernel support and acceptance testing are required. It is not guaranteed lossless capture or hardware attestation.
 
-Process triage checks retained, controller-authenticated Debian and RPM artifact manifests against the recorded executable SHA-256 first. It then checks the exact known-good cache and uses AI for unresolved behavior. A hash mismatch against the newest authenticated artifact bypasses cache reuse. A matching hash verifies the recorded bytes against the artifact; it cannot establish that the process behaved safely.
+Process triage checks retained, controller-authenticated Debian and RPM artifact manifests against the recorded executable SHA-256 first. It then checks the exact known-good cache and uses AI for unresolved behavior. A hash mismatch against the newest authenticated artifact bypasses cache reuse. A matching hash verifies the recorded bytes against the artifact; it cannot establish that the process behaved safely. Administrators can read fleet-wide known-good cache counts from `GET /api/ai/known-good/summary`: active and revoked published entries, retained cache-reuse assessments and the reuse linked to revoked entries. The counts describe retained records only. They do not measure misses, provider savings or current context validity.
 
 Administrators can open **File status** from fleet or server navigation and the corresponding Overview. Filter recorded managed, startup, vendor-inspected and process files by path or status. The views show hashes, evidence sources, assessment history, baseline comparison, freshness and coverage gaps. They use stored evidence and make no target or AI-provider requests. Coverage depends on recorded observations and retained artifacts, and baseline approval stays manual.
 
@@ -690,6 +694,12 @@ Unknown models, tiers, tool fees, output bounds or long-context pricing fail clo
 they are never admitted as free. Rate-plus-cap work reserves budget before consuming
 a smooth-rate start.
 
+Changes to the admission mode, shared rate, daily cap, reset timezone, legacy hourly
+limits and update-scoring opt-in are revision-checked. A save made from a stale Settings
+view is refused with a conflict, and the entered values stay in the form, instead of
+overwriting another administrator's change. Partial `PUT /api/settings/ai` requests
+keep omitted stored values rather than resetting them to defaults.
+
 Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
 without reliable pricing or usage—including timeouts and interrupted workers—keep the
 full ceiling counted. Unsent failures release their reservation, including a confirmed
@@ -701,6 +711,11 @@ changes are audited. Changing the reset timezone retains unreleased spend while
 its original admission window is still open, alongside spend in the current local
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
+
+In capped modes, AI Settings also shows how many counted transmitted calls await
+reconciliation and the oldest retained reservation time among them. This includes
+calls from still-counted prior windows. The time is the reservation time, because the
+ledger keeps no separate transmission timestamp.
 
 A confirmed local HTTP connection-pool timeout receives a short local retry delay
 without creating or changing the fleet-wide provider backoff. Provider and ambiguous
