@@ -12,6 +12,21 @@ from .db import Base, Session
 
 
 MAX_PROVIDER_DELAY=86400  # a longer provider Retry-After is capped and flagged for administrator review
+FAILURE_WINDOW=3600  # consecutive transient failures reset after this idle period
+CAPPED_REASON='Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.'
+# In-app notification policy: a single short transient backoff is routine and
+# silent. Only a capped (>24 h) floor or a sustained run of failures needs an
+# administrator, so neither per-failure timing nor provider text is announced.
+SUSTAINED_FAILURES=5
+NOTIFICATION={'source':'ai-provider','kind':'provider-backoff','subject_type':'ai-provider','subject_id':'global'}
+NOTIFICATION_TEXT={
+    'capped':('high','The AI provider asked Mr Patchy to wait more than 24 hours. The wait was capped at 24 hours, '
+        'and new paid AI work across the fleet is deferred until it lifts. Deferred work stays queued. Review the '
+        'provider account, then clear the reviewed backoff in AI Settings if appropriate.'),
+    'sustained':('medium','The AI provider has failed transiently several times in a row, so a shared backoff is '
+        'deferring new paid AI work across the fleet. Deferred work stays queued and resumes automatically after a '
+        'successful provider response. Review the provider status and AI Settings.'),
+}
 
 
 class ReviewConflict(Exception):
@@ -55,16 +70,20 @@ def failed(error,now=None):
             row=session.get(ProviderBackoff,'global')
             if not row:
                 row=ProviderBackoff(id='global');session.add(row)
-            if not row.updated or now-row.updated>3600:row.failures=0
+            if not row.updated or now-row.updated>FAILURE_WINDOW:row.failures=0
             row.failures=(row.failures or 0)+1
             provider=float(getattr(error,'provider_retry_after',getattr(error,'retry_after',0)) or 0)
             capped=provider>MAX_PROVIDER_DELAY
             provider=min(provider,MAX_PROVIDER_DELAY)
             error.provider_retry_after=provider
             delay=provider if provider>0 else random.uniform(30,min(1800,60*2**(row.failures-1)))
+            # A shorter failure never lowers the floor, so while an earlier
+            # capped floor still dominates it keeps its capped reason; otherwise
+            # the administrator review cue and notification would be lost.
+            capped=capped or (row.reason==CAPPED_REASON and (row.blocked_until or 0)>now+delay)
             row.blocked_until=max(row.blocked_until or 0,now+delay)
             row.updated=now
-            row.reason=('Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.' if capped else
+            row.reason=(CAPPED_REASON if capped else
                 'Provider Retry-After floor is active.' if provider>0 else
                 'Transient provider or transport failure; bounded exponential backoff is active.')
             session.commit()
@@ -139,3 +158,34 @@ def status(session,now=None):
     return {'blocked':blocked,'next_at':row.blocked_until if blocked else None,
         'failures':row.failures if row else 0,'reason':row.reason if blocked else '',
         'updated_at':row.updated if blocked else None,'revision':_revision(row) if blocked else ''}
+
+
+def notification_state(row,now):
+    """Classify the shared floor for administrator attention: capped, sustained or ''."""
+    if not row:return ''
+    if row.blocked_until>now and row.reason==CAPPED_REASON:return 'capped'
+    if (row.failures or 0)>=SUSTAINED_FAILURES and now-(row.updated or 0)<=FAILURE_WINDOW:return 'sustained'
+    return ''
+
+
+def publish_notification(session,cfg,now=None):
+    """Publish or resolve the admin-only provider-backoff event in the caller's transaction.
+
+    The payload is fixed text keyed by the attention state, so further failures
+    within one episode add no revision; an escalation or a later episode does.
+    """
+    from . import notifications
+    now=time.time() if now is None else now
+    state=notification_state(session.get(ProviderBackoff,'global'),now) if cfg.get('ai_enabled') else ''
+    if state:
+        severity,reason=NOTIFICATION_TEXT[state]
+        notifications.publish(session,**NOTIFICATION,subject_revision=state,severity=severity,reason=reason,
+            deep_link='#settings/ai',minimum_role='admin',now=now)
+        return
+    Event=notifications.NotificationEvent
+    exists=session.scalar(select(Event.id).where(Event.source==NOTIFICATION['source'],Event.kind==NOTIFICATION['kind'],
+        Event.subject_type==NOTIFICATION['subject_type'],Event.subject_id==NOTIFICATION['subject_id']))
+    if exists:
+        notifications.publish(session,**NOTIFICATION,subject_revision='resolved',severity='info',
+            reason='The shared AI provider backoff no longer needs administrator attention.',
+            deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)

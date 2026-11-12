@@ -7,7 +7,7 @@ PR and remaining acceptance. Historical review documents (for example
 their text unchanged as checkpoints. Where they list a capability as unfinished,
 this matrix states the current position.
 
-Status as of v1.59.48, 2026-11-12. First written against
+Status as of v1.59.49, 2026-11-12. First written against
 `3ac8f68` (v1.37.10) and reconciled by the coordinator at integration. Tracks
 issue [#347](https://github.com/StealthCat/MrPatchy/issues/347).
 

@@ -1,3 +1,8 @@
+## 1.59.49 — 2026-11-12
+
+1. [PR #697](https://github.com/StealthCat/MrPatchy/pull/697): Administrators get an in-app notification linking to AI Settings when the shared AI provider backoff floor needs attention. A floor set from a capped Retry-After over 24 hours raises a high-severity event asking for review, which points to the reviewed Clear action. At least five consecutive transient failures within the existing failure-reset window raise a medium-severity event. The event resolves automatically when the floor clears or AI is disabled. Alert collection evaluates it each pass, an unchanged state adds no revision, and the text is fixed. Closes #696.
+2. Compatibility and limits: an additive, administrator-only notification, with no change to backoff behaviour, admission, provider calls, SMTP/webhook alerts or schema. It clears nothing automatically. This source update does not publish a Docker image.
+
 ## 1.59.48 — 2026-11-12
 
 1. [PR #695](https://github.com/StealthCat/MrPatchy/pull/695): When the shared daily AI spend cap is exhausted, administrators get an in-app notification linking to AI Settings. It explains that new paid AI work is deferred, not discarded, until the reset or a cap or mode change. Alert collection evaluates the same conservative counted total that admission uses, and the notification's revision is bound to the budget window rather than to amounts, so further reservations in the same window add no revisions. Once the cap no longer blocks, a resolved revision is published. Closes #694.
