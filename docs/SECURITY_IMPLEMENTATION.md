@@ -3463,6 +3463,30 @@ event in the approval's own transaction, and revoking it while the verdict is st
 medium/high re-publishes the event as active; the notification never grants or
 withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
 
+Worker checkpoint (issue #698): a bounded milestone-1 producer covers expected-worker
+health. When `MRPATCHY_EXPECTED_WORKER_IDS` is configured, the elected coordinator's
+30-second tick publishes one admin-only `deployment`/`worker-health` event per
+expected worker that is `missing`, `stale` or `stopped` (high) or `unknown` or
+`version_mismatch` (medium). Each event links to Activity → Workers. The text is
+fixed and contains only the validated worker ID and state.
+
+- An unchanged state adds no revision. A state change adds a new unread revision.
+- Returning to `reporting`, or an intentional `draining`/`drained`, resolves the
+  event. Removing the ID from the configuration also resolves it.
+- An invalid configuration publishes one separate controller-wide medium event
+  and leaves the earlier worker events unchanged, because removal cannot be proven.
+- A startup grace of one freshness window suppresses new attention while
+  co-started workers register. Resolutions still apply during the grace.
+- The producer runs in its own transaction after `collect_alerts()`. A failure is
+  logged and does not stop the tick.
+
+There are no SMTP/webhook, schema, API or UI changes. The event never drains,
+recovers or authorizes anything.
+
+Known limit: if no worker runs, no coordinator publishes, so the Workers page
+remains authoritative. Controller web instances, endpoint agents and GCP nodes are
+not covered by this producer.
+
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.

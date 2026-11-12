@@ -1,3 +1,8 @@
+## 1.59.50 — 2026-11-12
+
+1. [PR #699](https://github.com/StealthCat/MrPatchy/pull/699): Expected workers (`MRPATCHY_EXPECTED_WORKER_IDS`) that need attention now raise an administrator-only in-app notification linking to **Activity → Workers**. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium, using fixed text with only the validated worker ID and state. An unchanged state adds no revision. Reporting or intentional draining resolves the event, and removal from the expected list resolves it with an explanation. An invalid expected-worker configuration raises one separate controller-wide event and leaves existing worker events unchanged. New attention is suppressed for one 120-second freshness window after process start, so co-started workers can register. Closes #698.
+2. Compatibility and limits: an additive notification producer run from the existing leader loop, with no schema, API, drain or worker-control change. Unconfigured workers are not monitored. This source update does not publish a Docker image.
+
 ## 1.59.49 — 2026-11-12
 
 1. [PR #697](https://github.com/StealthCat/MrPatchy/pull/697): Administrators get an in-app notification linking to AI Settings when the shared AI provider backoff floor needs attention. A floor set from a capped Retry-After over 24 hours raises a high-severity event asking for review, which points to the reviewed Clear action. At least five consecutive transient failures within the existing failure-reset window raise a medium-severity event. The event resolves automatically when the floor clears or AI is disabled. Alert collection evaluates it each pass, an unchanged state adds no revision, and the text is fixed. Closes #696.
