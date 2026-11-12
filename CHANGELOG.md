@@ -1,3 +1,8 @@
+## 1.59.28 — 2026-11-11
+
+1. [PR #550](https://github.com/StealthCat/MrPatchy/pull/550): The administrator AI worker status breaks deferred advisory plans down by purpose: release, incident and startup. Each purpose reports deferred and queue-ready counts and its earliest recorded future retry time, in a new `plan_deferred_by_action` field. The AI worker status card shows them under **Deferred plans by purpose**. It explains that queue-ready means due with server AI active, that shared controls can still delay a start, and that recorded retry times may belong to paused servers. Fixes #549.
+2. Compatibility and limits: an additive administrator status field and card section, with no schema change. The existing aggregate plan fields come from the same grouped query, which returns at most three groups and no job payloads or host identifiers. The viewer response and admission are unchanged. This source update does not publish a Docker image.
+
 ## 1.59.27 — 2026-11-11
 
 1. [PR #545](https://github.com/StealthCat/MrPatchy/pull/545): In capped modes, AI Settings shows how many counted transmitted AI calls await reconciliation and the oldest retained reservation time among them. The current-budget summary adds `unreconciled_call_count` and `oldest_unreconciled_reservation_at`, aggregated in the existing grouped SQL read. Sent and uncertain calls are counted, including those from still-counted prior windows after a timezone change. Settled, reserved, released and unknown-status calls are excluded. With no qualifying calls the API returns zero and null, and Settings shows an empty state. Fixes #544.

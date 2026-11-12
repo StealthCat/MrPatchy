@@ -5610,7 +5610,11 @@ Operation list/detail APIs now expose one explicit `ai_deferred` Boolean derived
 the internal marker while continuing to exclude the complete payload. Activity reads
 only that safe projection. Status counts eligible advisory plans separately and gives
 eligible work precedence over another plan's future timestamp while preserving the
-future `plan_next_at`. Incident and startup handlers distinguish a controlled zero
+future `plan_next_at`. The administrator status also groups deferred counts, due
+unpaused counts, and earliest recorded future retry times by release, incident
+and startup plan. One grouped query yields the three totals without returning job
+payloads or host identities. A recorded retry time does not override pause or
+shared admission controls. Incident and startup handlers distinguish a controlled zero
 eligibility from `None`; the durable run becomes `deferred` with a bounded resume
 message while the job remains queued at `next_at=0`. Every later execution still
 rechecks host lifecycle, global/per-server pause, evidence, provider, rate and spend
