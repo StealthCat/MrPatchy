@@ -60,6 +60,36 @@ _LINK = re.compile(r'([SK])([0-9]{2})(.+)')
 _FIELD = re.compile(r'#\s?([A-Za-z][A-Za-z0-9-]{0,63}):(.*)')
 _CONTINUATION = re.compile(r'#(?:\t| {2,})(.*)')
 _EXIT = re.compile(r'exit(?:\s+[0-9]+)?\s*(?:;\s*)?(?:#.*)?')
+# Rough shell construct tracking for rc.local: an unindented ``exit`` is only the
+# top-level exit when no ``if``/``case``/loop/function/brace/subshell is open.
+_SEGMENT_SPLIT = re.compile(r'&&|\|\||;;|[;&|\n]')
+_OPENERS = frozenset({'if', 'case', 'while', 'until', 'for', 'select'})
+_CLOSERS = frozenset({'fi', 'esac', 'done'})
+_FUNCTION = re.compile(r'(?:function\s+\S+|[A-Za-z_][A-Za-z0-9_.:-]*\s*\(\s*\))\s*(\{|\()?\s*$')
+
+
+def _construct_delta(logical: str) -> int:
+    """Approximate the change in open shell constructs on one logical line."""
+    delta = 0
+    for segment in _SEGMENT_SPLIT.split(logical):
+        segment = segment.strip()
+        if not segment or segment.startswith('#'):
+            continue
+        while segment.startswith('! '):
+            segment = segment[2:].lstrip()
+        function = _FUNCTION.fullmatch(segment)
+        if function:
+            delta += 1 if function.group(1) else 0
+            continue
+        word = segment.split(None, 1)[0]
+        if word in _OPENERS or word == '{' or (word.startswith('(') and not word.startswith('((')
+                                                  and ')' not in segment):
+            delta += 1
+        elif word in _CLOSERS or word in ('}', ')'):
+            delta -= 1
+        elif segment.endswith('{') and segment.split()[-1] == '{':
+            delta += 1
+    return delta
 
 
 def _gap(gaps: list[dict[str, Any]], code: str, line: int | None = None, detail: str = '') -> None:
@@ -82,7 +112,12 @@ def _decode(text: str | bytes, gaps: list[dict[str, Any]]) -> str | None:
     if not isinstance(text, str):
         _gap(gaps, 'unreadable', None, 'No text was captured.')
         return None
-    if len(text.encode('utf-8')) > MAX_TEXT:
+    try:
+        size = len(text.encode('utf-8'))
+    except UnicodeEncodeError:
+        _gap(gaps, 'invalid_utf8', None, 'Text is not valid UTF-8.')
+        return None
+    if size > MAX_TEXT:
         _gap(gaps, 'over_limit', None, f'More than {MAX_TEXT} bytes.')
         return None
     if '\x00' in text:
@@ -351,6 +386,7 @@ def parse_rc_local(text: str | bytes, mode: int | None = None) -> dict[str, Any]
     pending_line = 0
     complex_seen = False
     indented = False
+    depth = 0
     for index, raw in enumerate(lines[1:] if result['interpreter'] else lines, 2 if result['interpreter'] else 1):
         line = raw.rstrip('\r')
         if not pending:
@@ -365,12 +401,16 @@ def parse_rc_local(text: str | bytes, mode: int | None = None) -> dict[str, Any]
         pending.append(line)
         logical = '\n'.join(pending).strip()
         pending = []
-        if result['exit_line'] is not None:
+        after_exit = result['exit_line'] is not None
+        if after_exit:
+            # Kept visible (flagged) rather than dropped, in case construct
+            # tracking misjudged the exit as top-level.
             result['unreachable_commands'] += 1
-            continue
-        if not indented and _EXIT.fullmatch(logical):
+        elif not indented and depth <= 0 and _EXIT.fullmatch(logical):
             result['exit_line'] = pending_line
             continue
+        else:
+            depth = max(0, depth + _construct_delta(logical))
         if '<<' in logical and not complex_seen:
             complex_seen = True
             _gap(gaps, 'heredoc_not_interpreted', pending_line, 'Heredoc bodies are reported as separate lines.')
@@ -380,12 +420,14 @@ def parse_rc_local(text: str | bytes, mode: int | None = None) -> dict[str, Any]
             return result
         commands.append({'line': pending_line, 'command': logical[:MAX_COMMAND],
                          'command_truncated': len(logical) > MAX_COMMAND, 'command_sha256': _sha(logical),
-                         'background': logical.rstrip().endswith('&') and not logical.rstrip().endswith('&&')})
+                         'background': logical.rstrip().endswith('&') and not logical.rstrip().endswith('&&'),
+                         'after_exit': after_exit})
     if pending:
         _gap(gaps, 'unterminated_continuation', pending_line, 'The file ends inside a "\\" line continuation.')
     if result['unreachable_commands']:
         _gap(gaps, 'unreachable_after_exit', result['exit_line'],
-             f'{result["unreachable_commands"]} command line(s) follow the top-level exit and never run.')
+             f'{result["unreachable_commands"]} command line(s) follow what appears to be the top-level exit '
+             'and should never run; they are kept with after_exit set.')
     result['commands'] = commands
     if gaps:
         result['state'] = 'partial'

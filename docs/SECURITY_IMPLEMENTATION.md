@@ -2760,8 +2760,10 @@ explicit gaps. A combining step reports per-service enabled runlevels, start
 orders, links without a captured script, start and stop links in one runlevel,
 installed links that differ from LSB `Default-Start` and start links to a
 non-executable script as observations, not verdicts. `/etc/rc.local` becomes
-bounded logical command lines with per-line SHA-256, the top-level `exit` line,
-a count of unreachable lines after it, and gaps for a missing shebang, missing
+bounded logical command lines with per-line SHA-256, the top-level `exit` line
+(an `exit` inside an open `if`, `case`, loop, function, brace group or subshell is
+not top-level, even when unindented), a count of lines after it, which stay in the
+command list flagged `after_exit` rather than being dropped, and gaps for a missing shebang, missing
 execute bit, uninterpreted heredocs and unterminated continuations. Over-limit,
 non-UTF-8 or binary input produces explicit gaps, and over-cap input yields no
 partial records. Every record keeps `origin: not_assessed`. The contract does

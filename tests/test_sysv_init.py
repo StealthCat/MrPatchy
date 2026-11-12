@@ -165,6 +165,9 @@ def test_rc_local_commands_exit_and_unreachable_lines():
     assert r['commands'][1]['line'] == 8 and r['commands'][1]['background'] is True
     assert 'exit 1' in commands  # indented exit inside a conditional is not the top-level exit
     assert r['exit_line'] == 14 and r['unreachable_commands'] == 1
+    # Lines after the top-level exit stay visible, flagged rather than dropped.
+    assert r['commands'][-1]['command'] == '/usr/local/bin/never-runs' and r['commands'][-1]['after_exit'] is True
+    assert not any(c['after_exit'] for c in r['commands'][:-1])
     assert [g['code'] for g in r['gaps']] == ['unreachable_after_exit']
     assert all(len(c['command_sha256']) == 64 for c in r['commands'])
 
@@ -174,10 +177,35 @@ def test_rc_local_gaps_and_limits():
     codes = [g['code'] for g in r['gaps']]
     assert codes == ['missing_shebang', 'not_executable', 'heredoc_not_interpreted', 'unterminated_continuation']
     assert r['commands'][0] == {'line': 1, 'command': 'touch /x', 'command_truncated': False,
-                                'command_sha256': r['commands'][0]['command_sha256'], 'background': False}
+                                'command_sha256': r['commands'][0]['command_sha256'], 'background': False,
+                                'after_exit': False}
     long = sv.parse_rc_local('#!/bin/sh\n' + 'a' * (sv.MAX_COMMAND + 5) + '\n')
     assert long['commands'][0]['command_truncated'] is True and len(long['commands'][0]['command']) == sv.MAX_COMMAND
     over = sv.parse_rc_local('#!/bin/sh\n' + 'true\n' * (sv.MAX_COMMANDS + 1))
     assert over['state'] == 'unavailable' and over['commands'] == []
     assert sv.parse_rc_local(b'\xff')['state'] == 'unavailable'
     assert sv.parse_rc_local('#!/bin/sh\n')['state'] == 'parsed'
+
+
+def test_rc_local_unindented_exit_inside_construct_is_not_top_level():
+    # Review regression: an unindented exit inside an if block must not hide
+    # the boot command that runs when the condition is false.
+    r = sv.parse_rc_local('#!/bin/sh -e\nif [ ! -f /run/flag ]; then\nexit 0\nfi\n/usr/local/bin/startme &\n', 0o755)
+    assert r['exit_line'] is None and r['unreachable_commands'] == 0 and r['gaps'] == []
+    startme = r['commands'][-1]
+    assert startme['command'] == '/usr/local/bin/startme &' and startme['after_exit'] is False
+    assert startme['background'] is True
+    # Same for a function body, a brace group, a case arm and a subshell.
+    text = ('#!/bin/sh\nf() {\nexit 1\n}\ncase "$1" in\nstop)\nexit 0\n;;\nesac\n'
+            '[ -f /x ] || {\nexit 2\n}\n( cd /opt\nexit 3\n)\n/usr/bin/real\nexit 0\n/never\n')
+    r = sv.parse_rc_local(text, 0o755)
+    assert r['exit_line'] == 17 and r['unreachable_commands'] == 1
+    assert [(c['command'], c['after_exit']) for c in r['commands'][-2:]] == [('/usr/bin/real', False), ('/never', True)]
+    assert [g['code'] for g in r['gaps']] == ['unreachable_after_exit']
+
+
+def test_lone_surrogate_text_is_an_invalid_utf8_gap():
+    r = sv.parse_rc_local('#!/bin/sh\necho \ud800\n')
+    assert r['state'] == 'unavailable' and [g['code'] for g in r['gaps']] == ['invalid_utf8']
+    s = sv.parse_init_script('x', '#!/bin/sh\n\ud800')
+    assert s['state'] == 'unavailable' and [g['code'] for g in s['gaps']] == ['invalid_utf8']
