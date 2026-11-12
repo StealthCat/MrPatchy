@@ -1,3 +1,18 @@
+## 1.59.39 — 2026-11-12
+
+1. [PR #675](https://github.com/StealthCat/MrPatchy/pull/675): `tools/benchmark_ai.py` accepts `--follow-up-runs` (0 to the run count), so serial and parallel AI triage benchmarks can compare matched workloads with no, sparse or universal follow-up evidence requests. Explicit counts are distributed deterministically across the fixture subjects, and omitting the option keeps the existing alternating workload. The benchmark verifies provider requests, SSH requests and persisted call counts against the selected workload. A stage with no observations reports `count: 0` and null percentiles, which `tools/compare_ai_benchmarks.py` accepts and reports as unobserved instead of failing. Fixes #674.
+2. Compatibility and limits: development tooling only, with no application, schema or API change. Results remain fixture-only measurements, not production performance. This source update does not publish a Docker image.
+
+## 1.59.38 — 2026-11-12
+
+1. [PR #673](https://github.com/StealthCat/MrPatchy/pull/673): Add a pure CVE applicability and exposure-window contract (`app/cve_exposure.py`).
+   - `classify()` reads only the OSV entries for the exact distribution release and source package. It applies OSV ecosystem ranges and explicit version lists through an injected comparator (native `dpkg --compare-versions` in production), and reports `affected`, `fixed`, `unaffected` or `uncertain`.
+   - A fixed version is named only when the complete matching data classifies it as fixed or unaffected.
+   - Another release's or upstream data, GIT/SEMVER-only or `limit` ranges, malformed or oversized data, an unknown installed version and comparator failures all give `uncertain`, never `unaffected`.
+   - `exposure_window()` computes explicit exposure intervals. Exposure starts at the first applicability observation only when monitoring covered the whole period since publication, and at publication otherwise.
+   - Only a verified install closes a window. A required restart or reboot keeps it pending until activation, and reintroduction, or re-reported applicability while pending or closed, reopens it. Coverage gaps are clipped, and future-dated or malformed clocks are rejected.
+2. Compatibility and limits: an unwired contract only. No advisory feed, storage, detector, UI, scheduler or containment action is added, and no response action is authorized. This is a partial #672 increment. This source update does not publish a Docker image.
+
 ## 1.59.37 — 2026-11-12
 
 1. [PR #665](https://github.com/StealthCat/MrPatchy/pull/665): **Startup files** now lists individual cron jobs parsed by updated target agents from the crontab-format files already in scope: `/etc/crontab`, `/etc/cron.d/*` and the user spool crontabs. Each job shows its line, schedule, account and a bounded command, parsed from exactly the bytes that were hashed. Credentials in commands are redacted on the target: URL user:password, Bearer and Authorization headers, secret-named options and query parameters, `-u`/`--user` values, and `sshpass`/MySQL `-p`. Standard input after cron's first unescaped `%` is flagged but not stored, and control characters are shown escaped. Environment assignments are counted but not exported, and malformed lines are counted rather than guessed. The controller strictly validates the optional job data (at most 64 jobs per file and 256 in total). Refs #664.

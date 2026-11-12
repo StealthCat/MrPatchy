@@ -2682,6 +2682,59 @@ until the corresponding detection and response milestones are completed.
 - Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
 - Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
 
+### Applicability and exposure-window contract — worker checkpoint #672
+
+The first bounded increment adds the pure `app/cve_exposure.py` contract. It has
+no schema, route, UI, producer, AI or response changes, so runtime behavior is
+unchanged.
+
+- **Applicability:** `classify()` reads only the OSV entries for the endpoint's
+  exact ecosystem (for example `Debian:12`) and source package. It applies the
+  OSV ECOSYSTEM range algorithm (`introduced`/`fixed`/`last_affected`) and the
+  explicit `versions` lists through an injected comparator; production uses
+  native `dpkg --compare-versions`, so epochs, tildes and distribution backports
+  follow vendor ordering. Each result is `affected`, `fixed`, `unaffected` or
+  `uncertain`. An `affected` result names a fixed version only when the complete
+  matching vendor data classifies that version as `fixed` or `unaffected`, so a
+  fix that ends one range but sits inside an overlapping range, an explicit
+  affected version or an unevaluable sibling is never reported. The following
+  all yield `uncertain` rather than `unaffected`:
+  - another release's or upstream ecosystem's entry;
+  - GIT/SEMVER-only or `limit` ranges;
+  - malformed or oversized data, including non-string explicit versions;
+  - an unknown installed version;
+  - a comparator failure.
+
+  An affected range wins over an unevaluable sibling, but a `fixed` result is
+  only reported when every range was evaluated.
+- **Exposure window:** `exposure_window()` computes `not_applicable`, `open`,
+  `pending_activation` or `closed` from recorded applicability, fix-availability,
+  install, activation and reintroduction events. Exposure is returned as explicit
+  intervals, each keeping its own closure, and the duration is their sum, so a
+  verified-fixed period before a reopen is never counted.
+  - Exposure starts at the first applicability observation only when monitoring
+    covered the whole interval since publication without a gap
+    (`start_basis: first_observed`). Otherwise it conservatively starts at
+    publication (`start_basis: publication`) with a note.
+  - Only a verified installation closes it. A failed, partial or unverified
+    install does not.
+  - A required restart or reboot keeps it in `pending_activation` until a later
+    activation is recorded.
+  - Rollback or reintroduction reopens it, and the reopen is counted. Producers
+    should emit `reintroduced`, but a post-closure `applicable` event also
+    reopens the window, so a producer that only re-reports applicability cannot
+    hide renewed exposure.
+  - Late enrollment, missing monitoring and offline periods are clipped to the
+    exposed intervals and returned as explicit gaps; a gap inside a
+    verified-fixed period is not an exposure gap. Future-dated or malformed
+    timestamps are rejected.
+
+This does not complete requirement D. Advisory ingestion for every supported
+distribution, stored per-endpoint exposure records and producers, CVE-specific
+exploitation detectors, typed automatic containment, server/fleet views,
+notifications and real-target acceptance remain planned. A vulnerable version, an
+advisory match or AI output still authorizes no containment.
+
 
 ## Planned: known and unknown malware detection with automatic response
 
@@ -6920,6 +6973,17 @@ database performance. The default remains zero added persistence delay. Runtime
 admission, accounting, provider calls, schema, pause/lifecycle checks, roles and
 response authorization are unchanged. Full SQLite/MySQL race/failover acceptance and
 the broader faster-AI roadmap remain incomplete.
+
+
+### Configurable AI benchmark follow-up load — worker checkpoint #674
+
+The disposable serial/parallel benchmark accepts `--follow-up-runs` from zero
+through `--runs`. Omitting it keeps the alternating workload. Use the same
+count on both sides of a comparison to vary follow-up evidence load while
+preserving the request fingerprint. A stage with no observations reports null
+percentiles and comparison deltas. These synthetic fixtures exercise measured
+workload equivalence. Production latency and full faster-triage acceptance
+remain open.
 
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
