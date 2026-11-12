@@ -1055,7 +1055,98 @@ def parse_package_verification(output):
     return findings,gaps[:20]
 
 
-def persistence_inventory(deadline,custom_paths=None):
+# Crontab-format files whose individual jobs are parsed from the hashed bytes. Run-parts
+# directories (cron.daily etc.), anacron and at queues are not crontab format.
+CRON_SYSTEM_FILES = ('/etc/crontab',)
+CRON_SYSTEM_DIRS = ('/etc/cron.d',)
+CRON_USER_DIRS = ('/var/spool/cron/crontabs','/var/spool/cron')
+CRON_SPECIALS = ('@reboot','@yearly','@annually','@monthly','@weekly','@daily','@midnight','@hourly')
+CRON_FILE_JOBS = 64
+CRON_TOTAL_JOBS = 256
+CRON_COMMAND_LIMIT = 512
+CRON_ACCOUNT = r'[A-Za-z0-9_.][A-Za-z0-9_.-]{0,31}\$?'
+_CRON_SECRET_WORDS = r'(?:pass(?:word|wd|phrase)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|auth(?:orization)?|credentials?)'
+_CRON_VALUE = r'("[^"]*"|\'[^\']*\'|[^\s;&|\'"]+)'
+_CRON_REDACTIONS = (
+    (re.compile(r'(?<=://)[^/\s:@]+:[^/\s@]+@'),'[REDACTED]@'),
+    (re.compile(r'(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+'),r'\1[REDACTED]'),
+    (re.compile(r'(?i)([?&](?:[\w.-]*'+_CRON_SECRET_WORDS+r'[\w.-]*|key|sig|signature)=)[^&\s\'"#;|]+'),r'\1[REDACTED]'),
+    # Authorization headers: the credential follows the scheme word (Basic, Digest, ...).
+    (re.compile(r'(?i)(\b(?:proxy-)?authorization\s*:\s*)(?:(?:basic|digest|bearer|token|negotiate|ntlm|hoba|mutual|vapid|aws4-hmac-sha256|scram-sha-\d+)\s+)?(?:\[REDACTED\]|[^\s\'"]+)'),r'\1[REDACTED]'),
+    (re.compile(r'(?i)(\b[\w.-]*'+_CRON_SECRET_WORDS+r'[\w.-]*\s*[=:]\s*)'+_CRON_VALUE),r'\1[REDACTED]'),
+    (re.compile(r'(?i)((?<!\S)--?[\w.-]*'+_CRON_SECRET_WORDS+r'[\w.-]*\s+)("[^"]*"|\'[^\']*\'|[^\s;&|\'"-][^\s;&|\'"]*)'),r'\1[REDACTED]'),
+    # user:password and user%password credential arguments (curl/wget -u/--user, smbclient -U).
+    # A quoted value is consumed up to its closing quote so a password with spaces is not split.
+    (re.compile(r'((?<!\S)(?:-u|-U|--user|--proxy-user)(?:\s+|=)?(["\'])[^\s:%\'"]*(?::|\\?%))(?:(?!\2).)+(?=\2)'),r'\1[REDACTED]'),
+    (re.compile(r'((?<!\S)(?:-u|-U|--user|--proxy-user)(?:\s+|=)?["\']?[^\s:%\'"]*(?::|\\?%))[^\s\'"]+'),r'\1[REDACTED]'),
+    (re.compile(r'(\bsshpass\b[^;&|]*?(?<!\S)-p\s*)("[^"]*"|\'[^\']*\'|\S+)'),r'\1[REDACTED]'),
+    (re.compile(r'(?i)(\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^;&|]*?(?<!\S)-p)(?=\S)("[^"]*"|\'[^\']*\'|\S+)'),r'\1[REDACTED]'),
+)
+# cron reads lines up to \n and separates fields with spaces and tabs only. Other control
+# characters are shown escaped so the displayed command is the text cron passes to the shell.
+_CRON_CONTROL = re.compile(r'[\x00-\x08\x0a-\x1f\x7f-\x9f]')
+
+
+def cron_format(path):
+    """Return 'system' or 'user' for crontab-format files in built-in scope, else None."""
+    value=str(path);parent=str(Path(value).parent)
+    if value in CRON_SYSTEM_FILES or parent in CRON_SYSTEM_DIRS:return 'system'
+    if parent in CRON_USER_DIRS:return 'user'
+    return None
+
+
+def redact_cron_command(command):
+    redacted=command
+    for pattern,replacement in _CRON_REDACTIONS:redacted=pattern.sub(replacement,redacted)
+    return redacted,redacted!=command
+
+
+def cron_command(text):
+    """Split a crontab command field at cron's first unescaped percent sign. The remainder
+    is the job's standard input, which is data rather than command text, so it is only flagged."""
+    # Like cronie's do_command, each backslash escapes the next character, so an even run of
+    # backslashes before a percent sign leaves that percent sign unescaped.
+    split=None;escaped=False
+    for index,char in enumerate(text):
+        if escaped:escaped=False
+        elif char=='\\':escaped=True
+        elif char=='%':split=index;break
+    command=(text if split is None else text[:split]).rstrip(' \t')
+    return _CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),command),split is not None
+
+
+def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
+    """Parse crontab text as data. Nothing is executed or sourced; environment values are
+    counted but never exported, and malformed lines are counted rather than guessed."""
+    result={'format':form,'jobs':[],'unparsed':0,'environment':0,'truncated':False}
+    limit=max(0,min(CRON_FILE_JOBS,budget))
+    for number,line in enumerate(data.decode('utf-8','replace').split('\n'),1):
+        text=line.rstrip('\r').strip(' \t')
+        if not text or text.startswith('#'):continue
+        if '\x00' in text:result['unparsed']+=1;continue
+        if re.match(r'[A-Za-z_][A-Za-z0-9_]*[ \t]*=',text):result['environment']+=1;continue
+        special=re.split(r'[ \t]+',text,maxsplit=1)[0]
+        count=(1 if special.startswith('@') else 5)+(1 if form=='system' else 0)
+        parts=re.split(r'[ \t]+',text,maxsplit=count)
+        if len(parts)!=count+1:result['unparsed']+=1;continue
+        if special.startswith('@'):
+            if special not in CRON_SPECIALS:result['unparsed']+=1;continue
+            schedule=special
+        else:
+            if not all(re.fullmatch(r'[0-9A-Za-z*/,-]{1,64}',f) for f in parts[:5]):result['unparsed']+=1;continue
+            schedule=' '.join(parts[:5])
+        user=parts[count-1] if form=='system' else account
+        if form=='system' and not re.fullmatch(CRON_ACCOUNT,user):result['unparsed']+=1;continue
+        command,stdin=cron_command(parts[-1])
+        if not command:result['unparsed']+=1;continue
+        if len(result['jobs'])>=limit:result['truncated']=True;continue
+        command,redacted=redact_cron_command(command)
+        result['jobs'].append({'line':number,'schedule':schedule,'account':user,'command':command[:CRON_COMMAND_LIMIT],
+                               'redacted':redacted,'command_truncated':len(command)>CRON_COMMAND_LIMIT,'stdin':stdin})
+    return result
+
+
+def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
     report={'scope':scope,'entries':[],'entries_examined':0,
@@ -1063,8 +1154,9 @@ def persistence_inventory(deadline,custom_paths=None):
     def gap(path,reason):
         report['skipped']+=1
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
+    cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;content=bytearray() if form else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1085,6 +1177,7 @@ def persistence_inventory(deadline,custom_paths=None):
                     total+=len(chunk)
                     if total>1024*1024 or time.monotonic()>deadline:raise TimeoutError('Hash budget exhausted')
                     digest.update(chunk)
+                    if content is not None:content.extend(chunk)
                 row.update(kind='regular',sha256=digest.hexdigest())
                 after=os.fstat(fd)
                 if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
@@ -1096,6 +1189,11 @@ def persistence_inventory(deadline,custom_paths=None):
             with scan_root(directory) as current:
                 now=os.fstat(current);old=os.fstat(directory_fd)
                 if (now.st_dev,now.st_ino)!=(old.st_dev,old.st_ino):raise ValueError('Directory changed')
+            if content is not None and row['kind']=='regular':
+                # Parsed from exactly the bytes that were hashed above.
+                account=name if form=='user' and re.fullmatch(CRON_ACCOUNT,name) else None
+                row['cron']=parse_cron(bytes(content),form,account,CRON_TOTAL_JOBS-cron_total[0])
+                cron_total[0]+=len(row['cron']['jobs'])
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
@@ -1148,7 +1246,7 @@ def persistence_inventory(deadline,custom_paths=None):
     return report
 
 
-def security_inspect(packages,persistence=True,custom_paths=None):
+def security_inspect(packages,persistence=True,custom_paths=None,cron_jobs=False):
     """Local database comparison and metadata-only startup inventory; no remediation."""
     validate_inspection(packages,persistence,custom_paths)
     try:from bridge import bounded,rpm_backend
@@ -1196,7 +1294,7 @@ def security_inspect(packages,persistence=True,custom_paths=None):
             row['gaps'].append(type(error).__name__+': package verification unavailable or interrupted')
         if time.monotonic()>deadline:
             report['gaps'].append('Inspection time budget exhausted; remaining packages not examined');break
-    if persistence:report['persistence']=persistence_inventory(min(deadline,time.monotonic()+15),custom_paths)
+    if persistence:report['persistence']=persistence_inventory(min(deadline,time.monotonic()+15),custom_paths,cron_jobs is True)
     incomplete=report['gaps'] or any(row['state']=='incomplete' for row in report['packages']) or (persistence and report['persistence']['state']=='incomplete')
     report['state']='incomplete' if incomplete else 'collected'
     report['finished']=time.time()

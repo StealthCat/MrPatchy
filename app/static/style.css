@@ -459,6 +459,8 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 .startup-file h3 { overflow-wrap:anywhere;word-break:break-word; }
 #startup-file-view code { overflow-wrap:anywhere;word-break:break-word; }
+.startup-cron-jobs td:first-child, .startup-cron-jobs td:nth-child(2) code { white-space:nowrap; }
+.startup-cron-jobs td:last-child { min-width:16rem; }
 
 .startup-review-toolbar { flex-wrap:wrap;gap:12px; }
 .startup-review-toolbar label { flex:1 1 220px;min-width:0; }
