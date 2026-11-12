@@ -447,6 +447,8 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .endpoint-agent-table { min-width:700px; }
 .endpoint-agent-table td { max-width:260px;overflow-wrap:anywhere; }
 .endpoint-agent-table td small { display:block;white-space:normal; }
+/* Long configuration identifiers (e.g. MRPATCHY_EXPECTED_CONTROLLER_IDS) must wrap on phones. */
+#controller-registrations, #endpoint-agent-health { overflow-wrap:anywhere; }
 .endpoint-agent-counts { display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center; }
 .endpoint-agent-pager { align-items:center; }
 
