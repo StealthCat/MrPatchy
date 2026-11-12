@@ -148,7 +148,7 @@ async function aiDiagnostics(revision=renderRevision,context=null){
  const key=context?.hostId||'fleet',saved=aiListContext.get(key)||{purpose:'',state:'',offset:0};
  const status=context?null:await api('/investigation-status');if(!currentView(revision,context?'servers':'ai-logs')||!root.isConnected)return;
  root.innerHTML=(context?'<p class="help">AI activity linked to this server. Shared scoring batches show the whole batch cost, not a per-server charge. Older runs without a server association remain in fleet AI logs.</p>':heading('Know what Mr Patchy is thinking.','Persistent run stages, provider errors, retries, and worker health.')+triageStatus(status))+`<div class="toolbar"><label>Purpose<select id="ai-log-purpose"><option value="">All logged AI activity</option><option value="triage">Process triage</option><option value="update_scoring">Update importance</option><option value="connection_test">Connection tests</option><option value="release_configuration">Release configuration</option><option value="security_plan">Security response plans</option><option value="worker">Worker failures</option></select></label><label>State<select id="ai-log-state"><option value="">All run states</option><option value="running">Running</option><option value="complete">Complete</option><option value="error">Failed</option><option value="deferred">Deferred</option><option value="interrupted">Interrupted</option></select></label><p class="help">API keys, raw prompts and provider bodies are excluded.</p></div><p class="help">Costs are estimated in USD from returned token usage and saved public rates. Older activity and calls without usage or known pricing show Unavailable.</p><div class="card" id="ai-log-table"></div><div class="actions"><button id="ai-log-prev">Previous</button><button id="ai-log-next">Next</button></div>`;
- if(!context&&isAdmin())bindTriageTimingSummary(root,revision);
+ if(!context&&isAdmin()){bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);}
  let offset=saved.offset,ticket=0;
  const table=$('#ai-log-table'),purposeFilter=$('#ai-log-purpose'),stateFilter=$('#ai-log-state');
  purposeFilter.value=saved.purpose;stateFilter.value=saved.state;
@@ -196,6 +196,37 @@ function bindTriageTimingSummary(root,revision){
  };
 }
 
+function bindKnownGoodSummary(root,revision){
+ const panel=document.createElement('section');
+ panel.className='card';
+ panel.setAttribute('aria-labelledby','ai-known-good-title');
+ panel.innerHTML='<h2 id="ai-known-good-title">Fleet known-good cache</h2><p class="help">Counts of retained exact-match safe candidates and the assessments that reused them. These are record counts only. They do not verify current context, count cache misses or estimate saved provider calls or cost. Reuse grants no approval and authorizes no response.</p><button type="button">Load cache summary</button><p class="help" role="status"></p><div class="status-facts" hidden></div><p class="help known-good-review" hidden></p>';
+ root.querySelector('.toolbar').before(panel);
+ const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),facts=panel.querySelector('.status-facts'),review=panel.querySelector('.known-good-review');
+ const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unavailable';
+ button.onclick=async()=>{
+  if(!active()||button.disabled)return;
+  button.disabled=true;status.textContent='Loading cache summary…';
+  try{
+   const data=await api('/ai/known-good/summary');
+   if(!active())return;
+   const value=data&&typeof data==='object'?data:{};
+   facts.innerHTML=[['active_entries','active safe candidates'],['revoked_entries','revoked candidates'],['retained_reuse_assessments','retained reuse assessments'],['reuse_assessments_on_revoked_entries','reuse assessments on revoked candidates']].map(([key,label])=>`<span><strong>${esc(count(value[key]))}</strong> ${label}</span>`).join('');
+   facts.hidden=false;
+   const flagged=value.reuse_assessments_on_revoked_entries;
+   review.hidden=!(Number.isSafeInteger(flagged)&&flagged>0);
+   review.textContent=review.hidden?'':`${count(flagged)} retained reuse assessment(s) are linked to revoked candidates and need review. Their original results are unchanged. Open an assessment's history to review it or request Re-triage.`;
+   status.textContent='Summary of retained records. Cache misses and provider calls avoided are not measured.';
+   button.textContent='Refresh cache summary';
+  }catch{
+   if(!active())return;
+   facts.hidden=true;facts.innerHTML='';review.hidden=true;review.textContent='';
+   status.textContent='Cache summary is unavailable. You can still inspect individual AI runs.';
+   button.textContent='Retry cache summary';
+  }finally{if(active())button.disabled=false;}
+ };
+}
 async function packageHistory(revision=renderRevision,context=null){
  const root=context?.root||$('#content');
  root.innerHTML=(context?'':heading('Every package has a history.','Observed installations, version changes, removals, and package-state changes.'))+`<div class="toolbar">${context?'':`<label>Server<select id="history-host"><option value="">All servers</option>${hosts.map(h=>`<option value="${h.id}">${esc(h.name)}</option>`).join('')}</select></label>`}<label>Package<input id="history-search" placeholder="Filter package names"></label></div><p class="help">Baseline means present when history began, not installed at that time. Dates are observation times; external changes may have happened earlier. Job links show the operation during which a change was observed, including dependencies.</p><div class="card" id="package-history-table"></div><div class="actions"><button id="package-history-prev">Previous</button><button id="package-history-next">Next</button></div>`;
