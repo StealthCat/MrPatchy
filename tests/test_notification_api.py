@@ -189,3 +189,70 @@ def test_stream_frame_contains_only_valid_cursor_and_reconnect_metadata():
     assert _notification_sse(cursor) == (
         'id: ' + cursor + '\nretry: 3000\nevent: notifications\n'
         'data: {"cursor":"' + cursor + '"}\n\n')
+
+
+def test_read_batch_marks_only_shown_revisions_and_reports_unavailable(admin):
+    add_user('reader', 'viewer')
+    first, second, operator = seed_events()
+    login(admin, 'reader')
+    shown = admin.get('/api/notifications').json()['items']
+    assert {item['id'] for item in shown} == {first, second}
+    # The first event escalates after the page was loaded.
+    with Session() as session:
+        publish(session, 'viewer-first', subject_revision='revision-2',
+                severity='critical', reason='The condition escalated.', now=500)
+        session.commit()
+    csrf = admin.headers.pop('X-CSRF-Token')
+    body = {'items': [{'id': item['id'], 'revision': item['revision']} for item in shown]
+            + [{'id': operator, 'revision': 1}, {'id': 'f' * 64, 'revision': 1}]}
+    assert admin.post('/api/notifications/read-batch', json=body).status_code == 403
+    admin.headers['X-CSRF-Token'] = csrf
+
+    result = admin.post('/api/notifications/read-batch', json=body)
+    assert result.status_code == 200
+    # Hidden and missing events are indistinguishable and never written.
+    assert result.json() == {'marked': 2, 'already_read': 0, 'unavailable': 2}
+    unread = admin.get('/api/notifications?unread_only=true').json()['items']
+    assert [(item['id'], item['revision']) for item in unread] == [(first, 2)]
+    assert admin.get('/api/notifications/unread-count').json() == {'unread': 1}
+
+    repeat = admin.post('/api/notifications/read-batch', json=body).json()
+    assert repeat == {'marked': 0, 'already_read': 2, 'unavailable': 2}
+    with Session() as session:
+        states = session.scalars(select(notifications.NotificationUserState)).all()
+        assert {(state.username, state.event_id) for state in states} == {
+            ('reader', first), ('reader', second)}
+        assert all(state.dismissed_revision == 0 for state in states)
+        actions = list(session.scalars(select(Audit.action).where(
+            Audit.action == 'read notifications')))
+        assert actions == ['read notifications']
+
+    add_user('other-reader', 'viewer')
+    login(admin, 'other-reader')
+    assert admin.get('/api/notifications/unread-count').json() == {'unread': 2}
+
+
+def test_read_batch_rejects_malformed_batches_without_writes(admin):
+    add_user('reader', 'viewer')
+    first, second, _ = seed_events()
+    login(admin, 'reader')
+    url = '/api/notifications/read-batch'
+    valid = {'id': first, 'revision': 1}
+    for body, status in [
+            ({'items': []}, 422),
+            ({'items': [valid] * 101}, 422),
+            ({'items': [valid, valid]}, 400),
+            ({'items': [{'id': second, 'revision': 1}, {'id': first, 'revision': 2}]}, 400),
+            ({'items': [{'id': 'NOT-HEX', 'revision': 1}]}, 400),
+            ({'items': [{'id': first, 'revision': 0}]}, 422),
+            ({'items': [{'id': first, 'revision': True}]}, 422),
+            ({'items': [{'id': first}]}, 422)]:
+        assert admin.post(url, json=body).status_code == status, body
+    assert admin.get('/api/notifications/unread-count').json() == {'unread': 2}
+    with Session() as session:
+        assert session.scalars(select(notifications.NotificationUserState)).all() == []
+
+
+def test_read_batch_requires_authentication(client):
+    assert client.post('/api/notifications/read-batch',
+                       json={'items': [{'id': 'a' * 64, 'revision': 1}]}).status_code in {401, 403}
