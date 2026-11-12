@@ -14,6 +14,7 @@ PASSWORD = os.environ['ADMIN_PASSWORD']
 # test_every_route_has_an_expected_role, so each new route forces a role decision.
 EXPECTED_ROLES = {
     ('GET','/'):'public',
+    ('GET','/api/ai/known-good/summary'):'admin',
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
     ('POST','/api/ai/provider-backoff/clear'):'admin',
     ('GET','/api/ai/triage/timings'):'admin',
@@ -23,6 +24,7 @@ EXPECTED_ROLES = {
     ('GET','/api/audit/entries/{entry_id}'):'admin',
     ('GET','/api/audit/export'):'admin',
     ('GET','/api/dashboard'):'viewer',
+    ('GET','/api/fleet/updates'):'viewer',
     ('GET','/api/hosts'):'viewer',
     ('POST','/api/hosts'):'admin',
     ('DELETE','/api/hosts/{host_id}'):'admin',
@@ -209,8 +211,10 @@ EXPECTED_ROLES = {
     ('PUT','/api/settings'):'admin',
     ('PUT','/api/settings/ai'):'admin',
     ('PUT','/api/settings/ai-key'):'admin',
+    ('GET','/api/settings/ai-control-status'):'admin',
     ('GET','/api/settings/ai-spend-history'):'admin',
     ('GET','/api/settings/ai-models'):'admin',
+    ('GET','/api/settings/ai-connections'):'admin',
     ('GET','/api/settings/agent-maintenance'):'admin',
     ('PUT','/api/settings/agent-maintenance'):'admin',
     ('POST','/api/settings/ai-test'):'admin',

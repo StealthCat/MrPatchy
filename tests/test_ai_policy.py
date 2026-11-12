@@ -3,7 +3,7 @@ from app import ai_policy,ai,ai_runs
 from app.db import Session,Host,Setting,Audit,Job,Behavior
 from app.coordination import Lock
 from app.identity import User
-from sqlalchemy import select
+from sqlalchemy import event,select
 
 BASE='/api/hosts/one/security/ai-policy'
 @pytest.fixture
@@ -20,6 +20,49 @@ def configure(client,limit,**changes):
     current=client.get(BASE).json()
     return client.put(BASE,json={'paused':current['paused'],'concurrency_limit':limit,
         'expected_revision':current['revision'],'reason':'Adjust investigation capacity after review',**changes})
+
+def test_provider_pause_checks_batch_policy_reads_and_skip_empty_scope(managed,monkeypatch):
+    from app.db import engine
+    hosts = ['one','two','three','four','five']
+    with Session() as s:
+        s.add_all([Setting(key=ai_policy.PREFIX+host,value={'paused':False}) for host in hosts[:-1]])
+        s.add(Setting(key=ai_policy.PREFIX+'other',value={'paused':True}))
+        s.commit()
+    selects = []
+
+    def record(conn,cursor,statement,parameters,context,executemany):
+        if statement.lstrip().upper().startswith('SELECT'):
+            selects.append(statement)
+
+    event.listen(engine,'before_cursor_execute',record)
+    try:
+        ai_policy.require([])
+        assert selects==[]
+        ai_policy.require([*hosts,'one'])
+        assert len(selects)==2
+        assert sum(' IN (' in statement.upper() for statement in selects)==1
+        selects.clear()
+        monkeypatch.setattr(ai_policy,'POLICY_READ_BATCH',2)
+        ai_policy.require([*hosts,'one'])
+        assert len(selects)==4
+        assert sum(' IN (' in statement.upper() for statement in selects)==3
+    finally:
+        event.remove(engine,'before_cursor_execute',record)
+
+
+def test_provider_pause_checks_refuse_malformed_rows_before_global_disable(managed,monkeypatch):
+    monkeypatch.setattr(ai_policy,'POLICY_READ_BATCH',2,raising=False)
+    with Session() as s:
+        s.get(Setting,'config').value={'ai_enabled':False}
+        s.add(Setting(key=ai_policy.PREFIX+'zzz',value=['invalid policy']))
+        s.commit()
+    with pytest.raises(ai.AIError,match='paused') as error:
+        ai_policy.require(['one','two','zzz'])
+    assert error.value.policy_wait
+    with pytest.raises(ai.AIError,match='globally disabled'):
+        ai_policy.require(['one','two'])
+    ai_policy.require([])
+
 
 def test_persistence_isolation_revision_audit_and_global_precedence(managed):
     assert pause(managed).status_code==200

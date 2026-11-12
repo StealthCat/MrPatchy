@@ -3,7 +3,11 @@
 // permission filtering, unread counts and per-user revision state.
 window.NotificationShell=(()=>{
  const POLL_MS=30000, severityRank={info:0,low:1,medium:2,high:3,critical:4};
- let generation=0,requestRevision=0,centerRequestRevision=0,timer=0,items=[],open=false,started=false,stream=null;
+ // Live toasts: only new or higher-revision unread high/critical events seen after
+ // the first successful refresh. Hiding a toast is local to this tab and never
+ // marks the notification read, dismisses it or acknowledges its subject.
+ const TOAST_LIMIT=3,TOAST_MS=10000,TOAST_SEEN_LIMIT=500,toastSeverities=new Set(['high','critical']);
+ let generation=0,requestRevision=0,centerRequestRevision=0,timer=0,items=[],open=false,started=false,stream=null,toastSeen=null;
  const centerContext={offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''};
  const node=id=>document.getElementById(id);
  const button=()=>node('notification-button'),panel=()=>node('notification-panel');
@@ -44,6 +48,101 @@ window.NotificationShell=(()=>{
    article.append(meta,reason,actions);list.append(article);
   }
  }
+ function toastStack(){
+  let stack=node('notification-toasts');
+  if(!stack){
+   stack=element('div','notification-toasts');stack.id='notification-toasts';
+   stack.setAttribute('role','status');stack.setAttribute('aria-live','polite');stack.setAttribute('aria-label','New notifications');
+   if(typeof stack.showPopover==='function')stack.popover='manual';
+  }
+  // A modal dialog makes everything outside it inert, so mount inside the open
+  // dialog. The top-layer popover keeps the stack above the dialog without
+  // moving focus.
+  const dialog=node('modal'),host=dialog?.open?dialog:document.body;
+  if(stack.parentNode!==host)host.append(stack);
+  return stack;
+ }
+ function showStack(stack){
+  if(!stack.children.length){if(stack.popover&&stack.matches(':popover-open'))stack.hidePopover();stack.hidden=true;return;}
+  stack.hidden=false;
+  if(stack.popover){try{if(stack.matches(':popover-open'))stack.hidePopover();stack.showPopover();}catch{}}
+ }
+ function removeToast(card){clearTimeout(card._timer);card.remove();const stack=node('notification-toasts');if(stack)showStack(stack);}
+ function armToast(card){
+  const arm=()=>{clearTimeout(card._timer);card._timer=setTimeout(()=>removeToast(card),TOAST_MS);};
+  card.addEventListener('mouseenter',()=>clearTimeout(card._timer));card.addEventListener('mouseleave',()=>{if(!card.contains(document.activeElement))arm();});
+  card.addEventListener('focusin',()=>clearTimeout(card._timer));card.addEventListener('focusout',event=>{if(!card.contains(event.relatedTarget)&&!card.matches(':hover'))arm();});
+  arm();
+ }
+ function toastCard({severity,title,reason,link,linkLabel,eventId}){
+  const card=element('article','notification-toast');card.dataset.severity=severity;if(eventId)card.dataset.eventId=eventId;
+  const head=element('div','notification-meta');head.append(element('span','notification-severity',severity),element('span','',title));
+  const actions=element('div','notification-actions');
+  if(link){const anchor=element('a','button',linkLabel);anchor.href=link;anchor.addEventListener('click',()=>removeToast(card));actions.append(anchor);}
+  const hide=element('button','quiet','Hide');hide.type='button';hide.setAttribute('aria-label','Hide this toast. The notification stays unread.');hide.addEventListener('click',()=>removeToast(card));actions.append(hide);
+  card.append(head,element('p','notification-reason',reason),actions);return card;
+ }
+ function clearToasts(){const stack=node('notification-toasts');if(!stack)return;for(const card of [...stack.children])clearTimeout(card._timer);stack.replaceChildren();showStack(stack);}
+ // Toast admission reads the durable arrival cursor (GET /notifications/arrivals),
+ // not the bell's recent list or any bounded unread window. The first successful
+ // refresh takes a baseline cursor, so events present at sign-in, reload or
+ // reconnect never toast. Later refreshes receive, in commit order, each visible
+ // current revision committed after the cursor, independent of producer
+ // timestamps and of how many older unread events exist. Items are filtered by
+ // the server to the caller's current role.
+ const TOAST_ARRIVAL_PAGE=100,TOAST_ARRIVAL_PAGES=5;
+ async function toastArrivals(){
+  const from=toastSeen?toastSeen.cursor:null;
+  if(from===null){const page=await api('/notifications/arrivals');return {from,cursor:arrivalCursor(page),items:[],baseline:true};}
+  let cursor=from;const found=[];
+  // Bounded catch-up per refresh; anything beyond it is picked up on the next one.
+  for(let pageNo=0;pageNo<TOAST_ARRIVAL_PAGES;pageNo++){
+   const page=await api(`/notifications/arrivals?after=${cursor}&limit=${TOAST_ARRIVAL_PAGE}`);
+   // A cursor beyond the retained sequence is reset to a fresh baseline.
+   if(page.reset)return {from,cursor:arrivalCursor(page),items:[],baseline:true};
+   found.push(...(Array.isArray(page.items)?page.items:[]));cursor=arrivalCursor(page);
+   if(!page.more)break;
+  }
+  return {from,cursor,items:found,baseline:false};
+ }
+ function arrivalCursor(page){if(!Number.isInteger(page?.cursor)||page.cursor<0)throw new Error('Notification arrival cursor unavailable');return page.cursor;}
+ function noteToasts(current,arrivals){
+  // Without a fresh arrival result the bell still updates; existing toasts are
+  // pruned but nothing new is admitted and the cursor is kept for a retry.
+  const fresh=[];
+  if(arrivals&&(toastSeen?toastSeen.cursor:null)===arrivals.from){
+   const first=toastSeen===null;
+   toastSeen={cursor:arrivals.cursor,revisions:toastSeen?.revisions||new Map()};
+   if(!first&&!arrivals.baseline)for(const item of arrivals.items){
+    // Arrivals are delivered once per revision; the bounded memory only guards
+    // against duplicate items inside one catch-up.
+    const revision=Number(item.revision)||0,known=toastSeen.revisions.get(item.id);
+    if(known!==undefined&&known>=revision)continue;
+    toastSeen.revisions.delete(item.id);toastSeen.revisions.set(item.id,revision);
+    if(!item.read&&!item.dismissed&&item.lifecycle!=='resolved'&&toastSeverities.has(item.severity))fresh.push(item);
+   }
+   while(toastSeen.revisions.size>TOAST_SEEN_LIMIT)toastSeen.revisions.delete(toastSeen.revisions.keys().next().value);
+  }
+  if(!toastSeen)return;
+  fresh.sort((a,b)=>(Number(b.created)||0)-(Number(a.created)||0)||(String(a.id)<String(b.id)?-1:1));
+  const stack=toastStack();
+  for(const card of [...stack.querySelectorAll('[data-event-id]')]){const item=current.find(candidate=>candidate.id===card.dataset.eventId);if(item&&(item.read||item.dismissed))removeToast(card);}
+  if(!fresh.length){showStack(stack);return;}
+  if(fresh.length>TOAST_LIMIT){
+   clearToasts();
+   const severity=fresh.some(item=>item.severity==='critical')?'critical':'high';
+   const card=toastCard({severity,title:'notifications',reason:`${fresh.length} new ${severity==='critical'?'critical or high':'high'}-severity notifications need attention.`,link:'#notifications',linkLabel:'Open notification center'});
+   stack.append(card);armToast(card);showStack(stack);return;
+  }
+  for(const item of fresh.reverse()){
+   for(const old of [...stack.querySelectorAll('[data-event-id]')])if(old.dataset.eventId===item.id)removeToast(old);
+   const card=toastCard({severity:item.severity,title:readableSource(item.source)+(item.host_id?' · '+(typeof hostName==='function'?hostName(item.host_id):'server '+item.host_id):''),reason:item.reason||'Reason unavailable',link:safeLink(item.deep_link),linkLabel:'Open',eventId:item.id});
+   stack.append(card);armToast(card);
+  }
+  while(stack.children.length>TOAST_LIMIT)removeToast(stack.firstElementChild);
+  showStack(stack);
+ }
+ node('modal')?.addEventListener('close',()=>{const stack=node('notification-toasts');if(stack&&stack.parentNode!==document.body){document.body.append(stack);showStack(stack);}});
  function schedule(run=generation){clearTimeout(timer);if(!started||document.hidden)return;timer=setTimeout(()=>{if(run===generation)refresh();},POLL_MS);}
  function connect(run){
   if(typeof EventSource!=='function')return;
@@ -57,9 +156,9 @@ window.NotificationShell=(()=>{
   if(!started||document.hidden)return;
   const run=generation,request=++requestRevision;
   try{
-   const [count,page]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8')]);
+   const [count,page,arrivals]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8'),toastArrivals().catch(()=>null)]);
    if(run!==generation||request!==requestRevision)return;
-   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();
+   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();noteToasts(items,arrivals);
    status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
    if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){
@@ -89,7 +188,7 @@ window.NotificationShell=(()=>{
   open=true;panel().hidden=false;button().setAttribute('aria-expanded','true');refresh();
  }
  function reset(){
-  generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;
+  generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;toastSeen=null;clearToasts();
   if(stream){stream.close();stream=null;}
   panel().hidden=true;button().setAttribute('aria-expanded','false');setCount(null,[]);
   status('');node('notification-list').replaceChildren();Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});
@@ -144,7 +243,7 @@ window.NotificationShell=(()=>{
   const request=++centerRequestRevision,root=node('content'),page=await api('/notifications?'+query());
   if(request!==centerRequestRevision||!currentView(revision,'notifications')||!root.isConnected)return;
   const hostOptions=hosts.map(host=>`<option value="${esc(host.id)}" ${centerContext.hostId===host.id?'selected':''}>${esc(host.name)}</option>`).join('');
-  root.innerHTML=PatchyUI.heading('notifications','Your notification history.','Permission-filtered attention and recovery notes, kept separate from operational acknowledgement.')+`<section class="card notification-center-controls"><form id="notification-filters"><div class="form-grid"><label>Severity<select name="severity"><option value="">All severities</option>${['critical','high','medium','low','info'].map(value=>`<option value="${value}" ${centerContext.severity===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Source<input name="source" value="${esc(centerContext.source)}" maxlength="40" pattern="[a-z0-9][a-z0-9_.-]*" placeholder="All sources"></label><label>Server<select name="host_id"><option value="">All servers</option>${hostOptions}</select></label></div><div class="actions"><label class="check"><input name="unread_only" type="checkbox" ${centerContext.unreadOnly?'checked':''}>Unread only</label><label class="check"><input name="include_dismissed" type="checkbox" ${centerContext.includeDismissed?'checked':''}>Include dismissed</label><button type="submit">Apply filters</button><button type="button" class="quiet" id="notification-filters-clear">Clear</button></div></form><p class="help">Read and dismiss affect only your account. They never acknowledge an alert, resolve an incident, approve AI work or run remediation.</p></section><section id="notification-center-list" aria-label="Notification history"></section><div class="actions notification-center-pages"><button id="notification-center-prev">Previous</button><span class="help" id="notification-center-range"></span><button id="notification-center-next">Next</button></div><p class="help notification-center-coverage">Authenticated server push refreshes this page from durable, permission-filtered history. A 30-second polling fallback remains active; live toasts and complete failover acceptance remain planned.</p>`;
+  root.innerHTML=PatchyUI.heading('notifications','Your notification history.','Permission-filtered attention and recovery notes, kept separate from operational acknowledgement.')+`<section class="card notification-center-controls"><form id="notification-filters"><div class="form-grid"><label>Severity<select name="severity"><option value="">All severities</option>${['critical','high','medium','low','info'].map(value=>`<option value="${value}" ${centerContext.severity===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Source<input name="source" value="${esc(centerContext.source)}" maxlength="40" pattern="[a-z0-9][a-z0-9_.-]*" placeholder="All sources"></label><label>Server<select name="host_id"><option value="">All servers</option>${hostOptions}</select></label></div><div class="actions"><label class="check"><input name="unread_only" type="checkbox" ${centerContext.unreadOnly?'checked':''}>Unread only</label><label class="check"><input name="include_dismissed" type="checkbox" ${centerContext.includeDismissed?'checked':''}>Include dismissed</label><button type="submit">Apply filters</button><button type="button" class="quiet" id="notification-filters-clear">Clear</button></div></form><p class="help">Read and dismiss affect only your account. They never acknowledge an alert, resolve an incident, approve AI work or run remediation.</p></section><section id="notification-center-list" aria-label="Notification history"></section><div class="actions notification-center-pages"><button id="notification-center-prev">Previous</button><span class="help" id="notification-center-range"></span><button id="notification-center-next">Next</button></div><p class="help notification-center-coverage">Authenticated server push refreshes this page from durable, permission-filtered history. A 30-second polling fallback remains active. New high and critical notifications also appear briefly as toasts; hiding a toast leaves the notification unread. Complete failover acceptance remains planned.</p>`;
   applyCenterPage(page,false);
   node('notification-filters').onsubmit=event=>{event.preventDefault();const form=new FormData(event.currentTarget);Object.assign(centerContext,{offset:0,severity:String(form.get('severity')||''),source:String(form.get('source')||'').trim(),hostId:String(form.get('host_id')||''),unreadOnly:form.has('unread_only'),includeDismissed:form.has('include_dismissed')});center(revision).catch(error=>toast(error.message));};
   node('notification-filters-clear').onclick=()=>{Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});center(revision).catch(error=>toast(error.message));};
