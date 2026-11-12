@@ -85,6 +85,7 @@ module.exports=async(page,capture)=>{
  await page.reload();await page.locator('#ai-settings-form').waitFor();
  assert.equal(await page.locator('[name=ai_daily_cap_usd]').inputValue(),'10');
  assert.match(await page.locator('#ai-settings-form').textContent(),/remaining \$10(?:\s|$)/);
+ await page.getByText('No transmitted AI calls await reconciliation.',{exact:true}).waitFor();
  assert.match(await page.locator('#ai-settings-form').textContent(),/Price catalog current.*2026-10-26.*expires/s);
  await page.locator('[name=ai_control_mode]').selectOption('rate_and_daily');
  await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
@@ -94,6 +95,16 @@ module.exports=async(page,capture)=>{
  const aiState=await (await page.request.get(new URL('/api/settings',page.url()).href)).json();
  assert.equal(aiState.ai_control_mode,'rate_and_daily');assert.equal(aiState.ai_daily_cap_usd,12.5);
  assert.equal(aiState.ai_budget_timezone,'America/New_York');
+ // A concurrent control change makes this open form stale: saving it must be refused, not overwrite (#709).
+ const concurrent=await page.evaluate(async()=>(await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_daily_cap_usd:20})})).status);
+ assert.equal(concurrent,200);
+ await page.locator('[name=ai_daily_cap_usd]').fill('15');
+ await page.getByRole('button',{name:'Save AI settings',exact:true}).click();
+ await page.locator('#ai-save-result').filter({hasText:'reload Settings'}).waitFor();
+ assert.equal(await page.locator('[name=ai_daily_cap_usd]').inputValue(),'15');
+ assert.equal((await (await page.request.get(new URL('/api/settings',page.url()).href)).json()).ai_daily_cap_usd,20);
+ await page.reload();await page.locator('#ai-settings-form').waitFor();
+ assert.equal(await page.locator('[name=ai_daily_cap_usd]').inputValue(),'20');
  assert.match(await page.locator('#ai-settings-form').textContent(),/uncertain.*remaining/s);
  assert.match(await page.locator('#ai-settings-form').textContent(),/Provider Retry-After.*shared across workers/s);
  for(const width of [320,390,1440]){
@@ -105,6 +116,14 @@ module.exports=async(page,capture)=>{
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,section+' overflows at '+width);
   }
  }
+ const budgetFixture=route=>route.fulfill({json:{...aiState,ai_budget:{
+  ...aiState.ai_budget,unreconciled_call_count:2,oldest_unreconciled_reservation_at:1793404800,
+ }}});
+ await page.route('**/api/settings',budgetFixture);
+ try{
+  await page.locator('[href="#settings/ai"]').first().click();
+  await page.getByText('2 transmitted AI calls await reconciliation · Oldest reservation',{exact:false}).waitFor();
+ }finally{await page.unroute('**/api/settings',budgetFixture);}
  await page.locator('[data-nav=settings]').click();
  await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
  await page.unroute('**/api/settings',settingsHandler);

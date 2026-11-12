@@ -15,7 +15,7 @@ import math
 import re
 import time
 
-from sqlalchemy import Boolean, Double, Integer, JSON, String, func, select
+from sqlalchemy import Boolean, Double, Integer, JSON, String, case, func, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
@@ -36,6 +36,7 @@ FORBIDDEN_CANONICAL_FIELDS = OBSERVATION_FIELDS | {
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
 FOLLOWUP_POLICY_VERSION = 'process-followup-v2'
 FOLLOWUP_CHECKS = {'package', 'service', 'executable'}
+LOOKUP_READ_BATCH = 100
 FOLLOWUP_CONTEXT_KEYS = {
     'version', 'process', 'credentials', 'namespaces', 'maps_sha256',
     'cgroup_sha256', 'artifacts', 'executable', 'coverage',
@@ -376,41 +377,54 @@ def lookup(s, snapshot, model, policy_hashes, bypass=False):
     """
     if bypass or not isinstance(policy_hashes, (list, tuple)):
         return None
+    candidates = []
     for policy_hash in dict.fromkeys(policy_hashes):
         status = _safe_probe(snapshot, model, policy_hash)
-        if not status['eligible']:
-            continue
-        saved = s.get(Entry, status['fingerprint'])
-        if not saved or not saved.active:
-            continue
-        from .ai_assessments import Assessment
-        origin = s.get(Assessment, saved.assessment_id)
-        origin_observation = s.get(Observation, saved.assessment_id)
-        if (not origin or origin.source != 'ai' or origin.host_id != saved.source_host_id or
-                origin.model != saved.model or origin.policy_hash != saved.policy_hash or
-                origin.result != saved.result or
-                not origin_observation or origin_observation.fingerprint != saved.fingerprint or
-                origin_observation.host_id != saved.source_host_id or
-                origin_observation.subject != origin.subject):
-            continue
-        expected = Entry(fingerprint=status['fingerprint'], version=status['version'],
-            classification_source='ai', model=model.strip(), policy_hash=policy_hash,
-            assessment_id=saved.assessment_id, source_host_id=saved.source_host_id,
-            contract=_canonical_contract(snapshot), result=copy.deepcopy(saved.result))
-        # Re-evaluate the retained result too: a corrupt/mutated low-risk row is
-        # never reusable merely because its primary key still matches.
-        retained = evaluate(snapshot, saved.model, saved.policy_hash, saved.result,
-            saved.classification_source)
-        if (not retained['eligible'] or retained['fingerprint'] != saved.fingerprint or
-                not _same_entry(saved, expected) or
-                not isinstance(saved.result.get('recommended_checks'), str)):
-            continue
-        return {'fingerprint': saved.fingerprint, 'version': saved.version,
-            'model': saved.model, 'policy_hash': saved.policy_hash,
-            'assessment_id': saved.assessment_id,
-            'source_subject': origin.subject,
-            'source_host_id': saved.source_host_id,
-            'created': saved.created, 'result': copy.deepcopy(saved.result)}
+        if status['eligible']:
+            candidates.append((policy_hash, status))
+    from .ai_assessments import Assessment
+    for offset in range(0, len(candidates), LOOKUP_READ_BATCH):
+        batch = candidates[offset:offset + LOOKUP_READ_BATCH]
+        fingerprints = [status['fingerprint'] for _, status in batch]
+        saved_by_fingerprint = {row.fingerprint: row for row in s.scalars(
+            select(Entry).where(
+                Entry.fingerprint.in_(fingerprints), Entry.active.is_(True)))}
+        assessment_ids = {row.assessment_id for row in saved_by_fingerprint.values()}
+        origins = {row.id: row for row in s.scalars(
+            select(Assessment).where(Assessment.id.in_(assessment_ids)))} if assessment_ids else {}
+        observations = {row.assessment_id: row for row in s.scalars(
+            select(Observation).where(Observation.assessment_id.in_(assessment_ids)))} if assessment_ids else {}
+        for policy_hash, status in batch:
+            saved = saved_by_fingerprint.get(status['fingerprint'])
+            if saved is None:
+                continue
+            origin = origins.get(saved.assessment_id)
+            origin_observation = observations.get(saved.assessment_id)
+            if (not origin or origin.source != 'ai' or origin.host_id != saved.source_host_id or
+                    origin.model != saved.model or origin.policy_hash != saved.policy_hash or
+                    origin.result != saved.result or
+                    not origin_observation or origin_observation.fingerprint != saved.fingerprint or
+                    origin_observation.host_id != saved.source_host_id or
+                    origin_observation.subject != origin.subject):
+                continue
+            expected = Entry(fingerprint=status['fingerprint'], version=status['version'],
+                classification_source='ai', model=model.strip(), policy_hash=policy_hash,
+                assessment_id=saved.assessment_id, source_host_id=saved.source_host_id,
+                contract=_canonical_contract(snapshot), result=copy.deepcopy(saved.result))
+            # Re-evaluate the retained result too: a corrupt/mutated low-risk row is
+            # never reusable merely because its primary key still matches.
+            retained = evaluate(snapshot, saved.model, saved.policy_hash, saved.result,
+                saved.classification_source)
+            if (not retained['eligible'] or retained['fingerprint'] != saved.fingerprint or
+                    not _same_entry(saved, expected) or
+                    not isinstance(saved.result.get('recommended_checks'), str)):
+                continue
+            return {'fingerprint': saved.fingerprint, 'version': saved.version,
+                'model': saved.model, 'policy_hash': saved.policy_hash,
+                'assessment_id': saved.assessment_id,
+                'source_subject': origin.subject,
+                'source_host_id': saved.source_host_id,
+                'created': saved.created, 'result': copy.deepcopy(saved.result)}
     return None
 
 
@@ -479,6 +493,24 @@ def publish(s, row):
         audit(s, 'link known-good observation',
             f'{observation.fingerprint} {observation.assessment_id} {observation.host_id}')
     return {**status, 'published': bool(saved.active)}
+
+
+def summary(s):
+    """Count published state and retained reuse links without loading evidence."""
+    from .ai_assessments import Assessment
+
+    entries = select(
+        func.count(case((Entry.active.is_(True), 1))).label('active_entries'),
+        func.count(case((Entry.active.is_(False), 1))).label('revoked_entries'),
+    ).select_from(Entry).subquery()
+    reuse = select(
+        func.count().label('retained_reuse_assessments'),
+        func.count(case((Entry.active.is_(False), 1))).label('reuse_assessments_on_revoked_entries'),
+    ).select_from(Observation).join(Entry, Entry.fingerprint == Observation.fingerprint).join(
+        Assessment, Assessment.id == Observation.assessment_id,
+    ).where(Assessment.source == 'known_good').subquery()
+    statement = select(entries, reuse).select_from(entries.join(reuse, true()))
+    return dict(s.execute(statement).mappings().one())
 
 
 def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action):

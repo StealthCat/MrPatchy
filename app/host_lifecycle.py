@@ -14,6 +14,8 @@ class Inactive(ValueError):pass
 class Busy(ValueError):pass
 class QueueFull(ValueError):pass
 
+ACTIVITY_READ_BATCH=200
+
 
 def active(host):
     # Transient Host fixtures/objects get SQLAlchemy defaults at insertion time.
@@ -31,19 +33,31 @@ def inactive_ids():
 def activity(host_ids,kind,blocking=True,wait=None):
     """Keep lifecycle transitions out of in-flight SSH and provider requests."""
     locks=[]
+    identifiers=sorted(set(host_ids))
     try:
-        for identifier in sorted(set(host_ids)):
+        for identifier in identifiers:
             lock=Lock('server-'+kind+':'+identifier)
             if not (lock.acquire(blocking) if wait is None else lock.acquire(blocking,wait)):
                 raise Busy('Server communication or AI work is active; retry after it finishes')
             locks.append(lock)
         revisions={}
         with Session() as s:
-            for identifier in host_ids:
-                host=s.get(Host,identifier)
-                # Bootstrap/native tests may use unpersisted typed SSH hosts.
-                if host and not active(host):raise Inactive('Server management is disabled or deleted')
-                if host:revisions[identifier]=host.lifecycle_revision
+            # Bootstrap/native callers may use unpersisted typed SSH hosts.
+            # Missing rows retain that behavior and contribute no revision.
+            lifecycle_fields=select(Host.id,Host.enabled,Host.deleted_at,Host.lifecycle_revision)
+            mysql=s.get_bind().dialect.name in ('mysql','mariadb')
+            for start in range(0,len(identifiers),ACTIVITY_READ_BATCH):
+                batch=identifiers[start:start+ACTIVITY_READ_BATCH]
+                hosts={host.id:host for host in s.execute(lifecycle_fields.where(Host.id.in_(batch)))}
+                for identifier in batch:
+                    host=hosts.get(identifier)
+                    # MySQL collations can match a different spelling. Keep
+                    # the caller's revision key and use the database's equality.
+                    if host is None and mysql:
+                        host=s.execute(lifecycle_fields.where(Host.id==identifier)).one_or_none()
+                    if host is None:continue
+                    if not active(host):raise Inactive('Server management is disabled or deleted')
+                    revisions[identifier]=host.lifecycle_revision
         yield revisions
     finally:
         for lock in reversed(locks):lock.release()
