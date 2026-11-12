@@ -662,7 +662,9 @@ def test_nearing_daily_cap_warns_once_per_window_and_hands_over_at_exhaustion(ad
         assert event.revision==1 and event.minimum_role=='admin' and event.host_id==''
         assert revision.lifecycle=='active' and revision.severity=='low'
         assert revision.deep_link=='#settings/ai'
-        assert 'at least 80% of the shared daily cap of $1 (UTC day)' in revision.reason
+        assert 'reached $0.8 of the shared daily cap of $1 (UTC day), at least 80% of the cap' in revision.reason
+        assert 'leaving $0.2 before the reset' in revision.reason
+        first_reason=revision.reason
         assert '2026-11-01T00:00:00Z' in revision.reason and 'not a provider invoice' in revision.reason
         assert cap_event(session) is None
         notifications.mark_read(session, 'admin', event.id, event.revision, now=DAY+200)
@@ -671,7 +673,8 @@ def test_nearing_daily_cap_warns_once_per_window_and_hands_over_at_exhaustion(ad
     ledger('0.1', status='sent')
     operations.collect_alerts(DAY+240)
     with Session() as session:
-        assert warning_event(session).revision==1
+        event=warning_event(session)
+        assert event.revision==1 and cap_revision(session, event).reason==first_reason
         assert notifications.unread_count(session, 'admin')==0
         assert not session.query(operations.Alert).filter(operations.Alert.kind.like('%cap%')).count()
     # Reaching the cap resolves the warning; only the exhausted notification is active.

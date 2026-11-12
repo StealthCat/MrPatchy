@@ -2396,11 +2396,13 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
 Worker checkpoint #739 adds an advance warning to the same producer. While
 counted spend in an enabled cap mode is at least a fixed 80% of the cap but
 below it, one admin-only `ai-budget`/`daily-cap-warning` notification (severity
-low, `#settings/ai`) names the threshold, cap, budget timezone and next reset.
+low, `#settings/ai`) names the threshold, cap, budget timezone and next reset,
+plus the counted and remaining amounts recorded when the warning was raised.
 - **Revision binding:** as for the exhausted notification, the revision is bound
-  to the window and cap. The reason text deliberately omits live amounts, which
-  would otherwise create a new unread revision on every reservation. Settings
-  shows the current counted and remaining totals.
+  to the window and cap. The amounts are captured at threshold crossing, and an
+  active warning for the same window and cap is not republished, so later
+  reservations create no new unread revision. The text labels the amounts as
+  recorded at that time; Settings shows the current totals.
 - **Hand-over and resolution:** the warning resolves once when the cap is
   reached (the exhausted notification then applies), the window resets, the cap
   is raised, the mode becomes uncapped or AI is disabled.
