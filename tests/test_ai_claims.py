@@ -158,6 +158,28 @@ def test_same_host_uses_two_slots_but_cannot_occupy_the_pool(admin,monkeypatch):
         for future in running:future.result(15)
 
 
+def test_server_ai_policy_occupancy_counts_only_live_host_leases(admin):
+    seed(count=2)
+    now=time.time()
+    with Session() as s:
+        s.add_all([
+            ai_claims.Claim(subject=subject,host_id=host_id,token='private-token',
+                worker_id='private-worker',boot_id='private-boot',run_id=subject,
+                revision='fixture',configuration='fixture',created=now-60,renewed=now,
+                expires=expires)
+            for subject,host_id,expires in [
+                ('first-live','host-0',now+30),('second-live','host-0',now+60),
+                ('expired','host-0',now-1),('other-host','host-1',now+15),
+            ]
+        ])
+        s.commit()
+    response=admin.get('/api/hosts/host-0/security/ai-policy')
+    assert response.status_code==200
+    assert response.json()['active_lease_count']==2
+    assert response.json()['earliest_lease_expires_at']==pytest.approx(now+30,abs=.01)
+    assert 'private-token' not in response.text and 'private-worker' not in response.text
+
+
 def test_status_reports_earliest_live_lease_expiry(admin):
     seed(count=2)
     first=ai_claims.acquire();second=ai_claims.acquire()
@@ -190,6 +212,7 @@ def test_status_reports_earliest_live_lease_expiry(admin):
 def test_lowered_server_limit_preserves_live_leases_and_blocks_later_admission(admin):
     seed(count=4,same_host=True)
     current=admin.get('/api/hosts/host-0/security/ai-policy').json()
+    assert current['active_lease_count']==0 and current['earliest_lease_expires_at'] is None
     configured=admin.put('/api/hosts/host-0/security/ai-policy',json={
         'paused':False,'concurrency_limit':3,'expected_revision':current['revision'],
         'reason':'Allow three reviewed investigations for this server',
@@ -204,6 +227,8 @@ def test_lowered_server_limit_preserves_live_leases_and_blocks_later_admission(a
         'reason':'Return this server to serial investigation capacity',
     })
     assert lowered.status_code==200 and lowered.json()['concurrency_limit']==1
+    assert lowered.json()['active_lease_count']==3
+    assert lowered.json()['earliest_lease_expires_at']>time.time()
     for lease in leases:lease.check()
     assert ai_claims.acquire() is None
     with leases.pop():pass
