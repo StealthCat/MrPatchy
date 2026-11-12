@@ -61,7 +61,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.46"
+APP_VERSION = "1.59.53"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1027,7 +1027,8 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(admin_user)):
             s.rollback();row=s.get(Behavior,behavior_id)
             if not row:raise HTTPException(404,'Behavior not found')
             if ai_assessments.revision(row)!=body.expected_revision:raise HTTPException(409,'The assessment changed since you opened it; review the current result and try again')
-            row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
+            from . import triage_notifications
+            row.approved=body.approved; triage_notifications.publish_approval(s,row); audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 
 class RetriageInput(BaseModel):
     expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -3325,7 +3326,9 @@ def review_startup_incident(host_id:str,incident_id:str,body:IncidentReview,user
         reason=body.reason.strip()
         if len(reason)<10:raise ValueError('Provide a review reason of at least 10 characters')
         if row.state==body.state:raise HTTPException(409,'Incident already has this state')
-        row.state=body.state;row.updated=max(time.time(),row.updated+.000001)
+        previous=row.state;row.state=body.state;row.updated=max(time.time(),row.updated+.000001)
+        from .persistence import notify_review
+        notify_review(s,row,previous)
         s.add(incidents.PersistenceReview(id=str(uuid.uuid4()),incident_id=row.id,actor=user['username'],state=row.state,reason=reason))
         audit(s,'startup incident reviewed',row.id+' '+user['username']+' '+row.state);s.commit()
         return object_dict(row)

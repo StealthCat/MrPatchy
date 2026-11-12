@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_pricing,host_lifecycle,notifications
+from . import ai_budget,ai_pricing,host_lifecycle,notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -227,6 +227,7 @@ def collect_alerts(now=None):
                 try:_operational_notification(s,host_id,kind,message,now)
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
         _pricing_catalog_alert(s,cfg,record,now)
+        ai_budget.publish_cap_notification(s,cfg,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine
@@ -300,6 +301,9 @@ def collect_alerts(now=None):
             if host.id in overdue_hosts:
                 count=sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in s.scalars(select(Package).where(Package.host_id==host.id,Package.candidate!='')))
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
+        # In-app only: the shared provider floor never had an SMTP/webhook alert.
+        from . import ai_provider_backoff
+        ai_provider_backoff.publish_notification(s,cfg,now)
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
         _resolve_operational_notifications(s,published,now)
