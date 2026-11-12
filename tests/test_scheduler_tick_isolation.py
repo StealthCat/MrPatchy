@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import time
 
 import pytest
-from app import worker, persistence, response_monitor, service_monitor, execution_scans
+from app import worker, persistence, response_monitor, service_monitor, execution_scans, plan_notifications
 from app.db import Session, Host, Job
 
 TICKS = (
@@ -15,6 +15,7 @@ TICKS = (
     ('response monitoring', response_monitor, 'schedule_tick'),
     ('service monitoring', service_monitor, 'schedule_tick'),
     ('execution scans', execution_scans, 'schedule_tick'),
+    ('plan review notifications', plan_notifications, 'tick'),
 )
 
 

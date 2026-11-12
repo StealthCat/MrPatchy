@@ -1,3 +1,72 @@
+## 1.59.57 — 2026-11-12
+
+1. [PR #716](https://github.com/StealthCat/MrPatchy/pull/716): A **Mark shown read** button in the bell panel and notification center marks every notification currently shown as read in one action. It is backed by `POST /api/notifications/read-batch`, which accepts 1–100 displayed `{id, revision}` pairs. Each pair follows the single-item revision rule, so an event that escalated or reopened after the page loaded stays unread at its newer revision. Missing or role-hidden events are skipped without a write or disclosure. Malformed, duplicate, empty, oversized or future-revision batches are rejected before any write. One `read notifications` audit row is written per changing batch, and dismiss state is untouched. Closes #715.
+2. Compatibility and limits: an additive per-user endpoint and UI action, with no schema change. Read state remains per-user UI state and never acknowledges an alert, resolves an incident or authorizes a response. This source update does not publish a Docker image.
+
+## 1.59.56 — 2026-11-12
+
+1. [PR #712](https://github.com/StealthCat/MrPatchy/pull/712): Add a pure, I/O-free anacrontab and at-queue parsing contract (`app/scheduled_jobs.py`). `parse_anacrontab()` turns captured anacrontab text into typed, bounded job records: period, delay, identifier, a bounded command with a full-text SHA-256, and any directories named by `run-parts`. Only ASCII digits are accepted in numeric fields, so other numeric characters such as superscripts become coverage gaps instead of errors. Duplicate identifiers are flagged. Environment values are withheld (only names are returned), while `START_HOURS_RANGE` and `RANDOM_DELAY` are validated and disclosed. At spool job files are parsed into bounded records in the same way, and malformed or over-limit data is reported as coverage gaps. Closes #711.
+2. Compatibility and limits: an unwired contract only. No schema, API, UI, agent or response change. Native collection, inventory wiring, provenance and classification remain open in roadmap F, along with two documented non-ASCII parser fidelity edges. This source update does not publish a Docker image.
+
+## 1.59.55 — 2026-11-12
+
+1. [PR #714](https://github.com/StealthCat/MrPatchy/pull/714): Fleet AI logs gain an administrator-only **Fleet known-good cache** panel, loaded on demand from the existing `GET /api/ai/known-good/summary`. It shows active and revoked candidates, retained reuse assessments and reuse assessments on revoked candidates. When reuse is linked to revoked candidates, a review note explains that the original results are unchanged and how to request Re-triage. The panel states that these are record counts only: they do not verify context, count misses or estimate savings, and reuse grants no approval. Malformed counts render as "Unavailable", a failed request shows a fixed retryable message, and stale responses after navigation are discarded. Closes #713.
+2. Compatibility and limits: a client-only addition using an existing administrator API, with no API or schema change. Viewers never request the endpoint. This source update does not publish a Docker image.
+
+## 1.59.54 — 2026-11-12
+
+1. [PR #707](https://github.com/StealthCat/MrPatchy/pull/707): Administrators are notified when an AI-proposed security-incident or startup-change response plan awaits review. A leader-only periodic reconciler publishes one administrator-only, medium-severity notification per reviewable draft (younger than 24 hours, on an active server). It links to the server tab where the plan is reviewed: Security for incident plans and File integrity for startup-change plans. Approval, supersession, the 24-hour expiry, plan deletion and server deletion or deactivation each resolve the notification exactly once. The plan's own severity and text never reach the payload, and unchanged passes add no revisions. Closes #706.
+2. Compatibility and limits: an additive notification producer that writes only notification rows. It changes no plan, incident, approval or response-authorization state. Each pass reads at most 500 rows per query, and a still-reviewable draft beyond that bound stays active rather than being falsely resolved. This source update does not publish a Docker image.
+
+## 1.59.53 — 2026-11-12
+
+1. [PR #705](https://github.com/StealthCat/MrPatchy/pull/705): Startup-change (persistence) incidents now publish administrator-only in-app notifications that link to the server's File integrity tab, so they appear in the bell, notification center, SSE stream and arrivals cursor. A new incident publishes one medium-severity active event. Repeat detections of an open incident add nothing, while a repeat detection of a closed incident reopens it. Administrator closure resolves the event, reopening a closed incident re-activates it, and deleting a server resolves its active events while keeping the incidents. Reasons are fixed text stating that a change is not a malware verdict; no endpoint paths, hashes or link targets reach the payload. Publishing shares the incident transaction. Closes #704.
+2. Compatibility and limits: an additive notification producer, with no schema, API, incident-lifecycle or response-authorization change. Notifications acknowledge and authorize nothing. This source update does not publish a Docker image.
+
+## 1.59.52 — 2026-11-12
+
+1. [PR #703](https://github.com/StealthCat/MrPatchy/pull/703): Add a pure systemd effective-unit contract (`app/systemd_units.py`). It turns captured read-only observations of systemd system-unit search directories into effective-unit records, trigger relationships, explicit coverage gaps and a deterministic digest.
+   - It follows the system manager's search-path precedence and records shadowed fragments.
+   - It resolves masking, and applies unit, template, dash-prefix and type-level `.conf` drop-ins in order, with empty-assignment list resets. Drop-ins are read for the canonical name and every effective alias.
+   - It separates enablement links (`.wants`, `.requires`, `.upholds` in `/etc`, `/run`, generator and transient directories) from vendor static dependencies, and reports dangling or foreign links as gaps.
+   - It resolves aliases, linked units and template instances, and maps timer, socket and path units to their targets.
+   - Refs #702.
+2. Compatibility and limits: an unwired contract only. No collection, agent, storage, API or UI change. User units, generated and transient runtime state, and live wiring into the startup inventory remain open in #702. This source update does not publish a Docker image.
+
+## 1.59.51 — 2026-11-12
+
+1. [PR #701](https://github.com/StealthCat/MrPatchy/pull/701): Scanner-created security incidents now reach the in-app bell and notification center. A new malware detection publishes a high-severity, administrator-only event that matches the incident API and links to the server's Security tab. The reason is fixed text: endpoint paths, rule names and engine output never appear in it. A repeat match on a closed incident reopens the event, and an administrator reopening a closed incident does the same. Repeat matches on an open incident add nothing. Administrator closure (resolved or false positive) or deleting the server resolves the event. Acknowledgement leaves it unchanged. Closes #700.
+2. Compatibility and limits: an additive notification producer in the existing incident transaction, with no schema, API, incident lifecycle or response-authorization change. Notifications acknowledge and authorize nothing. This source update does not publish a Docker image.
+
+## 1.59.50 — 2026-11-12
+
+1. [PR #699](https://github.com/StealthCat/MrPatchy/pull/699): Expected workers (`MRPATCHY_EXPECTED_WORKER_IDS`) that need attention now raise an administrator-only in-app notification linking to **Activity → Workers**. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium, using fixed text with only the validated worker ID and state. An unchanged state adds no revision. Reporting or intentional draining resolves the event, and removal from the expected list resolves it with an explanation. An invalid expected-worker configuration raises one separate controller-wide event and leaves existing worker events unchanged. New attention is suppressed for one 120-second freshness window after process start, so co-started workers can register. Closes #698.
+2. Compatibility and limits: an additive notification producer run from the existing leader loop, with no schema, API, drain or worker-control change. Unconfigured workers are not monitored. This source update does not publish a Docker image.
+
+## 1.59.49 — 2026-11-12
+
+1. [PR #697](https://github.com/StealthCat/MrPatchy/pull/697): Administrators get an in-app notification linking to AI Settings when the shared AI provider backoff floor needs attention. A floor set from a capped Retry-After over 24 hours raises a high-severity event asking for review, which points to the reviewed Clear action. At least five consecutive transient failures within the existing failure-reset window raise a medium-severity event. The event resolves automatically when the floor clears or AI is disabled. Alert collection evaluates it each pass, an unchanged state adds no revision, and the text is fixed. Closes #696.
+2. Compatibility and limits: an additive, administrator-only notification, with no change to backoff behaviour, admission, provider calls, SMTP/webhook alerts or schema. It clears nothing automatically. This source update does not publish a Docker image.
+
+## 1.59.48 — 2026-11-12
+
+1. [PR #695](https://github.com/StealthCat/MrPatchy/pull/695): When the shared daily AI spend cap is exhausted, administrators get an in-app notification linking to AI Settings. It explains that new paid AI work is deferred, not discarded, until the reset or a cap or mode change. Alert collection evaluates the same conservative counted total that admission uses, and the notification's revision is bound to the budget window rather than to amounts, so further reservations in the same window add no revisions. Once the cap no longer blocks, a resolved revision is published. Closes #694.
+2. Compatibility and limits: an additive, administrator-only notification. It reserves, releases and authorizes nothing, adds no SMTP/webhook alert and changes no schema. Near-exhaustion warnings are not included. This source update does not publish a Docker image.
+
+## 1.59.47 — 2026-11-12
+
+1. [PR #692](https://github.com/StealthCat/MrPatchy/pull/692): Medium- and high-risk AI process triage verdicts now reach the bell and notification center. Events are advisory: they use fixed text, carry the server and verdict severity, are visible to viewers (matching the Investigations page), and link to the server's Investigations tab. Executable paths and model output never enter the payload. An unchanged risk adds no revision, and a risk change resurfaces as unread. A later `low` verdict (from the provider or exact known-good reuse) or an administrator approval resolves the event, while revoking approval of a still-significant verdict reopens it. `unknown` verdicts and rolled-back or rejected saves announce nothing. Closes #691.
+2. Compatibility and limits: an additive notification producer in the existing verdict and approval transactions, with no schema, API, UI, provider, approval-semantics or response-authorization change. Notifications grant nothing. This source update does not publish a Docker image.
+
+## 1.59.46 — 2026-11-12
+
+1. [PR #690](https://github.com/StealthCat/MrPatchy/pull/690): Server conditions that need an administrator now also appear in the in-app bell and notification center, not only in the SMTP/webhook alert outbox. Alert collection publishes an allowlisted set of alert kinds as durable, administrator-only notification events in the same transaction:
+   - recovery-required operations, file, process, publication and service holds, and disabled-server recovery;
+   - failed scheduled patching, response integrity and verification, service health and coverage, execution-scan coverage, agent health and startup baseline.
+
+   Each event has a stable kind, explicit severity, a controller-composed message and a same-origin deep link to the server tab. Unchanged conditions add no revision. A changed message resurfaces as unread, a cleared condition (or a disabled or deleted server) resolves the event, and a recurrence reopens it. Closes #689.
+2. Compatibility and limits: kinds that could carry raw endpoint text stay outbox-only, never reaching notification reasons: stale, raw integrity JSON, repository errors, overdue and server disabled. Alert acknowledgement and notification read/dismiss stay independent, and SMTP/webhook delivery is unchanged. A rejected notification payload is logged and skipped without blocking alert collection. This source update does not publish a Docker image.
+
 ## 1.59.45 — 2026-11-12
 
 1. [PR #688](https://github.com/StealthCat/MrPatchy/pull/688): Notification arrival records no longer grow without bound. The leader's hourly cleanup prunes arrivals older than the existing `history_days` retention, in separately committed batches of at most 5,000. It deletes only the oldest contiguous sequenced prefix, stopping at the first arrival still inside the window, and leaves the durable head untouched. `GET /api/notifications/arrivals` now reads its head from the durable head row, so pruning never moves live cursors backwards. A cursor older than the oldest retained arrival gets a fresh baseline with `reset: true, reset_reason: "pruned"`, so clients resynchronize instead of silently skipping pruned revisions. A cursor beyond the head reports `reset_reason: "ahead"`. A pruning failure is logged and does not block the rest of the cleanup. Closes #687.

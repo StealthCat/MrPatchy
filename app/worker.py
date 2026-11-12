@@ -773,7 +773,7 @@ def _assess_behavior(s,row,cfg,secret):
         return _assess_active_behavior(s,row,cfg,secret)
 
 def _assess_active_behavior(s,row,cfg,secret):
-    from . import ai_assessments,ai_claims,known_good
+    from . import ai_assessments,ai_claims,known_good,triage_notifications
     lease=ai_claims.current.get()
     policy=ai.investigation_policy()
     policy_hashes=[ai_assessments.digest([policy]),ai_assessments.digest([policy,policy])]
@@ -802,6 +802,7 @@ def _assess_active_behavior(s,row,cfg,secret):
         from .file_trust import record_reuse
         record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)
+        triage_notifications.publish_verdict(write,saved)
         return True
 
     with ai_runs.measure('known_good_lookup'):
@@ -854,6 +855,7 @@ def _assess_active_behavior(s,row,cfg,secret):
             known_good.invalidate_contradiction(write,assessment)
             known_good.publish(write,assessment)
             ai_retry.clear(write,saved)
+            triage_notifications.publish_verdict(write,saved)
         if lease:
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
@@ -876,7 +878,8 @@ def periodic_ticks(now,state):
     callbacks=(('patch schedules','scheduling','tick'),('scanner schedules','incidents','schedule_tick'),
                ('startup schedules','persistence','schedule_tick'),('incident AI plans','incidents','auto_plan_tick'),
                ('response monitoring','response_monitor','schedule_tick'),('service monitoring','service_monitor','schedule_tick'),
-               ('execution scans','execution_scans','schedule_tick'))
+               ('execution scans','execution_scans','schedule_tick'),
+               ('plan review notifications','plan_notifications','tick'))
     for name,module,attribute in callbacks:
         due,failures=state.get(name,(0,0))
         if now<due:continue
@@ -965,6 +968,11 @@ def _loop(reporter):
                                     except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
                         operations.collect_alerts()
+                        # In-app only; a failure must not stop the coordinator tick.
+                        try:
+                            from . import worker_registry
+                            worker_registry.publish_notifications()
+                        except Exception:log.exception('Expected-worker notifications failed')
                     # Resume observation, never the package transaction, after worker loss.
                     resume_busy={host_id for _,host_id in active_jobs.values()}
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
