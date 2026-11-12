@@ -2785,6 +2785,46 @@ hashes, and it never executes or sources anything.
 Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
 
 
+### Startup-entry provenance classification contract — worker checkpoint #720
+
+Contract increment only; the startup-awareness requirement and its provenance
+milestone remain incomplete. `app/startup_provenance.py` is a pure, I/O-free
+classifier. It takes already-collected evidence about one startup file (crontab,
+anacrontab, systemd unit, drop-in or override, SysV script, `rc.local`) and returns
+exactly one class with its basis, verification strength (`authenticated`,
+`unauthenticated` or `none`) and explicit gaps:
+
+- `verified_default`: the observed SHA-256 equals an authenticated vendor artifact
+  for the exact package and version of the single installed owner.
+- `modified`: package-owned, and the bytes differ from the authenticated artifact or
+  from the target's own package-database digest.
+- `unverifiable`: package-owned without an authenticated exact-version comparison,
+  or generator output.
+- `custom`: a complete ownership query found no owning package.
+- `unknown`: missing, malformed, oversized or conflicting evidence, a diverted path,
+  more than one owner, an incomplete ownership query, or a transient unit.
+
+**Fail-closed rules**
+- Package ownership alone never yields `verified_default`. A match against the
+  target's own package database (sha256, or dpkg md5 with an observed MD5) is
+  labelled unauthenticated and stays `unverifiable`.
+- An authenticated artifact or database digest for another package or version is
+  never used; it is recorded as a gap.
+- A conflict never raises trust: a vendor-artifact match with a differing database
+  digest is `unknown`. Authenticated evidence wins the other way round: bytes that
+  differ from the vendor artifact are `modified` even when the target's database
+  agrees with them (`package_db_disagrees` gap), so rewriting both cannot hide a change.
+- Entries in a modified file are classified individually (`verified_default` or
+  `custom`, multiset-matched) only against authenticated default entry digests;
+  otherwise entries inherit the file's class.
+- Drop-ins and overrides are classified on their own bytes and report the unit they
+  modify. Administrator baseline acceptance is a separate field and never changes the
+  class. Every result carries `safety: not_assessed`.
+
+**Not covered:** collecting ownership, package-database digests or authenticated
+vendor artifacts from targets; persistence; UI; AI classification; response actions.
+No schema, API, auth or response-authorization change.
+
 ## v0.3.0 — opt-in cross-source advisory AI evidence
 
 Delivery: [PR #55](https://github.com/StealthCat/MrPatchy/pull/55); initial implementation
