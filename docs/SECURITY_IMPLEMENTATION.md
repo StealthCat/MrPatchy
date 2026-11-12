@@ -2804,6 +2804,68 @@ exploitation detectors, typed automatic containment, server/fleet views,
 notifications and real-target acceptance remain planned. A vulnerable version, an
 advisory match or AI output still authorizes no containment.
 
+### Exploitation containment eligibility contract — worker checkpoint #725
+
+Status: **bounded slice; requirement D remains planned/incomplete.**
+`app/cve_containment.py` is a pure, deterministic contract with no I/O, provider call,
+storage or executor. Nothing calls it yet, so runtime behavior is unchanged.
+
+- `evaluate(policy, detection, now=)` checks one CVE-specific exploitation detection
+  against a per-CVE policy. The policy holds:
+  - a `disabled`, `monitor_only` or `enforce` mode and an explicit CVE list;
+  - the action scope and a minimum rule confidence (`medium` at the lowest);
+  - a minimum number of distinct supporting evidence kinds (at least one);
+  - a maximum rule age (30 days at most);
+  - a maximum applicability-assessment age (one day by default, 30 days at most);
+  - path and hash exclusions and an `allow_uncertain_applicability` opt-in.
+- Only `confirmed_exploitation` can authorize anything, and it requires all of
+  the following:
+  - an authenticated, fresh detection rule that names the same CVE and matched
+    the exact artifact sha256;
+  - a rule confidence that meets the policy;
+  - an applicability assessment bound to the same server and CVE showing
+    `affected`, or `uncertain` only when the policy opts in;
+  - enough supporting observations bound to the same server, evidence revision
+    and artifact.
+
+  The other outcomes are `not_in_policy`, `unverified_rule`,
+  `unverified_applicability`, `not_exposed`, `suspected_exploitation` and
+  `invalid`.
+- A `fixed` or `unaffected` endpoint yields `not_exposed`, with an
+  `artifact_left_to_malware_policy` gap. The requirement E contract can still act
+  on that artifact.
+- A vulnerable version, an advisory match or a CVSS score is never exploitation
+  evidence. Supplied AI enrichment is ignored and reported as
+  `ai_output_not_authoritative`. The function has no AI-availability input, so AI
+  outages and per-server AI pause cannot change the decision.
+- Quarantine and termination reuse #682's checks and helpers:
+  - hash-bound file and process identities;
+  - pseudo-filesystem and pid-1 refusal;
+  - path exclusions applied to the process executable as well as the file;
+  - hash exclusions;
+  - effect statements;
+  - `still_bound` rechecks immediately before execution.
+
+  Each action is decided independently. The binding digest covers the CVE and the
+  rule version, for duplicate suppression.
+- Malformed or injection-shaped policies, detections and evaluation times fail
+  closed with no authorized action. This covers non-ASCII CVE digits, overflowing
+  integers, duplicate CVEs, `str`/`dict` subclasses, and one evidence event
+  reused under several kinds.
+- A rule version dated after the observation is refused.
+- The binding is a target-identity key for suppressing duplicate executions. It
+  is not a decision key, so it must not suppress a later decision with a
+  different classification.
+
+Remaining for requirement D:
+- advisory ingestion and stored per-endpoint exposure records;
+- CVE-specific exploitation detectors that produce this evidence;
+- persisted, audited policies with an administrator UI;
+- typed executors shared with requirement E;
+- alerts and incidents;
+- server and fleet views;
+- real-target and benign-lookalike acceptance drills.
+
 
 ## Planned: known and unknown malware detection with automatic response
 
