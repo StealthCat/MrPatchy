@@ -2298,6 +2298,15 @@ state still scales with the eligible fleet. Production throughput remains open.
 
 ### Fleet-wide exact-match known-good cache
 
+The administrator-only `GET /api/ai/known-good/summary` endpoint counts active and
+revoked published entries, retained assessments with a cache-reuse link, and
+the subset of those assessments linked to revoked entries. Ordinary provider
+assessments linked at publication are excluded from the reuse counts. A single
+aggregate SQL statement returns only counts and preserves historical reuse
+after revocation. These counts describe retained records and do not verify
+current context, measure misses, or estimate provider calls, billing or
+performance. Dashboard presentation and matched production acceptance remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless

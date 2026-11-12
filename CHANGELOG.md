@@ -1,3 +1,8 @@
+## 1.59.26 — 2026-11-11
+
+1. [PR #538](https://github.com/StealthCat/MrPatchy/pull/538): Add the administrator-only `GET /api/ai/known-good/summary`. It reports active and revoked published known-good entries, retained cache-reuse assessments and the subset linked to a revoked entry. A provider assessment linked at publication is not counted as reuse, historical reuse stays visible after revocation, and empty counts are zero. One aggregate statement returns only the four counters, without loading evidence, payloads or host identifiers. Fixes #537.
+2. Compatibility and limits: an additive read-only API, with no schema, provider, scheduling, authorization-policy or UI change. The counts describe retained cache records. They do not quantify misses, current context validity, provider savings, billing or speed, and dashboard presentation remains open. This source update does not publish a Docker image.
+
 ## 1.59.25 — 2026-11-11
 
 1. [PR #521](https://github.com/StealthCat/MrPatchy/pull/521): Add a pure agent spool capacity-admission contract (`app/spool_admission.py`). It accounts logical and physical (journal, WAL and temporary) usage separately, keeps a free-space reserve and reports pressure at 70% and 90%. Admission is by priority. At critical pressure, including the projected pressure after the append with journal overhead, only `security` records are admitted. Refusals are explicit and counted, never silent eviction. An epoch-tagged cumulative loss ledger keeps reason and priority counters monotonic within an epoch, saturating at 2^53 with a flag instead of resetting.

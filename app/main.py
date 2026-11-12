@@ -52,7 +52,7 @@ async def lifespan(app):
             worker.stop.set()
             if background: background.join()
             ai.transport.close()
-APP_VERSION = "1.59.25"
+APP_VERSION = "1.59.26"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1052,6 +1052,13 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin
                 s.commit()
                 return {'ok':True,'request_id':refresh.id,'detail':'Fresh triage queued. Prior assessment retained; AI pause, model settings and admission limits still apply.'}
     finally:lock.release()
+
+
+@app.get('/api/ai/known-good/summary')
+def known_good_summary(user=Depends(admin_user)):
+    from . import known_good
+    with Session() as s:
+        return known_good.summary(s)
 
 
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
