@@ -1,3 +1,8 @@
+## 1.59.41 — 2026-11-12
+
+1. [PR #677](https://github.com/StealthCat/MrPatchy/pull/677): Add fixed `compose.controller.yaml` and `compose.worker.yaml` files for same-Docker-host split deployments. The controller file runs the app and Caddy by extending `compose.yaml`. The worker file runs scalable workers (`--scale worker=N`) as a separate Compose project on the controller's existing data volume, named by the required `MRPATCHY_CONTROLLER_DATA_VOLUME`. Workers keep the hardening, health check and drain grace period from `compose.yaml`, and each replica gets a unique boot identity. `docs/COMPOSE_CONFIGURATION.md` covers migration from `compose.yaml` with `--remove-orphans`, and CI validates both files. Refs #676.
+2. Compatibility and limits: additive deployment files; `compose.yaml` is unchanged. Only the same-Docker-host topology is supported. Multi-host MySQL deployment, drain, failure and recovery acceptance, and live start and scale validation of these files remain open in #676. This source update does not publish a Docker image.
+
 ## 1.59.40 — 2026-11-12
 
 1. [PR #686](https://github.com/StealthCat/MrPatchy/pull/686): Fix the investigations queue notice, which showed the legacy hourly limit to administrators even in rate, daily-cap and unthrottled admission modes. The notice now names the control that actually gates new AI work: shared starts per hour (plus the daily spend cap in combined mode), the daily spend cap, unthrottled, or the legacy attempts limit in legacy mode. The AI worker status card uses the same helper. Fixes #685.
