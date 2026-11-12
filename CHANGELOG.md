@@ -1,3 +1,8 @@
+## 1.59.34 — 2026-11-11
+
+1. [PR #574](https://github.com/StealthCat/MrPatchy/pull/574): Scoped outbound AI provider calls read server pause policies in bounded batches. Five scoring-sized server IDs, including one without a policy row, now use one policy SELECT, at most 200 servers per query, plus one global enablement lookup, instead of a full status read per server. Pause still takes precedence over global disablement. A corrupt stored policy is treated as paused, failing closed, and an empty scope skips the checks as before. Fixes #573.
+2. Compatibility and limits: a read-path optimisation with no schema, API or authorization change. Scoped provider and lease locks are unchanged. This source update does not publish a Docker image.
+
 ## 1.59.33 — 2026-11-11
 
 1. [PR #571](https://github.com/StealthCat/MrPatchy/pull/571): The server activity guard reads lifecycle state in bounded batches. After acquiring the ordered per-server locks, it fetches only IDs, enabled flags, deletion timestamps and lifecycle revisions, in one query per 200 distinct servers, instead of loading each server row separately. A five-server scoring batch now uses one SELECT. Disabled and deleted servers are still refused with the acquired locks released, and absent bootstrap records still contribute no revision. Fixes #569.

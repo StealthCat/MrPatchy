@@ -6950,3 +6950,17 @@ faster-AI acceptance. UI integration, call-specific preview, provider-invoice tr
 multi-controller failover/reset acceptance and fresh code-scanning verification remain
 required. Coordinator integration and exact-head SQLite/MySQL/full-suite checks are
 also still required before delivery.
+
+### Batched outbound AI pause-policy reads — worker checkpoint #573
+
+The existing outbound provider guard reads scoped server pause settings in
+batches of at most 200 distinct keys and checks global AI enablement once.
+A five-server scoring-sized scope uses two SELECTs in the disposable SQLite
+regression, compared with 12 on the previous path. Missing policy rows retain
+the default, any paused or malformed row blocks before global enablement is
+checked, and an empty scope keeps the provider setup path available.
+
+Provider locks, lease ownership checks, shared admission, budget accounting,
+and response authorization continue to apply. This is an admission database
+read improvement. Native integration and end-to-end performance acceptance
+for the faster-AI program remain open.
