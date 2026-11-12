@@ -2,7 +2,7 @@
 import time
 from decimal import Decimal, InvalidOperation
 
-from . import ai_admission, ai_budget, ai_provider_backoff
+from . import ai_admission, ai_budget, ai_pricing, ai_provider_backoff
 from .db import Setting, config
 
 
@@ -12,6 +12,11 @@ LIMITATIONS = [
 ]
 LEGACY_LIMITATION = ('Legacy per-purpose hourly limits (triage and update scoring) are enforced separately and are '
                      'not reflected in this snapshot; switch to an explicit control mode for an authoritative status.')
+
+PRICING_MESSAGES = {
+    'catalog': 'The bundled public-price catalog is not currently valid, so capped admission cannot reserve spend for any call.',
+    'model': 'The saved model has no verified catalog price, so capped admission cannot reserve spend for it.',
+}
 
 
 def _money_exhausted(value):
@@ -38,6 +43,12 @@ def snapshot(session, now=None):
         add('disabled', 'Central AI provider calls are disabled by an administrator.')
     if not settings['ai_model'] or session.get(Setting, 'openai_key') is None:
         add('configuration', 'A saved model and API key are required before provider calls can start.')
+    if budget['enabled'] and settings['ai_model']:
+        # Capped admission must quote every paid call from the bundled catalog;
+        # an unpriced model or a stale catalog refuses all of them indefinitely.
+        pricing = ai_pricing.model_status(settings['ai_model'], now)
+        if not pricing['ok']:
+            add('pricing', PRICING_MESSAGES[pricing['code']])
     if provider['blocked']:
         add('provider_backoff', 'Shared provider backoff is waiting after a transient failure.', provider['next_at'])
     if admission['mode'] in ('rate', 'rate_and_daily') and admission['next_at'] and admission['next_at'] > now:

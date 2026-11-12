@@ -228,6 +228,7 @@ def collect_alerts(now=None):
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
+        ai_budget.publish_unpriced_model_notification(s,cfg,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine

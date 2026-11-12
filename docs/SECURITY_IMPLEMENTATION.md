@@ -2393,6 +2393,35 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
 
+Worker checkpoint #735 adds the unpriced-model blocker. In `daily_cap` and
+`rate_and_daily` modes, capped admission must quote every paid call from the
+bundled price catalog. `ai_pricing.reservation()` refuses a saved model that is
+not catalogued (for example `gpt-5` or a fine-tune ID), so every capped call
+fails closed. Before this checkpoint nothing showed that in advance.
+- **Pure check:** `ai_pricing.model_status()` reports whether the catalog is
+  valid and can price the alias-resolved saved model. It shares its fixed reason
+  with `reservation()`. An `ok` result never promises that a call is admitted:
+  tier, tools, output bound and context size are still checked per call.
+- **Start-gate snapshot:** `GET /api/settings/ai-control-status` adds an
+  indefinite `pricing` blocker in cap modes when a saved model cannot be priced
+  or the catalog is not valid. `can_start_now` is then false and there is no
+  automatic next start. The message is fixed and omits the model ID.
+- **Notification:** `operations.collect_alerts()` publishes one admin-only
+  `ai-budget`/`unpriced-model` notification (high severity, `#settings/ai`)
+  while AI is enabled, a cap mode applies, the catalog is valid and the saved
+  model is unpriced. The revision is bound to the catalog version and a SHA-256
+  of the model ID, so repeated collection creates no new revision. A different
+  unpriced model or catalog version resurfaces it as unread. The text names the
+  model only when it is a valid catalog identifier.
+- **Resolution:** one `resolved` revision is published when the model becomes
+  priced or is cleared, the mode becomes uncapped or AI is disabled. An invalid
+  catalog is left to the existing pricing-catalog alert and neither publishes
+  nor resolves this event.
+- **Unchanged:** both additions only read state. They never reserve, release or
+  authorize spend, change admission or add an SMTP/webhook alert.
+- **Limitation:** a missing API key is still reported only by the existing
+  `configuration` gate. Near-exhaustion of the cap remains undetected.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
