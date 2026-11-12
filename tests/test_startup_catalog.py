@@ -222,3 +222,68 @@ def test_additional_scope_mirrors_agent_exclusions_and_homes():
 def test_catalog_declares_it_is_not_exhaustive():
     assert sc.catalog('debian')['gaps'][0]['code'] == 'catalog_not_exhaustive'
     assert sc.coverage('rpm', ['/etc/crontab'])['gaps'][0]['code'] == 'catalog_not_exhaustive'
+
+
+# Regressions for the #724 peer review (2026-11-12).
+def _locs(mechanism):
+    return {loc['path']: loc for loc in mechanism['locations']}
+
+
+def test_usrmerge_alias_takes_the_canonical_state_only_for_the_exact_target():
+    roots = ['/etc/systemd/system', '/etc/systemd/system.control', '/run/systemd/system',
+             '/run/systemd/system.control', '/usr/local/lib/systemd/system', '/usr/lib/systemd/system',
+             '/lib/systemd/system']
+    merged = by_id(sc.coverage('debian', roots, failed_roots=['/lib/systemd/system'], complete=True,
+                               symlink_targets={'/lib/systemd/system': '/usr/lib/systemd/system'}))['systemd_system']
+    assert merged['state'] == 'covered'
+    assert _locs(merged)['/lib/systemd/system'] == {'path': '/lib/systemd/system', 'state': 'collected',
+                                                    'alias_of': '/usr/lib/systemd/system'}
+    # Without the reported link, or with any other target, the failure stands.
+    for links in (None, {'/lib/systemd/system': '/tmp/evil'}, {'/lib/systemd/system': '/usr/lib/systemd'}):
+        result = by_id(sc.coverage('debian', roots, failed_roots=['/lib/systemd/system'], complete=True,
+                                   symlink_targets=links))['systemd_system']
+        assert result['state'] == 'partial'
+        assert _locs(result)['/lib/systemd/system']['state'] == 'collection_failed'
+        assert 'alias_of' not in _locs(result)['/lib/systemd/system']
+
+
+def test_alias_inherits_a_failed_or_missing_canonical_location():
+    roots = ['/usr/lib/udev/rules.d', '/lib/udev/rules.d']
+    links = {'/lib/udev/rules.d': '/usr/lib/udev/rules.d'}
+    failed = by_id(sc.coverage('debian', roots, failed_roots=roots, complete=True, symlink_targets=links))
+    assert _locs(failed['udev_rules'])['/lib/udev/rules.d']['state'] == 'collection_failed'
+    missing = by_id(sc.coverage('debian', roots, missing_roots=['/usr/lib/udev/rules.d'],
+                                failed_roots=['/lib/udev/rules.d'], complete=True, symlink_targets=links))
+    assert _locs(missing['udev_rules'])['/lib/udev/rules.d']['state'] == 'absent_reported'
+
+
+def test_rpm_init_d_and_rc_local_aliases():
+    scope = ['/etc/init.d', '/etc/rc.d', '/etc/rc.local']
+    links = {'/etc/init.d': '/etc/rc.d/init.d', '/etc/rc.local': '/etc/rc.d/rc.local'}
+    result = by_id(sc.coverage('rpm', scope, failed_roots=['/etc/init.d', '/etc/rc.local'], complete=True,
+                               symlink_targets=links))
+    assert result['sysv']['state'] == 'covered' and result['rc_local']['state'] == 'covered'
+    # A symlink at a non-alias location is never satisfied by its target.
+    debian = by_id(sc.coverage('debian', ['/etc/init.d'], failed_roots=['/etc/init.d'], complete=True,
+                               symlink_targets={'/etc/init.d': '/etc/rc.d/init.d'}))
+    assert _locs(debian['sysv'])['/etc/init.d']['state'] == 'collection_failed'
+    assert sc.catalog('rpm')['mechanisms'][[m['id'] for m in sc.catalog('rpm')['mechanisms']].index('sysv')][
+        'aliases'] == {'/etc/init.d': '/etc/rc.d/init.d'}
+
+
+@pytest.mark.parametrize('links', ['x', {'/etc/crontab': 'relative'}, {'/not-collected': '/etc'},
+                                   {'/etc/crontab': None}])
+def test_malformed_symlink_targets_fail_closed(links):
+    result = sc.coverage('debian', ['/etc/crontab'], symlink_targets=links)
+    assert result['mechanisms'] == [] and result['gaps'][-1]['code'] == 'malformed_collection'
+
+
+def test_incomplete_collection_never_claims_parsed_entries():
+    cron = by_id(sc.coverage('debian', ['/etc/crontab', '/etc/cron.d'], entries_reported=True))['cron_system']
+    assert cron['entries_parsed'] is False and any(g['code'] == 'entries_not_parsed' for g in cron['gaps'])
+
+
+def test_builtin_home_root_is_credited_consistently_with_scope_validation():
+    assert sc.validate_additional_scope(['/home'])['rejected'][0]['reason'] == 'overlaps_catalog_location'
+    result = sc.coverage('debian', ['/home', '/srv/app'], complete=True, homes_complete=True)
+    assert [a['path'] for a in result['additional']] == ['/srv/app']

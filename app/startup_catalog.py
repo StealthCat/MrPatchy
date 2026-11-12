@@ -22,7 +22,11 @@ authorizes a response action. Fail-closed rules:
   and never credited to a catalog mechanism, even when it overlaps one.
 - Roots the collector failed on, or an incomplete inventory, never yield
   ``covered``; entries are reported parsed only when the collection says the
-  parser ran and at least one location was fully collected.
+  parser ran, the collection finished and at least one location was fully
+  collected.
+- A catalog alias location (pre-usrmerge ``/lib/...``, RPM ``/etc/init.d`` and
+  ``/etc/rc.local``) is satisfied by its canonical location only when the
+  collector reports it as a symlink to exactly that location.
 - The catalog is not exhaustive and every result says so.
 """
 from __future__ import annotations
@@ -51,8 +55,14 @@ _BOTH = FAMILIES
 _RUNLEVELS = ('0', '1', '2', '3', '4', '5', '6', 'S')
 
 
-def _loc(path: str, families: tuple[str, ...] = _BOTH) -> dict[str, Any]:
-    return {'path': path, 'families': families}
+def _loc(path: str, families: tuple[str, ...] = _BOTH, alias_of: str | None = None) -> dict[str, Any]:
+    return {'path': path, 'families': families, 'alias_of': alias_of}
+
+
+def _lib(path: str) -> dict[str, Any]:
+    """Pre-usrmerge Debian ``/lib/...`` location, a symlink to ``/usr/lib/...``
+    on merged-/usr systems."""
+    return _loc(path, ('debian',), '/usr' + path)
 
 
 # id, label, trigger, scope, parse level, locations. Home-relative locations start
@@ -75,17 +85,17 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'scope': 'system', 'parse': 'metadata',
      'locations': (_loc('/etc/systemd/system'), _loc('/etc/systemd/system.control'), _loc('/run/systemd/system'),
                    _loc('/run/systemd/system.control'), _loc('/usr/local/lib/systemd/system'),
-                   _loc('/usr/lib/systemd/system'), _loc('/lib/systemd/system', ('debian',)))},
+                   _loc('/usr/lib/systemd/system'), _lib('/lib/systemd/system'))},
     {'id': 'systemd_generators', 'label': 'systemd generator executables', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/systemd/system-generators'), _loc('/usr/local/lib/systemd/system-generators'),
-                   _loc('/usr/lib/systemd/system-generators'), _loc('/lib/systemd/system-generators', ('debian',)),
+                   _loc('/usr/lib/systemd/system-generators'), _lib('/lib/systemd/system-generators'),
                    _loc('/etc/systemd/user-generators'), _loc('/usr/local/lib/systemd/user-generators'),
                    _loc('/usr/lib/systemd/user-generators'))},
     {'id': 'systemd_hooks', 'label': 'systemd shutdown and sleep hooks', 'trigger': 'event', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/usr/lib/systemd/system-shutdown'), _loc('/usr/lib/systemd/system-sleep'),
-                   _loc('/lib/systemd/system-shutdown', ('debian',)), _loc('/lib/systemd/system-sleep', ('debian',)))},
+                   _lib('/lib/systemd/system-shutdown'), _lib('/lib/systemd/system-sleep'))},
     {'id': 'systemd_generated', 'label': 'systemd generator output', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/run/systemd/generator.early'), _loc('/run/systemd/generator'),
@@ -95,15 +105,17 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
     {'id': 'systemd_user', 'label': 'systemd user units', 'trigger': 'login', 'scope': 'per_user',
      'parse': 'metadata',
      'locations': (_loc('/etc/systemd/user'), _loc('/run/systemd/user'), _loc('/usr/local/lib/systemd/user'),
-                   _loc('/usr/lib/systemd/user'), _loc('/lib/systemd/user', ('debian',)),
+                   _loc('/usr/lib/systemd/user'), _lib('/lib/systemd/user'),
                    _loc('~/.config/systemd/user'), _loc('~/.local/share/systemd/user'))},
     {'id': 'sysv', 'label': 'SysV init scripts and runlevel links', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
-     'locations': (_loc('/etc/init.d'), *(_loc(f'/etc/rc{r}.d', ('debian',)) for r in _RUNLEVELS),
+     'locations': (_loc('/etc/init.d', ('debian',)), _loc('/etc/init.d', ('rpm',), '/etc/rc.d/init.d'),
+                   *(_loc(f'/etc/rc{r}.d', ('debian',)) for r in _RUNLEVELS),
                    _loc('/etc/rc.d/init.d', ('rpm',)),
                    *(_loc(f'/etc/rc.d/rc{r}.d', ('rpm',)) for r in _RUNLEVELS if r != 'S'))},
     {'id': 'rc_local', 'label': 'rc.local boot script', 'trigger': 'boot', 'scope': 'system', 'parse': 'metadata',
-     'locations': (_loc('/etc/rc.local'), _loc('/etc/rc.d/rc.local', ('rpm',)))},
+     'locations': (_loc('/etc/rc.local', ('debian',)), _loc('/etc/rc.local', ('rpm',), '/etc/rc.d/rc.local'),
+                   _loc('/etc/rc.d/rc.local', ('rpm',)))},
     {'id': 'shell_system', 'label': 'System shell startup files', 'trigger': 'login', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/profile'), _loc('/etc/profile.d'), _loc('/etc/environment'),
@@ -131,7 +143,7 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
                    _loc('/etc/yum/pluginconf.d', ('rpm',)))},
     {'id': 'udev_rules', 'label': 'udev rules', 'trigger': 'event', 'scope': 'system', 'parse': 'metadata',
      'locations': (_loc('/etc/udev/rules.d'), _loc('/run/udev/rules.d'), _loc('/usr/lib/udev/rules.d'),
-                   _loc('/lib/udev/rules.d', ('debian',)))},
+                   _lib('/lib/udev/rules.d'))},
     {'id': 'loader_preload', 'label': 'Dynamic loader preload', 'trigger': 'loader', 'scope': 'system',
      'parse': 'metadata', 'locations': (_loc('/etc/ld.so.preload'),)},
     {'id': 'loader_config', 'label': 'Dynamic loader search paths', 'trigger': 'loader', 'scope': 'system',
@@ -139,11 +151,11 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
     {'id': 'modules_load', 'label': 'Kernel modules loaded at boot', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/modules', ('debian',)), _loc('/etc/modules-load.d'), _loc('/run/modules-load.d'),
-                   _loc('/usr/lib/modules-load.d'), _loc('/lib/modules-load.d', ('debian',)))},
+                   _loc('/usr/lib/modules-load.d'), _lib('/lib/modules-load.d'))},
     {'id': 'modprobe', 'label': 'modprobe install/options configuration', 'trigger': 'event', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/modprobe.d'), _loc('/run/modprobe.d'), _loc('/usr/lib/modprobe.d'),
-                   _loc('/lib/modprobe.d', ('debian',)))},
+                   _lib('/lib/modprobe.d'))},
 )
 
 
@@ -173,10 +185,12 @@ def catalog(family: Any) -> dict[str, Any]:
                 'gaps': [_gap('unknown_family', 'Platform family is not debian or rpm; no catalog applies.')]}
     mechanisms = []
     for item in _MECHANISMS:
-        locations = [loc['path'] for loc in item['locations'] if family in loc['families']]
-        if locations:
+        applicable = [loc for loc in item['locations'] if family in loc['families']]
+        if applicable:
             mechanisms.append({'id': item['id'], 'label': item['label'], 'trigger': item['trigger'],
-                               'scope': item['scope'], 'parse': item['parse'], 'locations': locations})
+                               'scope': item['scope'], 'parse': item['parse'],
+                               'locations': [loc['path'] for loc in applicable],
+                               'aliases': {loc['path']: loc['alias_of'] for loc in applicable if loc['alias_of']}})
     return {'contract_version': CONTRACT_VERSION, 'family': family, 'mechanisms': mechanisms,
             'gaps': [dict(NOT_EXHAUSTIVE)]}
 
@@ -254,7 +268,7 @@ def _roots(value: Any, name: str, gaps: list[dict[str, Any]]) -> list[str] | Non
 
 def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, failed_roots: Any = (),
              additional_roots: Any = (), complete: Any = False, homes_complete: Any = False,
-             entries_reported: Any = False) -> dict[str, Any]:
+             entries_reported: Any = False, symlink_targets: Any = None) -> dict[str, Any]:
     """Map a collection's scope onto the catalog.
 
     - ``collected_roots``: every root in the collection scope (absolute, or
@@ -267,6 +281,17 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
     - ``complete``: the collection itself finished (inventory ``state`` collected).
     - ``homes_complete``: every account home was enumerated.
     - ``entries_reported``: the collection requested and returned parsed entries.
+    - ``symlink_targets``: ``{root: target}`` for collected roots the collector
+      found to be symlinks (normally also in ``failed_roots``, because the agent
+      never follows them). A catalog alias location whose reported target is
+      exactly its canonical location (``/lib/systemd/system`` ->
+      ``/usr/lib/systemd/system`` on merged-/usr systems, RPM ``/etc/init.d`` ->
+      ``/etc/rc.d/init.d``) takes the canonical location's state and says so.
+      Any other target, or a symlink at a non-alias location, keeps the failure.
+
+    A home-relative root in ``missing_roots`` means the path is absent in
+    **every** enumerated account home; a collector must not report it missing
+    because one home lacks it.
     """
     result: dict[str, Any] = {'contract_version': CONTRACT_VERSION, 'family': None, 'mechanisms': [],
                               'additional': [], 'gaps': [dict(NOT_EXHAUSTIVE)]}
@@ -280,6 +305,12 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
     failed = _roots(failed_roots, 'Failed roots', gaps)
     additional = _roots(additional_roots, 'Additional roots', gaps)
     if collected is None or missing is None or failed is None or additional is None:
+        return result
+    links = {} if symlink_targets is None else symlink_targets
+    if (not isinstance(links, dict) or len(links) > MAX_ROOTS
+            or not all(_absolute_ok(k) and k in collected and _absolute_ok(v) for k, v in links.items())):
+        gaps.append(_gap('malformed_collection',
+                         'symlink_targets must map collected absolute roots to absolute targets.'))
         return result
     if any(r not in collected for r in (*missing, *failed, *additional)):
         gaps.append(_gap('malformed_collection', 'Missing, failed and additional roots must be collected roots.'))
@@ -297,7 +328,14 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
     present = [r for r in builtin if r not in missing and r not in failed]
     failed_builtin = [r for r in builtin if r in failed]
 
+    aliases = {path: canonical for m in listing['mechanisms'] for path, canonical in m['aliases'].items()}
+
     def state_of(location: str) -> str:
+        canonical = aliases.get(location)
+        if canonical is not None and links.get(location) == canonical:
+            # The alias is a symlink to exactly its canonical location, which is
+            # catalogued and judged on its own; never follow any other target.
+            return state_of(canonical)
         if any(_under(location, r) or _under(r, location) for r in failed_builtin):
             return 'collection_failed'
         if location.startswith('~/') and not homes_complete:
@@ -311,7 +349,12 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
         return 'not_collected'
 
     for mechanism in listing['mechanisms']:
-        locations = [{'path': loc, 'state': state_of(loc)} for loc in mechanism['locations']]
+        locations = []
+        for loc in mechanism['locations']:
+            entry = {'path': loc, 'state': state_of(loc)}
+            if loc in mechanism['aliases'] and links.get(loc) == mechanism['aliases'][loc]:
+                entry['alias_of'] = mechanism['aliases'][loc]
+            locations.append(entry)
         states = {loc['state'] for loc in locations}
         if states == {'absent_reported'}:
             state = 'absent_reported'
@@ -337,7 +380,7 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
         if 'partial_homes' in states:
             mechanism_gaps.append(_gap('user_homes_incomplete',
                                        'Not every account home was enumerated for home-relative locations.'))
-        parsed = mechanism['parse'] == 'entries' and entries_reported and 'collected' in states
+        parsed = mechanism['parse'] == 'entries' and entries_reported and complete and 'collected' in states
         if mechanism['parse'] == 'entries' and not parsed and state != 'not_collected':
             mechanism_gaps.append(_gap('entries_not_parsed', 'No collected location had its entries parsed.'))
         if mechanism['parse'] == 'metadata' and state != 'not_collected':
@@ -346,8 +389,14 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
                                      'locations': locations, 'gaps': mechanism_gaps})
 
     catalog_paths = [loc for m in listing['mechanisms'] for loc in m['locations']]
+    absolute_paths = [loc for loc in catalog_paths if loc.startswith('/')]
+    home_relative = [loc for loc in catalog_paths if loc.startswith('~/')]
     for root in collected:
-        overlaps = any(_under(root, loc) or _under(loc, root) for loc in catalog_paths)
+        if root.startswith('~/'):
+            overlaps = any(_under(root, loc) or _under(loc, root) for loc in home_relative)
+        else:
+            overlaps = (any(_under(root, loc) or _under(loc, root) for loc in absolute_paths)
+                        or _overlaps_home_location(root, home_relative))
         if root in additional or not overlaps:
             result['additional'].append({'path': root, 'mechanism': 'additional', 'missing': root in missing,
                                          'failed': root in failed})

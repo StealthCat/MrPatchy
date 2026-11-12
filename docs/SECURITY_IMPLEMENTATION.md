@@ -2876,11 +2876,19 @@ states that the catalog is not exhaustive.
   collected, failed or reported missing. A reported missing path is explicitly
   not a safety verdict.
 - **Failed and incomplete collections.** Roots with a collection gap (for
-  example a symlinked RHEL `/etc/init.d`, or budget, depth or entry limits)
-  count as `collection_failed`. An unfinished collection never yields `covered`.
+  example a symlink, or budget, depth or entry limits) count as
+  `collection_failed`. An unfinished collection never yields `covered`.
+- **Alias locations.** The catalog marks pre-usrmerge Debian `/lib/...` paths and
+  the RPM `/etc/init.d` and `/etc/rc.local` links as aliases of their canonical
+  locations. The agent refuses to follow symlinks, so on merged-/usr and RHEL
+  systems these roots fail. An alias takes its canonical location's state, and
+  records `alias_of`, only when the collector reports it as a symlink to exactly
+  that location. Any other target, or a symlink at a non-alias location, keeps
+  the failure.
 - **Parsed entries.** `entries_parsed` is true only when the collection reports
-  parsed entries and at least one of the mechanism's locations was fully
-  collected.
+  parsed entries, the collection finished, and at least one of the mechanism's
+  locations was fully collected. A home-relative missing root means the path is
+  absent in every enumerated home.
 - **Administrator scope.** Administrator custom roots are passed separately and
   never credited to a mechanism. Home-relative locations count as collected only
   when every account home was enumerated.
