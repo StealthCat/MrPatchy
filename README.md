@@ -36,12 +36,12 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Package management | Installed/held/broken inventory, select-all reviewed batches, explained AI importance scores, expected start times, per-package change history, exact-version updates, APT dependency simulation, RPM target-side resolution, repair and priority policies |
 | Repositories | Central native APT/DNF verification; `.list`, Deb822 `.sources` and RPM `.repo`; signing keys, scoped credentials, private CAs, proxies, pinning and mirror mappings |
 | Distribution upgrades | Report-only Debian upgrade-availability badges; adjacent Ubuntu LTS/Debian release plans, AI configuration diffs, one go/no-go approval, detached execution and verified recovery |
-| Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
+| Safe patch operations | Maintenance windows, staged/canary rollouts, reviewed loopback application probes that gate rollout stages, reviewed reboot/rollback policies, post-reboot health retries, durable recovery states and interrupted-host quarantine |
 | Monitoring | 30-second process/connection sampling, five-minute integrity sweeps, network namespaces, script and mapped-library provenance, optional eBPF exec capture |
-| Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
-| Fleet analysis | API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
+| Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, live lease expiry with recovery and billing caveats, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test |
+| Fleet analysis | **Available patches** view of every pending package update across the fleet, opened from navigation or the Overview **Updates available** card, with server-side paging, search and server, priority, status and disabled-server filters; API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
-| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
+| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; durable signed-in arrival cursor for newly committed visible revisions; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
 [Quick start](#quick-start) · [Enrollment](#enroll-a-server-in-three-steps) · [Release upgrades](#distribution-release-upgrades) · [Recovery](#workers-databases-and-backups) · [Documentation](#documentation)
@@ -51,6 +51,8 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 Overview summary cards reflow to the available content width. Decorative imagery stays clear of text and actions, and multi-line link buttons retain a complete border on narrow screens.
 
 The 30-second Fleet Overview and Servers background refresh keeps the current view visible while it fetches, preserves scroll position and keyboard focus, and reuses the existing DOM when the rendered result is unchanged. An open details panel defers that background refresh; manual refresh, navigation and Retry still show their normal loading state.
+
+Select **Available patches** in the navigation, or the **Updates available** card on **Overview**, to list every available package update across active servers without opening servers one at a time. The list pages on the server, with no per-server cap, and can be searched by package and filtered by server, priority and status. Each row shows the server (linked to its Packages tab), package and architecture, installed and candidate versions, priority, policy deadline, status (available, queued, held or not installable) and repository-check freshness. The unfiltered total matches the Overview count. Switch the scope to list retained candidates on disabled servers separately; deleted servers never appear. The view is read-only: installation is still reviewed and approved per server.
 
 Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
 
@@ -216,7 +218,7 @@ bearer tokens; preparation does not prove completed delivery or execution.
 
 The web UI reports readable HTTP-status errors when a proxy or server returns an empty or non-JSON error body. Empty successful responses are accepted; stale-session responses are still discarded.
 
-Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
+Settings is a section hub with separate pages for **AI & models**, **Patch policy**, **Database**, **HTTPS & certificates**, and **History retention**. Each section saves independently without overwriting other sections. On the hub, **Find a setting** filters the sections as you type. Every typed term must match a section name, description or keyword, such as API key, repository checks, certificate, MySQL or retention. Direct links such as `#settings/ai` survive refresh and browser back/forward navigation.
 
 ## Review and install updates
 
@@ -238,6 +240,8 @@ Explicit installation refreshes target metadata and requests the recorded exact 
 Deadlines start at first discovery of an outstanding update and do not reset when a newer candidate supersedes it. Once the package is current, a future update starts a new deadline. Security-origin updates with a newer candidate default to high; others default to normal. Resetting a package to **auto** uses the same rule; a package without a newer candidate stays normal. These are scheduling heuristics, **not CVSS severity ratings**. Deadlines highlight overdue work; they do not automatically approve upgrades. Unattended installation requires an explicitly enabled patch schedule.
 
 **Account → Operations** provides UTC maintenance windows, ordered canary rollouts and advisory matching. Windows gate job start; a long installation/recovery can extend past the window. Advisory matching is opt-in and currently maps Ubuntu/Debian source packages to OSV; derivative coverage is explicitly limited.
+
+Administrators can configure fleet-wide change freezes through `GET /api/operations/freezes` and `PUT /api/operations/freezes`. Supply start and end timestamps with explicit UTC offsets and a reason for each interval. Include the current `revision` from GET as `expected_revision` when saving. Active freezes block the start of patch, repair and release-upgrade jobs, including urgent jobs with a maintenance-window bypass. Existing schedules still apply their approved start deadlines.
 
 After a reviewed staged rollout is queued, its dialog closes and a confirmation reports the queued server count. Approval is disabled while submission is in flight. Each server job records a `queue patch` audit entry alongside the rollout batch audit. Submission remains one transaction: a server queue at the 50-operation limit rejects the whole rollout without partially queueing it.
 
@@ -326,7 +330,7 @@ The collector hashes Mr Patchy's managed files and readable running executables.
 
 Optional bpftrace exec capture retains short-lived observations. Unverifiable identities stay marked unverified through central processing. Enabling eBPF relaxes the collector sandbox for kernel tracing; kernel support and acceptance testing are required. It is not guaranteed lossless capture or hardware attestation.
 
-Process triage checks retained, controller-authenticated Debian and RPM artifact manifests against the recorded executable SHA-256 first. It then checks the exact known-good cache and uses AI for unresolved behavior. A hash mismatch against the newest authenticated artifact bypasses cache reuse. A matching hash verifies the recorded bytes against the artifact; it cannot establish that the process behaved safely.
+Process triage checks retained, controller-authenticated Debian and RPM artifact manifests against the recorded executable SHA-256 first. It then checks the exact known-good cache and uses AI for unresolved behavior. A hash mismatch against the newest authenticated artifact bypasses cache reuse. A matching hash verifies the recorded bytes against the artifact; it cannot establish that the process behaved safely. Administrators can read fleet-wide known-good cache counts from `GET /api/ai/known-good/summary`: active and revoked published entries, retained cache-reuse assessments and the reuse linked to revoked entries. The counts describe retained records only. They do not measure misses, provider savings or current context validity.
 
 Administrators can open **File status** from fleet or server navigation and the corresponding Overview. Filter recorded managed, startup, vendor-inspected and process files by path or status. The views show hashes, evidence sources, assessment history, baseline comparison, freshness and coverage gaps. They use stored evidence and make no target or AI-provider requests. Coverage depends on recorded observations and retained artifacts, and baseline approval stays manual.
 
@@ -433,6 +437,8 @@ Use [the encrypted restic workflow](docs/ENTERPRISE_RECOVERY.md#complete-encrypt
 
 The older `scripts/backup.py` is a limited SQLite export; use `scripts/recovery.py` for full deployment recovery. Test restores before relying on them.
 
+Administrators can record recovery drill receipts with `POST /api/recovery/receipts` and read derived readiness with `GET /api/recovery/readiness`. Submit version-2 receipts in backup → archive verification → isolated restore → application recovery order (boot recovery is optional). Keep each returned receipt ID for the next stage's `parent_id`. Every stage must repeat the same backup ID, archive SHA-256, environment, adapter, database and trust identities and key fingerprint, and record when the key was last verified. Readiness needs a current, successful, matched chain, restore evidence covering the declared backup scope, and key custody recorded as `external`. Receipts are operator attestations: recording one never runs a backup or restore, and readiness is not proof that a deployment is recoverable.
+
 ## Upgrade
 
 1. Back up the database and all persistent volumes with app/workers stopped.
@@ -460,7 +466,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. It also runs `pip-audit` against the hash-locked Python runtime requirements and rejects vulnerabilities without an active owner/reason/expiry exception; this needs the PyPI advisory service and does not cover npm tooling, base-image packages or live GitHub alert state. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
+CI runs on Node 24-based GitHub Actions (`actions/checkout`, `setup-python` and `setup-node` v7) on runners pinned to `ubuntu-24.04`, and uses Node.js 26 LTS for browser checks. Adopting Ubuntu 26.04 is a deliberate change validated by a full CI run, not an `ubuntu-latest` rollover. A fast `static` job checks development metadata, pinned Ruff Pyflakes rules for undefined names/redefinitions/unused imports (undefined names only in tests), Python byte-compilation, every tracked shell and JavaScript file, and both Compose configurations. It also runs `pip-audit` against the hash-locked Python runtime requirements and rejects vulnerabilities without an active owner/reason/expiry exception; this needs the PyPI advisory service and does not cover npm tooling, base-image packages or live GitHub alert state. The separate `integration-version` merge gate stays red until the coordinator prepares a newer application version and a PR-linked changelog entry; see the [development coordination workflow](docs/DEVELOPMENT_COORDINATOR.md). The MySQL suite is split by test file across four jobs, each limited to 30 minutes and reporting its 25 slowest tests; reproduce one locally with `MRPATCHY_TEST_SHARD=1/4 python -m pytest -q`. Pull request runs are superseded by newer pushes to the same pull request. Every push to `main` is verified in full. It covers SQLite/MySQL, signed repository fixtures, real SSH enrollment/rotation on Ubuntu, Debian, Fedora and AlmaLinux, signed/unsigned RPM installation checks, Docker HTTPS startup, desktop/mobile browser flows and an encrypted SQLite restic restore drill. Regression coverage includes orphan quarantine, policy approval, lost SSH replies, worker restart/recovery deadlines, original-system rollback verification, pinned Debian upgrade stages, dependency markings, stale browser responses, secret filtering, missing-database refusal, exact OIDC issuers and provenance uncertainty.
 
 Repository, trust and schedule dialog submissions are one-shot while pending. Opening another dialog keeps it intact; an earlier result is shown globally for the same signed-in session and is suppressed after sign-out. Closing a dialog does not cancel the submitted operation.
 
@@ -482,8 +488,10 @@ Generate documentation screenshots with `SCREENSHOT_DIR=/tmp/mrpatchy-shots npm 
 - [AI diagnostics, update scores, expected installation and package history](docs/AI_AND_PACKAGE_HISTORY.md)
 - [Architecture and trust boundaries](docs/ARCHITECTURE.md)
 - [Enterprise configuration and recovery](docs/ENTERPRISE_RECOVERY.md)
+- [Secret custody inventory and key-rotation design](docs/SECRET_CUSTODY.md) (design only; not implemented)
 - [Database settings and offline SQLite/MySQL migration](docs/DATABASE_MIGRATION.md)
 - [Distribution release upgrades](docs/RELEASE_UPGRADES.md)
+- [Current capability and delivery-status matrix](docs/CAPABILITY_MATRIX.md)
 - [Post-review fixes](docs/REVIEW_FIXES.md)
 - [Latest code and interactive browser review](docs/FULL_REVIEW_2026-10-25.md)
 - [Historical reviews](docs/COMPLETION_REVIEW.md) and [expansion checkpoint](docs/OPERATIONS_EXPANSION.md)
@@ -516,6 +524,8 @@ process, startup/custom-file and package-integrity records on that server. Exact
 hash matches, path-only matches and changed bytes are labeled separately. Searches
 are bounded and paginated; matches do not establish causation or authorize response.
 See [the implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md#cross-source-incident-evidence-pivots).
+
+Administrators can assign a scanner incident to an enabled administrator and append investigator notes through the API: `GET /api/hosts/{host_id}/security/incidents/{incident_id}/case`, `PUT …/owner` and `POST …/notes`. Assignment needs the current ownership revision and a 10–4000 character reason. Both actions are audited and appear on the incident timeline. They never change incident state, evidence or plans, or authorize a response, and they return HTTP 409 while the server has an active operation. There is no UI for them yet.
 
 Each server workspace includes an administrator **AI integration** pause/resume control.
 Pausing blocks new provider calls for that server, including queued security proposals,
@@ -634,7 +644,7 @@ configured bound is reached. Lowering the bound preserves live leases and blocks
 admission until occupancy falls below it. Policy pause/resume
 and server lifecycle changes reject live claims, and delayed admission rechecks the
 current lifecycle before starting. Existing hourly/rate/spend admission and
-ownership/evidence checks still apply before calls and acceptance. The coordinator
+ownership/evidence checks still apply before calls and acceptance. Newly admitted process-triage work favors the eligible server with fewer live claims, then the durable least-recently admitted server turn, before choosing the oldest eligible observation. Same-server slots remain available when no less-occupied eligible server is waiting. The coordinator
 schedules update scoring, alternating purposes even with one AI slot. Claims expire
 after 120 seconds without renewal; interrupted attempts retain the existing recovery
 delay and finite retry limits. A lease cannot cancel an already sent request or
@@ -684,6 +694,12 @@ Unknown models, tiers, tool fees, output bounds or long-context pricing fail clo
 they are never admitted as free. Rate-plus-cap work reserves budget before consuming
 a smooth-rate start.
 
+Changes to the admission mode, shared rate, daily cap, reset timezone, legacy hourly
+limits and update-scoring opt-in are revision-checked. A save made from a stale Settings
+view is refused with a conflict, and the entered values stay in the form, instead of
+overwriting another administrator's change. Partial `PUT /api/settings/ai` requests
+keep omitted stored values rather than resetting them to defaults.
+
 Valid provider usage reconciles the ceiling to a retained estimate. Transmitted calls
 without reliable pricing or usage—including timeouts and interrupted workers—keep the
 full ceiling counted. Unsent failures release their reservation, including a confirmed
@@ -696,9 +712,16 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+In capped modes, AI Settings also shows how many counted transmitted calls await
+reconciliation and the oldest retained reservation time among them. This includes
+calls from still-counted prior windows. The time is the reservation time, because the
+ledger keeps no separate transmission timestamp.
+
 A confirmed local HTTP connection-pool timeout receives a short local retry delay
 without creating or changing the fleet-wide provider backoff. Provider and ambiguous
 network timeouts still apply the shared cooldown and conservative spend accounting.
+
+While an active shared cooldown is in effect, an administrator can review its sanitized reason, consecutive-failure count, recorded time and next eligibility in **Settings → AI**. Clearing requires confirming `CLEAR BACKOFF` and entering an audit reason; a stale or expired review is rejected instead of erasing a newer cooldown. The action sends no provider or target request and does not bypass local retries, rate/budget limits, pause, lifecycle or concurrency controls.
 
 The shared OpenAI Responses API client validates outgoing JSON against a
 2,000,000-byte UTF-8 limit before spend and rate admission. Invalid or oversized
@@ -718,7 +741,7 @@ are excluded. The report contains bounded aggregate windows only, never provider
 model, credential, prompt, evidence or response details. At most four reset/timezone
 groups per requested day are returned, with an explicit truncation notice if heavier
 configuration churn exceeds that bound. These local public-price estimates are not
-provider invoices.
+provider invoices. Administrators can filter them by the exact IANA timezone recorded with each ledger window. Filtering occurs before grouping and the window limit; clearing restores the all-timezone report without changing current or unsaved budget settings.
 
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary

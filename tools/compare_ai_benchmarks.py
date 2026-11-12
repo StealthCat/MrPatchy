@@ -16,6 +16,7 @@ MAX_THROUGHPUT = 1_000_000
 MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
 MAX_QUEUE_AGE_SECONDS = 86_400
 LEGACY_QUEUE_AGE_SECONDS = 2
+MAX_SINGLE_SERVER_SLOTS = 4
 REPORT_ROUNDING_RADIUS = Decimal('0.0005')
 STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
@@ -145,6 +146,19 @@ def _validate(report, label):
     runs = _integer(report.get('runs'), f'{label}.runs', positive=True)
     if not 2 <= runs <= 20:
         raise ComparisonError(f'{label}.runs must be between 2 and 20')
+    # Historical reports always gave each subject its own server.
+    fixture_hosts = _integer(report.get('fixture_hosts', runs), f'{label}.fixture_hosts')
+    if fixture_hosts not in (1, runs):
+        raise ComparisonError(f'{label}.fixture_hosts must be 1 or equal to runs')
+    single_server_slots = report.get('single_server_slots')
+    if fixture_hosts == 1:
+        single_server_slots = _integer(single_server_slots, f'{label}.single_server_slots')
+        if not 1 <= single_server_slots <= MAX_SINGLE_SERVER_SLOTS:
+            raise ComparisonError(f'{label}.single_server_slots must be between 1 and {MAX_SINGLE_SERVER_SLOTS}')
+        if concurrency > single_server_slots:
+            raise ComparisonError(f'{label}.concurrency exceeds single_server_slots')
+    elif single_server_slots is not None:
+        raise ComparisonError(f'{label}.single_server_slots requires one fixture server')
     provider_delay = _bounded(report.get('provider_delay_ms'), f'{label}.provider_delay_ms', 1, 1000)
     provider_calls = _integer(report.get('provider_calls'), f'{label}.provider_calls', positive=True)
     input_tokens = _integer(report.get('input_tokens'), f'{label}.input_tokens', positive=True)
@@ -207,6 +221,7 @@ def _validate(report, label):
         raise ComparisonError(f'{label}.retained_history_rows must be between 0 and 50000')
     return {
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
+        'fixture_hosts': fixture_hosts, 'single_server_slots': single_server_slots,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
         'ssh_delay_source': ssh_delay_source,
         'persistence_delay_ms': persistence_delay,
@@ -241,7 +256,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
         raise ComparisonError('candidate must use a distinct execution configuration')
     controls = (
-        'runs', 'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
+        'runs', 'fixture_hosts', 'single_server_slots',
+        'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
         'queue_age_seconds', 'retained_history_rows',
         'provider_calls', 'input_tokens', 'output_tokens',
     )
@@ -260,6 +276,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'baseline': {
             'name': baseline_name, 'execution': base['execution'],
             'concurrency': base['concurrency'], 'runs': base['runs'],
+            'fixture_hosts': base['fixture_hosts'], 'single_server_slots': base['single_server_slots'],
             'provider_delay_ms': base['provider_delay_ms'],
             'ssh_delay_ms': base['ssh_delay_ms'],
             'ssh_delay_source': base['ssh_delay_source'],
@@ -273,6 +290,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'candidate': {
             'name': candidate_name, 'execution': current['execution'],
             'concurrency': current['concurrency'], 'runs': current['runs'],
+            'fixture_hosts': current['fixture_hosts'], 'single_server_slots': current['single_server_slots'],
             'provider_delay_ms': current['provider_delay_ms'],
             'ssh_delay_ms': current['ssh_delay_ms'],
             'ssh_delay_source': current['ssh_delay_source'],

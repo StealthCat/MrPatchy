@@ -92,24 +92,36 @@ def test_actual_admission_query_uses_index_with_retained_history(admin):
     # Splitting the two equality ranges must retain their global oldest-first
     # result rather than preferring the pending branch.
     assert lease and lease.subject == 'e' * 64
-    assert len(queries) == 1
-    statement, parameters = queries[0]
+    # Fair admission first elects a host (#389), then resolves that host's
+    # oldest candidate through the indexed per-verdict shortlist. Both reads
+    # split the verdicts into equality ranges; only the election groups hosts.
+    election = [query for query in queries if 'GROUP BY' in query[0]]
+    shortlist = [query for query in queries if 'GROUP BY' not in query[0]]
+    assert len(queries) == 2 and len(election) == 1 and len(shortlist) == 1, queries
+    assert all('UNION ALL' in query[0] for query in queries), queries
+    for statement, parameters in election + shortlist:
+        _assert_admission_index_plan(statement, parameters)
+
+    with lease:
+        pass
+
+
+def _assert_admission_index_plan(statement, parameters):
     with db.engine.connect() as connection:
         prefix = 'EXPLAIN QUERY PLAN ' if connection.dialect.name == 'sqlite' else 'EXPLAIN '
         plan = connection.exec_driver_sql(prefix + statement, parameters)
         if connection.dialect.name == 'sqlite':
             details = [row[3] for row in plan]
             assert any(ADMISSION_INDEX in detail for detail in details), details
+            # Neither read may scan retained behaviors, including through the
+            # host index, before reaching the eligible pending/error ranges.
             assert all('SCAN behaviors' not in detail for detail in details), details
         else:
             rows = plan.mappings().all()
             behavior_rows = [row for row in rows if row.get('table') == 'behaviors']
-            # Each verdict-range subquery uses the admission index. The outer
-            # query then resolves the winning identity through the primary key.
+            # Each verdict-range branch uses the admission index. The shortlist
+            # then resolves the winning identity through the primary key.
             indexed = [row for row in behavior_rows if row.get('key') == ADMISSION_INDEX]
             assert len(indexed) == 2, rows
             assert all(row.get('type') != 'ALL' for row in behavior_rows), rows
             assert all(row.get('key') in (ADMISSION_INDEX, 'PRIMARY') for row in behavior_rows), rows
-
-    with lease:
-        pass

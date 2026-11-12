@@ -114,6 +114,21 @@ The completion gate takes priority, and the development schedule is unchanged.
 
 ## Current implementation status
 
+### AI provider connection inventory (partial #290)
+
+Administrators can read `GET /api/settings/ai-connections` to see the existing
+OpenAI connection, saved default model and settings eligibility for each AI
+feature. Connection testing and model discovery are listed separately from
+host work. Model discovery has no selected execution model. The endpoint checks
+for the saved key record by name and returns allowlisted metadata. It does not
+decrypt credentials, contact a provider or change a route.
+
+Configuration completeness describes saved settings only. Actual calls still
+apply host policy, lifecycle, admission, budget and provider validation at
+their existing boundaries. Remaining #290 milestones include provider adapters
+and named connections, configuration migration, persisted and audited feature
+and item routes, queue/retry identity binding, accounting and Settings UI.
+
 ### Enrollment installer downloads (partial #202)
 
 Enrollment links retain their one-hour expiry and support repeated downloads for
@@ -2160,6 +2175,25 @@ server records. Existing pause and lifecycle filters still govern eligibility.
 This reduces data fetched per scoring pass. Candidate hashing and measured
 production throughput remain open.
 
+The update-scoring memo uses the distribution and package-manager fields
+shared with the scoring payload, plus installed RPM inventory when applicable.
+Repository file text, raw APT status and unrelated OS fields no longer evict
+identities when the stored inventory refreshes. SQLite and MySQL regression
+coverage checks retained APT/RPM score matches across refreshes and misses
+after relevant version, distribution or package-manager changes. Existing
+score keys and provider payloads are preserved. The worker still reads stored
+inventory, fingerprints the RPM list and walks eligible candidates. Production
+throughput and the broader parallel-scoring milestone remain open.
+
+At the 256-server memo bound, overflow servers use a pass-local memo and
+retained servers stay warm across scoring passes. An exhausted pass releases
+entries for absent eligible servers. A pass that stops after selecting a
+provider batch keeps entries for servers it has yet to visit. The regression
+checks overflow, early exit, slot reclaim and the exact completed-score matches
+on both database engines. The candidate walk and pass-local state still scale
+with the eligible fleet. Production throughput and parallel scoring remain
+open.
+
 ### Parallel execution and latency work
 
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run
@@ -2199,12 +2233,29 @@ pause, lifecycle, capacity and oldest-first eligibility checks. This is a partia
 database performance increment; production throughput and full faster-AI
 acceptance remain open.
 
+Worker checkpoint #647 adds a covering index on the attempt timestamp used by
+the administrator's recent-attempt status and the legacy hourly admission gate.
+Startup adds it to existing behavior tables without rewriting retained rows.
+The focused acceptance checks both real query plans, the strict one-hour cutoff,
+the displayed retry time and idempotent index installation on SQLite and MySQL.
+The index incurs timestamp-write maintenance. Fixture measurements do not
+establish production throughput or complete the faster-AI milestone.
+
 Worker checkpoint #603 adds a server/package/state/candidate index for exact
 score history and deferred scoring lookups. Startup creates it idempotently on
 existing databases and keeps retained scores and existing indexes. A fixture with
 5,000 unrelated scores on one server verifies the actual query plans and retained
 results. This is partial scoring performance work. Idle candidate hashing and
 end-to-end production throughput acceptance remain open.
+
+Worker checkpoint #649 indexes run purpose and start time for the administrator
+status aggregate and legacy triage and scoring counts. The index is installed
+during startup for new and existing databases. Focused tests verify the three
+real query plans, the strict hourly cutoff, unchanged admission and retry
+behavior, and idempotent index creation on SQLite and MySQL. The index adds
+maintenance to run inserts and retains the existing running-state index.
+Local query measurements do not establish production throughput or complete
+the faster-AI milestone.
 
 - Add a bounded, configurable `ThreadPoolExecutor` for independent triage tasks, with an initial target default of four concurrent investigations subject to load validation. Expose actual configured/active/queued AI capacity. Retain a supported serial setting and validate configuration/resource bounds.
 - Replace the single AI future/global execution lock with short atomic per-item claims, renewable leases and worker/boot ownership. Use independent database sessions and explicit run/policy context per task; never share mutable ORM sessions across threads. Completion must verify claim ownership and current evidence before accepting a verdict.
@@ -2215,6 +2266,18 @@ end-to-end production throughput acceptance remain open.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
 
+### Live process-triage lease telemetry
+
+The administrator investigation status API reports
+`active_lease_expires_at`, the earliest expiry among currently live process
+investigation claims, or null when no claim is live. Expired claims are
+excluded. The AI worker status displays this boundary with the active count so
+an administrator can tell when an unrenewed slot becomes eligible for fenced
+recovery. Expiry does not prove a provider request stopped or was not billed.
+This telemetry is read-only: it does not renew, reconcile, cancel, retry or
+otherwise alter a claim. Full multi-controller failover and production
+recovery acceptance remain open.
+
 ### Update-scoring schedule-state reads
 
 The scheduler reads only identity, state and eligibility fields from retained
@@ -2224,7 +2287,25 @@ Regression coverage checks the scheduling queries across batches, including
 durable deferral, stale-state updates and the existing assessment identity.
 Candidate hashing and production throughput validation remain open.
 
+Scoring prepares the operating-system fields, package manager and installed RPM
+version index as each bounded host batch is read. Raw inventory is released
+with that batch. The pass keeps the prepared inputs in first-candidate order
+and uses the same installed versions in the outbound evidence. Result
+persistence still rechecks live inventory. Focused SQLite and MySQL tests
+cover exact score identities, multi-version and multi-architecture RPM payloads,
+and superseding a result after a committed inventory change. Compact per-host
+state still scales with the eligible fleet. Production throughput remains open.
+
 ### Fleet-wide exact-match known-good cache
+
+The administrator-only `GET /api/ai/known-good/summary` endpoint counts active and
+revoked published entries, retained assessments with a cache-reuse link, and
+the subset of those assessments linked to revoked entries. Ordinary provider
+assessments linked at publication are excluded from the reuse counts. A single
+aggregate SQL statement returns only counts and preserves historical reuse
+after revocation. These counts describe retained records and do not verify
+current context, measure misses, or estimate provider calls, billing or
+performance. Dashboard presentation and matched production acceptance remain open.
 
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
@@ -2257,6 +2338,19 @@ reserve spend if the cap still applies. Capped requests add one settings read
 and compute the quote while holding the lock. This checkpoint removes one
 shared lock acquisition per request that begins budget admission uncapped.
 End-to-end throughput and broader shared-controls acceptance remain open.
+
+Changes to AI admission and spend controls are revision-checked (#709).
+`GET /api/settings` returns an opaque `ai_controls_revision`. It is a SHA-256
+of the stored mode, shared rate, daily cap, reset timezone, legacy hourly limits
+and update-scoring opt-in. Both AI settings save endpoints accept
+`expected_ai_controls_revision` under the existing settings lock. A stale value
+returns 409 and writes no settings or settings audit entry. The Settings form
+always sends the revision it loaded and keeps the entered values when a save
+conflicts. Requests that omit the field keep their previous behaviour. A partial
+`PUT /api/settings/ai` now keeps omitted stored values, so it can no longer
+silently reset the mode, cap, timezone or scoring opt-in to defaults (#708).
+The revision check does not cover the separate API-key, patching and history
+sections.
 
 Worker checkpoint #601 limits the automatic advisory planner's rolling-hour
 history query to legacy mode. Shared modes still queue at most ten plans per tick
@@ -2345,6 +2439,34 @@ Use the same history size, run count and delays for a serial/parallel pair.
 The fixture still checks the same provider, SSH evidence and completion workload.
 Native MySQL and production throughput acceptance remain open.
 
+### Same-server process-triage benchmark (issue #654)
+
+The disposable benchmark can seed distinct process observations on one server.
+The fixture uses the runtime's maximum supported per-server slot limit for both
+executions and rejects a requested thread count above that limit. The following
+commands compare one worker with four under the same fixture conditions.
+
+```bash
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
+python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
+python tools/compare_ai_benchmarks.py serial.json parallel.json
+```
+
+The benchmark checks that every persisted run belongs to the expected subject
+and server, with a receipt for every provider call. Reports record the observed
+server count, the single-server slot limit, and peak simultaneous loopback
+provider handling. The comparator requires the same server count and slot limit
+in addition to matching observed evidence, calls, and sample counts. Older
+reports without topology fields retain their one-server-per-subject meaning.
+
+The CLI measures the existing claim and request path on disposable SQLite with
+synthetic provider and SSH delays. A separate native MySQL 8.4.13 preview changed
+only the fixture database URL. Three matched eight-subject pairs retained the
+same evidence fingerprint, 12 provider calls and four follow-ups per execution.
+Peak simultaneous provider handling rose from one to four in all three pairs.
+Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
+The CLI has no MySQL mode, and matched production measurements remain open.
+
 ### Retained process-triage timing sample — worker checkpoint #522
 
 The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
@@ -2418,6 +2540,52 @@ state. This depends on #379 / PR #380 and does not complete cross-purpose priori
 aging, provider-specific quotas, native complete-context collection, full supported
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
+
+### Reviewed shared provider-backoff reset — worker checkpoint #552
+
+AI Settings exposes an active shared provider Retry-After/transient-failure floor with
+its sanitized reason, consecutive-failure count, recorded time and next eligibility.
+An administrator may clear the reviewed floor with an exact confirmation phrase and
+meaningful audited reason. The request carries an opaque digest of the durable state;
+the controller rechecks it under the provider-backoff lock and preserves a newer or
+already expired floor instead of applying a stale browser action.
+
+Resetting sends no provider or target request. It releases only the shared provider
+floor and provider-only item waits; local retry deadlines, attempt limits, smooth-rate
+and daily-budget admission, pause, lifecycle and concurrency controls stay
+authoritative. Status exposes no provider body, prompt, evidence, credential or raw
+error. No schema or target-helper upgrade is required.
+
+Focused acceptance covers active reset, changed/expired conflicts, required review
+fields, role/CSRF boundaries, audit evidence and responsive Settings behavior. This
+does not diagnose provider availability, reconcile uncertain charges, bypass provider
+limits or complete the broader shared-controls/faster-AI program. Exact-head
+SQLite/MySQL, browser, full-suite and coordinator integration checks remain required.
+
+
+### Durable cross-server process-triage fairness — worker checkpoint #388
+
+Process-triage admission now balances eligible servers by live leased occupancy before
+using another slot on the same server. Ties use a durable monotonically ordered server
+turn. A never-admitted eligible server sorts before one already served, and releasing
+a claim does not erase its turn, so worker or controller restarts cannot reset the
+order and let one deep queue repeatedly win on an older observation timestamp.
+
+The host choice remains inside the existing short distributed triage admission lock.
+Only a successfully committed subject claim records the next turn; refused locks,
+lifecycle changes and ineligible work do not consume one. The scheduler uses bounded
+SQL grouping and ordering rather than materializing the pending queue. A server may
+still fill its configured occupancy when no less-occupied eligible server is waiting.
+Subject exclusivity, per-server and fleet capacity, retry eligibility, pause/lifecycle,
+rate/spend/provider admission, evidence revisions and stale-result fencing remain
+authoritative.
+
+Focused acceptance covers live-occupancy balancing, persisted least-recent turns,
+same-server fallback and failed-admission non-consumption, plus offline database-copy
+retention. This stacked increment depends on #383 and does not complete cross-purpose
+priority/aging, provider-specific quotas, native complete-context collection, complete
+multi-controller failover acceptance or the overall faster-AI program. Exact-head
+SQLite/MySQL/full-suite and coordinator integration checks remain required.
 
 
 ## Portable per-server scanner records
@@ -2905,6 +3073,49 @@ closes the stream and clears account-scoped client data. This is not completion 
 milestones 2 or 4: production Caddy timeout/flushing measurements, slow-client and
 connection-exhaustion drills, multi-controller failover, pruned-cursor gap handling,
 two-browser SQLite/MySQL acceptance, live toasts and full producer coverage remain.
+
+Worker checkpoint (issue #668): a bounded milestone-2 increment adds a durable
+arrival sequence. Every newly created notification revision appends one unsequenced row to
+`notification_arrivals` in the publisher's transaction. Identical repeated
+observations append nothing. `GET /api/notifications/arrivals` is available to any
+signed-in role:
+
+- Without `after` it returns only a baseline cursor.
+- With `after` it returns, in arrival order, current revisions committed after that
+  cursor. Items use the list API shape plus `arrival`, and the response carries a
+  `more` flag and a new cursor.
+
+Results apply the caller's current role, and read and dismissed flags are reported,
+not filtered. Superseded revisions and hidden events are skipped, but the cursor
+still advances past them. A cursor beyond the retained sequence resets to a fresh
+baseline and sets `reset`.
+
+Discovery is independent of producer timestamps and list ordering. A newly
+committed revision is found even when its producer clock lags, or when 100 or more
+newer unread events of the same severity crowd it out of a bounded page. Those are
+the two gaps the live-toast reviews reproduced.
+
+Arrival numbers are assigned only after the producer commits. Before reading,
+the arrivals endpoint runs a short sequencing transaction. It first writes the
+single `notification_arrival_head` row, which serializes sequencers on SQLite and
+MySQL. It then numbers the committed unsequenced rows densely above the head and
+commits them atomically. So every reader snapshot sees a gap-free committed
+prefix:
+
+- A slow lower transaction that commits after a faster higher one is numbered
+  above any cursor already returned, so it is never skipped.
+- A rolled-back publish never appears and leaves no gap.
+- A baseline covers every revision committed before the request, however many
+  there are. This removes the earlier 60-second gap hold, its clock-skew limit and
+  the 500-row partial baseline that the #669 reviews reproduced.
+
+The sequencing transaction itself is the only serialization point; publishers do
+not wait on it.
+
+This is additive: SSE payloads, list/count APIs, read/dismiss/acknowledgement
+semantics and response authorization are unchanged. Client adoption by the live
+toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
+do arrival retention/pruning and multi-controller acceptance.
 
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
@@ -5399,7 +5610,11 @@ Operation list/detail APIs now expose one explicit `ai_deferred` Boolean derived
 the internal marker while continuing to exclude the complete payload. Activity reads
 only that safe projection. Status counts eligible advisory plans separately and gives
 eligible work precedence over another plan's future timestamp while preserving the
-future `plan_next_at`. Incident and startup handlers distinguish a controlled zero
+future `plan_next_at`. The administrator status also groups deferred counts, due
+unpaused counts, and earliest recorded future retry times by release, incident
+and startup plan. One grouped query yields the three totals without returning job
+payloads or host identities. A recorded retry time does not override pause or
+shared admission controls. Incident and startup handlers distinguish a controlled zero
 eligibility from `None`; the durable run becomes `deferred` with a bounded resume
 message while the job remains queued at `next_at=0`. Every later execution still
 rechecks host lifecycle, global/per-server pause, evidence, provider, rate and spend
@@ -6318,12 +6533,24 @@ unreleased states keep their conservative ceilings. Released unsent attempts do 
 count. The report contains only aggregate amounts, counts and window boundaries—no
 model names, keys, prompts, evidence, provider responses or pricing-source URLs.
 
+The current-budget summary also reports the number of counted transmitted calls
+awaiting reconciliation and the oldest retained reservation time among them.
+It includes sent and uncertain rows from still-counted prior windows. The
+display uses reservation time because the ledger has no separate transmission
+timestamp. No call identifiers or diagnostic evidence are needed.
+
 The administrator API validates a trailing 1–90 day range and performs fixed-precision
 SQL aggregation without materializing individual ledger records. Result groups are
 bounded to four persisted reset/timezone combinations per requested day (at most 360),
 and an explicit truncation flag discloses heavier configuration churn. AI Settings
 offers 7-, 30- and 90-day views with loading, empty, error and truncation states and
 states plainly that local public-price estimates are not provider invoices.
+
+AI Settings can filter this history by an exact IANA timezone recorded with the
+ledger window. The administrator API applies the optional timezone before
+grouping and limiting so other timezones cannot hide matching windows.
+Clearing the filter restores the all-timezone report. Applying a filter
+does not change budget settings or their unsaved edits.
 
 This checkpoint changes no admission, provider-call, pause, response-authorization or
 ledger-retention behavior. Provider-invoice reconciliation, signed/automated pricing
@@ -6654,6 +6881,30 @@ capacity may still delay dispatch.
 This is an additive administrator API change with no schema/configuration
 migration, provider call, scheduling change, UI change or response-authorization
 change. Matched production throughput and the broader dashboard remain open.
+
+### Authoritative shared AI control snapshot — worker checkpoint #546
+
+This bounded faster-AI increment adds an administrator-only read of every currently
+observable global provider-call blocker. It reports disabled or incomplete central AI
+configuration, a shared provider backoff, a smooth-rate wait and a fully consumed
+daily-cap window as separate fixed-code entries. When several finite gates overlap,
+the reported next start is the latest gate time rather than an earlier time at which
+another control would still refuse the call. An indefinite policy/configuration hold
+never claims a future start. A retained budget window that outlives the currently
+configured timezone reset likewise exposes that reset only as a recheck boundary and
+does not claim that headroom will be available then.
+
+The snapshot is read-only and contains no model name, key, prompt, evidence, provider
+body, call/run identifier or ledger record. It performs no provider or target traffic.
+`can_start_now` means only that these global gates are presently open: a call-specific
+conservative price quote, provider policy, finite concurrency, per-server pause and
+lifecycle checks remain authoritative and can still refuse work.
+
+This is an API/control-plane checkpoint, not the complete queue/spend dashboard or
+faster-AI acceptance. UI integration, call-specific preview, provider-invoice truth,
+multi-controller failover/reset acceptance and fresh code-scanning verification remain
+required. Coordinator integration and exact-head SQLite/MySQL/full-suite checks are
+also still required before delivery.
 
 ### Batched outbound AI pause-policy reads — worker checkpoint #573
 
