@@ -3124,6 +3124,32 @@ semantics and response authorization are unchanged. Client adoption by the live
 toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
 do arrival retention/pruning and multi-controller acceptance.
 
+Implementation checkpoint (issue #661): a bounded milestone-3 increment adds live
+toasts. After the first successful refresh following sign-in or page load, the
+shell records a durable arrival-cursor baseline, so reloads, reconnects
+and catch-up never replay old events as toasts. A later refresh shows a toast only
+for a new or higher-revision unread, undismissed, unresolved `high` or `critical`
+notification. Toast admission does not depend on the bell's recent list or any
+bounded unread window. It consumes the durable #668 arrival cursor: the first
+successful refresh takes a baseline from `GET /api/notifications/arrivals`, and each
+later refresh pages, in commit order, the visible current revisions committed after
+that cursor (up to five 100-item pages per refresh, with the rest picked up on the
+next one). An old event that slides into view after another session dismisses one
+therefore never toasts. A new event still toasts when its producer timestamp lags
+or when 100 or more newer unread events of its severity exist, which closes the
+coverage limit of the earlier bounded-window admission. A failed arrival read keeps
+the cursor for the next refresh, and a cursor the server no longer retains
+re-baselines silently. At most three toasts are visible; a larger burst
+collapses into one summary that links to the notification center. Toasts use a polite live
+region, render text nodes only, revalidate same-origin links, never take focus,
+pause their ten-second auto-hide on hover or focus, and mount inside an open modal
+so they stay usable above it. Hiding a toast is local to the tab and does not mark
+the notification read or dismissed, acknowledge an alert or perform any response.
+Logout and account reset clear toasts and the baseline. Remaining: per-user
+cross-tab toast deduplication (each open tab shows its own toast), producer and
+retention coverage, and the milestone 2 and 4 transport and end-to-end acceptance
+listed above.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
