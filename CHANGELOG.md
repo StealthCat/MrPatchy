@@ -1,3 +1,14 @@
+## 1.59.44 — 2026-11-12
+
+1. [PR #683](https://github.com/StealthCat/MrPatchy/pull/683): Add a pure malware automatic-containment eligibility contract (`app/malware_response.py`). It decides whether a malware detection may trigger automatic file quarantine and/or verified process termination under an administrator policy.
+   - **Known malware** qualifies only with an authenticated ClamAV, YARA or hash-indicator signature that is fresh, not future-dated and hash-matched.
+   - **Unknown malware** qualifies only when the policy allows it, AI is available, and a bound `malicious` verdict meets the confidence threshold with at least two distinct corroborating evidence kinds from the same evidence revision and artifact. A bare model verdict never authorizes an action.
+   - Quarantine and termination are decided independently against complete file and process identities. Protected pseudo-filesystems and excluded paths are refused, including for process-only detections.
+   - Modes are `disabled` (the default), `monitor_only` and `enforce`. Malformed input fails closed with no action.
+   - A stable `binding_digest` and a `still_bound()` pre-execution recheck reject PID reuse, reboot and file replacement.
+   - Includes the review fixes from #684: fail-closed process exclusions and artifact-bound AI corroboration. Refs #682.
+2. Compatibility and limits: an unwired contract only. No detector, policy storage, executor, API, UI, schema or configuration change, and no response action is authorized at runtime. This is a partial #682 increment. This source update does not publish a Docker image.
+
 ## 1.59.43 — 2026-11-12
 
 1. [PR #681](https://github.com/StealthCat/MrPatchy/pull/681): Controller web instances now register themselves in the shared database. Administrators see them in a new **Controllers** section on **Activity → Workers**, backed by the admin-only, paginated `GET /api/operations/controllers`.
