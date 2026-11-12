@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_pricing,host_lifecycle,notifications
+from . import ai_budget,ai_pricing,host_lifecycle,notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -227,6 +227,7 @@ def collect_alerts(now=None):
                 try:_operational_notification(s,host_id,kind,message,now)
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
         _pricing_catalog_alert(s,cfg,record,now)
+        ai_budget.publish_cap_notification(s,cfg,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine
