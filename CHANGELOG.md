@@ -1,3 +1,13 @@
+## 1.59.65 — 2026-11-12
+
+1. [PR #730](https://github.com/StealthCat/MrPatchy/pull/730): When one account has several Mr Patchy tabs open, each new high or critical notification revision shows its toast in only one tab.
+   - Tabs claim admitted revisions in `localStorage`, bound to the signed-in user. The check-and-claim is atomic across tabs where the Web Locks API is available and best-effort otherwise.
+   - A tab fails open and shows its own toasts if storage or locks fail.
+   - Claims are bounded to 500 entries kept for 24 hours, hold no notification text, source or link, and are removed at logout.
+   - A higher revision can still toast once, and burst summaries count only the tab's own claims.
+   - Closes #729.
+2. Compatibility and limits: a client-only change to toast admission, with no API or schema change. Without Web Locks, simultaneous claims across tabs are best-effort. This source update does not publish a Docker image.
+
 ## 1.59.64 — 2026-11-12
 
 1. [PR #728](https://github.com/StealthCat/MrPatchy/pull/728): The administrator Investigations page shows a **Shared AI start gates** card below the AI worker status, read from the existing `GET /api/settings/ai-control-status`.

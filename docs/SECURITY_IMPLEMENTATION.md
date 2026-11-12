@@ -3679,6 +3679,28 @@ cross-tab toast deduplication (each open tab shows its own toast), producer and
 retention coverage, and the milestone 2 and 4 transport and end-to-end acceptance
 listed above.
 
+Worker checkpoint (issue #729): a bounded milestone-3 increment deduplicates live
+toasts across tabs of one account. Each tab still keeps its own arrival cursor.
+Before it shows a toast, a tab claims the event revision in same-origin
+`localStorage`, under one key bound to the signed-in username. When the Web Locks
+API is available, the check and the claim are atomic, so concurrent refreshes show
+one toast. Without it, a best-effort read-modify-write still covers tabs that do
+not refresh at the same moment, such as a hidden tab that catches up when it
+becomes visible.
+
+- **What is stored:** at most 500 claims of event ID, revision and time, kept for
+  24 hours. Claims hold no notification text, source or link. Claims from another
+  account are ignored, and reset or logout clears them.
+- **Higher revisions:** a higher revision can still toast once.
+- **Burst summaries:** a summary counts only the revisions this tab claimed.
+- **Storage unavailable:** the tab fails open and shows its own toast, as before.
+- **Unchanged:** the bell count, list and center. Hiding a toast is still local to
+  the tab and never reads, dismisses, acknowledges or responds.
+- **Known limit:** claims dedupe only within one browser profile and origin; other
+  browsers and devices each show their own toast.
+
+Milestones 2 and 4 remain open.
+
 Worker checkpoint (issue #687): a bounded milestone-2 increment retains arrival
 records for the existing `history_days` setting. The leader's hourly cleanup calls
 `prune_arrivals`, which deletes only the oldest contiguous prefix of sequenced
