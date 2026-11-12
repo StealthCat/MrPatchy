@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from sqlalchemy import select, delete, update
-from . import host_lifecycle,response_status,worker_health, app_probes
+from . import host_lifecycle,response_status,worker_health, app_probes, notifications
 from .db import Session, Host, Package, Behavior, Job, Setting, InventoryRevision, Observation, config, audit
 from . import ai_transport, ai_policy, incidents, apt, ssh, operations, releases, scheduling, ai, ai_runs, ai_retry, package_history, update_scores, packages as package_backend  # noqa: F401 (tests reach worker.incidents and worker.apt)
 from target.agent import MANAGED
@@ -528,7 +528,8 @@ def execute_locked(job_id):
                     policy=monitor_policy(s,h.id)
                     if not policy['enabled'] or policy['revision']!=job.payload['_persistence_policy']:
                         raise ValueError('Persistence monitoring policy changed; scheduled inspection cancelled before remote access')
-                request={'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence']}
+                # Opt in to parsed crontab jobs: controllers that strip them from change evidence ask for them.
+                request={'action':'security-inspect','packages':job.payload['packages'],'persistence':job.payload['persistence'],'cron_jobs':True}
                 paths=job.payload.get('custom_paths',[])
                 if paths:
                     from target.agent import validate_custom_paths
@@ -772,7 +773,7 @@ def _assess_behavior(s,row,cfg,secret):
         return _assess_active_behavior(s,row,cfg,secret)
 
 def _assess_active_behavior(s,row,cfg,secret):
-    from . import ai_assessments,ai_claims,known_good
+    from . import ai_assessments,ai_claims,known_good,triage_notifications
     lease=ai_claims.current.get()
     policy=ai.investigation_policy()
     policy_hashes=[ai_assessments.digest([policy]),ai_assessments.digest([policy,policy])]
@@ -801,6 +802,7 @@ def _assess_active_behavior(s,row,cfg,secret):
         from .file_trust import record_reuse
         record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)
+        triage_notifications.publish_verdict(write,saved)
         return True
 
     with ai_runs.measure('known_good_lookup'):
@@ -853,6 +855,7 @@ def _assess_active_behavior(s,row,cfg,secret):
             known_good.invalidate_contradiction(write,assessment)
             known_good.publish(write,assessment)
             ai_retry.clear(write,saved)
+            triage_notifications.publish_verdict(write,saved)
         if lease:
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
@@ -964,6 +967,11 @@ def _loop(reporter):
                                     except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
                         operations.collect_alerts()
+                        # In-app only; a failure must not stop the coordinator tick.
+                        try:
+                            from . import worker_registry
+                            worker_registry.publish_notifications()
+                        except Exception:log.exception('Expected-worker notifications failed')
                     # Resume observation, never the package transaction, after worker loss.
                     resume_busy={host_id for _,host_id in active_jobs.values()}
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
@@ -998,6 +1006,9 @@ def _loop(reporter):
                         for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%') | Setting.key.like('oidc-state:%'))):
                             if entry.value.get('expires',now+1)<now: s.delete(entry)
                         s.commit()
+                    # Separate short batches; never holds the cleanup transaction.
+                    try:notifications.prune_arrivals(cutoff)
+                    except Exception:log.exception('Notification arrival pruning failed')
                     last_cleanup=now
                 if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
                 if now-last_ai>=5:

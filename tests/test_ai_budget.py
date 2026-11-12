@@ -346,6 +346,8 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
     assert state['ai_control_mode']=='rate_and_daily'
     assert state['ai_budget']['cap_usd']=='12.5'
     assert state['ai_budget']['timezone']=='America/New_York'
+    assert state['ai_budget']['unreconciled_call_count']==0
+    assert state['ai_budget']['oldest_unreconciled_reservation_at'] is None
     assert state['ai_budget']['pricing_catalog']['state']=='fresh'
     assert state['ai_budget']['pricing_catalog']['expires_at']==ai_pricing.EXPIRES_AT
     body['ai_budget_timezone']='Not/A_Zone'
@@ -406,8 +408,37 @@ def test_status_totals_use_sql_aggregates_without_loading_ledger(admin):
     assert result['settled_usd']=='0.0000009'
     assert result['reserved_usd']=='0.4'
     assert result['uncertain_usd']=='0.35'
+    assert result['unreconciled_call_count']==100
+    assert result['oldest_unreconciled_reservation_at']==now
     assert result['counted_usd']=='0.7500009'
     assert result['remaining_usd']=='99.2499991'
+
+
+def test_reconciliation_summary_keeps_still_counted_prior_windows(admin):
+    from datetime import datetime, timezone
+
+    now=datetime(2026,3,9,0,30,tzinfo=timezone.utc).timestamp()
+    configure(mode='daily_cap',cap=Decimal('100'),timezone='UTC')
+    rows=[
+        ('sent-prior','sent',now-7200,now+3600),
+        ('uncertain-current','uncertain',now-60,now+86400),
+        ('sent-expired','sent',now-14400,now-3600),
+        ('unknown-prior','legacy_pending',now-10800,now+3600),
+    ]
+    with Session() as session:
+        session.add_all([
+            ai_budget.BudgetEntry(id=identifier,created=created,updated=now,reset_at=reset,
+                timezone='America/New_York',model='m',status=status,reservation_usd=Decimal('1'),
+                pricing_version='v',pricing_source='s')
+            for identifier,status,created,reset in rows
+        ])
+        session.commit()
+        result=ai_budget.status(session,now)
+
+    assert result['counted_usd']=='3'
+    assert result['uncertain_usd']=='2'
+    assert result['unreconciled_call_count']==2
+    assert result['oldest_unreconciled_reservation_at']==now-7200
 
 
 def test_unrecognized_status_rows_stay_counted_and_block_admission(admin):
@@ -500,3 +531,114 @@ def test_spend_history_validates_range_role_and_bounds_group_rows(admin):
     assert admin.get(base+'&timezone=Invalid%2FTimezone').status_code==400
     with Session() as session:session.get(User,'admin').role='viewer';session.commit()
     assert admin.get(base+'&timezone=America%2FNew_York').status_code==403
+
+
+DAY=1793404800.0  # 2026-10-31T00:00:00Z
+
+
+def ledger(amount, *, created=DAY+60, status='reserved', reset=DAY+86400):
+    import uuid
+    with Session() as session:
+        session.add(ai_budget.BudgetEntry(id=str(uuid.uuid4()), created=created, updated=created,
+            reset_at=reset, timezone='UTC', model='gpt-6-luna', status=status,
+            reservation_usd=Decimal(amount), pricing_version='fixture', pricing_source='fixture'))
+        session.commit()
+
+
+def cap_event(session):
+    return session.query(notifications.NotificationEvent).filter_by(source='ai-budget', kind='daily-cap').one_or_none()
+
+
+def cap_revision(session, event):
+    return session.get(notifications.NotificationRevision, (event.id, event.revision))
+
+
+def test_exhausted_daily_cap_notifies_once_per_window_and_resolves_at_reset(admin):
+    configure(mode='rate_and_daily', cap=Decimal('1'))
+    ledger('0.4')
+    operations.collect_alerts(DAY+120)
+    with Session() as session:
+        assert cap_event(session) is None
+    ledger('0.35', status='sent')
+    ledger('0.25', status='uncertain')
+    operations.collect_alerts(DAY+180)
+    with Session() as session:
+        event=cap_event(session);revision=cap_revision(session, event)
+        assert event.revision==1 and event.minimum_role=='admin' and event.host_id==''
+        assert revision.lifecycle=='active' and revision.severity=='medium'
+        assert revision.deep_link=='#settings/ai'
+        assert '$1 (UTC day)' in revision.reason and '2026-11-01T00:00:00Z' in revision.reason
+        assert 'deferred, not discarded' in revision.reason
+        notifications.mark_read(session, 'admin', event.id, event.revision, now=DAY+200)
+        session.commit()
+    # Further spend in the same window is not a new observation.
+    ledger('0.5', status='sent')
+    operations.collect_alerts(DAY+240)
+    with Session() as session:
+        assert cap_event(session).revision==1
+        assert notifications.unread_count(session, 'admin')==0
+        assert not session.query(operations.Alert).filter(operations.Alert.kind.like('%cap%')).count()
+    # The reset opens a new window with headroom: one resolved revision, then no churn.
+    operations.collect_alerts(DAY+86400+10)
+    operations.collect_alerts(DAY+86400+70)
+    with Session() as session:
+        event=cap_event(session);revision=cap_revision(session, event)
+        assert event.revision==2 and revision.lifecycle=='resolved' and revision.severity=='info'
+    # Exhaustion in the next window resurfaces as unread.
+    ledger('1', created=DAY+86400+100, reset=DAY+2*86400)
+    operations.collect_alerts(DAY+86400+130)
+    with Session() as session:
+        event=cap_event(session);revision=cap_revision(session, event)
+        assert event.revision==3 and revision.lifecycle=='active'
+        assert '2026-11-02T00:00:00Z' in revision.reason
+        assert notifications.unread_count(session, 'admin')==1
+
+
+@pytest.mark.parametrize('change', ['raise_cap', 'rate_mode', 'unthrottled', 'disabled'])
+def test_cap_notification_resolves_when_cap_no_longer_blocks(admin, change):
+    configure(mode='daily_cap', cap=Decimal('1'))
+    ledger('1')
+    operations.collect_alerts(DAY+120)
+    if change=='raise_cap':configure(mode='daily_cap', cap=Decimal('2'))
+    elif change=='rate_mode':configure(mode='rate')
+    elif change=='unthrottled':configure(mode='unthrottled')
+    else:
+        with Session() as session:
+            row=session.get(Setting, 'config');row.value={**row.value, 'ai_enabled': False};session.commit()
+    operations.collect_alerts(DAY+180)
+    with Session() as session:
+        event=cap_event(session)
+        assert event.revision==2 and cap_revision(session, event).lifecycle=='resolved'
+
+
+@pytest.mark.parametrize('mode,enabled', [
+    ('rate',True),('unthrottled',True),('legacy',True),('daily_cap',False),('rate_and_daily',False),
+])
+def test_uncapped_or_disabled_modes_never_create_cap_notification(admin, mode, enabled):
+    configure(mode=mode, cap=Decimal('1'))
+    with Session() as session:
+        row=session.get(Setting, 'config');row.value={**row.value, 'ai_enabled': enabled};session.commit()
+    ledger('5', status='settled')
+    operations.collect_alerts(DAY+120)
+    with Session() as session:
+        assert cap_event(session) is None
+
+
+def test_released_rows_and_headroom_do_not_notify_and_viewers_cannot_see_it(admin):
+    from app.identity import User
+    with Session() as session:
+        session.add(User(username='viewer', password='x', role='viewer'));session.commit()
+    configure(mode='daily_cap', cap=Decimal('1'))
+    ledger('3', status='released')
+    ledger('0.999999')
+    operations.collect_alerts(DAY+120)
+    with Session() as session:
+        assert cap_event(session) is None
+    ledger('0.000001')
+    operations.collect_alerts(DAY+180)
+    with Session() as session:
+        event=cap_event(session)
+        assert event.minimum_role=='admin'
+        assert event.id in {item['id'] for item in notifications.list_for_user(session, 'admin')}
+        assert notifications.list_for_user(session, 'viewer')==[]
+        assert notifications.unread_count(session, 'viewer')==0

@@ -11,7 +11,7 @@ import re
 import threading
 import time
 
-from sqlalchemy import Double, Integer, String, Text, and_, func, select, update
+from sqlalchemy import Double, Integer, String, Text, and_, delete, func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -460,7 +460,10 @@ def arrivals_for_user(session, username, *, after=None, limit=50, factory=Sessio
     revision committed before the call.  Items use the list API shape plus
     ``arrival``.  Superseded revisions and events hidden from the caller's
     current role are skipped while the cursor still advances past them.  A
-    cursor beyond the retained sequence is reset to a fresh baseline.
+    cursor beyond the head (``reset_reason='ahead'``) or older than the oldest
+    retained arrival (``reset_reason='pruned'``) is reset to a fresh baseline,
+    so the client resynchronizes from the authoritative list and count APIs
+    instead of silently skipping pruned revisions.
     """
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('Notification limit must be between 1 and 100')
@@ -470,11 +473,23 @@ def arrivals_for_user(session, username, *, after=None, limit=50, factory=Sessio
     user = _user(session, username)
     if not user:
         return None
-    head = session.scalar(select(func.max(NotificationArrival.seq))) or 0
-    if after is None or after > head:
-        return {'items': [], 'cursor': head, 'more': False, 'reset': after is not None}
+    # The durable head, not max(seq), so pruning never moves the cursor back.
+    head = session.scalar(select(NotificationArrivalHead.head)
+                          .where(NotificationArrivalHead.id == 1)) or 0
+    if after is None:
+        return {'items': [], 'cursor': head, 'more': False, 'reset': False}
+    if after > head:
+        return {'items': [], 'cursor': head, 'more': False, 'reset': True,
+                'reset_reason': 'ahead'}
     if head == after:
         return {'items': [], 'cursor': after, 'more': False, 'reset': False}
+    # Arrivals are numbered densely from 1 and pruned only as an oldest prefix,
+    # so a cursor below the oldest retained arrival has missed pruned revisions.
+    oldest = session.scalar(select(func.min(NotificationArrival.seq))
+                            .where(NotificationArrival.seq.is_not(None)))
+    if oldest is None or oldest > after + 1:
+        return {'items': [], 'cursor': head, 'more': False, 'reset': True,
+                'reset_reason': 'pruned'}
     own_state = and_(
         NotificationUserState.event_id == NotificationEvent.id,
         NotificationUserState.username == username)
@@ -498,3 +513,46 @@ def arrivals_for_user(session, username, *, after=None, limit=50, factory=Sessio
         return {'items': items, 'cursor': items[-1]['arrival'], 'more': True,
                 'reset': False}
     return {'items': items, 'cursor': head, 'more': False, 'reset': False}
+
+
+ARRIVAL_PRUNE_BATCH = 5000
+
+
+def prune_arrivals(cutoff, *, factory=Session, batch=ARRIVAL_PRUNE_BATCH):
+    """Delete the oldest contiguous prefix of sequenced arrivals before ``cutoff``.
+
+    Only rows already numbered at or below the durable head are eligible, and
+    pruning stops at the first retained-age row, so a later row with a lagging
+    controller clock never leaves a hole below newer retained arrivals.  The
+    head row is untouched, keeping current cursors valid; cursors that fall
+    below the retained prefix are reported as a disclosed ``pruned`` reset.
+    Each batch commits separately.  Returns the number of rows deleted.
+    """
+    if type(batch) is not int or batch < 1:
+        raise ValueError('Notification arrival prune batch must be positive')
+    deleted = 0
+    while True:
+        with factory() as session:
+            head = session.scalar(select(NotificationArrivalHead.head)
+                                  .where(NotificationArrivalHead.id == 1))
+            if not head:
+                return deleted
+            keep = session.scalar(
+                select(func.min(NotificationArrival.seq))
+                .where(NotificationArrival.seq.is_not(None),
+                       NotificationArrival.created >= cutoff))
+            limit = head if keep is None else min(head, keep - 1)
+            oldest = session.scalar(select(func.min(NotificationArrival.seq))
+                                    .where(NotificationArrival.seq.is_not(None)))
+            if oldest is None or oldest > limit:
+                return deleted
+            upper = min(limit, oldest + batch - 1)
+            result = session.execute(
+                delete(NotificationArrival)
+                .where(NotificationArrival.seq.is_not(None),
+                       NotificationArrival.seq <= upper)
+                .execution_options(synchronize_session=False))
+            session.commit()
+            deleted += result.rowcount or 0
+            if upper >= limit:
+                return deleted

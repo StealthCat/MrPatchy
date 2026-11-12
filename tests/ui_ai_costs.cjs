@@ -9,7 +9,12 @@ module.exports=async(page,capture)=>{
  const unknown={...complete,id:'cost-unknown',purpose:'connection_test',calls:1,state:'error',model:'fixture-model',message:'OpenAI API HTTP 404 (model_not_found)',cost:{status:'unavailable',estimated_usd:null},api_calls:[]};
  const legacy={...complete,id:'cost-legacy',started:now-86400,cost:{status:'unavailable',estimated_usd:null},api_calls:[],message:'Historical run without token receipts.'};
  const rows=[complete,partial,unknown,legacy];
- const runs=route=>{const next=new URL(route.request().url()).searchParams.get('offset')==='50';return route.fulfill({json:{items:next?[legacy]:rows,more:!next}});};
+ const runs=route=>{
+  const params=new URL(route.request().url()).searchParams,state=params.get('state');
+  const next=params.get('offset')==='50';
+  if(state)return route.fulfill({json:{items:next?[]:rows.filter(row=>row.state===state),more:false}});
+  return route.fulfill({json:{items:next?[legacy]:rows,more:!next}});
+ };
  const details=route=>{detailCalls++;const url=new URL(route.request().url());if(url.searchParams.has('host_id'))assert.equal(url.searchParams.get('host_id'),scopeHost);return route.fulfill({json:rows.find(r=>url.pathname.endsWith('/'+r.id))});};
  await page.route('**/api/ai/runs?*',runs);await page.route('**/api/ai/runs/cost-*',details);
  try{
@@ -61,6 +66,23 @@ module.exports=async(page,capture)=>{
   const host=await page.evaluate(async()=>{let hosts=await(await fetch('/api/hosts')).json();if(!hosts.length){const session=await(await fetch('/api/session')).json();const created=await(await fetch('/api/hosts',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({name:'Run history fixture',address:'192.0.2.90'})})).json();return created.id;}return hosts[0].id;});
   complete.shared_batch=true;scopeHost=host;await page.goto(new URL('/#servers/'+host+'/ai/run/cost-complete/cost',page.url()).href);await page.getByRole('heading',{name:'Estimated API cost (USD)',exact:true}).waitFor();await page.getByText('Shared batch: displayed cost covers the whole run',{exact:false}).waitFor();
   await page.getByRole('link',{name:'← AI activity',exact:true}).click();await page.locator('#ai-log-table').waitFor();assert(page.url().endsWith('/ai'));
+  await page.locator('[data-ai-run="cost-complete"]').waitFor();
+  await page.locator('#ai-log-next').click();
+  await page.locator('[data-ai-run="cost-complete"]').waitFor({state:'hidden'});
+  await page.locator('[data-ai-run="cost-legacy"]').waitFor();
+  await page.locator('#ai-log-state').selectOption('error');
+  await page.locator('[data-ai-run="cost-legacy"]').waitFor({state:'hidden'});
+  await page.locator('[data-ai-run="cost-partial"]').waitFor();
+  assert.equal(await page.locator('[data-ai-run="cost-complete"]').count(),0);
+  assert.equal(await page.locator('#ai-log-prev').isDisabled(),true);
+  await page.locator('[data-ai-run="cost-partial"]').click();
+  await page.getByRole('heading',{name:'Saved run',exact:true}).waitFor();
+  await page.goBack();
+  await page.locator('[data-ai-run="cost-partial"]').waitFor();
+  assert.equal(await page.locator('#ai-log-state').inputValue(),'error');
+  await page.locator('#ai-log-state').selectOption('deferred');
+  await page.getByText('No matching AI runs',{exact:true}).waitFor();
+  await page.locator('#ai-log-state').selectOption('');
   await page.goto(new URL('/#ai-logs/run/missing-run/summary',page.url()).href);await page.getByRole('heading',{name:'Unable to open AI run',exact:true}).waitFor();await page.getByRole('link',{name:'← AI activity',exact:true}).click();await page.locator('#ai-log-table').waitFor();
   const identity=async route=>{const response=await route.fetch();return route.fulfill({response,json:{...await response.json(),role:'viewer'}});};
   await page.route('**/api/identity',identity);const before=detailCalls;await page.goto(new URL('/#ai-logs/run/cost-complete/summary',page.url()).href);await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();assert.equal(detailCalls,before);await page.unroute('**/api/identity',identity);

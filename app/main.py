@@ -45,14 +45,23 @@ async def lifespan(app):
         with Session() as s:
             if not s.get(User,'admin'):
                 s.add(User(username='admin',password=s.get(Setting,'admin').value['hash'],role='admin'));s.commit()
-        background=worker.start() if os.getenv('DISABLE_SCHEDULER')!='1' else None
+        from .controller_registry import Presence
+        scheduler=os.getenv('DISABLE_SCHEDULER')!='1'
+        presence=Presence(scheduler).start()
+        try:
+            background=worker.start() if scheduler else None
+        except BaseException:
+            presence.close();raise
         try:
             yield
         finally:
-            worker.stop.set()
-            if background: background.join()
-            ai.transport.close()
-APP_VERSION = "1.59.23"
+            try:
+                worker.stop.set()
+                if background: background.join()
+                ai.transport.close()
+            finally:
+                presence.close()
+APP_VERSION = "1.59.53"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -650,9 +659,10 @@ class ServerAIInput(BaseModel):
 
 @app.get('/api/hosts/{host_id}/security/ai-policy')
 def server_ai_policy(host_id:str,user=Depends(admin_user)):
-    from . import ai_policy
+    from . import ai_policy,ai_claims
     with Session() as s:
-        host_or_404(s,host_id);return ai_policy.status(s,host_id)
+        host_or_404(s,host_id)
+        return ai_policy.status(s,host_id)|ai_claims.occupancy(s,host_id)
 
 @app.put('/api/hosts/{host_id}/security/ai-policy')
 def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user)):
@@ -668,8 +678,11 @@ def save_server_ai_policy(host_id:str,body:ServerAIInput,user=Depends(admin_user
             lock=worker.Lock('ai-provider:'+host_id) if pause_change else None
             if lock and not lock.acquire(False):raise HTTPException(409,'AI request is in flight; retry after it finishes. State has not changed.')
             try:
-                with Session() as s:return ai_policy.save(s,host_or_404(s,host_id),body.paused,
-                    body.expected_revision,body.reason,user['username'],body.concurrency_limit)
+                with Session() as s:
+                    host=host_or_404(s,host_id)
+                    occupancy=ai_claims.occupancy(s,host_id)
+                    return ai_policy.save(s,host,body.paused,body.expected_revision,body.reason,
+                        user['username'],body.concurrency_limit)|occupancy
             finally:
                 if lock:lock.release()
 
@@ -1014,7 +1027,8 @@ def approve(behavior_id:str,body:ApproveInput,user=Depends(admin_user)):
             s.rollback();row=s.get(Behavior,behavior_id)
             if not row:raise HTTPException(404,'Behavior not found')
             if ai_assessments.revision(row)!=body.expected_revision:raise HTTPException(409,'The assessment changed since you opened it; review the current result and try again')
-            row.approved=body.approved; audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
+            from . import triage_notifications
+            row.approved=body.approved; triage_notifications.publish_approval(s,row); audit(s,'approve behavior' if body.approved else 'revoke behavior',behavior_id); s.commit(); return {'ok':True}
 
 class RetriageInput(BaseModel):
     expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
@@ -1052,6 +1066,13 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin
                 s.commit()
                 return {'ok':True,'request_id':refresh.id,'detail':'Fresh triage queued. Prior assessment retained; AI pause, model settings and admission limits still apply.'}
     finally:lock.release()
+
+
+@app.get('/api/ai/known-good/summary')
+def known_good_summary(user=Depends(admin_user)):
+    from . import known_good
+    with Session() as s:
+        return known_good.summary(s)
 
 
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
@@ -1102,6 +1123,12 @@ def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page
     return page(offset)
 
+@app.get('/api/operations/controllers')
+def registered_controllers(offset:int=0,user=Depends(admin_user)):
+    from .controller_registry import page
+    try:return page(offset)
+    except ValueError as error:raise HTTPException(400,str(error))
+
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
     boot_id:str=Field(pattern=r'^[0-9a-f]{32}$')
@@ -1142,7 +1169,7 @@ def settings(user=Depends(admin_user)):
     from . import ai_budget,ai_provider_backoff
     with Session() as s:
         cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
-        return cfg|{'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
+        return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
@@ -1163,6 +1190,11 @@ def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)
         raise HTTPException(400,'Select a valid IANA budget timezone.')
     with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
 
+@app.get('/api/settings/ai-control-status')
+def ai_control_status(user=Depends(admin_user)):
+    from . import ai_control_status
+    with Session() as s:return ai_control_status.snapshot(s)
+
 class ConfigInput(BaseModel):
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
@@ -1177,6 +1209,7 @@ class ConfigInput(BaseModel):
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
+    expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 @app.put('/api/settings')
 def settings_save(body:ConfigInput,user=Depends(admin_user)):
     from . import ai_budget
@@ -1187,10 +1220,10 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
-    sent=body.model_dump(exclude={'api_key'},include=supplied)
+    sent=body.model_dump(exclude={'api_key','expected_ai_controls_revision'},include=supplied)
     with worker.Lock('settings-config'):
         with Session() as s:
-            previous=config(s);merged=previous|sent
+            previous=config(s);check_ai_controls_revision(previous,body.expected_ai_controls_revision);merged=previous|sent
             if merged['ai_enabled'] and (not merged['ai_model'] or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
             raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
             if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
@@ -1198,7 +1231,19 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
             if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
-            audit(s,'update settings',detail); s.commit(); return {'ok':True}
+            audit(s,'update settings',detail); s.commit(); return {'ok':True,'ai_controls_revision':ai_controls_revision(merged)}
+
+AI_CONTROL_FIELDS=('ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone',
+    'ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled')
+
+def ai_controls_revision(cfg):
+    # Opaque optimistic-concurrency token for the stored AI admission, pacing and spend controls.
+    values={key:cfg[key] for key in AI_CONTROL_FIELDS}
+    return hashlib.sha256(json.dumps(values,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+def check_ai_controls_revision(cfg,expected):
+    if expected is not None and expected!=ai_controls_revision(cfg):
+        raise HTTPException(409,'AI admission or spend controls changed since you loaded Settings. Reload, review the current values and save again.')
 
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
@@ -1215,6 +1260,7 @@ class AISettingsInput(BaseModel):
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
+    expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 
 class AIKeyInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1229,12 +1275,18 @@ class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     history_days:int=Field(ge=1,le=3650)
 
-def save_settings_section(values,section):
+def save_settings_section(values,section,expected_ai_controls_revision=None):
     with worker.Lock('settings-config'):
         with Session() as s:
+            previous=config(s)
+            if section=='ai':
+                check_ai_controls_revision(previous,expected_ai_controls_revision)
+                # Omitted AI fields keep their stored values instead of silently reverting to defaults (#708).
+                values=previous|values
+                values={key:values[key] for key in AISettingsInput.model_fields if key!='expected_ai_controls_revision'}
             if section=='ai' and values['ai_enabled'] and (not values['ai_model'] or not s.get(Setting,'openai_key')):
                 raise HTTPException(400,'Save an API key and select a model before enabling AI. You can save a key independently above.')
-            previous=config(s);s.merge(Setting(key='config',value=previous|values))
+            s.merge(Setting(key='config',value=previous|values))
             detail='Saved '+section+' configuration; no provider test was performed'
             if section=='ai' and previous['ai_control_mode']!=values['ai_control_mode']:
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
@@ -1244,7 +1296,9 @@ def save_settings_section(values,section):
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             audit(s,'update '+section+' settings',detail)
             s.commit()
-            return {'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
+            result={'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
+            if section=='ai':result['ai_controls_revision']=ai_controls_revision(previous|values)
+            return result
 
 @app.put('/api/settings/ai-key')
 def ai_key_save(body:AIKeyInput,user=Depends(admin_user)):
@@ -1261,11 +1315,12 @@ def ai_key_save(body:AIKeyInput,user=Depends(admin_user)):
 @app.put('/api/settings/ai')
 def ai_settings_save(body:AISettingsInput,user=Depends(admin_user)):
     from . import ai_budget
+    supplied=set(body.model_fields_set)-{'expected_ai_controls_revision'}  # capture before normalizing marks ai_model as sent
     body.ai_model=body.ai_model.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):
         raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    return save_settings_section(body.model_dump(),'ai')
+    return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision)
 
 @app.put('/api/settings/patching')
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
@@ -1460,9 +1515,9 @@ def save_repository_access(host_id:str,body:RepositoryAccess,user=Depends(admin_
 @app.get('/api/investigation-status')
 def investigation_status(user=Depends(viewer_user)):
     with Session() as s:
-        full=ai_runs.status(s)
-    if user.get('role')=='admin': return full
-    return {k:full[k] for k in ('pending','oldest','enabled')}
+        if user.get('role')=='admin':
+            return ai_runs.status(s)
+        return ai_runs.viewer_status(s)
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
@@ -2116,11 +2171,15 @@ def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depend
 
 
 @app.get('/api/ai/runs')
-def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,user=Depends(admin_user)):
-    if purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker') or offset<0 or not 1<=limit<=100:raise HTTPException(400,'Invalid log filter')
+def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,state:str='',user=Depends(admin_user)):
+    if (purpose not in ('','triage','update_scoring','connection_test','release_configuration','security_plan','worker')
+            or state not in ('','running','complete','error','deferred','interrupted')
+            or offset<0 or not 1<=limit<=100):
+        raise HTTPException(400,'Invalid log filter')
     with Session() as s:
         query=select(ai_runs.AIRun)
         if purpose:query=query.where(ai_runs.AIRun.purpose==purpose)
+        if state:query=query.where(ai_runs.AIRun.state==state)
         if host_id:
             host_or_404(s,host_id)
             query=query.where((ai_runs.AIRun.host_id==host_id)|ai_runs.AIRun.id.in_(
@@ -3267,7 +3326,9 @@ def review_startup_incident(host_id:str,incident_id:str,body:IncidentReview,user
         reason=body.reason.strip()
         if len(reason)<10:raise ValueError('Provide a review reason of at least 10 characters')
         if row.state==body.state:raise HTTPException(409,'Incident already has this state')
-        row.state=body.state;row.updated=max(time.time(),row.updated+.000001)
+        previous=row.state;row.state=body.state;row.updated=max(time.time(),row.updated+.000001)
+        from .persistence import notify_review
+        notify_review(s,row,previous)
         s.add(incidents.PersistenceReview(id=str(uuid.uuid4()),incident_id=row.id,actor=user['username'],state=row.state,reason=reason))
         audit(s,'startup incident reviewed',row.id+' '+user['username']+' '+row.state);s.commit()
         return object_dict(row)
