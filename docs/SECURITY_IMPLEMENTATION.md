@@ -3320,6 +3320,28 @@ read/dismiss grants nothing. Resolution can lag by up to one scheduler tick,
 which is about 30 seconds. Release-plan approvals and per-user targeting
 remain open.
 
+Worker checkpoint #743 adds the release-plan decision producer. A leader-only
+periodic reconciler (`app/release_notifications.py`) publishes one admin-only
+`release-plans` notification for each distribution-upgrade release plan that is
+`ready`, has no blockers, has not reached its sealed 24-hour `expires` and
+belongs to an active server.
+- **Payload:** fixed text, `medium` severity and a link to
+  `#servers/<host>/maintenance`, where Distribution upgrade plans are reviewed.
+  AI review text, configuration content, package names and paths are never copied.
+- **Revision binding:** each active revision is bound to the frozen plan digest,
+  so unchanged passes publish nothing. A regenerated plan with a new digest
+  resurfaces as unread.
+- **Resolution:** GO (`approved`/`running`/terminal phases), no-go, expiry,
+  regeneration back to `planning`, new blockers, plan deletion and server
+  disable/delete each publish one `resolved` revision.
+- **Bounds:** the pending scan reads at most one newest-first batch of plans
+  created within an eight-day lookback. Active events are scanned with the
+  rotating keyset cursor from #706, so unchanged events cannot hold the page.
+- **Unchanged:** the reconciler never changes plan, job or approval state and
+  queues nothing. The GO route keeps its digest, blocker, expiry and pending-job
+  checks, and read/dismiss grants nothing. Resolution can lag by about one
+  scheduler tick (~30 seconds). Per-user targeting remains open.
+
 ### Asynchronous delivery and access control
 
 - Provide authenticated server push, preferably Server-Sent Events for the one-way event feed, with heartbeat, automatic reconnect and event-ID/cursor replay. Use authoritative paginated catch-up for first connection, page reload, sleeping/offline tabs and reconnect. If history was pruned or a cursor is invalid, explicitly resynchronize counts/history and disclose the gap. A documented polling fallback may provide degraded delivery; periodic whole-page refresh alone does not satisfy live notifications. See the [EventSource standard](https://html.spec.whatwg.org/multipage/server-sent-events.html).

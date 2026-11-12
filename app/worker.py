@@ -879,7 +879,8 @@ def periodic_ticks(now,state):
                ('startup schedules','persistence','schedule_tick'),('incident AI plans','incidents','auto_plan_tick'),
                ('response monitoring','response_monitor','schedule_tick'),('service monitoring','service_monitor','schedule_tick'),
                ('execution scans','execution_scans','schedule_tick'),
-               ('plan review notifications','plan_notifications','tick'))
+               ('plan review notifications','plan_notifications','tick'),
+               ('release plan notifications','release_notifications','tick'))
     for name,module,attribute in callbacks:
         due,failures=state.get(name,(0,0))
         if now<due:continue
