@@ -379,3 +379,17 @@ def test_reintroduced_while_pending_activation_keeps_one_interval_open():
     result = ce.exposure_window(100, events, now=900, monitoring_started_at=0)
     assert result['state'] == ce.OPEN and result['reopened'] == 0
     assert len(result['intervals']) == 1 and result['duration_seconds'] == 780
+
+
+def test_applicable_while_pending_activation_keeps_the_window_open():
+    # Regression (#673 review 2026-11-12): a re-reported ``applicable`` during
+    # pending activation was dropped, so a later ``activated`` closed the window
+    # while an affected version was installed.
+    events = [{'kind': 'applicable', 'at': 100},
+              {'kind': 'fix_installed', 'at': 200, 'verified': True, 'activation_required': True},
+              {'kind': 'applicable', 'at': 300}, {'kind': 'activated', 'at': 400}]
+    result = ce.exposure_window(0, events, now=1000, monitoring_started_at=0)
+    assert result['state'] == ce.OPEN and result['reopened'] == 0
+    assert result['closed_at'] is None and result['fix_installed_at'] is None
+    assert len(result['intervals']) == 1 and result['duration_seconds'] == 900
+    assert any('before the fix took effect' in note for note in result['notes'])

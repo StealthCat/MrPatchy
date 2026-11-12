@@ -289,8 +289,9 @@ def exposure_window(published_at, events, now, monitoring_started_at=None, offli
     counted, and every earlier closure is retained in its interval. Rollback or
     reinstallation of an affected version reopens a closed window. Producers
     should emit ``reintroduced`` for that, but an ``applicable`` event recorded
-    after a closure is treated the same way, so a producer that only re-reports
-    applicability can never hide renewed exposure.
+    after a closure, or while a fix is still pending activation, is treated the
+    same way, so a producer that only re-reports applicability can never hide
+    renewed exposure.
 
     Exposure starts at the first ``applicable`` observation only when monitoring
     covered the whole interval from publication to that observation without a
@@ -363,6 +364,11 @@ def exposure_window(published_at, events, now, monitoring_started_at=None, offli
             elif state == CLOSED:
                 state = OPEN
                 reopen(max(at, published), 'Applicability was observed again after a verified fix; the exposure window reopened')
+            elif state == PENDING_ACTIVATION:
+                state = intervals[-1]['state'] = OPEN
+                intervals[-1]['fix_installed_at'] = None
+                result['notes'].append(
+                    'Applicability was observed again before the fix took effect; the window stays open')
         elif kind == 'fix_available':
             if result['fix_available_at'] is None:
                 result['fix_available_at'] = at
