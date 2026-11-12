@@ -3270,6 +3270,27 @@ the existing external delivery configuration and alert lifecycle.
 - Link events to the actual subject and evidence revision, not only a host/kind aggregate. Deduplicate repeated unchanged observations and group related occurrences without suppressing distinct findings. New, reopened, materially changed or escalated findings must resurface even after an earlier notification was read or acknowledged. Routine successes and unchanged known-good cache hits must not create a notification storm.
 - Persist stable event IDs, occurrence/revision and safe subject metadata with the originating state change, using a transactional outbox or equivalent committed-event record. Never announce a rolled-back result. Support replay and idempotent consumers across multiple workers/controllers and restarts; an in-memory callback in one process is insufficient. Integrate the current aggregate Alert lifecycle carefully without silently changing global acknowledgement or resolution behavior.
 
+Worker checkpoint #706 adds the approval producer for AI response plans. A
+leader-only periodic reconciler (`app/plan_notifications.py`) publishes one
+admin-only `ai-plans` notification for each security-incident or
+startup-change plan that is still `draft`, younger than the 24-hour approval
+window and on an active server. Payloads use fixed text, `medium` severity and
+a link to the tab where the plan is reviewed (`#servers/<host>/security` for
+security plans, `#servers/<host>/integrity` for startup-change plans); AI
+severity and plan text are never copied.
+Approval, supersession, expiry, plan deletion and server deletion or
+deactivation each publish one `resolved` revision. A startup-change plan that
+the approval route would refuse (its incident is no longer open or
+acknowledged, or its evidence digest no longer matches current evidence after a
+newer inspection or incident revision) is never announced and resolves as
+`stale`; at most one bounded page of live startup-plan events is rechecked per
+pass. Security plans keep today's approval semantics. Unchanged passes publish
+nothing. Drafts that are still reviewable but beyond the bounded pass are left
+active. The reconciler never changes plan, incident or approval state, and
+read/dismiss grants nothing. Resolution can lag by up to one scheduler tick,
+which is about 30 seconds. Release-plan approvals and per-user targeting
+remain open.
+
 ### Asynchronous delivery and access control
 
 - Provide authenticated server push, preferably Server-Sent Events for the one-way event feed, with heartbeat, automatic reconnect and event-ID/cursor replay. Use authoritative paginated catch-up for first connection, page reload, sleeping/offline tabs and reconnect. If history was pruned or a cursor is invalid, explicitly resynchronize counts/history and disclose the gap. A documented polling fallback may provide degraded delivery; periodic whole-page refresh alone does not satisfy live notifications. See the [EventSource standard](https://html.spec.whatwg.org/multipage/server-sent-events.html).
