@@ -2943,6 +2943,26 @@ requirement.
 - Feed evidence-supported suspicious findings into the planned malware investigation/response policy. A custom entry or AI suspicion alone does not authorize quarantine, termination or deletion; reuse the established evidence and response-policy checks.
 - Validate native Debian/RPM and supported init/cron layouts, per-user/root jobs, unit precedence/drop-ins, transient/generated entries, package defaults versus legitimate edits, malicious and benign lookalikes, prompt injection/redaction, referenced-file changes, large inventories, offline/permission gaps and AI pause. Include real-target acceptance and migration/helper documentation. Do not mark this requirement complete solely because the existing metadata inventory or manual AI plan exists.
 
+Worker checkpoint (issue #711): a pure, I/O-free contract
+(`app/scheduled_jobs.py`) parses captured anacrontab text and individual at
+spool jobs into typed records. For anacrontab it returns jobs with numeric or
+documented `@name` periods, delays, identifiers, bounded commands with full-text
+SHA-256, `run-parts` directory relationships and duplicate-identifier gaps. Only
+the `START_HOURS_RANGE`/`RANDOM_DELAY` scheduling values are disclosed. Other
+environment values are withheld, and only their names are returned. For at jobs
+it decodes the spool name (queue, job number, scheduled minute, running `=`
+queue, uppercase batch queues) and the `# atrun uid= gid=` header, and flags an
+owner/header mismatch. It returns exported variable names only, the working
+directory and the command, including the heredoc-wrapped layout. Over-limit,
+non-UTF-8, binary, malformed or unrecognized input produces explicit gaps, and
+an over-cap file yields no jobs rather than a truncated list. Every record keeps
+`origin: not_assessed`. The contract does not collect from targets, show
+anything in the UI, attest package defaults, classify jobs or authorize any
+response. Agent collection of `/etc/anacrontab` and the at spool
+(`/var/spool/cron/atjobs`, `/var/spool/at`), inventory/UI wiring, provenance, AI
+classification and native acceptance remain open, so roadmap F is still
+incomplete.
+
 Worker checkpoint (issue #702): a pure, I/O-free contract
 (`app/systemd_units.py`) resolves captured read-only observations of the system
 unit search directories into effective-unit records. It applies documented
