@@ -3537,6 +3537,19 @@ baseline panel lives.
 Milestone 1 still needs significant triage, malware, CVE and startup-classification
 producers, and AI configuration/budget blockers beyond the pricing catalog.
 
+Worker checkpoint (issue #719): the bell panel now shows the live-update state
+(Connecting, Live, Reconnecting, Unavailable/polling only, Polling only or
+Delayed) and the time of the last
+successful authoritative list/count refresh, or "Not yet synchronized". The line
+states that it describes notification delivery only, not collector, agent or AI
+health. It is built client-side with text nodes; logout/reset clears both values,
+and a failed refresh never advances the time. A permanently refused stream
+(non-200 such as 429 at capacity or a proxy 502/503, which EventSource never
+retries) is shown as unavailable rather than reconnecting, and is retried only
+after a successful poll with a 30-second to 10-minute doubling backoff. This is frontend-only and does not
+complete milestones 2–4: Caddy flushing measurements, slow-client and failover
+drills and two-browser SQLite/MySQL acceptance remain.
+
 Worker checkpoint (issue #704): a milestone-1 producer for startup-change
 (persistence) incidents. In the same transaction as the incident change,
 `persistence.notify()` publishes one admin-only event per incident (source

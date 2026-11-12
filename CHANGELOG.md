@@ -1,3 +1,13 @@
+## 1.59.58 — 2026-11-12
+
+1. [PR #721](https://github.com/StealthCat/MrPatchy/pull/721): The notification bell panel shows a live-update status line and the last synchronization time.
+   - The live-update state is connecting, live, reconnecting, unavailable (polling only after a refused stream), polling only, or delayed after a failed refresh.
+   - A refused stream is retried only after a successful refresh, with a doubling backoff from 30 seconds to 10 minutes.
+   - The sync time advances only on successful list and count refreshes, with the ISO time in a tooltip. Before the first success it shows "Not yet synchronized".
+   - The line states that it reflects notification delivery only, not collector, agent or AI health.
+   - Closes #719.
+2. Compatibility and limits: a client-only change, with no API or schema change. This source update does not publish a Docker image.
+
 ## 1.59.57 — 2026-11-12
 
 1. [PR #716](https://github.com/StealthCat/MrPatchy/pull/716): A **Mark shown read** button in the bell panel and notification center marks every notification currently shown as read in one action. It is backed by `POST /api/notifications/read-batch`, which accepts 1–100 displayed `{id, revision}` pairs. Each pair follows the single-item revision rule, so an event that escalated or reopened after the page loaded stays unread at its newer revision. Missing or role-hidden events are skipped without a write or disclosure. Malformed, duplicate, empty, oversized or future-revision batches are rejected before any write. One `read notifications` audit row is written per changing batch, and dismiss state is untouched. Closes #715.
