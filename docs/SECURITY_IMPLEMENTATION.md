@@ -3413,6 +3413,29 @@ event in the approval's own transaction, and revoking it while the verdict is st
 medium/high re-publishes the event as active; the notification never grants or
 withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
 
+Implementation checkpoint (issue #731): failed server-changing operations now publish a
+milestone-1 failure/recovery producer. When an operator-initiated `patch`, `repository`,
+`key`, `repair`, `release-upgrade` or `agent-update` job ends `failed`, including a
+verified rollback, it publishes source `operations`, subject type `operation` and kind
+equal to the action. There is one event per server and action, with operator
+visibility, medium severity and a link to `#activity/jobs/<id>`. The publish happens in
+the same transaction that records the job state.
+
+- A later failure of the same action adds a revision linking the newest operation, so
+  it is unread again.
+- A later successful run resolves the event. A success with no active event publishes
+  nothing.
+- Scheduled patch runs are excluded because the `scheduled patching` alert already
+  covers them. `recovery_required` jobs are excluded because the `recovery` alert
+  covers them. Read-only and other actions publish nothing.
+- Reasons use fixed wording only. Job output and errors stay on the escaped
+  operation page.
+- A notification error is logged inside a savepoint and never changes the job's
+  recorded outcome.
+- Notifications never retry, reconcile, acknowledge or authorize anything.
+
+Milestones 2–4 remain open.
+
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
