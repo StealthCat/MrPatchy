@@ -3148,6 +3148,32 @@ semantics and response authorization are unchanged. Client adoption by the live
 toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
 do arrival retention/pruning and multi-controller acceptance.
 
+Implementation checkpoint (issue #661): a bounded milestone-3 increment adds live
+toasts. After the first successful refresh following sign-in or page load, the
+shell records a durable arrival-cursor baseline, so reloads, reconnects
+and catch-up never replay old events as toasts. A later refresh shows a toast only
+for a new or higher-revision unread, undismissed, unresolved `high` or `critical`
+notification. Toast admission does not depend on the bell's recent list or any
+bounded unread window. It consumes the durable #668 arrival cursor: the first
+successful refresh takes a baseline from `GET /api/notifications/arrivals`, and each
+later refresh pages, in commit order, the visible current revisions committed after
+that cursor (up to five 100-item pages per refresh, with the rest picked up on the
+next one). An old event that slides into view after another session dismisses one
+therefore never toasts. A new event still toasts when its producer timestamp lags
+or when 100 or more newer unread events of its severity exist, which closes the
+coverage limit of the earlier bounded-window admission. A failed arrival read keeps
+the cursor for the next refresh, and a cursor the server no longer retains
+re-baselines silently. At most three toasts are visible; a larger burst
+collapses into one summary that links to the notification center. Toasts use a polite live
+region, render text nodes only, revalidate same-origin links, never take focus,
+pause their ten-second auto-hide on hover or focus, and mount inside an open modal
+so they stay usable above it. Hiding a toast is local to the tab and does not mark
+the notification read or dismissed, acknowledge an alert or perform any response.
+Logout and account reset clear toasts and the baseline. Remaining: per-user
+cross-tab toast deduplication (each open tab shows its own toast), producer and
+retention coverage, and the milestone 2 and 4 transport and end-to-end acceptance
+listed above.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -6959,3 +6985,37 @@ faster-AI acceptance. UI integration, call-specific preview, provider-invoice tr
 multi-controller failover/reset acceptance and fresh code-scanning verification remain
 required. Coordinator integration and exact-head SQLite/MySQL/full-suite checks are
 also still required before delivery.
+
+### Batched outbound AI pause-policy reads — worker checkpoint #573
+
+The existing outbound provider guard reads scoped server pause settings in
+batches of at most 200 distinct keys and checks global AI enablement once.
+A five-server scoring-sized scope uses two SELECTs in the disposable SQLite
+regression, compared with 12 on the previous path. Missing policy rows retain
+the default, any paused or malformed row blocks before global enablement is
+checked, and an empty scope keeps the provider setup path available.
+
+Provider locks, lease ownership checks, shared admission, budget accounting,
+and response authorization continue to apply. This is an admission database
+read improvement. Native integration and end-to-end performance acceptance
+for the faster-AI program remain open.
+
+### Bounded exact-known-good provenance reads — worker checkpoint #582
+
+The strict exact-known-good lookup now derives every eligible policy candidate before
+database access and reads active entries, retained origin assessments and isolated
+observations in set-based batches of at most 100 candidates. Candidate ordering and
+the first fully revalidated match are unchanged. With two eligible active candidates,
+including a corrupt first candidate that must fail closed, lookup performs one read
+per provenance table instead of repeating those three reads for each candidate.
+Ineligible evidence performs no registry read.
+
+Every existing eligibility, active-entry, retained AI source, host/model/policy/result,
+canonical contract and observation identity check remains mandatory. Missing, inactive,
+or corrupt state still proceeds through the normal provider path; this optimization
+does not approve behavior, authorize a response, suppress deterministic protection or
+expand data sharing. Focused regression coverage pins query count, candidate order,
+strict fallback and the 100-candidate SQL bound. It does not claim a production speedup
+or complete native-context, MySQL concurrency, provider-invoice, multi-controller or
+remaining faster-triage acceptance. Coordinator integration, exact-head checks and a
+fresh code scan remain required before delivery.
