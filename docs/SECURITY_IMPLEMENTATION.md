@@ -7588,3 +7588,20 @@ strict fallback and the 100-candidate SQL bound. It does not claim a production 
 or complete native-context, MySQL concurrency, provider-invoice, multi-controller or
 remaining faster-triage acceptance. Coordinator integration, exact-head checks and a
 fresh code scan remain required before delivery.
+
+### Agent event-spool attention notifications — worker checkpoint #108
+
+This adds a roadmap J health/coverage producer and closes the alerting gap left open in #108. Each time the controller ingests a fresh telemetry snapshot from an enabled server, it publishes one admin-only in-app event per server (`agent-spool` / `spool-health`) in either case:
+
+- the agent spool is at **critical** pressure (≥90% of its byte capacity), with severity medium;
+- the agent reported **newly lost** observation batches, compared with the previous retained counters (the same delta as the existing integrity issue), with severity high.
+
+The event links to the server summary's spool card. An episode stays open without republishing while use remains at warning or above, while loss continues, or while counters are unusable. It escalates at most once, when loss and critical pressure combine. It resolves only after a usable reading below the warning threshold with no new loss. A later episode reopens the same event as an unread revision. Cumulative loss counters that are only retained never raise attention by themselves, and polling cannot flood users. Deleting a server resolves its still-active event. Reason text is fixed and contains no counters, paths, payloads or server-supplied text.
+
+The event is advisory. It never acknowledges, restarts, drains or remediates anything, and it does not change response authorization. There is no schema change.
+
+**Remaining:**
+- Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.
+- Stale telemetry raises no spool notification. Worker/agent liveness producers cover stale telemetry separately.
+- Warning-level pressure is shown on the summary card only.
+- Configurable thresholds remain outstanding.

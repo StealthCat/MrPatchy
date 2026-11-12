@@ -92,3 +92,84 @@ def fleet(hosts,now=None):
     return {'counts':counts,'loss':{'dropped_batches':batches,'lost_observations':observations,'servers_with_loss':with_loss},
             'servers':listed[:FLEET_LIMIT],'more':max(0,len(listed)-FLEET_LIMIT),
             'unavailable_metrics':['oldest_observation_age','ingest_rate','flush_rate','delivery_latency','retries']}
+
+
+# In-app attention for spool pressure and newly observed loss (roadmap J, #108).
+NOTIFY_SOURCE='agent-spool'
+NOTIFY_KIND='spool-health'
+NOTIFY_SUBJECT='server'
+_NOTIFY_PARTS=('critical','loss')
+_NOTIFY_TEXT={
+    'critical':'The agent event spool on this server is at least '+str(CRITICAL_PERCENT)+'% full. Further observations may be lost if it fills; check the agent and its connection.',
+    'loss':'The agent reported newly lost observation batches, so monitoring coverage for this server is incomplete for that period. Cumulative counts are on the server summary.',
+}
+_RESOLVED_TEXT=('Agent event spool use on this server is back below '+str(WARNING_PERCENT)+
+                '% and no new loss was reported. Earlier cumulative loss stays visible on the server summary.')
+_DELETED_TEXT='The server was deleted; its agent event spool no longer needs attention here.'
+
+
+def _link(host_id):
+    return '#servers/'+host_id+'/summary'
+
+
+def notification_transition(active,pressure,new_loss):
+    """Pure episode state machine: return ``(action, state)``.
+
+    ``active`` is the current unresolved episode state ('' when none), e.g.
+    'critical', 'loss' or 'critical+loss'. An episode opens on critical pressure
+    or newly lost batches, grows (escalates) at most once more, holds while use
+    stays at warning or above, while loss continues or while counters are
+    unusable, and resolves only after a usable reading below warning with no new
+    loss. Unchanged conditions never republish, so polling cannot flood users.
+    """
+    observed={part for part,present in (('critical',pressure=='critical'),('loss',bool(new_loss))) if present}
+    current={part for part in active.split('+') if part in _NOTIFY_PARTS} if active else set()
+    if observed:
+        merged=current|observed
+        if merged==current:return 'hold',active
+        return 'publish','+'.join(part for part in _NOTIFY_PARTS if part in merged)
+    if not current:return 'none',''
+    if pressure=='ok':return 'resolve',''
+    return 'hold',active
+
+
+def _active_state(session,host_id):
+    from sqlalchemy import select
+    from . import notifications
+    N=notifications.NotificationEvent;R=notifications.NotificationRevision
+    row=session.execute(select(R.subject_revision,R.lifecycle).join(N,(R.event_id==N.id)&(R.revision==N.revision)).where(
+        N.id==notifications._event_id(NOTIFY_SOURCE,NOTIFY_KIND,NOTIFY_SUBJECT,host_id,host_id))).first()
+    return row[0] if row and row[1]=='active' else ''
+
+
+def publish_notification(session,host,new_loss,now=None):
+    """Publish/resolve the admin-only spool attention event for freshly ingested telemetry.
+
+    Advisory only: it never acknowledges, restarts, drains or remediates anything
+    and does not change response authorization. The caller owns the transaction.
+    Returns the action taken.
+    """
+    from . import notifications
+    item=health(host,now)
+    pressure=item['pressure'] if item['status']=='fresh' else UNAVAILABLE
+    action,state=notification_transition(_active_state(session,host.id),pressure,new_loss)
+    if action=='publish':
+        notifications.publish(session,source=NOTIFY_SOURCE,kind=NOTIFY_KIND,subject_type=NOTIFY_SUBJECT,
+            subject_id=host.id,host_id=host.id,subject_revision=state,severity='high' if 'loss' in state else 'medium',
+            reason=' '.join(_NOTIFY_TEXT[part] for part in state.split('+')),deep_link=_link(host.id),
+            minimum_role='admin',now=now)
+    elif action=='resolve':
+        notifications.publish(session,source=NOTIFY_SOURCE,kind=NOTIFY_KIND,subject_type=NOTIFY_SUBJECT,
+            subject_id=host.id,host_id=host.id,subject_revision='resolved',severity='info',reason=_RESOLVED_TEXT,
+            deep_link=_link(host.id),minimum_role='admin',lifecycle='resolved',now=now)
+    return action
+
+
+def resolve_host_notification(session,host_id):
+    """Resolve a still-active spool attention event when its server is deleted."""
+    from . import notifications
+    if not _active_state(session,host_id):return False
+    notifications.publish(session,source=NOTIFY_SOURCE,kind=NOTIFY_KIND,subject_type=NOTIFY_SUBJECT,
+        subject_id=host_id,host_id=host_id,subject_revision='server-deleted',severity='info',reason=_DELETED_TEXT,
+        deep_link=_link(host_id),minimum_role='admin',lifecycle='resolved')
+    return True
