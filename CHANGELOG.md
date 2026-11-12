@@ -1,3 +1,17 @@
+## 1.59.62 — 2026-11-12
+
+1. [PR #724](https://github.com/StealthCat/MrPatchy/pull/724): Add a pure startup mechanism catalog and coverage contract (`app/startup_catalog.py`). It catalogs 26 mechanisms, each with a stable ID, label, trigger, scope, parse level and per-family locations:
+   - cron, anacron and at;
+   - systemd system, generated, transient and user units, generators and hooks;
+   - SysV and rc.local;
+   - shell startup files, XDG autostart, SSH rc hooks and `authorized_keys` commands;
+   - PAM, MOTD and X session hooks;
+   - network, logrotate and package-manager hooks;
+   - udev, ld.so preload and search paths, and module loading.
+
+   Only the cron mechanisms claim entry-level parsing, matching the parsers on main. Every result carries a `catalog_not_exhaustive` gap, and an administrator-configurable additional scope is supported. Closes #723.
+2. Compatibility and limits: an unwired contract for a later collection and view slice. No collection, schema, API or UI change. This source update does not publish a Docker image.
+
 ## 1.59.61 — 2026-11-12
 
 1. [PR #742](https://github.com/StealthCat/MrPatchy/pull/742): Fix capped-AI tests depending on the wall clock being inside the bundled price catalog's validity window. CI on main and on every PR would otherwise have started failing at 2026-11-26 00:00 UTC, when the catalog expires. An autouse test fixture now pins a catalog window that covers both the bundled reviewed window and the current clock. Tests marked `bundled_pricing_catalog` opt out. A regression guard confirms that the source constants are unchanged and that a genuinely expired catalog still refuses capped admission without a ledger row. Fixes #741.
