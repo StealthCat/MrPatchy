@@ -284,12 +284,20 @@ def test_worker_exact_match_reuses_without_provider_call_and_retains_host_proven
     assert event and published['fingerprint'] in event.detail
 
 
+EMPTY_ESTIMATE = {'reuse_with_priced_source': 0, 'reuse_with_unpriced_source': 0,
+    'reuse_with_unavailable_source': 0, 'estimated_calls': 0, 'estimated_usd': None,
+    'currency': 'USD'}
+# The revocation fixture's source assessment has no retained AI run.
+UNAVAILABLE_ONE = {**EMPTY_ESTIMATE, 'reuse_with_unavailable_source': 1}
+
+
 def test_empty_known_good_summary(admin):
     response = admin.get('/api/ai/known-good/summary')
     assert response.status_code == 200
     assert response.json() == {
         'active_entries': 0, 'revoked_entries': 0,
         'retained_reuse_assessments': 0, 'reuse_assessments_on_revoked_entries': 0,
+        'avoided_estimate': EMPTY_ESTIMATE,
     }
 
 
@@ -316,6 +324,7 @@ def test_admin_revocation_blocks_reuse_and_marks_every_linked_assessment_for_rev
     assert admin.get(summary).json() == {
         'active_entries': 2, 'revoked_entries': 0,
         'retained_reuse_assessments': 1, 'reuse_assessments_on_revoked_entries': 0,
+        'avoided_estimate': UNAVAILABLE_ONE,
     }
 
     reason='A new deterministic detector requires fleet review'
@@ -326,6 +335,7 @@ def test_admin_revocation_blocks_reuse_and_marks_every_linked_assessment_for_rev
     assert admin.get(summary).json() == {
         'active_entries': 1, 'revoked_entries': 1,
         'retained_reuse_assessments': 1, 'reuse_assessments_on_revoked_entries': 1,
+        'avoided_estimate': UNAVAILABLE_ONE,
     }
     with Session() as s:
         entry=s.get(known_good.Entry,published['fingerprint'])
@@ -772,3 +782,97 @@ def test_unrelated_or_invalid_newer_receipt_does_not_hide_valid_exact_path(clien
 def test_malformed_followup_never_crashes_vendor_binding(client,details):
     evidence={'executable':'/usr/bin/fixture','sha256':sha('a'),'investigation':{'details':details}}
     with Session() as s:assert known_good.bind_vendor_provenance(s,'one',evidence,100)==evidence
+
+
+def _estimate_fixture(s, index, run_id, reuses, active=True):
+    """One candidate whose source assessment points at run_id, reused `reuses` times."""
+    fingerprint = format(index, '064x')
+    source = retained(id=f'source-{index}', subject=f'behavior-{index}')
+    source.run_id = run_id
+    s.add(source)
+    s.add(known_good.Entry(fingerprint=fingerprint, version=1, classification_source='ai',
+        model='gpt-fixture', policy_hash=sha('9'), assessment_id=source.id,
+        source_host_id='host-one', contract={}, result={}, active=active))
+    # The source's own observation is ordinary provider work, never avoided work.
+    s.add(known_good.Observation(assessment_id=source.id, fingerprint=fingerprint,
+        host_id='host-one', subject=source.subject, observation={}))
+    for number in range(reuses):
+        reuse = retained(id=f'reuse-{index}-{number}', host=f'host-{number}',
+            subject=f'behavior-{index}-{number}', source='known_good')
+        s.add(reuse)
+        s.add(known_good.Observation(assessment_id=reuse.id, fingerprint=fingerprint,
+            host_id=reuse.host_id, subject=reuse.subject, observation={}))
+
+
+def _run(s, run_id, priced, calls=None, state='completed'):
+    s.add(ai_runs.AIRun(id=run_id, purpose='triage', state=state,
+        calls=len(priced) if calls is None else calls))
+    for number, amount in enumerate(priced, 1):
+        s.add(ai_runs.AICall(id=f'{run_id}-{number}', run_id=run_id, number=number,
+            requested_model='gpt-fixture',
+            status='estimated' if amount is not None else 'unavailable',
+            pricing={'estimated_usd': amount} if amount is not None else {}))
+
+
+def test_summary_estimates_avoided_calls_and_spend_with_honest_coverage(admin):
+    with Session() as s:
+        _run(s, 'priced', ['0.0125', '0.0050'])
+        _run(s, 'unpriced', [None])
+        _run(s, 'partial', ['0.0300'], calls=2)
+        _run(s, 'running', ['0.0100'], state='running')
+        _estimate_fixture(s, 1, 'priced', 2)
+        _estimate_fixture(s, 2, 'priced', 1, active=False)
+        _estimate_fixture(s, 3, 'unpriced', 1)
+        _estimate_fixture(s, 4, 'partial', 1)
+        _estimate_fixture(s, 5, 'pruned-run', 2)
+        _estimate_fixture(s, 6, '', 1)
+        _estimate_fixture(s, 7, 'running', 1)
+        _estimate_fixture(s, 8, 'priced', 0)
+        s.commit()
+    body = admin.get('/api/ai/known-good/summary').json()
+    assert body['retained_reuse_assessments'] == 9
+    assert body['reuse_assessments_on_revoked_entries'] == 1
+    assert body['avoided_estimate'] == {
+        # Three reuses of a fully priced two-call source: 3 x 0.0175 USD.
+        'reuse_with_priced_source': 3, 'estimated_usd': '0.0525',
+        # Unpriced and partly priced sources are known calls but never free.
+        'reuse_with_unpriced_source': 2,
+        # Pruned, unlinked or still-running sources cannot be attributed.
+        'reuse_with_unavailable_source': 4,
+        'estimated_calls': 3 * 2 + 1 + 2, 'currency': 'USD',
+    }
+    total = sum(body['avoided_estimate'][key] for key in (
+        'reuse_with_priced_source', 'reuse_with_unpriced_source', 'reuse_with_unavailable_source'))
+    assert total == body['retained_reuse_assessments']
+
+
+def test_summary_estimate_reads_candidates_in_bounded_batches(admin):
+    count = known_good.LOOKUP_READ_BATCH * 2 + 5
+    with Session() as s:
+        _run(s, 'priced', ['0.0010'])
+        for index in range(count):
+            _estimate_fixture(s, index + 1, 'priced', 1)
+        s.commit()
+    with Session() as s:
+        statements = []
+        listener = lambda *args: statements.append(args[2])
+        event.listen(s.get_bind(), 'before_cursor_execute', listener)
+        try:
+            estimate = known_good.avoided_estimate(s)
+        finally:
+            event.remove(s.get_bind(), 'before_cursor_execute', listener)
+    assert estimate['reuse_with_priced_source'] == count
+    assert estimate['estimated_calls'] == count
+    assert estimate['estimated_usd'] == format(count * known_good_decimal('0.0010'), 'f')
+    # One grouping read, then candidate, run and receipt reads per batch of 100.
+    assert len(statements) == 1 + 3 * 3
+    assert not any('snapshot' in statement for statement in statements)
+
+
+def known_good_decimal(value):
+    from decimal import Decimal
+    return Decimal(value)
+
+
+def test_known_good_summary_requires_admin(client):
+    assert client.get('/api/ai/known-good/summary').status_code in (401, 403)

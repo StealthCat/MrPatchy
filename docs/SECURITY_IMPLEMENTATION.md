@@ -2316,6 +2316,19 @@ endpoint. The panel adds presentation only: lookup, publication, revocation,
 role, approval and response boundaries are unchanged. Hit/miss reasons,
 saved-call or cost estimates and matched production acceptance remain open.
 
+Worker checkpoint #749 adds an **estimate** of avoided provider work to the
+same summary and panel. Each retained reuse assessment is attributed to its
+candidate's originating AI investigation run. Avoided calls are that run's
+recorded call count. Avoided USD sums the run's priced receipts only when every
+call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
+partly priced, pruned, unlinked or still running is counted separately and
+never treated as free, so incomplete coverage makes the figures lower bounds.
+The estimate reads candidates in bounded batches without loading evidence or
+snapshots. It is not a provider invoice, does not measure misses and does not
+predict what a fresh investigation would cost today. Lookup, publication,
+revocation, pause, budget, role, approval and response boundaries are
+unchanged. Hit/miss reasons and matched production acceptance remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
