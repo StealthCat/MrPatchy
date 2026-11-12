@@ -1,3 +1,23 @@
+## 1.59.51 — 2026-11-12
+
+1. [PR #701](https://github.com/StealthCat/MrPatchy/pull/701): Scanner-created security incidents now reach the in-app bell and notification center. A new malware detection publishes a high-severity, administrator-only event that matches the incident API and links to the server's Security tab. The reason is fixed text: endpoint paths, rule names and engine output never appear in it. A repeat match on a closed incident reopens the event, and an administrator reopening a closed incident does the same. Repeat matches on an open incident add nothing. Administrator closure (resolved or false positive) or deleting the server resolves the event. Acknowledgement leaves it unchanged. Closes #700.
+2. Compatibility and limits: an additive notification producer in the existing incident transaction, with no schema, API, incident lifecycle or response-authorization change. Notifications acknowledge and authorize nothing. This source update does not publish a Docker image.
+
+## 1.59.50 — 2026-11-12
+
+1. [PR #699](https://github.com/StealthCat/MrPatchy/pull/699): Expected workers (`MRPATCHY_EXPECTED_WORKER_IDS`) that need attention now raise an administrator-only in-app notification linking to **Activity → Workers**. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium, using fixed text with only the validated worker ID and state. An unchanged state adds no revision. Reporting or intentional draining resolves the event, and removal from the expected list resolves it with an explanation. An invalid expected-worker configuration raises one separate controller-wide event and leaves existing worker events unchanged. New attention is suppressed for one 120-second freshness window after process start, so co-started workers can register. Closes #698.
+2. Compatibility and limits: an additive notification producer run from the existing leader loop, with no schema, API, drain or worker-control change. Unconfigured workers are not monitored. This source update does not publish a Docker image.
+
+## 1.59.49 — 2026-11-12
+
+1. [PR #697](https://github.com/StealthCat/MrPatchy/pull/697): Administrators get an in-app notification linking to AI Settings when the shared AI provider backoff floor needs attention. A floor set from a capped Retry-After over 24 hours raises a high-severity event asking for review, which points to the reviewed Clear action. At least five consecutive transient failures within the existing failure-reset window raise a medium-severity event. The event resolves automatically when the floor clears or AI is disabled. Alert collection evaluates it each pass, an unchanged state adds no revision, and the text is fixed. Closes #696.
+2. Compatibility and limits: an additive, administrator-only notification, with no change to backoff behaviour, admission, provider calls, SMTP/webhook alerts or schema. It clears nothing automatically. This source update does not publish a Docker image.
+
+## 1.59.48 — 2026-11-12
+
+1. [PR #695](https://github.com/StealthCat/MrPatchy/pull/695): When the shared daily AI spend cap is exhausted, administrators get an in-app notification linking to AI Settings. It explains that new paid AI work is deferred, not discarded, until the reset or a cap or mode change. Alert collection evaluates the same conservative counted total that admission uses, and the notification's revision is bound to the budget window rather than to amounts, so further reservations in the same window add no revisions. Once the cap no longer blocks, a resolved revision is published. Closes #694.
+2. Compatibility and limits: an additive, administrator-only notification. It reserves, releases and authorizes nothing, adds no SMTP/webhook alert and changes no schema. Near-exhaustion warnings are not included. This source update does not publish a Docker image.
+
 ## 1.59.47 — 2026-11-12
 
 1. [PR #692](https://github.com/StealthCat/MrPatchy/pull/692): Medium- and high-risk AI process triage verdicts now reach the bell and notification center. Events are advisory: they use fixed text, carry the server and verdict severity, are visible to viewers (matching the Investigations page), and link to the server's Investigations tab. Executable paths and model output never enter the payload. An unchanged risk adds no revision, and a risk change resurfaces as unread. A later `low` verdict (from the provider or exact known-good reuse) or an administrator approval resolves the event, while revoking approval of a still-significant verdict reopens it. `unknown` verdicts and rolled-back or rejected saves announce nothing. Closes #691.

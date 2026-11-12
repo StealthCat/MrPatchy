@@ -2374,6 +2374,25 @@ logical work item's start. This removes one lock acquisition per start that does
 not use shared pacing. Production throughput and broader shared-controls
 acceptance remain open.
 
+Worker checkpoint #694 adds the first AI budget-blocker notification producer.
+In an enabled cap mode, `operations.collect_alerts()` publishes one admin-only
+`ai-budget`/`daily-cap` in-app notification when counted spend reaches the cap.
+Counted spend is the same conservative settled, reserved and uncertain total that
+admission uses. The notification states the cap, budget timezone and next reset,
+says deferred work is kept rather than discarded, and links to `#settings/ai`.
+- **Revision binding:** each revision is bound to the budget window and cap, so
+  further spend or reconciliation within one window creates no new revision.
+  Exhaustion in a later window resurfaces as unread.
+- **Resolution:** one `resolved` revision is published when the window resets,
+  the cap is raised, the mode becomes uncapped or AI is disabled.
+- **Unchanged:** the producer reads the ledger but never reserves, releases or
+  authorizes spend. It adds no SMTP/webhook alert. Pause, read, dismiss and
+  acknowledgement semantics are unchanged.
+- **Limitation:** near-exhaustion is not detected. When some headroom remains
+  but it is smaller than the next call's quote, admission defers that call
+  without a notification, because no call payload is available here. Other
+  blocker producers (missing key, unknown pricing, provider backoff) remain open.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
@@ -2579,6 +2598,37 @@ does not diagnose provider availability, reconcile uncertain charges, bypass pro
 limits or complete the broader shared-controls/faster-AI program. Exact-head
 SQLite/MySQL, browser, full-suite and coordinator integration checks remain required.
 
+Worker checkpoint (issue #696): the shared provider floor is now also an in-app
+notification producer, adding to the roadmap J "AI configuration/budget blockers"
+producers. Each alert-collection pass runs `ai_provider_backoff.publish_notification()`
+in its own transaction. It publishes one admin-only `ai-provider`/`provider-backoff`
+event linked to AI Settings in two cases:
+
+- **`high`:** the active floor came from a provider Retry-After over 24 hours that
+  was capped, which the reviewed Clear action exists for.
+- **`medium`:** at least five consecutive transient failures fell inside the
+  one-hour failure-reset window.
+
+A single short transient backoff stays silent. The payload is fixed text keyed only
+by that state, so further failures within one episode add no revision. Escalating
+from sustained to capped adds one revision. A later shorter transient failure
+never lowers the floor, so while the capped floor still dominates it keeps the
+capped reason (and the `high` event and AI Settings review cue) until it lifts or is
+cleared.
+
+The event gets one `resolved` revision in any of these cases: a successful provider
+response, an administrator Clear, the episode going idle past the reset window, or AI
+being disabled. A later episode reopens it as unread.
+
+The following are unchanged:
+
+- No provider text, timing or error body enters the notification.
+- No SMTP/webhook `Alert` is added.
+- Backoff timing, admission, Clear semantics, read/dismiss/acknowledgement and
+  response authorization stay as they were.
+
+Missing-key and unknown-pricing blocker producers remain open.
+
 
 ### Durable cross-server process-triage fairness — worker checkpoint #388
 
@@ -2774,6 +2824,32 @@ signature or an active CVE exposure window, and continue after patch installatio
 - Add server/fleet malware incidents showing known versus AI-discovered findings, evidence/confidence, detection coverage, response policy and quarantine/termination outcomes. Reuse the existing Security workspace, notifications and Mr Patchy visual style rather than creating duplicate incident systems.
 - Deliver maintained known-malware detection, cross-source AI triage, general automatic response and recovery/UI integration as tracked milestones. Update this checkpoint with implemented scope and remaining limitations after each milestone.
 - Validate known-malware fixtures, controlled unknown-behavior simulations and benign administrative lookalikes, false-positive restoration, AI outages/pause and prompt-injection attempts, evidence changes, process reuse, file replacement, concurrent/replayed detections and partial response failures. Include supported-platform real-target response drills; document measured detection limits without claiming universal detection or a clean endpoint.
+
+### In-app malware-detection notifications — worker checkpoint #700
+
+A scan finding that creates a security incident now publishes one durable,
+admin-only in-app notification. Signature scans, YARA scans and
+execution-triggered scoped scans all count. The notification has source
+`security-scan`, kind `malware-detection`, severity `high` and a deep link to the
+server's Security tab. The reason is fixed text: endpoint-supplied paths, rule
+names and engine output never reach the bell.
+
+How the notification follows the incident:
+
+- **Repeat detections.** Repeat detections of an open or acknowledged incident
+  add no revision.
+- **Recurrence.** A recurrence after `resolved` or `false_positive`, or an
+  administrator review back to `open`, adds an active, unread revision.
+- **Closing.** Closing the incident adds one `resolved` revision. Acknowledging
+  it changes nothing.
+- **Server deletion.** Deleting a server resolves its active detection
+  notifications. The incident record itself is retained.
+
+Incidents recorded before this change gain no retroactive events. The
+notification is advisory only: it does not acknowledge or transition incidents,
+and it does not approve, contain or remediate. SMTP and webhook delivery are
+unchanged. Known-versus-AI-discovered classification, automatic response and
+the remaining delivery and acceptance items above remain open.
 
 
 ### Automatic-containment eligibility contract — worker checkpoint #682
@@ -3412,6 +3488,30 @@ response authorization are unchanged. An administrator approval resolves an acti
 event in the approval's own transaction, and revoking it while the verdict is still
 medium/high re-publishes the event as active; the notification never grants or
 withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
+
+Worker checkpoint (issue #698): a bounded milestone-1 producer covers expected-worker
+health. When `MRPATCHY_EXPECTED_WORKER_IDS` is configured, the elected coordinator's
+30-second tick publishes one admin-only `deployment`/`worker-health` event per
+expected worker that is `missing`, `stale` or `stopped` (high) or `unknown` or
+`version_mismatch` (medium). Each event links to Activity → Workers. The text is
+fixed and contains only the validated worker ID and state.
+
+- An unchanged state adds no revision. A state change adds a new unread revision.
+- Returning to `reporting`, or an intentional `draining`/`drained`, resolves the
+  event. Removing the ID from the configuration also resolves it.
+- An invalid configuration publishes one separate controller-wide medium event
+  and leaves the earlier worker events unchanged, because removal cannot be proven.
+- A startup grace of one freshness window suppresses new attention while
+  co-started workers register. Resolutions still apply during the grace.
+- The producer runs in its own transaction after `collect_alerts()`. A failure is
+  logged and does not stop the tick.
+
+There are no SMTP/webhook, schema, API or UI changes. The event never drains,
+recovers or authorizes anything.
+
+Known limit: if no worker runs, no coordinator publishes, so the Workers page
+remains authoritative. Controller web instances, endpoint agents and GCP nodes are
+not covered by this producer.
 
 Implementation checkpoint (issue #731): failed server-changing operations now publish a
 milestone-1 failure/recovery producer. When an operator-initiated `patch`, `repository`,
