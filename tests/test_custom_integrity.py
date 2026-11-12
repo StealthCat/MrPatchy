@@ -69,7 +69,7 @@ def test_manual_custom_protocol_and_scope_cannot_be_silently_ignored(admin,monke
     result=admin.post(path,json={'packages':[],'persistence':True,'custom_paths':selected});assert result.status_code==200
     inv=inventory();inv['scope']=agent.validate_custom_paths(selected)
     def call(host,request,**kwargs):
-        assert request=={'action':'security-inspect-custom','packages':[],'persistence':True,'custom_paths':selected}
+        assert request=={'action':'security-inspect-custom','packages':[],'persistence':True,'custom_paths':selected,'cron_jobs':True}
         return receipt(inv)
     monkeypatch.setattr(worker.ssh,'call',call);worker.execute(result.json()['job_id'])
     with Session() as s:assert s.get(Job,result.json()['job_id']).state=='complete'

@@ -1,4 +1,4 @@
-"""Read-only review of bounded stored startup metadata, never job/default attestation."""
+"""Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
 from . import persistence
 from .incidents import digest
 
@@ -12,7 +12,8 @@ CATALOG=(
     ('loader','Loader preload configuration','/etc/ld.so.preload'),
 )
 GAPS=[
-    'Stored file metadata only: cron jobs, schedules, accounts and effective commands are not parsed.',
+    'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar), anacron and at queues are not parsed into jobs.',
+    'Parsed jobs are data from the hashed file only: referenced scripts are not inspected, and cron.d naming rules, PATH/SHELL settings and whether the cron daemon runs are not evaluated.',
     'Vendor/user systemd units, effective precedence, generated/transient units and runtime state are not enumerated.',
     'Anacron/at queues, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
@@ -27,6 +28,17 @@ def mechanism(path):
     return 'additional','Additional inventory scope'
 
 
+CRON_FILES=('/etc/crontab',)
+CRON_DIRS=('/etc/cron.d','/var/spool/cron/crontabs','/var/spool/cron')
+
+
+def jobs_state(entry):
+    """Whether parsed jobs exist, were not reported (older agent) or do not apply."""
+    if 'cron' in entry:return 'parsed'
+    path=entry['path'];parent=path.rsplit('/',1)[0]
+    return 'not_reported' if entry['kind']=='regular' and (path in CRON_FILES or parent in CRON_DIRS) else 'not_crontab'
+
+
 def page(s,host_id,offset=0,q='',expected_digest=''):
     assessment=persistence.status(s,host_id);latest=assessment['latest']
     if latest is None and expected_digest:raise ValueError('Startup inventory changed; reopen the browser')
@@ -39,11 +51,16 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
     for entry in inventory['entries']:
         key,label=mechanism(entry['path'])
         row={k:entry[k] for k in ('path','kind','uid','gid','mode','size','sha256','target') if k in entry}
-        row.update(mechanism=key,mechanism_label=label,change=changes.get(entry['path'],'unchanged') if changes is not None else 'not_compared',origin='not_assessed')
-        if q.casefold() in (entry['path']+' '+label).casefold():rows.append(row)
+        row.update(mechanism=key,mechanism_label=label,change=changes.get(entry['path'],'unchanged') if changes is not None else 'not_compared',origin='not_assessed',jobs_state=jobs_state(entry))
+        if 'cron' in entry:row['cron']=entry['cron']
+        jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
+        if q.casefold() in (entry['path']+' '+label+' '+jobs).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     catalog=[{'id':key,'label':label,'observed_files':sum(mechanism(e['path'])[0]==key for e in inventory['entries'])} for key,label,_ in CATALOG]
-    return {'state':inventory['state'],'items':rows[offset:offset+25],'more':len(rows)>offset+25,'total':len(rows),'digest':revision,
+    parsed=[e for e in inventory['entries'] if 'cron' in e]
+    cron={'files':len(parsed),'jobs':sum(len(e['cron']['jobs']) for e in parsed),'unparsed':sum(e['cron']['unparsed'] for e in parsed),
+          'truncated':any(e['cron']['truncated'] for e in parsed),'not_reported':sum(jobs_state(e)=='not_reported' for e in inventory['entries'])}
+    return {'state':inventory['state'],'items':rows[offset:offset+25],'cron':cron,'more':len(rows)>offset+25,'total':len(rows),'digest':revision,
         'inspection_id':latest['id'],'created':latest['created'],'baseline_state':assessment['state'],'catalog':catalog,'scope':inventory['scope'],
         'missing_roots':inventory['missing_roots'],'skipped':inventory['skipped'],'gaps':GAPS+inventory['gaps'],
         'note':'Only files present in this bounded stored receipt. Missing files/mechanisms are not proof of absence or safety; removed files remain in baseline differences.'}
