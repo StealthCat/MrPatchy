@@ -1,3 +1,12 @@
+## 1.59.46 — 2026-11-12
+
+1. [PR #690](https://github.com/StealthCat/MrPatchy/pull/690): Server conditions that need an administrator now also appear in the in-app bell and notification center, not only in the SMTP/webhook alert outbox. Alert collection publishes an allowlisted set of alert kinds as durable, administrator-only notification events in the same transaction:
+   - recovery-required operations, file, process, publication and service holds, and disabled-server recovery;
+   - failed scheduled patching, response integrity and verification, service health and coverage, execution-scan coverage, agent health and startup baseline.
+
+   Each event has a stable kind, explicit severity, a controller-composed message and a same-origin deep link to the server tab. Unchanged conditions add no revision. A changed message resurfaces as unread, a cleared condition (or a disabled or deleted server) resolves the event, and a recurrence reopens it. Closes #689.
+2. Compatibility and limits: kinds that could carry raw endpoint text stay outbox-only, never reaching notification reasons: stale, raw integrity JSON, repository errors, overdue and server disabled. Alert acknowledgement and notification read/dismiss stay independent, and SMTP/webhook delivery is unchanged. A rejected notification payload is logged and skipped without blocking alert collection. This source update does not publish a Docker image.
+
 ## 1.59.45 — 2026-11-12
 
 1. [PR #688](https://github.com/StealthCat/MrPatchy/pull/688): Notification arrival records no longer grow without bound. The leader's hourly cleanup prunes arrivals older than the existing `history_days` retention, in separately committed batches of at most 5,000. It deletes only the oldest contiguous sequenced prefix, stopping at the first arrival still inside the window, and leaves the durable head untouched. `GET /api/notifications/arrivals` now reads its head from the durable head row, so pruning never moves live cursors backwards. A cursor older than the oldest retained arrival gets a fresh baseline with `reset: true, reset_reason: "pruned"`, so clients resynchronize instead of silently skipping pruned revisions. A cursor beyond the head reports `reset_reason: "ahead"`. A pruning failure is logged and does not block the rest of the cleanup. Closes #687.
