@@ -51,6 +51,30 @@ def test_comparison_reports_equivalent_deltas_and_zero_percent():
     assert 'never treated as zero' in result['interpretation']['cost']
 
 
+def test_legacy_report_has_one_server_per_subject():
+    baseline, candidate = report(), report('parallel', 4)
+    candidate['fixture_hosts'] = candidate['runs']
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['baseline']['fixture_hosts'] == result['candidate']['fixture_hosts'] == 8
+
+
+@pytest.mark.parametrize(('base_layout', 'candidate_layout', 'message'), [
+    ({}, {'fixture_hosts': 1, 'single_server_slots': 4}, 'fixture_hosts differs'),
+    ({'fixture_hosts': 1, 'single_server_slots': 3},
+     {'fixture_hosts': 1, 'single_server_slots': 4}, 'single_server_slots differs'),
+    ({}, {'fixture_hosts': 2}, 'fixture_hosts must be 1 or equal to runs'),
+    ({}, {'fixture_hosts': 1}, 'single_server_slots must be a finite number'),
+    ({}, {'fixture_hosts': 1, 'single_server_slots': 3}, 'concurrency exceeds single_server_slots'),
+    ({}, {'fixture_hosts': 1, 'single_server_slots': 5}, 'single_server_slots must be between 1 and 4'),
+    ({}, {'fixture_hosts': 8, 'single_server_slots': 4}, 'single_server_slots requires one fixture server'),
+])
+def test_comparison_rejects_unmatched_or_invalid_host_layout(base_layout, candidate_layout, message):
+    baseline = {**report(), **base_layout}
+    candidate = {**report('parallel', 4), **candidate_layout}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=message):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
 def test_legacy_fixed_ssh_delay_matches_explicit_default():
     baseline = report()
     baseline.pop('ssh_delay_ms')
