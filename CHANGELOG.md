@@ -1,3 +1,16 @@
+## 1.59.63 — 2026-11-12
+
+1. [PR #726](https://github.com/StealthCat/MrPatchy/pull/726): Add a pure CVE-exploitation containment eligibility contract (`app/cve_containment.py`). It decides whether one exploitation detection may automatically quarantine the artifact and/or terminate the process under a per-CVE policy, with modes `disabled`, `monitor_only` and `enforce`, bounded thresholds and exclusions.
+   - `confirmed_exploitation` requires all of:
+     - an authenticated, fresh rule that names the CVE and matched the exact artifact hash at sufficient confidence;
+     - a fresh, server-bound applicability assessment of `affected` (or `uncertain` only with opt-in);
+     - distinct supporting evidence kinds bound to the same server, evidence revision and artifact.
+   - A vulnerable version, advisory or CVSS score is never exploitation evidence on its own. AI enrichment is ignored, and AI availability cannot affect the decision.
+   - Quarantine and termination reuse the malware-containment identity checks from #683.
+   - Malformed input fails closed.
+   - Closes #725.
+2. Compatibility and limits: an unwired contract only. No detector, policy storage, executor, API, UI or schema change, and no response action is authorized at runtime. This source update does not publish a Docker image.
+
 ## 1.59.62 — 2026-11-12
 
 1. [PR #724](https://github.com/StealthCat/MrPatchy/pull/724): Add a pure startup mechanism catalog and coverage contract (`app/startup_catalog.py`). It catalogs 26 mechanisms, each with a stable ID, label, trigger, scope, parse level and per-family locations:
