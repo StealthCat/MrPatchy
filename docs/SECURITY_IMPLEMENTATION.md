@@ -2741,6 +2741,28 @@ requirement.
 - Feed evidence-supported suspicious findings into the planned malware investigation/response policy. A custom entry or AI suspicion alone does not authorize quarantine, termination or deletion; reuse the established evidence and response-policy checks.
 - Validate native Debian/RPM and supported init/cron layouts, per-user/root jobs, unit precedence/drop-ins, transient/generated entries, package defaults versus legitimate edits, malicious and benign lookalikes, prompt injection/redaction, referenced-file changes, large inventories, offline/permission gaps and AI pause. Include real-target acceptance and migration/helper documentation. Do not mark this requirement complete solely because the existing metadata inventory or manual AI plan exists.
 
+Worker checkpoint (issue #717): a pure, I/O-free contract (`app/sysv_init.py`)
+parses captured SysV boot material into typed records. For `/etc/init.d`
+scripts it returns the interpreter, execute bit, full-text SHA-256 and the LSB
+`INIT INFO` fields (Provides, Required/Should-Start/Stop, Default-Start/Stop,
+descriptions and `X-` extension names), never the script body. Runlevel entries
+from `/etc/rc[0-6S].d` and `/etc/rc.d/rc[0-6].d` become start/stop links with
+order numbers and resolved init-script targets. Links to paths outside the init
+directory, name/target mismatches, regular files and unrecognized names are
+explicit gaps. A combining step reports per-service enabled runlevels, start
+orders, links without a captured script, start and stop links in one runlevel,
+installed links that differ from LSB `Default-Start` and start links to a
+non-executable script as observations, not verdicts. `/etc/rc.local` becomes
+bounded logical command lines with per-line SHA-256, the top-level `exit` line,
+a count of unreachable lines after it, and gaps for a missing shebang, missing
+execute bit, uninterpreted heredocs and unterminated continuations. Over-limit,
+non-UTF-8 or binary input produces explicit gaps, and over-cap input yields no
+partial records. Every record keeps `origin: not_assessed`. The contract does
+not collect from targets, show anything in the UI, attest package defaults,
+classify entries or authorize any response. Agent collection, inventory/UI
+wiring, provenance, AI classification and native acceptance remain open, so
+roadmap F is still incomplete.
+
 
 ## v0.3.0 — opt-in cross-source advisory AI evidence
 
