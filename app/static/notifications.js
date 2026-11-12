@@ -8,6 +8,10 @@ window.NotificationShell=(()=>{
  // marks the notification read, dismisses it or acknowledges its subject.
  const TOAST_LIMIT=3,TOAST_MS=10000,TOAST_SEEN_LIMIT=500,toastSeverities=new Set(['high','critical']);
  let centerItems=[],generation=0,requestRevision=0,centerRequestRevision=0,timer=0,items=[],open=false,started=false,stream=null,toastSeen=null;
+ // Delivery-path state only: a live stream says nothing about collector, agent or AI health.
+ let liveState='',lastSync=0,syncDelayed=false,streamRetryAt=0,streamRetryDelay=0;
+ const STREAM_RETRY_MIN_MS=POLL_MS,STREAM_RETRY_MAX_MS=600000;
+ const liveLabels={connecting:'Connecting',live:'Live',reconnecting:'Reconnecting',unavailable:'Unavailable, polling only',polling:'Polling only'};
  const centerContext={offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''};
  const node=id=>document.getElementById(id);
  const button=()=>node('notification-button'),panel=()=>node('notification-panel');
@@ -31,6 +35,24 @@ window.NotificationShell=(()=>{
  }
  function element(tag,className,text){const result=document.createElement(tag);if(className)result.className=className;if(text!==undefined)result.textContent=String(text);return result;}
  function readableSource(value){return String(value||'notification').replace(/[._-]+/g,' ');}
+ function syncNode(){
+  let target=node('notification-sync');if(target)return target;
+  const anchor=panel().querySelector('.notification-coverage');if(!anchor)return null;
+  target=element('p','notification-sync help');target.id='notification-sync';
+  target.append(element('span','notification-sync-state'),element('span','notification-sync-time'),element('span','notification-sync-note','Shows notification delivery only, not collector, agent or AI health.'));
+  anchor.before(target);return target;
+ }
+ function renderSync(){
+  const target=syncNode();if(!target)return;
+  const state=syncDelayed?'delayed':(liveState||'');
+  target.dataset.state=state||'idle';
+  const label=syncDelayed?`Delayed${liveState?` (${(liveLabels[liveState]||liveState).toLowerCase()})`:''}`:(liveLabels[liveState]||'Not started');
+  const [stateText,timeText]=target.children;
+  stateText.textContent=`Live updates: ${label}. `;
+  if(lastSync){const when=new Date(lastSync);timeText.textContent=`Last synchronized ${when.toLocaleTimeString()}. `;timeText.title=when.toISOString();}
+  else{timeText.textContent='Not yet synchronized. ';timeText.removeAttribute('title');}
+ }
+ function setLive(state){if(liveState!==state){liveState=state;renderSync();}}
  function render(){
   const list=node('notification-list');list.replaceChildren();
   if(!items.length){const empty=element('div','notification-empty');empty.append(element('strong','', 'All caught up.'),element('p','help','No current notifications are available for your account.'));list.append(empty);return;}
@@ -162,12 +184,24 @@ window.NotificationShell=(()=>{
  node('modal')?.addEventListener('close',()=>{const stack=node('notification-toasts');if(stack&&stack.parentNode!==document.body){document.body.append(stack);showStack(stack);}});
  function schedule(run=generation){clearTimeout(timer);if(!started||document.hidden)return;timer=setTimeout(()=>{if(run===generation)refresh();},POLL_MS);}
  function connect(run){
-  if(typeof EventSource!=='function')return;
+  if(typeof EventSource!=='function'){setLive('polling');return;}
+  setLive('connecting');
   if(stream)stream.close();
   const current=new EventSource('/api/notifications/stream');stream=current;
-  current.addEventListener('notifications',()=>{if(stream===current&&run===generation&&started)refresh();});
+  current.onopen=()=>{if(stream===current&&run===generation&&started){streamRetryDelay=0;streamRetryAt=0;setLive('live');}};
+  current.addEventListener('notifications',()=>{if(stream===current&&run===generation&&started){setLive('live');refresh();}});
   current.addEventListener('close',()=>{if(stream!==current||run!==generation)return;current.close();stream=null;if(typeof showLogin==='function')showLogin();else reset();});
-  current.onerror=()=>{if(stream===current&&run===generation&&started&&open)status('Live updates are reconnecting. The 30-second catch-up remains active.');};
+  current.onerror=()=>{
+   if(stream!==current||run!==generation||!started)return;
+   // A non-200 stream response (for example 429 at stream capacity, or a proxy 502/503) fails the
+   // EventSource permanently: the browser will not reconnect, so do not claim it is reconnecting.
+   if(current.readyState===2){
+    current.close();stream=null;
+    streamRetryDelay=Math.min(STREAM_RETRY_MAX_MS,Math.max(STREAM_RETRY_MIN_MS,streamRetryDelay*2));streamRetryAt=Date.now()+streamRetryDelay;
+    setLive('unavailable');if(open)status('Live updates are unavailable. The 30-second catch-up remains active.');return;
+   }
+   setLive('reconnecting');if(open)status('Live updates are reconnecting. The 30-second catch-up remains active.');
+  };
  }
  async function refresh({keepStatus=false}={}){
   if(!started||document.hidden)return;
@@ -176,11 +210,14 @@ window.NotificationShell=(()=>{
    const [count,page,arrivals]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8'),toastArrivals().catch(()=>null)]);
    if(run!==generation||request!==requestRevision)return;
    items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();syncReadShown(node('notification-read-shown'),items);noteToasts(items,arrivals);
+   lastSync=Date.now();syncDelayed=false;renderSync();
+   // Bounded retry of a refused stream, only after an authoritative refresh succeeds.
+   if(!stream&&liveState==='unavailable'&&Date.now()>=streamRetryAt)connect(run);
    if(!keepStatus)status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
    if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){
    if(run!==generation||request!==requestRevision)return;
-   setCount(null);status('Notification updates are temporarily delayed. '+error.message);
+   setCount(null);syncDelayed=true;renderSync();status('Notification updates are temporarily delayed. '+error.message);
   }finally{if(run===generation)schedule(run);}
  }
  async function mutate(item,action,control){
@@ -208,6 +245,7 @@ window.NotificationShell=(()=>{
   generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;toastSeen=null;clearToasts();
   if(stream){stream.close();stream=null;}
   panel().hidden=true;button().setAttribute('aria-expanded','false');setCount(null,[]);
+  liveState='';lastSync=0;syncDelayed=false;streamRetryAt=0;streamRetryDelay=0;renderSync();
   status('');node('notification-list').replaceChildren();node('notification-read-shown').disabled=true;centerItems=[];Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''});
  }
  function start(){generation++;requestRevision++;started=true;clearTimeout(timer);connect(generation);refresh();}
