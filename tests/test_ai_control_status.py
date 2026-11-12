@@ -100,5 +100,19 @@ def test_unthrottled_configured_snapshot_is_read_only_and_explains_remaining_gat
         assert not list(session.query(ai_budget.BudgetEntry))
 
 
+def test_legacy_mode_discloses_unreflected_per_purpose_hourly_limits(admin):
+    configure(mode='legacy')
+    with Session() as session:
+        result = ai_control_status.snapshot(session, 1000)
+    assert result['mode'] == 'legacy'
+    assert result['limitations'][:len(ai_control_status.LIMITATIONS)] == ai_control_status.LIMITATIONS
+    assert result['limitations'][-1] == ai_control_status.LEGACY_LIMITATION
+    assert 'per-purpose hourly limits' in result['limitations'][-1]
+    for mode in ('rate', 'daily_cap', 'rate_and_daily', 'unthrottled'):
+        configure(mode=mode)
+        with Session() as session:
+            assert ai_control_status.snapshot(session, 1000)['limitations'] == ai_control_status.LIMITATIONS
+
+
 def test_control_snapshot_requires_admin(client):
     assert client.get('/api/settings/ai-control-status').status_code in (401, 403)

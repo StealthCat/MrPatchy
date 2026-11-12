@@ -10,6 +10,8 @@ LIMITATIONS = [
     'A call-specific conservative price quote can still refuse capped admission.',
     'Provider policy, finite concurrency, per-server pause and lifecycle checks still apply.',
 ]
+LEGACY_LIMITATION = ('Legacy per-purpose hourly limits (triage and update scoring) are enforced separately and are '
+                     'not reflected in this snapshot; switch to an explicit control mode for an authoritative status.')
 
 
 def _money_exhausted(value):
@@ -55,5 +57,5 @@ def snapshot(session, now=None):
         'can_start_now': not blockers,
         'next_start_at': None if indefinite or not finite else max(finite),
         'blockers': blockers,
-        'limitations': LIMITATIONS,
+        'limitations': LIMITATIONS + ([LEGACY_LIMITATION] if admission['mode'] == 'legacy' else []),
     }
