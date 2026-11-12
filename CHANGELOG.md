@@ -1,3 +1,8 @@
+## 1.59.39 — 2026-11-12
+
+1. [PR #675](https://github.com/StealthCat/MrPatchy/pull/675): `tools/benchmark_ai.py` accepts `--follow-up-runs` (0 to the run count), so serial and parallel AI triage benchmarks can compare matched workloads with no, sparse or universal follow-up evidence requests. Explicit counts are distributed deterministically across the fixture subjects, and omitting the option keeps the existing alternating workload. The benchmark verifies provider requests, SSH requests and persisted call counts against the selected workload. A stage with no observations reports `count: 0` and null percentiles, which `tools/compare_ai_benchmarks.py` accepts and reports as unobserved instead of failing. Fixes #674.
+2. Compatibility and limits: development tooling only, with no application, schema or API change. Results remain fixture-only measurements, not production performance. This source update does not publish a Docker image.
+
 ## 1.59.38 — 2026-11-12
 
 1. [PR #673](https://github.com/StealthCat/MrPatchy/pull/673): Add a pure CVE applicability and exposure-window contract (`app/cve_exposure.py`).
