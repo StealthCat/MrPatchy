@@ -18,8 +18,12 @@ authorizes a response action. Fail-closed rules:
   mechanism is file metadata only, and says so.
 - Per-user (home-relative) locations count as collected only when the collector
   states that every account home was enumerated; otherwise they are partial.
-- Administrator additional scope is labeled ``additional`` and is never mapped
-  onto a catalog mechanism or used to claim that a mechanism is covered.
+- Administrator additional scope is passed separately, labeled ``additional``
+  and never credited to a catalog mechanism, even when it overlaps one.
+- Roots the collector failed on, or an incomplete inventory, never yield
+  ``covered``; entries are reported parsed only when the collection says the
+  parser ran and at least one location was fully collected.
+- The catalog is not exhaustive and every result says so.
 """
 from __future__ import annotations
 
@@ -32,10 +36,16 @@ TRIGGERS = ('boot', 'schedule', 'login', 'event', 'loader')
 SCOPES = ('system', 'per_user')
 PARSE_LEVELS = ('entries', 'metadata')
 STATES = ('covered', 'partial', 'absent_reported', 'not_collected')
-MAX_ADDITIONAL = 32
+MAX_ADDITIONAL = 16  # matches target/agent.py validate_custom_paths
 MAX_ROOTS = 256
 MAX_PATH = 4096
-PSEUDO_FILESYSTEMS = ('/proc', '/sys', '/dev')
+PSEUDO_FILESYSTEMS = ('/proc', '/sys', '/dev', '/run')
+# Mirrors the agent's SCAN_EXCLUDED Mr Patchy state directories.
+EXCLUDED_STATE = ('/var/lib/mrpatchy-quarantine', '/var/lib/mrpatchy-evidence', '/var/lib/mrpatchy-process-response',
+                  '/var/lib/mrpatchy-repair-staging')
+HOME_PARENTS = ('/home', '/root')
+NOT_EXHAUSTIVE = {'code': 'catalog_not_exhaustive',
+                  'detail': 'The catalog lists known mechanisms only; other code-execution paths can exist.'}
 
 _BOTH = FAMILIES
 _RUNLEVELS = ('0', '1', '2', '3', '4', '5', '6', 'S')
@@ -63,8 +73,19 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'locations': (_loc('/var/spool/cron/atjobs', ('debian',)), _loc('/var/spool/at', ('rpm',)))},
     {'id': 'systemd_system', 'label': 'systemd system units, timers and drop-ins', 'trigger': 'boot',
      'scope': 'system', 'parse': 'metadata',
-     'locations': (_loc('/etc/systemd/system'), _loc('/run/systemd/system'), _loc('/usr/local/lib/systemd/system'),
+     'locations': (_loc('/etc/systemd/system'), _loc('/etc/systemd/system.control'), _loc('/run/systemd/system'),
+                   _loc('/run/systemd/system.control'), _loc('/usr/local/lib/systemd/system'),
                    _loc('/usr/lib/systemd/system'), _loc('/lib/systemd/system', ('debian',)))},
+    {'id': 'systemd_generators', 'label': 'systemd generator executables', 'trigger': 'boot', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/etc/systemd/system-generators'), _loc('/usr/local/lib/systemd/system-generators'),
+                   _loc('/usr/lib/systemd/system-generators'), _loc('/lib/systemd/system-generators', ('debian',)),
+                   _loc('/etc/systemd/user-generators'), _loc('/usr/local/lib/systemd/user-generators'),
+                   _loc('/usr/lib/systemd/user-generators'))},
+    {'id': 'systemd_hooks', 'label': 'systemd shutdown and sleep hooks', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/usr/lib/systemd/system-shutdown'), _loc('/usr/lib/systemd/system-sleep'),
+                   _loc('/lib/systemd/system-shutdown', ('debian',)), _loc('/lib/systemd/system-sleep', ('debian',)))},
     {'id': 'systemd_generated', 'label': 'systemd generator output', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/run/systemd/generator.early'), _loc('/run/systemd/generator'),
@@ -73,7 +94,9 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'parse': 'metadata', 'locations': (_loc('/run/systemd/transient'),)},
     {'id': 'systemd_user', 'label': 'systemd user units', 'trigger': 'login', 'scope': 'per_user',
      'parse': 'metadata',
-     'locations': (_loc('/etc/systemd/user'), _loc('/usr/lib/systemd/user'), _loc('~/.config/systemd/user'))},
+     'locations': (_loc('/etc/systemd/user'), _loc('/run/systemd/user'), _loc('/usr/local/lib/systemd/user'),
+                   _loc('/usr/lib/systemd/user'), _loc('/lib/systemd/user', ('debian',)),
+                   _loc('~/.config/systemd/user'), _loc('~/.local/share/systemd/user'))},
     {'id': 'sysv', 'label': 'SysV init scripts and runlevel links', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/init.d'), *(_loc(f'/etc/rc{r}.d', ('debian',)) for r in _RUNLEVELS),
@@ -93,6 +116,19 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'parse': 'metadata', 'locations': (_loc('/etc/xdg/autostart'), _loc('~/.config/autostart'))},
     {'id': 'ssh_rc', 'label': 'SSH login rc hooks', 'trigger': 'login', 'scope': 'per_user', 'parse': 'metadata',
      'locations': (_loc('/etc/ssh/sshrc'), _loc('~/.ssh/rc'))},
+    {'id': 'ssh_forced_command', 'label': 'SSH authorized_keys command= options', 'trigger': 'login',
+     'scope': 'per_user', 'parse': 'metadata', 'locations': (_loc('~/.ssh/authorized_keys'),)},
+    {'id': 'login_hooks', 'label': 'PAM, MOTD and X session login hooks', 'trigger': 'login', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/etc/pam.d'), _loc('/etc/update-motd.d', ('debian',)), _loc('/etc/X11/Xsession.d'))},
+    {'id': 'event_hooks', 'label': 'Network dispatcher and log rotation hooks', 'trigger': 'event',
+     'scope': 'system', 'parse': 'metadata',
+     'locations': (_loc('/etc/NetworkManager/dispatcher.d'), _loc('/etc/network/if-up.d', ('debian',)),
+                   _loc('/etc/logrotate.d'))},
+    {'id': 'package_manager_hooks', 'label': 'Package manager hooks', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/etc/apt/apt.conf.d', ('debian',)), _loc('/etc/dnf/plugins', ('rpm',)),
+                   _loc('/etc/yum/pluginconf.d', ('rpm',)))},
     {'id': 'udev_rules', 'label': 'udev rules', 'trigger': 'event', 'scope': 'system', 'parse': 'metadata',
      'locations': (_loc('/etc/udev/rules.d'), _loc('/run/udev/rules.d'), _loc('/usr/lib/udev/rules.d'),
                    _loc('/lib/udev/rules.d', ('debian',)))},
@@ -103,10 +139,11 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
     {'id': 'modules_load', 'label': 'Kernel modules loaded at boot', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/modules', ('debian',)), _loc('/etc/modules-load.d'), _loc('/run/modules-load.d'),
-                   _loc('/usr/lib/modules-load.d'))},
+                   _loc('/usr/lib/modules-load.d'), _loc('/lib/modules-load.d', ('debian',)))},
     {'id': 'modprobe', 'label': 'modprobe install/options configuration', 'trigger': 'event', 'scope': 'system',
      'parse': 'metadata',
-     'locations': (_loc('/etc/modprobe.d'), _loc('/run/modprobe.d'), _loc('/usr/lib/modprobe.d'))},
+     'locations': (_loc('/etc/modprobe.d'), _loc('/run/modprobe.d'), _loc('/usr/lib/modprobe.d'),
+                   _loc('/lib/modprobe.d', ('debian',)))},
 )
 
 
@@ -140,27 +177,43 @@ def catalog(family: Any) -> dict[str, Any]:
         if locations:
             mechanisms.append({'id': item['id'], 'label': item['label'], 'trigger': item['trigger'],
                                'scope': item['scope'], 'parse': item['parse'], 'locations': locations})
-    return {'contract_version': CONTRACT_VERSION, 'family': family, 'mechanisms': mechanisms, 'gaps': []}
+    return {'contract_version': CONTRACT_VERSION, 'family': family, 'mechanisms': mechanisms,
+            'gaps': [dict(NOT_EXHAUSTIVE)]}
 
 
-def _catalog_paths(family: str) -> list[str]:
-    return [loc for m in catalog(family)['mechanisms'] for loc in m['locations'] if loc.startswith('/')]
+def _all_locations(family: Any) -> list[str]:
+    families = (family,) if family in FAMILIES else FAMILIES
+    return [loc for fam in families for m in catalog(fam)['mechanisms'] for loc in m['locations']]
+
+
+def _overlaps_home_location(path: str, home_relative: list[str]) -> bool:
+    """A home parent, an account home, or a path holding a home-relative location."""
+    if path in HOME_PARENTS or (_under(path, '/home') and path.count('/') == 2):
+        return True
+    if _under(path, '/root'):
+        tail = path[len('/root'):]
+    elif _under(path, '/home'):
+        tail = '/' + path.split('/', 3)[3]
+    else:
+        return False
+    return any(_under(tail, rel[1:]) or _under(rel[1:], tail) for rel in home_relative)
 
 
 def validate_additional_scope(paths: Any, family: Any = None) -> dict[str, Any]:
     """Validate administrator-configured additional scope. Every rejected path gets
-    a reason; accepted paths are labeled ``additional`` and never a mechanism."""
+    a reason; accepted paths are labeled ``additional`` and never a mechanism.
+    An unknown family is checked against every family's locations."""
     if not isinstance(paths, (list, tuple)):
         return {'accepted': [], 'rejected': [], 'gaps': [_gap('malformed_scope', 'Additional scope must be a list.')]}
     if len(paths) > MAX_ADDITIONAL:
         return {'accepted': [], 'rejected': [],
                 'gaps': [_gap('over_limit', f'At most {MAX_ADDITIONAL} additional paths are allowed.')]}
-    known = set()
-    for fam in (FAMILIES if family is None else (family,) if family in FAMILIES else ()):
-        known.update(_catalog_paths(fam))
+    locations = _all_locations(family)
+    known = [loc for loc in locations if loc.startswith('/')]
+    home_relative = [loc for loc in locations if loc.startswith('~/')]
     accepted: list[dict[str, str]] = []
     rejected: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: list[str] = []
     for index, path in enumerate(paths):
         if not _absolute_ok(path):
             reason = 'invalid_path'
@@ -168,19 +221,21 @@ def validate_additional_scope(paths: Any, family: Any = None) -> dict[str, Any]:
             reason = 'duplicate'
         elif any(_under(path, p) or _under(p, path) for p in seen):
             reason = 'overlaps_additional'
-        elif path == '/' or any(_under(path, p) for p in PSEUDO_FILESYSTEMS):
+        elif any(_under(path, p) for p in PSEUDO_FILESYSTEMS):
             reason = 'pseudo_or_root_filesystem'
-        elif any(_under(path, p) or _under(p, path) for p in known):
+        elif any(_under(path, p) or _under(p, path) for p in EXCLUDED_STATE):
+            reason = 'excluded_state_directory'
+        elif any(_under(path, p) or _under(p, path) for p in known) or _overlaps_home_location(path, home_relative):
             reason = 'overlaps_catalog_location'
         else:
             reason = ''
         if reason:
             rejected.append({'index': index, 'reason': reason})
             continue
-        seen.add(path)
+        seen.append(path)
         accepted.append({'path': path, 'mechanism': 'additional'})
     gaps = [] if family is None or family in FAMILIES else [
-        _gap('unknown_family', 'Catalog locations could not be checked for an unknown platform family.')]
+        _gap('unknown_family', 'Platform family is unknown; paths were checked against every family.')]
     return {'accepted': accepted, 'rejected': rejected, 'gaps': gaps}
 
 
@@ -191,41 +246,63 @@ def _roots(value: Any, name: str, gaps: list[dict[str, Any]]) -> list[str] | Non
     if not all(_absolute_ok(v) or _home_ok(v) for v in value):
         gaps.append(_gap('malformed_collection', f'{name} contains an invalid path.'))
         return None
+    if len(set(value)) != len(value):
+        gaps.append(_gap('malformed_collection', f'{name} repeat a path.'))
+        return None
     return list(value)
 
 
-def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, homes_complete: bool = False) -> dict[str, Any]:
+def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, failed_roots: Any = (),
+             additional_roots: Any = (), complete: Any = False, homes_complete: Any = False,
+             entries_reported: Any = False) -> dict[str, Any]:
     """Map a collection's scope onto the catalog.
 
-    ``collected_roots`` are the roots the collector inspected (absolute paths, or
-    ``~/``-relative paths it inspected in every enumerated account home).
-    ``missing_roots`` must be a subset of them and lists roots reported absent.
-    ``homes_complete`` states that every account home was enumerated.
+    - ``collected_roots``: every root in the collection scope (absolute, or
+      ``~/``-relative when inspected in each enumerated account home).
+    - ``missing_roots``: roots reported absent; a subset of the collected roots.
+    - ``failed_roots``: roots with any collection gap (symlinked, unreadable,
+      budget, depth or entry limit); a subset of the collected roots.
+    - ``additional_roots``: administrator custom scope; a subset of the collected
+      roots. They are listed as ``additional`` and never credited to a mechanism.
+    - ``complete``: the collection itself finished (inventory ``state`` collected).
+    - ``homes_complete``: every account home was enumerated.
+    - ``entries_reported``: the collection requested and returned parsed entries.
     """
     result: dict[str, Any] = {'contract_version': CONTRACT_VERSION, 'family': None, 'mechanisms': [],
-                              'additional': [], 'gaps': []}
+                              'additional': [], 'gaps': [dict(NOT_EXHAUSTIVE)]}
     gaps = result['gaps']
     listing = catalog(family)
     if listing['family'] is None:
-        gaps.extend(listing['gaps'])
+        gaps[:] = listing['gaps']
         return result
     collected = _roots(collected_roots, 'Collected roots', gaps)
     missing = _roots(missing_roots, 'Missing roots', gaps)
-    if collected is None or missing is None:
+    failed = _roots(failed_roots, 'Failed roots', gaps)
+    additional = _roots(additional_roots, 'Additional roots', gaps)
+    if collected is None or missing is None or failed is None or additional is None:
         return result
-    if len(set(collected)) != len(collected) or any(m not in collected for m in missing):
-        gaps.append(_gap('malformed_collection', 'Collected roots repeat, or a missing root was not collected.'))
+    if any(r not in collected for r in (*missing, *failed, *additional)):
+        gaps.append(_gap('malformed_collection', 'Missing, failed and additional roots must be collected roots.'))
         return result
-    if type(homes_complete) is not bool:
-        gaps.append(_gap('malformed_collection', 'homes_complete must be a boolean.'))
+    if any(_under(r, m) and r != m for r in collected for m in missing):
+        gaps.append(_gap('malformed_collection', 'A collected root lies inside a root reported missing.'))
+        return result
+    if any(type(v) is not bool for v in (complete, homes_complete, entries_reported)):
+        gaps.append(_gap('malformed_collection', 'complete, homes_complete and entries_reported must be booleans.'))
         return result
     result['family'] = family
-    present = [r for r in collected if r not in missing]
+    if not complete:
+        gaps.append(_gap('collection_incomplete', 'The collection did not finish; no mechanism is reported covered.'))
+    builtin = [r for r in collected if r not in additional]
+    present = [r for r in builtin if r not in missing and r not in failed]
+    failed_builtin = [r for r in builtin if r in failed]
 
     def state_of(location: str) -> str:
+        if any(_under(location, r) or _under(r, location) for r in failed_builtin):
+            return 'collection_failed'
         if location.startswith('~/') and not homes_complete:
             return 'partial_homes' if any(_under(location, r) for r in present) else 'not_collected'
-        if any(_under(location, r) for r in missing):
+        if any(_under(location, r) for r in missing if r in builtin):
             return 'absent_reported'
         if any(_under(location, r) for r in present):
             return 'collected'
@@ -239,28 +316,30 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, home
         if states == {'absent_reported'}:
             state = 'absent_reported'
         elif states <= {'collected', 'absent_reported'}:
-            state = 'covered'
+            state = 'covered' if complete else 'partial'
         elif states == {'not_collected'}:
             state = 'not_collected'
         else:
             state = 'partial'
         mechanism_gaps = []
-        uncollected = [loc['path'] for loc in locations if loc['state'] == 'not_collected']
-        if uncollected:
-            mechanism_gaps.append(_gap('locations_not_collected',
-                                       'These locations were not in the collected scope; nothing is known about them.',
-                                       paths=uncollected))
-        narrowed = [loc['path'] for loc in locations if loc['state'] == 'partial_subpath']
-        if narrowed:
-            mechanism_gaps.append(_gap('locations_partly_collected',
-                                       'Only some paths inside these locations were collected.', paths=narrowed))
+
+        for code, wanted, detail in (
+                ('locations_not_collected', 'not_collected',
+                 'These locations were not in the collected scope; nothing is known about them.'),
+                ('locations_partly_collected', 'partial_subpath', 'Only some paths inside these locations were collected.'),
+                ('collection_failed', 'collection_failed',
+                 'Collection of these locations failed or was cut short; nothing is known about them.'),
+                ('absence_is_not_safety', 'absent_reported',
+                 'The collector reported these paths missing; that is not a safety verdict.')):
+            hit = [loc['path'] for loc in locations if loc['state'] == wanted]
+            if hit:
+                mechanism_gaps.append(_gap(code, detail, paths=hit))
         if 'partial_homes' in states:
             mechanism_gaps.append(_gap('user_homes_incomplete',
                                        'Not every account home was enumerated for home-relative locations.'))
-        if state == 'absent_reported':
-            mechanism_gaps.append(_gap('absence_is_not_safety',
-                                       'The collector reported these paths missing; that is not a safety verdict.'))
-        parsed = mechanism['parse'] == 'entries' and state in ('covered', 'partial')
+        parsed = mechanism['parse'] == 'entries' and entries_reported and 'collected' in states
+        if mechanism['parse'] == 'entries' and not parsed and state != 'not_collected':
+            mechanism_gaps.append(_gap('entries_not_parsed', 'No collected location had its entries parsed.'))
         if mechanism['parse'] == 'metadata' and state != 'not_collected':
             mechanism_gaps.append(_gap('metadata_only', 'Only file metadata is collected; individual entries are not parsed.'))
         result['mechanisms'].append({'id': mechanism['id'], 'state': state, 'entries_parsed': parsed,
@@ -268,6 +347,8 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, home
 
     catalog_paths = [loc for m in listing['mechanisms'] for loc in m['locations']]
     for root in collected:
-        if not any(_under(root, loc) or _under(loc, root) for loc in catalog_paths):
-            result['additional'].append({'path': root, 'mechanism': 'additional', 'missing': root in missing})
+        overlaps = any(_under(root, loc) or _under(loc, root) for loc in catalog_paths)
+        if root in additional or not overlaps:
+            result['additional'].append({'path': root, 'mechanism': 'additional', 'missing': root in missing,
+                                         'failed': root in failed})
     return result

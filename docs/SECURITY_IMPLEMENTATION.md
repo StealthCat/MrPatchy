@@ -2843,28 +2843,49 @@ Redaction is pattern-based. It may over-redact, and it cannot recognise every cr
 Contract increment only; the startup-awareness requirement remains incomplete.
 `app/startup_catalog.py` is a pure, versioned catalog of the boot, schedule,
 login, event and loader mechanisms on the supported `debian` and `rpm` families.
-It covers cron, run-parts directories, the user cron spool, anacron, at queues,
-systemd system, user, generated and transient units, SysV scripts and runlevel
-links, rc.local, system and user shell startup files, XDG autostart, SSH rc hooks,
-udev rules, loader preload/search paths, modules-load and modprobe. Each entry
-records its trigger, system or per-user scope, family-specific locations and
-whether an entry parser exists on main (only system and user crontabs).
+It covers:
 
-- `coverage()` maps a collection's scope and reported missing roots to a
-  `covered`, `partial`, `absent_reported` or `not_collected` state per
-  mechanism, with every uncollected or partly collected location named.
-  Uncollected locations are never treated as absent or safe, and a reported
-  missing path is explicitly not a safety verdict.
-- Home-relative locations count as collected only when every account home was
-  enumerated. Roots outside the catalog are reported as `additional` and never
-  mapped onto a mechanism.
-- `validate_additional_scope()` gives a per-index reason for rejecting
-  invalid, duplicate, overlapping, pseudo-filesystem or catalog-overlapping
-  administrator paths, without echoing rejected input.
-- Unknown families and malformed collections fail closed with a gap.
+- cron, run-parts directories, the user cron spool, anacron and at queues;
+- systemd system, user, generated and transient units, generator executables and
+  shutdown/sleep hooks;
+- SysV scripts and runlevel links, and rc.local;
+- system and user shell startup files, XDG autostart, SSH rc hooks and
+  `authorized_keys` forced commands;
+- PAM, MOTD and X session hooks, network dispatcher and logrotate hooks, and
+  apt/dnf hooks;
+- udev rules, loader preload/search paths, modules-load and modprobe.
 
-**Not covered:** agent collection of the new locations, persistence/UI wiring of
-the coverage result, and AI classification. No schema, API or UI change.
+Each entry records its trigger, system or per-user scope, family-specific
+locations (including pre-usrmerge Debian `/lib` paths), and whether an entry
+parser exists on main. Only system and user crontabs have one. Every result
+states that the catalog is not exhaustive.
+
+- **Per-mechanism coverage.** `coverage()` maps a collection's scope to a state
+  for each mechanism: `covered`, `partial`, `absent_reported` or
+  `not_collected`. It names every location that was uncollected, partly
+  collected, failed or reported missing. A reported missing path is explicitly
+  not a safety verdict.
+- **Failed and incomplete collections.** Roots with a collection gap (for
+  example a symlinked RHEL `/etc/init.d`, or budget, depth or entry limits)
+  count as `collection_failed`. An unfinished collection never yields `covered`.
+- **Parsed entries.** `entries_parsed` is true only when the collection reports
+  parsed entries and at least one of the mechanism's locations was fully
+  collected.
+- **Administrator scope.** Administrator custom roots are passed separately and
+  never credited to a mechanism. Home-relative locations count as collected only
+  when every account home was enumerated.
+- **Validating additional scope.** `validate_additional_scope()` mirrors the
+  agent's 16-path limit and its `/proc`, `/sys`, `/dev`, `/run` and Mr Patchy
+  state-directory exclusions. It rejects paths that are invalid, duplicated or
+  overlapping, and paths that overlap a catalog or home-relative location. Each
+  rejection gives a per-index reason without echoing the input back. An unknown
+  family is checked against every family's locations.
+- **Malformed input.** Unknown families and malformed or contradictory
+  collections fail closed with a gap.
+
+**Not covered:** agent collection of the new locations, persistence and UI
+wiring of the coverage result, and AI classification. No schema, API or UI
+change.
 
 
 ## v0.3.0 — opt-in cross-source advisory AI evidence
