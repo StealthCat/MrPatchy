@@ -1,3 +1,8 @@
+## 1.59.48 — 2026-11-12
+
+1. [PR #695](https://github.com/StealthCat/MrPatchy/pull/695): When the shared daily AI spend cap is exhausted, administrators get an in-app notification linking to AI Settings. It explains that new paid AI work is deferred, not discarded, until the reset or a cap or mode change. Alert collection evaluates the same conservative counted total that admission uses, and the notification's revision is bound to the budget window rather than to amounts, so further reservations in the same window add no revisions. Once the cap no longer blocks, a resolved revision is published. Closes #694.
+2. Compatibility and limits: an additive, administrator-only notification. It reserves, releases and authorizes nothing, adds no SMTP/webhook alert and changes no schema. Near-exhaustion warnings are not included. This source update does not publish a Docker image.
+
 ## 1.59.47 — 2026-11-12
 
 1. [PR #692](https://github.com/StealthCat/MrPatchy/pull/692): Medium- and high-risk AI process triage verdicts now reach the bell and notification center. Events are advisory: they use fixed text, carry the server and verdict severity, are visible to viewers (matching the Investigations page), and link to the server's Investigations tab. Executable paths and model output never enter the payload. An unchanged risk adds no revision, and a risk change resurfaces as unread. A later `low` verdict (from the provider or exact known-good reuse) or an administrator approval resolves the event, while revoking approval of a still-significant verdict reopens it. `unknown` verdicts and rolled-back or rejected saves announce nothing. Closes #691.
