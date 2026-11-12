@@ -106,6 +106,40 @@ function aiAdmissionControl(status){
  if(admission.mode==='daily_cap')return 'Daily spend cap';
  return `${count(status?.recent_attempts||0)} / ${count(status?.hourly_limit)} legacy attempts`;
 }
+// Shared AI start gates (#727): renders the administrator-only control snapshot
+// from /api/settings/ai-control-status (#546). Display-only; never a promise that
+// a specific call will start.
+const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
+function aiControlGates(snapshot){
+ const when=value=>Number.isFinite(value)&&value>0?date(value):null;
+ const head=state=>`<div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2>${badge(state)}</div>`;
+ if(!snapshot||snapshot.unavailable||typeof snapshot.can_start_now!=='boolean'||!Array.isArray(snapshot.blockers)){
+  return head('unavailable')+`<p class="notice" role="status">Shared AI start gates are unavailable right now. The rest of the queue status is unaffected, and an unavailable snapshot never means AI work may start.</p><div class="actions"><button type="button" data-ai-control-retry>Retry start gates</button></div>`;
+ }
+ const limitations=Array.isArray(snapshot.limitations)&&snapshot.limitations.length?`<ul class="help">${snapshot.limitations.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'';
+ const refresh=`<div class="actions"><button type="button" data-ai-control-retry>Refresh start gates</button></div>`;
+ if(snapshot.can_start_now&&!snapshot.blockers.length){
+  return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${limitations}${refresh}`;
+ }
+ const items=snapshot.blockers.map(blocker=>{
+  const code=typeof blocker?.code==='string'?blocker.code:'unknown';
+  const next=when(blocker?.next_at),recheck=when(blocker?.recheck_at);
+  const timing=next?`Next eligible ${next}`:recheck?`Recheck at ${recheck}. This is not a promised start`:'No scheduled end. An administrator must change this';
+  return `<li><strong>${esc(AI_GATE_LABELS[code]||code.replaceAll('_',' '))}</strong> · ${esc(blocker?.message||'')}<br><small>${esc(timing)}.</small></li>`;
+ }).join('');
+ const nextStart=when(snapshot.next_start_at);
+ const summary=nextStart?`<p><strong>Next eligible start:</strong> ${nextStart}. This is the latest time among the blocking gates. Work may still wait after it.</p>`:`<p><strong>No automatic next start.</strong> At least one hold has no scheduled end, or its time is only a recheck boundary.</p>`;
+ return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${limitations}${refresh}`;
+}
+async function loadAiControlGates(root,revision){
+ const section=root.querySelector('#ai-control-gates');if(!section)return;
+ const token=(Number(section.dataset.request)||0)+1;section.dataset.request=String(token);
+ section.setAttribute('aria-busy','true');
+ let snapshot;try{snapshot=await api('/settings/ai-control-status');}catch{snapshot={unavailable:true};}
+ if(!currentView(revision,'investigations')||!section.isConnected||section.dataset.request!==String(token))return;
+ section.innerHTML=aiControlGates(snapshot);section.removeAttribute('aria-busy');
+ section.querySelectorAll('[data-ai-control-retry]').forEach(button=>button.onclick=()=>loadAiControlGates(root,revision));
+}
 function triageStatus(status){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value:'Unavailable';
  const control=aiAdmissionControl(status);
