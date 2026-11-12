@@ -4652,6 +4652,13 @@ explicitly not a guarantee of available/readiness-verified slots. Existing glass
 styling, mascot, routes and roles remain. Browser acceptance checks phone/tablet/
 desktop rendering, escaping and navigation with these fields.
 
+The administrator server AI card shows its configured limit next to a snapshot
+of live investigation leases and the earliest expiry if no renewal arrives.
+The host-scoped aggregate excludes expired claims and returns no lease tokens,
+worker identifiers or evidence. Lowering the limit may leave more live leases
+than the new limit until the current work finishes. The snapshot does not
+guarantee global capacity.
+
 Acceptance includes four genuinely overlapping independent investigations with
 one/two model stages, identical model/schema/output limits and all SSH requests,
 atomic hourly admission, duplicate subject/host suppression, thread context
