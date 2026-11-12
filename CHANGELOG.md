@@ -1,3 +1,8 @@
+## 1.59.35 — 2026-11-12
+
+1. [PR #583](https://github.com/StealthCat/MrPatchy/pull/583): The strict exact-known-good lookup batches its eligible policy candidates into set reads of at most 100. It reads active entries, their originating assessments and their observations in one query each, instead of three point reads per candidate. Caller order is preserved, and only the first candidate that passes every existing check is returned. Those checks cover the active entry, retained assessment, result, canonical contract and isolated observation. Ineligible evidence performs no registry read. Fixes #582.
+2. Compatibility and limits: a read-path optimisation with no schema, API, eligibility or reuse-policy change. Reuse still requires every existing provenance and re-evaluation check. This source update does not publish a Docker image.
+
 ## 1.59.34 — 2026-11-11
 
 1. [PR #574](https://github.com/StealthCat/MrPatchy/pull/574): Scoped outbound AI provider calls read server pause policies in bounded batches. Five scoring-sized server IDs, including one without a policy row, now use one policy SELECT, at most 200 servers per query, plus one global enablement lookup, instead of a full status read per server. Pause still takes precedence over global disablement. A corrupt stored policy is treated as paused, failing closed, and an empty scope skips the checks as before. Fixes #573.
