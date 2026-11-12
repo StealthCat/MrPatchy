@@ -7679,6 +7679,25 @@ also still required before delivery.
 
 The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
 
+### Shared AI start gates in the worker status card — worker checkpoint #727
+
+The administrator Investigations page now reads the #546 snapshot and shows a
+**Shared AI start gates** card next to the AI worker status. It shows whether the
+global gates are open, each blocker's fixed message and next eligible time, and
+whether a reset time is only a recheck boundary. It also shows the overall next
+eligible start, or that an indefinite hold (disabled or incomplete configuration)
+has no automatic next start. The snapshot's limitations are always listed, so an
+open gate is never presented as a guarantee that a call will start.
+
+The card loads independently of the queue status and investigation list. A
+failed or malformed snapshot shows a recoverable notice with a retry control,
+and a superseded response is discarded. Viewers never request the
+administrator-only route. This is display-only: admission, spend, pause,
+lifecycle and response authorization are unchanged. A browser regression covers
+the open, finite, indefinite, failure/retry, malformed/escaped and viewer cases,
+with 320/768/1440 px renders. Settings and AI-activity placement, a per-call
+preview and full queue/spend dashboard acceptance remain open.
+
 ### Batched outbound AI pause-policy reads — worker checkpoint #573
 
 The existing outbound provider guard reads scoped server pause settings in
