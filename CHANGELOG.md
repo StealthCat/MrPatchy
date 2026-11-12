@@ -1,3 +1,8 @@
+## 1.59.47 — 2026-11-12
+
+1. [PR #692](https://github.com/StealthCat/MrPatchy/pull/692): Medium- and high-risk AI process triage verdicts now reach the bell and notification center. Events are advisory: they use fixed text, carry the server and verdict severity, are visible to viewers (matching the Investigations page), and link to the server's Investigations tab. Executable paths and model output never enter the payload. An unchanged risk adds no revision, and a risk change resurfaces as unread. A later `low` verdict (from the provider or exact known-good reuse) or an administrator approval resolves the event, while revoking approval of a still-significant verdict reopens it. `unknown` verdicts and rolled-back or rejected saves announce nothing. Closes #691.
+2. Compatibility and limits: an additive notification producer in the existing verdict and approval transactions, with no schema, API, UI, provider, approval-semantics or response-authorization change. Notifications grant nothing. This source update does not publish a Docker image.
+
 ## 1.59.46 — 2026-11-12
 
 1. [PR #690](https://github.com/StealthCat/MrPatchy/pull/690): Server conditions that need an administrator now also appear in the in-app bell and notification center, not only in the SMTP/webhook alert outbox. Alert collection publishes an allowlisted set of alert kinds as durable, administrator-only notification events in the same transaction:

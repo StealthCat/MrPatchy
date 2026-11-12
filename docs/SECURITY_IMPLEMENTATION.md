@@ -3388,6 +3388,31 @@ Milestone 1 still needs significant triage, malware, CVE and startup-classificat
 producers, and AI configuration/budget blockers beyond the pricing catalog.
 
 
+Worker checkpoint (issue #691): a bounded milestone-1 producer increment publishes
+significant AI process-triage verdicts to the notification center. The publish
+happens in the same transaction that saves the verdict, so a rolled-back save
+never announces anything.
+
+The significance policy is explicit and advisory:
+
+- A `medium` or `high` provider verdict publishes source `ai-triage`, kind
+  `process-verdict` for that exact behavior and server, with the matching
+  severity, viewer visibility (the same as the Investigations list) and a link to
+  the server's Investigations tab.
+- An unchanged risk adds no revision. A changed risk adds one, so escalations
+  resurface as unread.
+- A later `low` verdict, including an exact known-good cache reuse, resolves an
+  active event and otherwise publishes nothing, so safe cache hits cause no
+  storm. A later significant verdict reopens the event.
+- `unknown` leaves the event unchanged.
+
+Payloads carry fixed text only. Executable paths and model output stay on the
+escaped Investigations page. Read/dismiss, approval semantics, acknowledgement and
+response authorization are unchanged. An administrator approval resolves an active
+event in the approval's own transaction, and revoking it while the verdict is still
+medium/high re-publishes the event as active; the notification never grants or
+withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
+
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
