@@ -158,6 +158,7 @@ window.NotificationShell=(()=>{
   for(const card of [...stack.querySelectorAll('[data-event-id]')]){const item=current.find(candidate=>candidate.id===card.dataset.eventId);if(item&&(item.read||item.dismissed))removeToast(card);}
   if(!fresh.length){showStack(stack);return;}
   // Another open tab of this account may already have shown these revisions.
+  // claimToasts never rejects; it falls back to this tab's own candidates.
   const claimed=await claimToasts(fresh);
   if(run!==generation||!started)return;
   fresh.splice(0,fresh.length,...claimed);
@@ -194,7 +195,7 @@ window.NotificationShell=(()=>{
   try{
    const [count,page,arrivals]=await Promise.all([api('/notifications/unread-count'),api('/notifications?limit=8'),toastArrivals().catch(()=>null)]);
    if(run!==generation||request!==requestRevision)return;
-   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();await noteToasts(items,arrivals,run);if(run!==generation)return;
+   items=Array.isArray(page.items)?page.items.slice(0,8):[];setCount(count.unread,items);render();noteToasts(items,arrivals);
    status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
    if(location.hash==='#notifications')await refreshCenterList(renderRevision);
   }catch(error){

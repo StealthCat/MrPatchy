@@ -30,7 +30,9 @@ module.exports=async(page)=>{
   }
   const [first,second]=tabs;
   const toasts=tab=>tab.locator('.notification-toast');
-  const refresh=tab=>tab.evaluate(()=>window.NotificationShell.refresh());
+  // refresh() does not wait for the toast claim; queue behind the same Web Lock so
+  // every earlier claim, and the toast rendering after it, has finished.
+  const refresh=tab=>tab.evaluate(async()=>{await window.NotificationShell.refresh();await navigator.locks.request('mrpatchy-notification-toasts',()=>{});await new Promise(resolve=>setTimeout(resolve,0));});
   for(const tab of tabs)await refresh(tab);
   for(const tab of tabs)assert.equal(await toasts(tab).count(),0,'the baseline never toasts in either tab');
 
