@@ -3124,6 +3124,15 @@ semantics and response authorization are unchanged. Client adoption by the live
 toasts (#662/#663) is a separate increment. Milestones 2 and 4 remain open, and so
 do arrival retention/pruning and multi-controller acceptance.
 
+Worker checkpoint (issue #719): the bell panel now shows the live-update state
+(Connecting, Live, Reconnecting, Polling only or Delayed) and the time of the last
+successful authoritative list/count refresh, or "Not yet synchronized". The line
+states that it describes notification delivery only, not collector, agent or AI
+health. It is built client-side with text nodes; logout/reset clears both values,
+and a failed refresh never advances the time. This is frontend-only and does not
+complete milestones 2–4: Caddy flushing measurements, slow-client and failover
+drills and two-browser SQLite/MySQL acceptance remain.
+
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 

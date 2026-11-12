@@ -113,6 +113,11 @@ main { margin-left: calc(var(--sidebar) + 32px); padding: 0 32px; max-width: 190
 .notification-empty { padding:24px 8px 12px;text-align:center; }
 .notification-empty p { margin:5px 0; }
 .notification-coverage { margin:10px 0 0;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;line-height:1.5; }
+.notification-sync { margin:10px 0 0;font-size:11px;line-height:1.5;overflow-wrap:anywhere; }
+.notification-sync-state { font-weight:600; }
+.notification-sync[data-state="live"] .notification-sync-state { color:var(--mint); }
+.notification-sync[data-state="reconnecting"] .notification-sync-state, .notification-sync[data-state="delayed"] .notification-sync-state { color:var(--amber); }
+.notification-sync-note { display:block;color:var(--muted);font-size:10px; }
 .notification-center-link { display:block;margin-top:10px;text-align:center; }
 .notification-center-controls { margin-bottom:14px; }
 .notification-center-controls .actions { margin-top:12px; }
