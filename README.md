@@ -419,6 +419,8 @@ Compose separates the web app, worker and Caddy services. Keep one web process. 
 docker compose up -d --build --scale worker=3
 ```
 
+For a controller with separately scaled workers on the same Docker host, use the fixed `compose.controller.yaml` (app and Caddy) and `compose.worker.yaml` (workers on the controller's existing data volume) files. See *Fixed controller and worker files* in [Compose configuration](docs/COMPOSE_CONFIGURATION.md).
+
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
 
 Fleet and per-server Activity history keeps stable newest-first ordering. On MySQL, paginated history uses the existing ordered job-history indexes so small pages do not sort the retained jobs table; SQLite keeps its existing query and index selection.
