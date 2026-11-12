@@ -3033,6 +3033,21 @@ separation feature with a unified operational view of the Mr Patchy installation
 - Update GCP installation/upgrade tooling and documentation for the dedicated node, including migration from the existing GCP-ready app/worker image arrangement, clear connectivity tests and supported version combinations. Preserve existing GCP connection functionality during migration.
 - Validate controller and remote-worker routing, credential expiry/missing permissions, node outage/restart, tunnel interruption, duplicate requests and honest incomplete/recovery outcomes. Include non-production live-GCP acceptance; successful container startup alone does not complete the integration.
 
+Implementation checkpoint (issue #680): each controller web process now registers
+a bounded self-report (`app/controller_registry.py`): identity
+(`MRPATCHY_CONTROLLER_ID` or a random ID, guarded by the existing identity lock),
+boot, version, reported deployment type, embedded/disabled scheduler, start time,
+uptime and a heartbeat refreshed every 15 seconds from a daemon thread. A graceful
+stop is retained and both registration and stop are audited. The admin-only
+`GET /api/operations/controllers` page and the Activity → Workers **Controllers**
+section classify each record as reporting, stale, stopped, version mismatch or
+unknown. Future, invalid or key-mismatched records are never shown as healthy.
+Optional `MRPATCHY_EXPECTED_CONTROLLER_IDS` lists controllers that never
+registered as missing. The display carries no readiness, serving-role, failover
+or response authority, which remains with #451. Still planned for this
+requirement: endpoint-agent and GCP-node inventory, readiness and HTTPS/Caddy
+checks, resource metrics, alerts and the unified dashboard acceptance.
+
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
 Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint below.
