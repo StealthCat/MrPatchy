@@ -96,10 +96,19 @@ function installationCell(value){
  if(!value)return '—';
  return `<strong>${value.at?date(value.at):esc(value.state==='unscheduled'?'Not scheduled':value.state==='installing'?'In progress':value.state==='blocked'?'Blocked':'Waiting')}</strong><small>${esc(value.schedule||value.state)}</small><details><summary>Timing details</summary><p class="help">${esc(value.reason)}</p>${value.at?'<p class="help">Estimated earliest start, not a guaranteed completion time.</p>':''}</details>`;
 }
+// Describes the admission control that actually gates new AI work. The legacy
+// hourly limit applies only in legacy mode; other modes must not advertise it.
+function aiAdmissionControl(status){
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value:'Unavailable';
+ const admission=status?.admission||{mode:'legacy'};
+ if(['rate','rate_and_daily'].includes(admission.mode))return `${count(admission.rate_per_hour)} shared starts/hour`+(admission.mode==='rate_and_daily'?' + daily spend cap':'');
+ if(admission.mode==='unthrottled')return 'Unthrottled by Mr Patchy';
+ if(admission.mode==='daily_cap')return 'Daily spend cap';
+ return `${count(status?.recent_attempts||0)} / ${count(status?.hourly_limit)} legacy attempts`;
+}
 function triageStatus(status){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value:'Unavailable';
- const admission=status.admission||{mode:'legacy'};
- const control=['rate','rate_and_daily'].includes(admission.mode)?`${count(admission.rate_per_hour)} shared starts/hour`:admission.mode==='unthrottled'?'Unthrottled by Mr Patchy':admission.mode==='daily_cap'?'Daily spend cap':`${status.recent_attempts||0} / ${status.hourly_limit} legacy attempts`;
+ const control=aiAdmissionControl(status);
  const budget=status.budget||{};const spend=budget.enabled?`<p class="help">Daily budget: $${esc(budget.counted_usd)} counted · $${esc(budget.remaining_usd)} remaining · $${esc(budget.uncertain_usd)} uncertain · resets ${date(budget.next_reset)} (${esc(budget.timezone)}). Public price estimates are not provider invoices.</p>`:'';
  const plans=status.plan_deferred_by_action;
  const planDetails=plans&&status.plan_deferred>0?`<details><summary>Deferred plans by purpose</summary>
