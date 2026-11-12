@@ -4,11 +4,13 @@ module.exports=async(page,capture)=>{
  await page.goto(new URL('/#servers/'+host.id+'/overview',page.url()).href);
  await page.getByRole('heading',{name:'AI integration · Globally disabled',exact:true}).waitFor();
  await page.getByText('2 process investigation slots',{exact:true}).waitFor();
+ await page.getByText('0 active investigation leases at last refresh.',{exact:false}).waitFor();
  await page.getByRole('button',{name:'Change AI capacity',exact:true}).click();
  await page.locator('#server-ai-capacity-form select').selectOption('1');
  await page.locator('#server-ai-capacity-form textarea').fill('Use serial investigation capacity for this server.');
  await page.getByRole('button',{name:'Save AI capacity',exact:true}).click();
  await page.getByText('1 process investigation slot',{exact:true}).waitFor();
+ await page.getByText('0 active investigation leases at last refresh.',{exact:false}).waitFor();
  await page.reload();await page.getByText('1 process investigation slot',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Pause AI',exact:true}).click();
  await page.locator('#server-ai-form textarea').fill('Pause this server AI for an operator review.');

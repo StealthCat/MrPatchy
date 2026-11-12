@@ -1,3 +1,8 @@
+## 1.59.31 — 2026-11-11
+
+1. [PR #559](https://github.com/StealthCat/MrPatchy/pull/559): The server AI policy panel shows how many live AI investigation leases the server holds and the earliest lease expiry if no renewal arrives. It states that this snapshot does not guarantee global capacity, and that lowering the concurrency limit leaves active leases in place. The administrator server AI policy read and save responses add `active_lease_count` and `earliest_lease_expires_at`, counting only unexpired leases for that server. Fixes #558.
+2. Compatibility and limits: additive administrator response fields and panel text, with no schema, admission or role change. Occupancy is a point-in-time snapshot. This source update does not publish a Docker image.
+
 ## 1.59.30 — 2026-11-11
 
 1. [PR #555](https://github.com/StealthCat/MrPatchy/pull/555): Administrators can filter fleet and server AI activity by run state: running, complete, failed, deferred or interrupted. The state filter combines with the purpose and server filters, and changing either filter resets the page. Returning from a run restores both filters and the page for that scope. An empty filtered result says that no runs match. `GET /api/ai/runs` accepts an optional, validated `state`, applied in SQL before pagination. Fixes #553.
