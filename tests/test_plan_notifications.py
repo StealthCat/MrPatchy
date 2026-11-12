@@ -1,6 +1,7 @@
 """Admin-only notifications for AI response plans awaiting review (#706)."""
 import time
 
+import pytest
 from sqlalchemy import func, select
 
 from app import notifications, plan_notifications
@@ -29,6 +30,17 @@ def seed(session, *, host='plan-host', kind='security', plan_id='plan-1', create
     session.commit()
 
 
+@pytest.fixture
+def fake_startup_digest(monkeypatch):
+    """Stand in for real startup evidence: closed incidents refuse approval and a
+    ``fixture_digest`` in the incident evidence simulates newer inspection evidence."""
+    def digest(session, row):
+        if row is None or row.state not in plan_notifications.STARTUP_REVIEWABLE:
+            return None
+        return row.evidence.get('fixture_digest', 'd' * 64)
+    monkeypatch.setattr(plan_notifications, '_startup_digest', digest)
+
+
 def revisions(session, plan_id='plan-1'):
     event = session.scalar(select(notifications.NotificationEvent).where(
         notifications.NotificationEvent.source == 'ai-plans',
@@ -47,7 +59,7 @@ def sync(session, now=NOW):
     return result
 
 
-def test_draft_plans_publish_fixed_admin_only_review_notifications(admin):
+def test_draft_plans_publish_fixed_admin_only_review_notifications(admin, fake_startup_digest):
     with Session() as s:
         seed(s, plan_id='plan-1')
         seed(s, kind='startup', plan_id='plan-2')
@@ -184,3 +196,70 @@ def test_tick_commits_its_own_session(admin):
     with Session() as s:
         event, rows = revisions(s)
         assert event is not None and [r.lifecycle for r in rows] == ['active']
+
+
+def test_startup_plans_resolve_stale_when_approval_would_refuse(admin, fake_startup_digest):
+    # #707 review: a closed startup incident or newer inspection evidence makes
+    # approve_startup_plan return 409, so the notification must not keep
+    # saying the plan awaits review for up to 24 hours.
+    with Session() as s:
+        seed(s, kind='startup', plan_id='closed')
+        seed(s, kind='startup', plan_id='reinspected')
+        seed(s, kind='startup', plan_id='current')
+        seed(s, kind='security', plan_id='security')
+        assert sync(s) == (4, 0)
+        s.get(PersistenceIncident, s.get(Plan, 'closed').incident_id).state = 'false_positive'
+        reinspected = s.get(PersistenceIncident, s.get(Plan, 'reinspected').incident_id)
+        reinspected.evidence = {**reinspected.evidence, 'fixture_digest': 'e' * 64}
+        # Security plans on closed incidents stay approvable today (#103).
+        s.get(Incident, s.get(Plan, 'security').incident_id).state = 'resolved'
+        s.commit()
+        assert sync(s, NOW + 60) == (0, 2)
+        for plan_id in ('closed', 'reinspected'):
+            _, rows = revisions(s, plan_id)
+            assert [r.lifecycle for r in rows] == ['active', 'resolved']
+            assert rows[-1].reason == plan_notifications.RESOLVED_REASON['stale']
+            assert rows[-1].severity == 'info'
+        for plan_id in ('current', 'security'):
+            assert [r.lifecycle for r in revisions(s, plan_id)[1]] == ['active']
+        assert sync(s, NOW + 120) == (0, 0)
+        # The notifier changes no plan or incident state.
+        assert {p.state for p in s.scalars(select(Plan))} == {'draft'}
+
+
+def test_unapprovable_startup_drafts_never_publish(admin, fake_startup_digest):
+    with Session() as s:
+        seed(s, kind='startup', plan_id='born-closed')
+        seed(s, kind='startup', plan_id='born-stale')
+        s.get(PersistenceIncident, s.get(Plan, 'born-closed').incident_id).state = 'resolved'
+        stale = s.get(PersistenceIncident, s.get(Plan, 'born-stale').incident_id)
+        stale.evidence = {**stale.evidence, 'fixture_digest': 'e' * 64}
+        s.commit()
+        assert sync(s) == (0, 0)
+        assert revisions(s, 'born-closed') == (None, [])
+        assert revisions(s, 'born-stale') == (None, [])
+
+
+def test_real_startup_evidence_digest_drives_resolution(admin):
+    # End to end with the real startup evidence used by approve_startup_plan.
+    from test_persistence_comparison import inventory
+    from test_persistence_monitoring import receipt
+    from test_startup_ai import setup_incident
+    from app import incidents, startup_ai
+    identifier = setup_incident(admin)
+    now = time.time()
+    with Session() as s:
+        row = s.get(PersistenceIncident, identifier)
+        s.add(Plan(id='real-plan', incident_id=identifier, created=now - 60, state='draft',
+                   evidence_digest=incidents.digest(startup_ai.evidence(s, row)),
+                   content={'summary': 'x', 'severity': 'unknown', 'uncertainty': 'x', 'steps': []}))
+        s.commit()
+        assert sync(s, now) == (1, 0)
+        assert sync(s, now + 1) == (0, 0)
+        incidents.record_inspection(s, 'baseline-host', 'gap',
+                                    receipt({**inventory(), 'state': 'incomplete', 'gaps': ['unreadable']}))
+        s.commit()
+        assert sync(s, now + 2) == (0, 1)
+        _, rows = revisions(s, 'real-plan')
+        assert [r.lifecycle for r in rows] == ['active', 'resolved']
+        assert rows[-1].reason == plan_notifications.RESOLVED_REASON['stale']

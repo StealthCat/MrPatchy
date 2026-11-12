@@ -10,7 +10,7 @@ import time
 
 from sqlalchemy import select
 
-from . import host_lifecycle, notifications
+from . import host_lifecycle, incidents, notifications
 from .db import Host, Session
 from .incidents import Incident, PersistenceIncident, Plan
 
@@ -31,7 +31,11 @@ RESOLVED_REASON = {
     'superseded': 'This AI response plan was superseded by newer incident evidence or a review.',
     'expired': 'This AI response plan expired before review; request a new plan if still needed.',
     'unavailable': 'This AI response plan is no longer reviewable because its incident or server is unavailable.',
+    'stale': 'This AI response plan can no longer be approved because its startup incident was closed or '
+             'newer inspection evidence arrived; request a new plan if still needed.',
 }
+# The startup approval route only accepts plans for incidents in these states.
+STARTUP_REVIEWABLE = ('open', 'acknowledged')
 
 
 # Security plans are reviewed on the Security tab; startup-change plans are
@@ -52,7 +56,29 @@ def _active_current():
                    revision.lifecycle == 'active'))
 
 
-def _pending(session, now):
+def _startup_digest(session, row):
+    """Digest the startup approval route would compare, or ``None`` if it would refuse."""
+    from . import startup_ai
+    try:
+        return incidents.digest(startup_ai.evidence(session, row))
+    except ValueError:
+        return None
+
+
+def _startup_current(session, plan, cache):
+    """True when the startup approval route's evidence check would still accept ``plan``.
+
+    Mirrors ``approve_startup_plan``: the incident must be open or acknowledged
+    and the plan's evidence digest must match current evidence (incident
+    revision and the latest inspection).  Digests are cached per pass.
+    """
+    if plan.incident_id not in cache:
+        cache[plan.incident_id] = _startup_digest(session, session.get(PersistenceIncident, plan.incident_id))
+    current = cache[plan.incident_id]
+    return current is not None and current == plan.evidence_digest
+
+
+def _pending(session, now, cache):
     """Return ``{plan_id: (kind, host_id)}`` for bounded reviewable drafts.
 
     Drafts that already have an active notification are excluded in SQL, so
@@ -63,13 +89,16 @@ def _pending(session, now):
     notified = _active_current().with_only_columns(notifications.NotificationEvent.subject_id)
     found = {}
     for kind, model in (('security-plan', Incident), ('startup-plan', PersistenceIncident)):
-        rows = session.execute(
-            select(Plan.id, model.host_id)
-            .join(model, model.id == Plan.incident_id)
-            .where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW,
-                   model.host_id.in_(active_hosts), Plan.id.not_in(notified))
-            .order_by(Plan.created, Plan.id).limit(BATCH))
+        query = (select(Plan.id, model.host_id)
+                 .join(model, model.id == Plan.incident_id)
+                 .where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW,
+                        model.host_id.in_(active_hosts), Plan.id.not_in(notified)))
+        if model is PersistenceIncident:
+            query = query.where(model.state.in_(STARTUP_REVIEWABLE))
+        rows = session.execute(query.order_by(Plan.created, Plan.id).limit(BATCH))
         for plan_id, host_id in rows:
+            if kind == 'startup-plan' and not _startup_current(session, session.get(Plan, plan_id), cache):
+                continue  # Approval would already refuse it; never announce it.
             found.setdefault(plan_id, (kind, host_id))
     return found
 
@@ -82,7 +111,9 @@ def _active_events(session, now):
     host-mismatch case, rechecked), so unchanged events cannot hold the page.
     """
     event = notifications.NotificationEvent
-    reviewable = select(Plan.id).where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW)
+    closed_startup = select(PersistenceIncident.id).where(PersistenceIncident.state.not_in(STARTUP_REVIEWABLE))
+    reviewable = select(Plan.id).where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW,
+                                       Plan.incident_id.not_in(closed_startup))
     return session.execute(
         _active_current()
         .where(~(event.subject_id.in_(reviewable) & event.host_id.in_(host_lifecycle.active_ids())))
@@ -90,7 +121,25 @@ def _active_events(session, now):
         .limit(BATCH)).scalars().all()
 
 
-def _resolution(session, plan_id, now):
+def _live_startup_events(session, now):
+    """Bounded active startup-plan events that SQL still considers reviewable.
+
+    Their evidence digest is rechecked each pass so a newer inspection or
+    incident revision that makes approval refuse the plan resolves the event.
+    """
+    event = notifications.NotificationEvent
+    reviewable = (select(Plan.id).join(PersistenceIncident, PersistenceIncident.id == Plan.incident_id)
+                  .where(Plan.state == 'draft', Plan.created > now - REVIEW_WINDOW,
+                         PersistenceIncident.state.in_(STARTUP_REVIEWABLE)))
+    return session.execute(
+        _active_current()
+        .where(event.kind == 'startup-plan', event.subject_id.in_(reviewable),
+               event.host_id.in_(host_lifecycle.active_ids()))
+        .order_by(event.updated, event.id)
+        .limit(BATCH)).scalars().all()
+
+
+def _resolution(session, plan_id, now, cache):
     plan = session.get(Plan, plan_id)
     if plan is None:
         return 'unavailable'
@@ -102,6 +151,9 @@ def _resolution(session, plan_id, now):
         if plan.created <= now - REVIEW_WINDOW:
             return 'expired'
         if _host_active(session, plan):
+            startup = session.get(PersistenceIncident, plan.incident_id)
+            if startup is not None and not _startup_current(session, plan, cache):
+                return 'stale'  # The startup approval route would refuse it.
             return None  # Still reviewable but beyond this pass's bounded window.
     return 'unavailable'
 
@@ -120,7 +172,8 @@ def sync(session, now=None):
     Returns ``(published, resolved)`` counts of new revisions.
     """
     now = time.time() if now is None else now
-    pending = _pending(session, now)
+    cache = {}
+    pending = _pending(session, now, cache)
     published = resolved = 0
     for plan_id, (kind, host_id) in pending.items():
         _, created = notifications.publish(
@@ -129,10 +182,12 @@ def sync(session, now=None):
             reason=PENDING_REASON[kind], deep_link=_link(kind, host_id), host_id=host_id,
             minimum_role='admin', now=now)
         published += created
-    for event in _active_events(session, now):
-        if event.subject_id in pending:
+    seen = set()
+    for event in [*_active_events(session, now), *_live_startup_events(session, now)]:
+        if event.subject_id in pending or event.id in seen:
             continue
-        outcome = _resolution(session, event.subject_id, now)
+        seen.add(event.id)
+        outcome = _resolution(session, event.subject_id, now, cache)
         if outcome is None:
             continue
         _, created = notifications.publish(

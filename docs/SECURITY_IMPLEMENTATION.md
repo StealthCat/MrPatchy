@@ -2958,7 +2958,12 @@ a link to the tab where the plan is reviewed (`#servers/<host>/security` for
 security plans, `#servers/<host>/integrity` for startup-change plans); AI
 severity and plan text are never copied.
 Approval, supersession, expiry, plan deletion and server deletion or
-deactivation each publish one `resolved` revision. Unchanged passes publish
+deactivation each publish one `resolved` revision. A startup-change plan that
+the approval route would refuse (its incident is no longer open or
+acknowledged, or its evidence digest no longer matches current evidence after a
+newer inspection or incident revision) is never announced and resolves as
+`stale`; at most one bounded page of live startup-plan events is rechecked per
+pass. Security plans keep today's approval semantics. Unchanged passes publish
 nothing. Drafts that are still reviewable but beyond the bounded pass are left
 active. The reconciler never changes plan, incident or approval state, and
 read/dismiss grants nothing. Resolution can lag by up to one scheduler tick,
