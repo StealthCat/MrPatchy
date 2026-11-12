@@ -2838,6 +2838,35 @@ hashes, and it never executes or sources anything.
 Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
 
 
+### Startup mechanism catalog and coverage contract — worker checkpoint #723
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/startup_catalog.py` is a pure, versioned catalog of the boot, schedule,
+login, event and loader mechanisms on the supported `debian` and `rpm` families.
+It covers cron, run-parts directories, the user cron spool, anacron, at queues,
+systemd system, user, generated and transient units, SysV scripts and runlevel
+links, rc.local, system and user shell startup files, XDG autostart, SSH rc hooks,
+udev rules, loader preload/search paths, modules-load and modprobe. Each entry
+records its trigger, system or per-user scope, family-specific locations and
+whether an entry parser exists on main (only system and user crontabs).
+
+- `coverage()` maps a collection's scope and reported missing roots to a
+  `covered`, `partial`, `absent_reported` or `not_collected` state per
+  mechanism, with every uncollected or partly collected location named.
+  Uncollected locations are never treated as absent or safe, and a reported
+  missing path is explicitly not a safety verdict.
+- Home-relative locations count as collected only when every account home was
+  enumerated. Roots outside the catalog are reported as `additional` and never
+  mapped onto a mechanism.
+- `validate_additional_scope()` gives a per-index reason for rejecting
+  invalid, duplicate, overlapping, pseudo-filesystem or catalog-overlapping
+  administrator paths, without echoing rejected input.
+- Unknown families and malformed collections fail closed with a gap.
+
+**Not covered:** agent collection of the new locations, persistence/UI wiring of
+the coverage result, and AI classification. No schema, API or UI change.
+
+
 ## v0.3.0 — opt-in cross-source advisory AI evidence
 
 Delivery: [PR #55](https://github.com/StealthCat/MrPatchy/pull/55); initial implementation
