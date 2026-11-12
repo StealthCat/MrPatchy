@@ -281,13 +281,21 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
     - ``complete``: the collection itself finished (inventory ``state`` collected).
     - ``homes_complete``: every account home was enumerated.
     - ``entries_reported``: the collection requested and returned parsed entries.
-    - ``symlink_targets``: ``{root: target}`` for collected roots the collector
-      found to be symlinks (normally also in ``failed_roots``, because the agent
-      never follows them). A catalog alias location whose reported target is
-      exactly its canonical location (``/lib/systemd/system`` ->
-      ``/usr/lib/systemd/system`` on merged-/usr systems, RPM ``/etc/init.d`` ->
-      ``/etc/rc.d/init.d``) takes the canonical location's state and says so.
-      Any other target, or a symlink at a non-alias location, keeps the failure.
+    - ``symlink_targets``: ``{root: resolved}`` for collected roots whose path
+      traverses a symlink, whether the root itself is the link (RPM
+      ``/etc/init.d`` -> ``rc.d/init.d``) or an ancestor is (merged-/usr
+      ``/lib`` -> ``usr/lib`` makes ``/lib/systemd/system`` resolve to
+      ``/usr/lib/systemd/system`` while ``lstat`` on the root itself shows a
+      directory). ``resolved`` is the root's fully resolved, absolute,
+      normalized path with every component resolved (``realpath``-equivalent),
+      captured during collection; it is not a raw ``readlink`` value. Such roots
+      are normally also in ``failed_roots``, because the agent never follows
+      links. A catalog alias location whose resolved path is exactly its
+      canonical location takes the canonical location's state and says so. Any
+      other path, or a symlink at a non-alias location, keeps the failure. A
+      resolved value that is not an absolute normalized path (for example a
+      relative ``readlink`` result) gives that root no alias credit and adds a
+      ``symlink_target_unresolved`` gap; it does not discard the collection.
 
     A home-relative root in ``missing_roots`` means the path is absent in
     **every** enumerated account home; a collector must not report it missing
@@ -308,10 +316,12 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
         return result
     links = {} if symlink_targets is None else symlink_targets
     if (not isinstance(links, dict) or len(links) > MAX_ROOTS
-            or not all(_absolute_ok(k) and k in collected and _absolute_ok(v) for k, v in links.items())):
+            or not all(_absolute_ok(k) and k in collected for k in links)):
         gaps.append(_gap('malformed_collection',
-                         'symlink_targets must map collected absolute roots to absolute targets.'))
+                         'symlink_targets must map collected absolute roots to resolved absolute paths.'))
         return result
+    unresolved = sorted(k for k, v in links.items() if not _absolute_ok(v))
+    links = {k: v for k, v in links.items() if k not in unresolved}
     if any(r not in collected for r in (*missing, *failed, *additional)):
         gaps.append(_gap('malformed_collection', 'Missing, failed and additional roots must be collected roots.'))
         return result
@@ -322,6 +332,9 @@ def coverage(family: Any, collected_roots: Any, missing_roots: Any = (), *, fail
         gaps.append(_gap('malformed_collection', 'complete, homes_complete and entries_reported must be booleans.'))
         return result
     result['family'] = family
+    for root in unresolved:
+        gaps.append(_gap('symlink_target_unresolved',
+                         f'{root}: the reported target is not a resolved absolute path; no alias credit given.'))
     if not complete:
         gaps.append(_gap('collection_incomplete', 'The collection did not finish; no mechanism is reported covered.'))
     builtin = [r for r in collected if r not in additional]

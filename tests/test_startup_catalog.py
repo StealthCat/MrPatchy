@@ -271,11 +271,36 @@ def test_rpm_init_d_and_rc_local_aliases():
         'aliases'] == {'/etc/init.d': '/etc/rc.d/init.d'}
 
 
-@pytest.mark.parametrize('links', ['x', {'/etc/crontab': 'relative'}, {'/not-collected': '/etc'},
-                                   {'/etc/crontab': None}])
+@pytest.mark.parametrize('links', ['x', {'/not-collected': '/etc'}, {'relative': '/etc'}, {None: '/etc'}])
 def test_malformed_symlink_targets_fail_closed(links):
     result = sc.coverage('debian', ['/etc/crontab'], symlink_targets=links)
     assert result['mechanisms'] == [] and result['gaps'][-1]['code'] == 'malformed_collection'
+
+
+@pytest.mark.parametrize('target', ['rc.d/init.d', '../etc/rc.d/init.d', None, '/etc/rc.d/../rc.d/init.d', 5])
+def test_unresolved_symlink_target_drops_only_that_alias_credit(target):
+    # A raw relative readlink value (or anything not a resolved absolute path)
+    # must not discard the whole collection, and must not grant alias credit.
+    scope = ['/etc/init.d', '/etc/rc.d', '/etc/rc.local']
+    links = {'/etc/init.d': target, '/etc/rc.local': '/etc/rc.d/rc.local'}
+    result = sc.coverage('rpm', scope, failed_roots=['/etc/init.d', '/etc/rc.local'], complete=True,
+                         symlink_targets=links)
+    mechanisms = by_id(result)
+    assert mechanisms['rc_local']['state'] == 'covered'
+    assert mechanisms['sysv']['state'] == 'partial'
+    assert _locs(mechanisms['sysv'])['/etc/init.d']['state'] == 'collection_failed'
+    assert 'alias_of' not in _locs(mechanisms['sysv'])['/etc/init.d']
+    gap = next(g for g in result['gaps'] if g['code'] == 'symlink_target_unresolved')
+    assert gap['detail'].startswith('/etc/init.d:')
+
+
+def test_ancestor_symlink_alias_uses_the_resolved_root_path():
+    # Merged-/usr: /lib is the link, so the collector reports the root's resolved
+    # path rather than an lstat of the root itself.
+    roots = ['/usr/lib/udev/rules.d', '/lib/udev/rules.d', '/etc/udev/rules.d', '/run/udev/rules.d']
+    result = by_id(sc.coverage('debian', roots, failed_roots=['/lib/udev/rules.d'], complete=True,
+                               symlink_targets={'/lib/udev/rules.d': '/usr/lib/udev/rules.d'}))
+    assert _locs(result['udev_rules'])['/lib/udev/rules.d']['alias_of'] == '/usr/lib/udev/rules.d'
 
 
 def test_incomplete_collection_never_claims_parsed_entries():

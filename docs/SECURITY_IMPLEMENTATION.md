@@ -2882,9 +2882,13 @@ states that the catalog is not exhaustive.
   the RPM `/etc/init.d` and `/etc/rc.local` links as aliases of their canonical
   locations. The agent refuses to follow symlinks, so on merged-/usr and RHEL
   systems these roots fail. An alias takes its canonical location's state, and
-  records `alias_of`, only when the collector reports it as a symlink to exactly
-  that location. Any other target, or a symlink at a non-alias location, keeps
-  the failure.
+  records `alias_of`, only when the collector reports that the root's fully
+  resolved absolute path (`realpath`-equivalent, whether the link is the root
+  itself or an ancestor such as merged-/usr `/lib`) is exactly that location.
+  Any other path, or a symlink at a non-alias location, keeps the failure. A
+  raw relative `readlink` value or other unresolved target gives that root no
+  alias credit and adds a `symlink_target_unresolved` gap without discarding
+  the rest of the collection.
 - **Parsed entries.** `entries_parsed` is true only when the collection reports
   parsed entries, the collection finished, and at least one of the mechanism's
   locations was fully collected. A home-relative missing root means the path is
