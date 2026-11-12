@@ -2867,9 +2867,18 @@ exactly one class with its basis, verification strength (`authenticated`,
   digest is `unknown`. Authenticated evidence wins the other way round: bytes that
   differ from the vendor artifact are `modified` even when the target's database
   agrees with them (`package_db_disagrees` gap), so rewriting both cannot hide a change.
-- Entries in a modified file are classified individually (`verified_default` or
-  `custom`, multiset-matched) only against authenticated default entry digests;
-  otherwise entries inherit the file's class.
+- Entries in a modified file are classified individually, multiset-matched, only
+  against authenticated default entry digests; otherwise entries inherit the file's
+  class. An entry's behaviour also depends on content outside the entries (`PATH`,
+  `SHELL`, `CRON_TZ`, anacron ranges, unit sections), so a matching entry is
+  `verified_default` only when the observed `context_sha256` equals the authenticated
+  artifact's. A changed context gives `modified_outside_entries`, and a missing one
+  gives `entry_context_not_compared` (or `modified_outside_entries` when the entries
+  are unchanged but the file differs). In both cases the matching entries are
+  `modified`, and added entries are `custom`.
+- A declined (`accepted: false`) or malformed baseline record never blocks
+  classification. A non-finite acceptance time is dropped, and paths or names that
+  contain control characters fail closed.
 - Drop-ins and overrides are classified on their own bytes and report the unit they
   modify. Administrator baseline acceptance is a separate field and never changes the
   class. Every result carries `safety: not_assessed`.

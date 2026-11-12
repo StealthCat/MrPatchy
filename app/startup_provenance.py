@@ -31,11 +31,16 @@ Fail-closed rules:
 - Every result carries ``safety: not_assessed``. Neither ``custom`` nor a
   package origin implies malicious or benign. Administrator baseline acceptance
   is reported in a separate ``baseline`` field and never changes the class.
+- A matching entry inside a modified file is ``verified_default`` only when the
+  content outside the entries (environment, section headers) has an authenticated
+  matching ``context_sha256``. Otherwise it is ``modified`` with a disclosed gap,
+  because ``PATH=/tmp:...`` changes what an unchanged job line runs.
 - A drop-in or override is classified on its own bytes. Its ``modifies`` unit
   name is reported, and the vendor unit's own classification is unaffected.
 """
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from typing import Any
@@ -53,6 +58,9 @@ MAX_RECORDS = 4096
 MAX_GAPS = 32
 
 _HEX = re.compile(r'[0-9a-f]+')
+# C0 controls and DEL are never valid in evidence text: they would let a path or
+# name forge extra lines in later logs, JSON consumers or UI rendering.
+_CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 # Debian/RPM package names and versions; anything else is malformed evidence.
 _PACKAGE = re.compile(r'[A-Za-z0-9][A-Za-z0-9+._:-]*')
 _VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9+.~:_-]*')
@@ -66,7 +74,7 @@ def _gap(gaps: list[dict[str, str]], code: str, detail: str) -> None:
 
 
 def _text(value: Any, limit: int) -> str | None:
-    if not isinstance(value, str) or not value or len(value) > limit or '\x00' in value:
+    if not isinstance(value, str) or not value or len(value) > limit or _CONTROL.search(value):
         return None
     try:
         value.encode('utf-8')
@@ -105,6 +113,16 @@ def _entry_digests(value: Any, gaps: list[dict[str, str]], what: str) -> list[st
     return digests  # type: ignore[return-value]
 
 
+def _optional_digest(source: dict[str, Any], key: str, gaps: list[dict[str, str]], what: str) -> str | None:
+    value = source.get(key)
+    if value is None:
+        return None
+    digest = _digest(value)
+    if digest is None:
+        _gap(gaps, 'malformed_evidence', f'{what} is not a SHA-256 digest.')
+    return digest
+
+
 def _result(path: str | None, role: str | None, modifies: str | None) -> dict[str, Any]:
     return {'contract_version': CONTRACT_VERSION, 'path': path, 'role': role, 'modifies': modifies,
             'provenance': 'unknown', 'basis': 'insufficient_evidence', 'verification': 'none',
@@ -122,27 +140,60 @@ def _baseline(value: Any, result: dict[str, Any]) -> None:
     if value is None:
         return
     gaps = result['gaps']
+    if isinstance(value, dict) and value.get('accepted') is False:
+        return  # an explicit "not accepted" record is valid and changes nothing
     if not isinstance(value, dict) or value.get('accepted') is not True:
         _gap(gaps, 'malformed_baseline', 'Baseline acceptance is not a recorded acceptance; it was ignored.')
         return
     by, at = _text(value.get('by'), MAX_NAME), value.get('at')
+    valid_at = isinstance(at, (int, float)) and not isinstance(at, bool) and math.isfinite(at)
     result['baseline'] = {'accepted': True, 'affects_provenance': False, 'by': by,
-                          'at': at if isinstance(at, (int, float)) and not isinstance(at, bool) else None}
+                          'at': at if valid_at else None}
 
 
-def _entries(result: dict[str, Any], observed: list[str] | None, defaults: list[str] | None) -> None:
+def _entries(result: dict[str, Any], observed: list[str] | None, defaults: list[str] | None,
+             context: str | None = None, default_context: str | None = None) -> None:
     """Classify entries inside one file. Only a modified file with authenticated
-    default entries gets per-entry classes; otherwise entries inherit the file's."""
+    default entries gets per-entry classes; otherwise entries inherit the file's.
+
+    An entry's effective behaviour also depends on the file content outside the
+    entries (``PATH``, ``SHELL``, ``MAILTO``, ``CRON_TZ``, anacron's
+    ``START_HOURS_RANGE``, a unit's ``[Unit]``/``[Install]`` sections ...). A
+    matching entry is therefore ``verified_default`` only when the observed
+    context digest equals the authenticated artifact's context digest; otherwise
+    it is reported as ``modified`` with the reason and a disclosed gap."""
     if observed is None:
         return
     provenance = result['provenance']
     if provenance == 'modified' and defaults is not None and result['verification'] == 'authenticated':
         remaining = Counter(defaults)
+        if context is not None and default_context is not None:
+            context_state = 'match' if context == default_context else 'changed'
+        else:
+            context_state = 'unverified'
+        if context_state == 'changed':
+            _gap(result['gaps'], 'modified_outside_entries',
+                 'Content outside the entries differs from the authenticated artifact; '
+                 'default entries may behave differently.')
+        elif context_state == 'unverified':
+            if Counter(observed) == remaining:
+                # Same entries, different file: the change is outside the entries.
+                _gap(result['gaps'], 'modified_outside_entries',
+                     'The entries equal the authenticated defaults but the file differs, '
+                     'so content outside the entries changed.')
+            else:
+                _gap(result['gaps'], 'entry_context_not_compared',
+                     'No authenticated digest of the content outside the entries was compared; '
+                     'default entries are not verified.')
         for index, digest in enumerate(observed):
             if remaining[digest] > 0:
                 remaining[digest] -= 1
-                result['entries'].append({'index': index, 'sha256': digest, 'provenance': 'verified_default',
-                                          'basis': 'authenticated_default_entry'})
+                if context_state == 'match':
+                    entry_provenance, basis = 'verified_default', 'authenticated_default_entry'
+                else:
+                    entry_provenance, basis = 'modified', f'default_entry_context_{context_state}'
+                result['entries'].append({'index': index, 'sha256': digest, 'provenance': entry_provenance,
+                                          'basis': basis})
             else:
                 result['entries'].append({'index': index, 'sha256': digest, 'provenance': 'custom',
                                           'basis': 'not_in_authenticated_defaults'})
@@ -172,8 +223,13 @@ def classify(evidence: Any) -> dict[str, Any]:
     - ``package_db_digest``: ``{'package', 'version', 'algorithm', 'value'}``
       from the target's own package database (unauthenticated).
     - ``authenticated_artifact``: ``{'package', 'version', 'sha256',
-      'entry_sha256': [...]}`` from controller-verified vendor package bytes.
+      'entry_sha256': [...], 'context_sha256'}`` from controller-verified
+      vendor package bytes.
     - ``entry_sha256``: digests of entries parsed from the observed file.
+    - ``context_sha256``: SHA-256 of the observed file's content outside its
+      entries (environment assignments, section headers ...), canonicalised the
+      same way as the artifact's ``context_sha256``. Per-entry
+      ``verified_default`` requires both to be present and equal.
     - ``baseline``: ``{'accepted': True, 'by', 'at'}`` administrator acceptance.
     """
     if not isinstance(evidence, dict):
@@ -199,8 +255,12 @@ def classify(evidence: Any) -> dict[str, Any]:
     if observed is None:
         _gap(gaps, 'malformed_evidence', 'Observed SHA-256 is missing or malformed.')
     observed_entries = _entry_digests(evidence.get('entry_sha256'), gaps, 'Observed entry digests')
+    context = _optional_digest(evidence, 'context_sha256', gaps, 'Observed context digest')
+    blocked = bool(gaps)
+    # Baseline acceptance is reported alongside, never as evidence: a declined
+    # or malformed record is disclosed but cannot block classification.
     _baseline(evidence.get('baseline'), result)
-    if gaps:
+    if blocked:
         return result
     if source == 'transient':
         _gap(gaps, 'transient_unit', 'Transient runtime units have no package or file provenance.')
@@ -242,6 +302,7 @@ def classify(evidence: Any) -> dict[str, Any]:
     # Authenticated comparison, exact package and version only.
     authenticated: str | None = None
     defaults: list[str] | None = None
+    default_context: str | None = None
     artifact = evidence.get('authenticated_artifact')
     if artifact is not None:
         identity, digest = _package(artifact), _digest(artifact.get('sha256')) if isinstance(artifact, dict) else None
@@ -256,6 +317,11 @@ def classify(evidence: Any) -> dict[str, Any]:
             defaults = _entry_digests(artifact.get('entry_sha256'), gaps, 'Authenticated default entry digests')
             if artifact.get('entry_sha256') is not None and defaults is None:
                 return result
+            if artifact.get('context_sha256') is not None:
+                default_context = _optional_digest(artifact, 'context_sha256', gaps,
+                                                   'Authenticated context digest')
+                if default_context is None:
+                    return result
 
     # The target's own package database, never authenticating on its own.
     database: str | None = None
@@ -302,7 +368,7 @@ def classify(evidence: Any) -> dict[str, Any]:
     else:
         _gap(gaps, 'no_authenticated_comparison', 'No authenticated exact-version comparison was available.')
         result = _finish(result, 'unverifiable', 'package_owned', 'none')
-    _entries(result, observed_entries, defaults)
+    _entries(result, observed_entries, defaults, context, default_context)
     return result
 
 

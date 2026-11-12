@@ -110,11 +110,15 @@ def test_rewritten_file_and_package_db_is_still_modified():
 def test_entries_in_modified_file_are_classified_individually():
     defaults = [h('job-a'), h('job-b')]
     observed = [h('job-a'), h('job-added'), h('job-a')]
-    result = sp.classify(evidence(observed_sha256=h('changed'), entry_sha256=observed,
-                                  authenticated_artifact=artifact(entry_sha256=defaults)))
+    result = sp.classify(evidence(observed_sha256=h('changed'), entry_sha256=observed, context_sha256=h('ctx'),
+                                  authenticated_artifact=artifact(entry_sha256=defaults, context_sha256=h('ctx'))))
     assert result['provenance'] == 'modified'
     assert [e['provenance'] for e in result['entries']] == ['verified_default', 'custom', 'custom']
-    assert result['gaps'][0]['code'] == 'default_entries_absent'
+    assert [g['code'] for g in result['gaps']] == ['default_entries_absent']
+    no_context = sp.classify(evidence(observed_sha256=h('changed'), entry_sha256=observed,
+                                      authenticated_artifact=artifact(entry_sha256=defaults)))
+    assert [e['provenance'] for e in no_context['entries']] == ['modified', 'custom', 'custom']
+    assert [g['code'] for g in no_context['gaps']] == ['entry_context_not_compared', 'default_entries_absent']
     inherited = sp.classify(evidence(observed_sha256=h('changed'), entry_sha256=observed,
                                      authenticated_artifact=artifact()))
     assert {e['provenance'] for e in inherited['entries']} == {'modified'}
@@ -197,3 +201,75 @@ def test_every_class_is_reachable():
             sp.classify(evidence(ownership={'complete': True, 'owners': []}))['provenance'],
             sp.classify(evidence(ownership=None))['provenance']}
     assert seen == set(sp.CLASSES)
+
+
+# Regressions for the #722 peer review (2026-11-12).
+VENDOR_JOB = '17 * * * * root run-parts /etc/cron.hourly\n'
+
+
+def test_context_change_outside_entries_never_yields_verified_default_entries():
+    # PATH now resolves run-parts from /tmp: the job line is unchanged but its
+    # effective behaviour is not, so it must not be reported as a vendor default.
+    vendor, observed = 'PATH=/usr/bin\n' + VENDOR_JOB, 'PATH=/tmp:/usr/bin\n' + VENDOR_JOB
+    no_context = sp.classify(evidence(observed_sha256=h(observed), entry_sha256=[h(VENDOR_JOB)],
+                                      authenticated_artifact=artifact(vendor, entry_sha256=[h(VENDOR_JOB)])))
+    assert no_context['provenance'] == 'modified'
+    assert [e['provenance'] for e in no_context['entries']] == ['modified']
+    assert no_context['entries'][0]['basis'] == 'default_entry_context_unverified'
+    assert 'modified_outside_entries' in [g['code'] for g in no_context['gaps']]
+    changed = sp.classify(evidence(
+        observed_sha256=h(observed), entry_sha256=[h(VENDOR_JOB)], context_sha256=h('PATH=/tmp:/usr/bin\n'),
+        authenticated_artifact=artifact(vendor, entry_sha256=[h(VENDOR_JOB)], context_sha256=h('PATH=/usr/bin\n'))))
+    assert [e['provenance'] for e in changed['entries']] == ['modified']
+    assert changed['entries'][0]['basis'] == 'default_entry_context_changed'
+    assert 'modified_outside_entries' in [g['code'] for g in changed['gaps']]
+
+
+def test_matching_authenticated_context_keeps_per_entry_defaults():
+    context = h('PATH=/usr/bin\n')
+    added = '* * * * * root /tmp/x\n'
+    result = sp.classify(evidence(
+        observed_sha256=h('PATH=/usr/bin\n' + VENDOR_JOB + added), context_sha256=context,
+        entry_sha256=[h(VENDOR_JOB), h(added)],
+        authenticated_artifact=artifact('PATH=/usr/bin\n' + VENDOR_JOB, entry_sha256=[h(VENDOR_JOB)],
+                                        context_sha256=context)))
+    assert [e['provenance'] for e in result['entries']] == ['verified_default', 'custom']
+    assert result['entries'][0]['basis'] == 'authenticated_default_entry' and not result['gaps']
+
+
+def test_missing_context_with_changed_entries_is_disclosed():
+    added = '* * * * * root /tmp/x\n'
+    result = sp.classify(evidence(observed_sha256=h(VENDOR_JOB + added), entry_sha256=[h(VENDOR_JOB), h(added)],
+                                  authenticated_artifact=artifact(VENDOR_JOB, entry_sha256=[h(VENDOR_JOB)])))
+    assert [e['provenance'] for e in result['entries']] == ['modified', 'custom']
+    assert 'entry_context_not_compared' in [g['code'] for g in result['gaps']]
+
+
+def test_declined_baseline_does_not_block_classification():
+    declined = sp.classify(evidence(authenticated_artifact=artifact(), baseline={'accepted': False}))
+    assert declined['provenance'] == 'verified_default' and not declined['gaps']
+    assert declined['baseline'] == {'accepted': False, 'affects_provenance': False}
+    malformed = sp.classify(evidence(authenticated_artifact=artifact(), baseline={'accepted': 'yes'}))
+    assert malformed['provenance'] == 'verified_default'
+    assert [g['code'] for g in malformed['gaps']] == ['malformed_baseline']
+
+
+@pytest.mark.parametrize('at', [float('nan'), float('inf'), float('-inf')])
+def test_non_finite_baseline_time_is_dropped(at):
+    result = sp.classify(evidence(baseline={'accepted': True, 'by': 'admin', 'at': at}))
+    assert result['baseline']['accepted'] is True and result['baseline']['at'] is None
+
+
+@pytest.mark.parametrize('path', ['/x\n/etc/evil', '/x\r', '/x\ty', '/x\x1b[31m', '/x\x7f'])
+def test_control_characters_in_path_fail_closed(path):
+    result = sp.classify(evidence(path=path))
+    assert result['provenance'] == 'unknown' and result['path'] is None
+
+
+@pytest.mark.parametrize('changes', [
+    {'context_sha256': 'zz'},
+    {'authenticated_artifact': artifact(context_sha256='zz')},
+])
+def test_malformed_context_digest_fails_closed(changes):
+    result = sp.classify(evidence(**changes))
+    assert result['provenance'] == 'unknown' and result['gaps']
