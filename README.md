@@ -712,6 +712,11 @@ its original admission window is still open, alongside spend in the current loca
 day; it does not silently restore that budget. Estimates use published token prices
 and may differ from the provider invoice.
 
+In capped modes, AI Settings also shows how many counted transmitted calls await
+reconciliation and the oldest retained reservation time among them. This includes
+calls from still-counted prior windows. The time is the reservation time, because the
+ledger keeps no separate transmission timestamp.
+
 A confirmed local HTTP connection-pool timeout receives a short local retry delay
 without creating or changing the fleet-wide provider backoff. Provider and ambiguous
 network timeouts still apply the shared cooldown and conservative spend accounting.
