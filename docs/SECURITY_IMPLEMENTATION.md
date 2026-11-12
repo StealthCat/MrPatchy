@@ -2419,6 +2419,16 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### Active admission control in the investigations queue notice — worker checkpoint #685
+
+The administrator's Investigations queue notice now names the admission control
+that actually gates new AI work, reusing the AI worker status card's wording:
+shared starts/hour (with the daily spend cap when combined), daily spend cap,
+unthrottled by Mr Patchy, or legacy attempts against the legacy hourly limit.
+Previously it always advertised the legacy investigation limit, which only
+applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
+and authorization behavior are unchanged. A browser regression covers every mode.
+
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
 `tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
@@ -3001,6 +3011,22 @@ standalone-worker workflow. Existing app/worker containers, MySQL job coordinati
 and the shared-local-volume deployment are prerequisites. Deliver deployment
 separation and supported remote-worker setup as one coherent feature, with
 incremental milestones where needed.
+
+### Fixed role Compose files — worker checkpoint #676
+
+`compose.controller.yaml` (app and Caddy, extending the `compose.yaml` services) and
+`compose.worker.yaml` (workers only) now exist next to the unchanged complete
+`compose.yaml`. The worker file has no local app dependency, web/TLS mount, port or
+fixed container name. It uses the controller project's existing data volume through
+the required, external `MRPATCHY_CONTROLLER_DATA_VOLUME`, and keeps fail-closed
+controller-state preflight. It supports replicas on the controller's Docker host.
+`tests/test_compose_roles.py` keeps the worker definition in sync with `compose.yaml`
+and compares the rendered hardening, environment, networks and volumes through
+`docker compose config`. CI renders both files.
+
+Still open for this requirement: remote-machine provisioning of keys, SSH identities,
+artifacts and locking state; installer modes; split files combined with the GCP
+override; and multi-host MySQL, drain, failure and recovery acceptance.
 
 ### Deployment files and runtime roles
 
