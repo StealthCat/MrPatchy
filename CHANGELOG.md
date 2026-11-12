@@ -1,3 +1,8 @@
+## 1.59.42 — 2026-11-12
+
+1. [PR #679](https://github.com/StealthCat/MrPatchy/pull/679): The AI worker status card shows the eligible, unclaimed triage backlog from the existing administrator status fields: an **eligible, unclaimed** count, and the oldest eligible unclaimed observation's first-seen time with an approximate age. The card explains that this is observation age, not time since the item became eligible, and that shared rate, budget and provider admission and available worker capacity may still delay dispatch. Closes #678.
+2. Compatibility and limits: a client-only status card addition, with no API, schema or admission change. This source update does not publish a Docker image.
+
 ## 1.59.41 — 2026-11-12
 
 1. [PR #677](https://github.com/StealthCat/MrPatchy/pull/677): Add fixed `compose.controller.yaml` and `compose.worker.yaml` files for same-Docker-host split deployments. The controller file runs the app and Caddy by extending `compose.yaml`. The worker file runs scalable workers (`--scale worker=N`) as a separate Compose project on the controller's existing data volume, named by the required `MRPATCHY_CONTROLLER_DATA_VOLUME`. Workers keep the hardening, health check and drain grace period from `compose.yaml`, and each replica gets a unique boot identity. `docs/COMPOSE_CONFIGURATION.md` covers migration from `compose.yaml` with `--remove-orphans`, and CI validates both files. Refs #676.
