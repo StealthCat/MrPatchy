@@ -2598,6 +2598,37 @@ does not diagnose provider availability, reconcile uncertain charges, bypass pro
 limits or complete the broader shared-controls/faster-AI program. Exact-head
 SQLite/MySQL, browser, full-suite and coordinator integration checks remain required.
 
+Worker checkpoint (issue #696): the shared provider floor is now also an in-app
+notification producer, adding to the roadmap J "AI configuration/budget blockers"
+producers. Each alert-collection pass runs `ai_provider_backoff.publish_notification()`
+in its own transaction. It publishes one admin-only `ai-provider`/`provider-backoff`
+event linked to AI Settings in two cases:
+
+- **`high`:** the active floor came from a provider Retry-After over 24 hours that
+  was capped, which the reviewed Clear action exists for.
+- **`medium`:** at least five consecutive transient failures fell inside the
+  one-hour failure-reset window.
+
+A single short transient backoff stays silent. The payload is fixed text keyed only
+by that state, so further failures within one episode add no revision. Escalating
+from sustained to capped adds one revision. A later shorter transient failure
+never lowers the floor, so while the capped floor still dominates it keeps the
+capped reason (and the `high` event and AI Settings review cue) until it lifts or is
+cleared.
+
+The event gets one `resolved` revision in any of these cases: a successful provider
+response, an administrator Clear, the episode going idle past the reset window, or AI
+being disabled. A later episode reopens it as unread.
+
+The following are unchanged:
+
+- No provider text, timing or error body enters the notification.
+- No SMTP/webhook `Alert` is added.
+- Backoff timing, admission, Clear semantics, read/dismiss/acknowledgement and
+  response authorization stay as they were.
+
+Missing-key and unknown-pricing blocker producers remain open.
+
 
 ### Durable cross-server process-triage fairness — worker checkpoint #388
 
