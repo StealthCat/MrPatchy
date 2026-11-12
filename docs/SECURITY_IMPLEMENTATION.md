@@ -2714,6 +2714,9 @@ and applies unit, template, dash-prefix and type-level drop-ins in file-name ord
 with same-name shadowing. Drop-ins are read for the canonical name and every
 effective alias, so canonical and alias records resolve the same configuration; an
 alias whose target is not the canonical name's winning fragment is a coverage gap.
+A drop-in directory naming an instance of an observed template resolves that
+instance even without an enablement link (on-demand activation needs none), and
+any drop-in that applies to no resolved unit is an `unattached_dropin` gap.
 List settings honour empty-assignment resets. It records
 enablement links separately from vendor static dependencies, plus aliases, linked
 units, timer/socket/path trigger targets and `+`/`!` privileged Exec prefixes. Every

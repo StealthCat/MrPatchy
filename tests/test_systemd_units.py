@@ -293,3 +293,42 @@ def test_privileged_exec_prefix_is_flagged():
                 f(f'{ETC}/q.service', '[Service]\nUser=nobody\nExecStart=-/bin/run\n')])
     assert u['p.service']['privileged_exec'] is True
     assert u['q.service']['privileged_exec'] is False
+
+
+def test_dropin_for_unlinked_instance_of_observed_template_is_resolved():
+    # #703 review: getty@tty2 is started on demand (logind autovt) with no
+    # .wants link, but its drop-in still runs as root on the next VT switch.
+    r, u = run([f(f'{VENDOR}/getty@.service', '[Service]\nExecStart=/sbin/agetty %I\n'),
+                f(f'{ETC}/getty@tty2.service.d/evil.conf', '[Service]\nExecStartPre=/tmp/x\n')])
+    inst = u['getty@tty2.service']
+    assert inst['instance'] == 'tty2' and inst['fragment'] == f'{VENDOR}/getty@.service'
+    assert inst['exec']['ExecStartPre'] == ['/tmp/x']
+    assert inst['dropins'] == [{'path': f'{ETC}/getty@tty2.service.d/evil.conf',
+                                'origin': 'administrator', 'scope': 'unit'}]
+    assert inst['classification'] == 'vendor_overridden'
+    assert 'ExecStartPre' not in u['getty@.service']['exec']
+    assert r['complete'] and r['gaps'] == []
+
+
+def test_dropin_for_no_resolved_unit_is_an_explicit_gap():
+    r, u = run([f(f'{VENDOR}/getty@.service', '[Service]\nExecStart=/sbin/agetty %I\n'),
+                f(f'{ETC}/ghost.service.d/evil.conf', '[Service]\nExecStartPre=/tmp/y\n'),
+                f(f'{ETC}/nope@x.service.d/evil.conf', '[Service]\nExecStartPre=/tmp/z\n'),
+                f(f'{ETC}/notaunit.d/evil.conf', '[Service]\nExecStartPre=/tmp/w\n')])
+    assert set(u) == {'getty@.service'}
+    assert not r['complete']
+    assert [(g['code'], g['path']) for g in r['gaps']] == [
+        ('unattached_dropin', f'{ETC}/ghost.service.d/evil.conf'),
+        ('unattached_dropin', f'{ETC}/nope@x.service.d/evil.conf'),
+        ('unattached_dropin', f'{ETC}/notaunit.d/evil.conf'),
+    ]
+
+
+def test_type_and_prefix_dropins_attached_to_resolved_units_are_not_gaps():
+    r, u = run([f(f'{VENDOR}/foo-bar.service', SVC),
+                f(f'{ETC}/service.d/all.conf', '[Service]\nExecStartPre=/opt/a\n'),
+                f(f'{ETC}/foo-.service.d/p.conf', '[Service]\nExecStartPre=/opt/b\n'),
+                f(f'{ETC}/timer.d/t.conf', '[Timer]\nOnBootSec=1\n')])
+    assert u['foo-bar.service']['exec']['ExecStartPre'] == ['/opt/a', '/opt/b']
+    # No timer is resolved, so the timer.d drop-in is reported, not dropped.
+    assert [(g['code'], g['detail']) for g in r['gaps']] == [('unattached_dropin', 'timer.d')]

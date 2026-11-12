@@ -10,8 +10,11 @@ relationships and the origin of every contributing file.
 It performs no I/O, never runs ``systemctl`` or a unit, never sources a script
 and never authorizes a response action. Anything it cannot resolve exactly
 (an uncollected search directory, unreadable or oversized text, malformed lines,
-invalid names, unresolved links, over-cap inputs, runtime state) becomes an
-explicit coverage gap; it is never silently reported as covered. Package
+invalid names, unresolved links, over-cap inputs, runtime state, drop-ins that
+apply to no resolved unit) becomes an explicit coverage gap; it is never
+silently reported as covered. A drop-in directory naming an instance of an
+observed template resolves that instance even without an enablement link,
+because on-demand activation needs none. Package
 ownership is not inferred: a ``vendor`` origin means only "found in a vendor
 search directory", never "verified unchanged package default".
 
@@ -286,6 +289,13 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
     for link in links:
         names.add(link['name'])
         names.add(link['owner'])
+    # Instances started on demand (logind autovt, sockets, ``systemctl start
+    # foo@x``) need no link; a drop-in directory naming an instance of an
+    # observed template still configures that instance, so resolve it.
+    for dname, _ in dropins:
+        dparts = parse_name(dname[:-2])
+        if dparts and dparts['instance'] and dparts['template_name'] in fragments:
+            names.add(dparts['name'])
 
     alias_target, aliases = _alias_map(fragments, by_path)
 
@@ -303,6 +313,19 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
 
     for path in sorted(set(external) - referenced):
         gaps.append(_gap('outside_search_path', path))
+
+    # A drop-in that applies to no resolved unit (or alias) name is never
+    # silently dropped: report it so the result cannot claim full coverage.
+    consumed: set[str] = set()
+    for unit in units:
+        for n in unit['names'] + [unit['name']]:
+            nparts = parse_name(n)
+            if nparts is not None:
+                consumed.update(_dropin_dirs(nparts))
+    for (dname, _), recs in sorted(dropins.items()):
+        if dname not in consumed:
+            for r in recs:
+                gaps.append(_gap('unattached_dropin', r['path'], dname))
 
     triggers: list[dict[str, Any]] = []
     for unit in units:
