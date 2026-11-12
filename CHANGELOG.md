@@ -1,3 +1,8 @@
+## 1.59.53 — 2026-11-12
+
+1. [PR #705](https://github.com/StealthCat/MrPatchy/pull/705): Startup-change (persistence) incidents now publish administrator-only in-app notifications that link to the server's File integrity tab, so they appear in the bell, notification center, SSE stream and arrivals cursor. A new incident publishes one medium-severity active event. Repeat detections of an open incident add nothing, while a repeat detection of a closed incident reopens it. Administrator closure resolves the event, reopening a closed incident re-activates it, and deleting a server resolves its active events while keeping the incidents. Reasons are fixed text stating that a change is not a malware verdict; no endpoint paths, hashes or link targets reach the payload. Publishing shares the incident transaction. Closes #704.
+2. Compatibility and limits: an additive notification producer, with no schema, API, incident-lifecycle or response-authorization change. Notifications acknowledge and authorize nothing. This source update does not publish a Docker image.
+
 ## 1.59.52 — 2026-11-12
 
 1. [PR #703](https://github.com/StealthCat/MrPatchy/pull/703): Add a pure systemd effective-unit contract (`app/systemd_units.py`). It turns captured read-only observations of systemd system-unit search directories into effective-unit records, trigger relationships, explicit coverage gaps and a deterministic digest.

@@ -189,6 +189,8 @@ def remove(s,host,expected,confirmation,actor,reason):
     set_enabled(s,host,False,expected,actor,reason);s.commit()
     try:remove_credentials(host.id)
     except (OSError,ValueError):raise ValueError('Server disabled, but local credential cleanup failed. Refresh and retry deletion after reviewing controller storage') from None
+    from . import persistence
+    persistence.resolve_host_notifications(s,host.id)
     s.execute(delete(Setting).where(Setting.key.in_(['connection:'+host.id,'repository-access:'+host.id])))
     host.deleted_at=time.time();host.enabled=False;host.state='deleted';host.lifecycle_revision=str(uuid.uuid4())
     from . import incidents
