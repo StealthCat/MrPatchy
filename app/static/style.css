@@ -119,6 +119,13 @@ main { margin-left: calc(var(--sidebar) + 32px); padding: 0 32px; max-width: 190
 .notification-sync[data-state="reconnecting"] .notification-sync-state, .notification-sync[data-state="delayed"] .notification-sync-state { color:var(--amber); }
 .notification-sync-note { display:block;color:var(--muted);font-size:10px; }
 .notification-center-link { display:block;margin-top:10px;text-align:center; }
+.notification-toasts { position:fixed;inset:auto 26px 26px auto;z-index:40;display:grid;gap:10px;width:min(380px,calc(100vw - 32px));max-height:calc(100dvh - 52px);overflow:auto;margin:0;padding:0;border:0;background:transparent;color:var(--text);pointer-events:none; }
+.notification-toasts[hidden] { display:none; }
+.notification-toast { pointer-events:auto;padding:14px 16px;border:1px solid var(--line-bright);border-left:4px solid #f49a91;border-radius:16px;background:linear-gradient(var(--glass-strong),var(--glass-strong)),#0d1d24;backdrop-filter:blur(18px);box-shadow:0 18px 44px #020911aa;animation:notification-toast-in .18s ease-out; }
+.notification-toast[data-severity="critical"] { border-left-color:var(--red); }
+.notification-toast .notification-severity { color:var(--red);background:#ffb1a814; }
+.notification-toast .notification-reason { margin:8px 0 10px; }
+@keyframes notification-toast-in { from { opacity:0;transform:translateY(8px); } to { opacity:1;transform:none; } }
 .notification-center-controls { margin-bottom:14px; }
 .notification-center-controls .actions { margin-top:12px; }
 #notification-center-list { display:grid;gap:10px; }
@@ -267,7 +274,7 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
   .empty { padding: 26px 12px; flex-direction: column; text-align: center; gap: 16px; }.empty .empty-mascot { width: 95px; height: 102px; }.empty .eyebrow { justify-content: center; }.hero { padding: 22px 20px; }.hero>.mascot { width: 70px; flex-basis: 70px; }.hero h2 { font-size: 21px; }.hero p { font-size: 12px; }
   .enrollment-steps { gap: 6px; }.enrollment-steps li { flex-direction: column; align-items: flex-start; font-size: 10px; }.modal-head { gap: 10px; }.modal-head h2 { font-size: 17px; }.modal-head>span { display: none; }dialog { padding: 20px 17px; }.actions button { font-size: 12px; }
   .calendar-hour { grid-template-columns: 85px 1fr; }.calendar-hour time { padding: 12px 5px; }#patch-calendar { max-height: 560px; }.schedule-stats { gap: 10px; }.schedule-stats .card { padding: 16px 13px; }.schedule-stats .eyebrow { font-size: 8px; }
-  #toast { left: 16px; right: 16px; bottom: 16px; max-width: none; font-size: 13px; }.login { padding: 22px; }.login-card { padding: 26px; }.login-card h1 { font-size: 28px; }.loading-state { padding: 20px; }.loading-dots { display: none; }
+  #toast { left: 16px; right: 16px; bottom: 16px; max-width: none; font-size: 13px; }.notification-toasts { inset:auto 16px 16px 16px;width:auto; }.login { padding: 22px; }.login-card { padding: 26px; }.login-card h1 { font-size: 28px; }.loading-state { padding: 20px; }.loading-dots { display: none; }
   #notification-panel { position:fixed;left:16px;right:16px;top:132px;width:auto;max-height:calc(100dvh - 148px);padding:14px; }
   .notification-meta { flex-wrap:wrap; }.notification-meta time { width:100%;margin-left:0; }
 }

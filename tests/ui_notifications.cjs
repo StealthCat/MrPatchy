@@ -11,7 +11,21 @@ module.exports=async(page,capture)=>{
     {id:unsafeId,revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'scan-9',host_id:'',severity:'high',reason:'<img src=x onerror="window.notificationInjected=true"> Untrusted finding',deep_link:'https://attacker.invalid/',lifecycle:'active',created:1699999000,read:false,dismissed:false},
   ];
   await page.route('**/api/notifications/unread-count',route=>route.fulfill({json:{unread}}));
-  await page.route(/\/api\/notifications\?/,route=>{const url=new URL(route.request().url());listRequests.push(url.search);let visible=items.filter(item=>url.searchParams.get('include_dismissed')==='true'||!item.dismissed);if(url.searchParams.get('unread_only')==='true')visible=visible.filter(item=>!item.read);for(const key of ['severity','source']){const value=url.searchParams.get(key);if(value)visible=visible.filter(item=>item[key]===value);}const host=url.searchParams.get('host_id');if(host)visible=visible.filter(item=>item.host_id===host);const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||8),total=visible.length;visible=visible.slice(offset,offset+limit);return route.fulfill({json:{items:visible,offset,limit,total,more:offset+visible.length<total}});});
+  await page.route(/\/api\/notifications\?/,route=>{const url=new URL(route.request().url());listRequests.push(url.search);let visible=items.filter(item=>url.searchParams.get('include_dismissed')==='true'||!item.dismissed);if(url.searchParams.get('unread_only')==='true')visible=visible.filter(item=>!item.read);for(const key of ['severity','source']){const value=url.searchParams.get(key);if(value)visible=visible.filter(item=>item[key]===value);}const host=url.searchParams.get('host_id');if(host)visible=visible.filter(item=>item.host_id===host);if(url.searchParams.get('severity'))visible=[...visible].sort((a,b)=>b.created-a.created||(a.id<b.id?-1:1));const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||8),total=visible.length;visible=visible.slice(offset,offset+limit);return route.fulfill({json:{items:visible,offset,limit,total,more:offset+visible.length<total}});});
+  // Arrival-cursor mock mirroring the server: each newly observed (id, revision) is
+  // sequenced once, in commit order, independent of `created`; only current
+  // revisions are returned, with live read/dismissed state.
+  const arrivalLog=[],arrivalKeys=new Set(),arrivalRequests=[];
+  const sequenceArrivals=()=>{for(const item of items){const key=item.id+'@'+item.revision;if(!arrivalKeys.has(key)){arrivalKeys.add(key);arrivalLog.push({id:item.id,revision:item.revision});}}};
+  await page.route(/\/api\/notifications\/arrivals(\?|$)/,route=>{
+    const url=new URL(route.request().url());arrivalRequests.push(url.search);sequenceArrivals();
+    const head=arrivalLog.length,raw=url.searchParams.get('after'),limit=Number(url.searchParams.get('limit')||50);
+    if(raw===null||Number(raw)>head)return route.fulfill({json:{items:[],cursor:head,more:false,reset:raw!==null}});
+    const found=[];
+    for(let seq=Number(raw)+1;seq<=head;seq++){const entry=arrivalLog[seq-1],item=items.find(candidate=>candidate.id===entry.id);if(item&&item.revision===entry.revision)found.push({...item,arrival:seq});if(found.length>limit)break;}
+    if(found.length>limit)return route.fulfill({json:{items:found.slice(0,limit),cursor:found[limit-1].arrival,more:true,reset:false}});
+    return route.fulfill({json:{items:found,cursor:head,more:false,reset:false}});
+  });
   await page.route(/\/api\/notifications\/[0-9a-f]{64}\/(read|dismiss)$/,route=>{
     const url=route.request().url(),body=route.request().postDataJSON(),id=url.split('/').at(-2),item=items.find(candidate=>candidate.id===id);
     mutations.push({url,body});
@@ -125,4 +139,145 @@ module.exports=async(page,capture)=>{
   assert.equal(await page.locator('#notification-list').textContent(),'','a late mutation response cannot restore account-scoped content after reset');
   assert.equal(await page.locator('#notification-status').textContent(),'','a late mutation response cannot restore account-scoped status after reset');
   assert.equal(await page.locator('#notification-badge').isHidden(),true);
+
+  // Live toasts: the initial set never toasts; new or re-revised unread
+  // high/critical events do, bounded, without focus theft or read side effects.
+  for(const item of items){item.read=false;item.dismissed=false;}
+  unread=items.length;
+  const toasts=page.locator('.notification-toast');
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.match(await bell.getAttribute('aria-label'),/3 unread/);
+  assert.equal(await toasts.count(),0,'events present at sign-in or reload do not toast');
+
+  await page.getByRole('button',{name:'+ Add server',exact:true}).click();
+  const toastName=page.locator('[name=name]');
+  await toastName.fill('Toast keeps this draft');
+  await toastName.focus();
+  const mutationCount=mutations.length;
+  items.unshift({id:'4'.repeat(64),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'scan-new',host_id:'',severity:'critical',reason:'<img src=x onerror="window.toastInjected=true"> New critical finding',deep_link:'#activity',lifecycle:'active',created:1700000200,read:false,dismissed:false});
+  unread++;
+  await page.evaluate(()=>window.notificationStreams.at(-1).emit('notifications'));
+  const newToast=toasts.filter({hasText:'New critical finding'});
+  await newToast.waitFor();
+  assert.equal(await toasts.count(),1);
+  assert.equal(await newToast.locator('img').count(),0);
+  assert.equal(await page.evaluate(()=>window.toastInjected),undefined);
+  assert.equal(await page.evaluate(()=>document.getElementById('notification-toasts').parentElement.id),'modal','the toast mounts inside the open modal so it is not inert');
+  assert.equal(await toastName.inputValue(),'Toast keeps this draft');
+  assert.equal(await toastName.evaluate(node=>node===document.activeElement),true,'a toast never steals focus');
+  assert.equal(await newToast.getByRole('link',{name:'Open'}).getAttribute('href'),'/#activity');
+  await capture('notification-toast-dialog',false);
+  await newToast.getByRole('button',{name:/Hide this toast/}).click();
+  await newToast.waitFor({state:'detached'});
+  assert.equal(mutations.length,mutationCount,'hiding a toast does not mark the notification read or dismissed');
+  assert.equal(items[0].read,false);
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'an unchanged revision does not toast again');
+  await page.locator('#close-modal').click();
+
+  items.unshift({id:'5'.repeat(64),revision:1,source:'operations',kind:'attention',subject_type:'job',subject_id:'job-medium',host_id:'',severity:'medium',reason:'Medium notice stays in the bell.',deep_link:'#activity',lifecycle:'active',created:1700000300,read:false,dismissed:false});
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'medium and lower severities do not toast');
+
+  const revised=items.find(item=>item.id===safeId);revised.revision++;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'Patch verification needs review.'}).waitFor();
+  assert.equal(await page.evaluate(()=>document.getElementById('notification-toasts').parentElement===document.body),true);
+  assert.equal(await toasts.count(),1,'a reopened or escalated revision toasts again');
+  await capture('notification-toast-desktop',false);
+
+  for(let n=0;n<4;n++)items.unshift({id:String(6+n).repeat(64),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'burst-'+n,host_id:'',severity:'high',reason:'Burst finding '+n,deep_link:'#activity',lifecycle:'active',created:1700000400+n,read:false,dismissed:false});
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  const summary=toasts.filter({hasText:'4 new high-severity notifications need attention.'});
+  await summary.waitFor();
+  assert.equal(await toasts.count(),1,'a burst collapses into one summary toast');
+  assert.equal(await summary.getByRole('link',{name:'Open notification center'}).getAttribute('href'),'#notifications');
+  await page.setViewportSize({width:390,height:844});
+  const toastBox=await summary.boundingBox();
+  assert.ok(toastBox.x>=0&&toastBox.x+toastBox.width<=390&&toastBox.y+toastBox.height<=844);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.waitForTimeout(300);
+  await capture('notification-toast-mobile',false);
+  await page.setViewportSize({width:1440,height:1000});
+
+  await page.evaluate(()=>window.NotificationShell.reset());
+  assert.equal(await toasts.count(),0,'logout/reset clears toasts');
+
+  // Toast admission is independent of the bell's eight-item recent window.
+  const critical=(n,created,reason)=>({id:n.toString(16).padStart(64,'0'),revision:1,source:'scanner',kind:'finding',subject_type:'scan',subject_id:'window-'+n,host_id:'',severity:'critical',reason,deep_link:'#activity',lifecycle:'active',created,read:false,dismissed:false});
+  items.splice(0,items.length);
+  for(let n=1;n<=9;n++)items.unshift(critical(0x100+n,1700100000+n,'Pre-existing critical '+n));
+  unread=9;
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'nine pre-existing urgent events stay a silent baseline');
+  items[0].dismissed=true;items[0].read=true;unread=8;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'an unchanged event sliding into the bell window after another session dismisses one does not toast');
+  for(let n=1;n<=8;n++)items.unshift({...critical(0x200+n,1700200000+n,'Informational '+n),severity:'info'});
+  items.push(critical(0x300,1690000000,'Lagging producer critical'));unread=17;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal((await page.evaluate(()=>[...document.querySelectorAll('#notification-list .notification-reason')].map(node=>node.textContent))).includes('Lagging producer critical'),false,'the new critical event is outside the bell window');
+  await toasts.filter({hasText:'Lagging producer critical'}).waitFor();
+  assert.equal(await toasts.count(),1,'a genuinely new urgent event outside the bell window toasts; informational events do not');
+
+  // A large urgent backlog: unchanged events never toast, and a new event behind
+  // 100 or more newer unread events of its severity still does (formerly the
+  // documented coverage limit of the bounded admission window).
+  await page.evaluate(()=>window.NotificationShell.reset());
+  items.splice(0,items.length);
+  for(let n=1;n<=105;n++)items.unshift(critical(0x1000+n,1700300000+n,'Large backlog '+n));
+  unread=105;
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0);
+  assert.ok(arrivalRequests.includes(''),'the first refresh takes an arrival baseline');
+  for(let n=0;n<5;n++){items[n].dismissed=true;items[n].read=true;}
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0,'dismissing events in another session never toasts unchanged events');
+  items.push(critical(0x2001,1600000000,'Lagging critical behind a large backlog'));unread=101;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'Lagging critical behind a large backlog'}).waitFor();
+  assert.equal(await toasts.count(),1,'a new urgent event behind 100 newer unread events of its severity toasts');
+  items.unshift(critical(0x2000,1700400000,'Newest backlog critical'));
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'Newest backlog critical'}).waitFor();
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.filter({hasText:'Newest backlog critical'}).count(),1,'an arrival toasts once');
+
+  // Catch-up pages through more than one arrival page and summarizes the burst.
+  for(let n=1;n<=150;n++)items.unshift(critical(0x5000+n,1700450000+n,'Paged arrival '+n));
+  const pagedBefore=arrivalRequests.length;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'150 new critical or high-severity notifications need attention.'}).waitFor();
+  assert.ok(arrivalRequests.slice(pagedBefore).filter(search=>search.includes('after=')).length>=2,'catch-up follows the more flag');
+
+  // A cursor the server no longer retains re-baselines silently.
+  arrivalLog.splice(0,arrivalLog.length);
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  items.unshift(critical(0x6000,1700500000,'After reset baseline'));
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await toasts.filter({hasText:'After reset baseline'}).waitFor();
+  await page.evaluate(()=>window.NotificationShell.reset());
+
+  // Seen-revision eviction never forgets an event still in a complete urgent window.
+  items.splice(0,items.length);
+  items.push({...critical(0x3000,1700500000,'Long-lived high notice'),severity:'high'});
+  unread=1;
+  await page.evaluate(()=>window.NotificationShell.start());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await toasts.count(),0);
+  const longLived=toasts.filter({hasText:'Long-lived high notice'});
+  for(let burst=0;burst<5;burst++){
+   for(const item of items)if(item.severity==='critical')item.read=true;
+   for(let n=1;n<=100;n++)items.unshift(critical(0x4000+burst*0x100+n,1700600000+burst*1000+n,'Burst '+burst+' critical '+n));
+   await page.evaluate(()=>window.NotificationShell.refresh());
+   assert.equal(await longLived.count(),0);
+  }
+  for(const item of items)if(item.severity==='critical')item.read=true;
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  await page.evaluate(()=>window.NotificationShell.refresh());
+  assert.equal(await longLived.count(),0,'an unchanged high event that stayed in its complete window does not toast after 500 other revisions were seen');
+  await page.evaluate(()=>window.NotificationShell.reset());
 };
