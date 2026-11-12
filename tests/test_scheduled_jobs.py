@@ -167,3 +167,17 @@ def test_at_job_empty_command_and_env_cap():
     env = tuple(f'V{i}=1; export V{i}' for i in range(sj.MAX_ENV + 1))
     capped = sj.parse_at_job('a0000101a8b3c4', at_script(['id'], env=env))
     assert capped['state'] == 'unavailable' and capped['environment_names'] == []
+
+
+def test_non_ascii_anacron_numeric_fields_are_coverage_gaps():
+    result = sj.parse_anacrontab(
+        'RANDOM_DELAY=\u00b2\nSTART_HOURS_RANGE=\u0663-22\n'
+        '\u00b2 5 period /bin/true\n1 \u00b2 delay /bin/true\n'
+        '\u0661 5 decimal /bin/true\n1 0 good /bin/true\n'
+    )
+    assert result['state'] == 'partial'
+    assert result['settings'] == {}
+    assert [job['identifier'] for job in result['jobs']] == ['good']
+    assert [gap['code'] for gap in result['gaps']] == [
+        'invalid_setting', 'invalid_setting', 'invalid_period', 'invalid_delay', 'invalid_period',
+    ]

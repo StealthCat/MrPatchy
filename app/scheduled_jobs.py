@@ -47,7 +47,7 @@ DISCLOSED_SETTINGS = ('START_HOURS_RANGE', 'RANDOM_DELAY')
 
 _ASSIGN = re.compile(r'\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)')
 _IDENT = re.compile(r'[^\s/]{1,255}')
-_HOURS = re.compile(r'(\d{1,2})-(\d{1,2})')
+_HOURS = re.compile(r'([0-9]{1,2})-([0-9]{1,2})')
 _AT_NAME = re.compile(r'([a-zA-Z=])([0-9a-f]{5})([0-9a-f]{8})')
 _AT_HEADER = re.compile(r'# atrun uid=(\d{1,10}) gid=(\d{1,10})')
 _AT_EXPORT = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)=.*; export \1')
@@ -112,7 +112,7 @@ def _settings(name: str, value: str) -> tuple[Any, str | None]:
     """Validate a disclosed anacron setting; return (parsed, gap code)."""
     value = value.strip()
     if name == 'RANDOM_DELAY':
-        return (int(value), None) if value.isdigit() and len(value) <= 6 else (None, 'invalid_setting')
+        return (int(value), None) if value.isascii() and value.isdigit() and len(value) <= 6 else (None, 'invalid_setting')
     match = _HOURS.fullmatch(value)
     if not match:
         return None, 'invalid_setting'
@@ -167,7 +167,7 @@ def parse_anacrontab(text: str | bytes) -> dict[str, Any]:
         if period_text.startswith('@'):
             days = PERIOD_NAMES.get(period_text[1:])
             period = {'kind': 'named', 'name': period_text[1:], 'days': days}
-        elif period_text.isdigit() and len(period_text) <= 5 and int(period_text) > 0:
+        elif period_text.isascii() and period_text.isdigit() and len(period_text) <= 5 and int(period_text) > 0:
             days = int(period_text)
             period = {'kind': 'days', 'name': None, 'days': days}
         else:
@@ -175,7 +175,7 @@ def parse_anacrontab(text: str | bytes) -> dict[str, Any]:
         if days is None:
             _gap(gaps, 'invalid_period', number, 'Period must be a positive day count or a documented @name.')
             continue
-        if not (delay_text.isdigit() and len(delay_text) <= 6):
+        if not (delay_text.isascii() and delay_text.isdigit() and len(delay_text) <= 6):
             _gap(gaps, 'invalid_delay', number, 'Delay must be a non-negative number of minutes.')
             continue
         if not _IDENT.fullmatch(ident):
