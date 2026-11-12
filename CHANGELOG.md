@@ -1,3 +1,13 @@
+## 1.59.36 — 2026-11-12
+
+1. [PR #662](https://github.com/StealthCat/MrPatchy/pull/662): When a new or escalated unread high or critical notification arrives for the signed-in account, the authenticated shell shows a short, non-modal toast on any page or dialog. Toasts are admitted from the durable `GET /api/notifications/arrivals` cursor, so an urgent event behind many newer unread events still toasts. The first refresh after sign-in, reload or reconnect takes a baseline, so existing notifications never toast. At most three toasts appear, and a summary toast points to the notification center for overflow. Toasts never take focus and announce through a polite live region. They pause on hover or focus, and hiding a toast leaves the notification unread and undismissed. Logout or account change clears toasts and the baseline. Closes #661.
+2. Compatibility and limits: a client-only change using the existing arrivals API, with no schema or API change. Toasts cover only high and critical severities; toasts for lower severities (#660) remain open. Read and dismiss stay per-user UI state and never acknowledge or remediate anything. This source update does not publish a Docker image.
+
+## 1.59.35 — 2026-11-12
+
+1. [PR #583](https://github.com/StealthCat/MrPatchy/pull/583): The strict exact-known-good lookup batches its eligible policy candidates into set reads of at most 100. It reads active entries, their originating assessments and their observations in one query each, instead of three point reads per candidate. Caller order is preserved, and only the first candidate that passes every existing check is returned. Those checks cover the active entry, retained assessment, result, canonical contract and isolated observation. Ineligible evidence performs no registry read. Fixes #582.
+2. Compatibility and limits: a read-path optimisation with no schema, API, eligibility or reuse-policy change. Reuse still requires every existing provenance and re-evaluation check. This source update does not publish a Docker image.
+
 ## 1.59.34 — 2026-11-11
 
 1. [PR #574](https://github.com/StealthCat/MrPatchy/pull/574): Scoped outbound AI provider calls read server pause policies in bounded batches. Five scoring-sized server IDs, including one without a policy row, now use one policy SELECT, at most 200 servers per query, plus one global enablement lookup, instead of a full status read per server. Pause still takes precedence over global disablement. A corrupt stored policy is treated as paused, failing closed, and an empty scope skips the checks as before. Fixes #573.

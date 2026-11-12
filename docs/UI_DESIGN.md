@@ -448,6 +448,16 @@ choice and is explained separately from operational response. Server push/replay
 cross-tab synchronization, live toasts and full multi-browser/SQLite/MySQL/failover
 acceptance remain planned, so the asynchronous notification program is not complete.
 
+Issue #661 adds live toasts for new or re-revised unread high and critical
+notifications. They appear bottom-right on desktop and full-width above the bottom
+gutter on phones, using the strong glass surface, severity edge and existing
+notification meta styles. At most three are visible, and bursts collapse into one
+summary linking to the center. Toasts announce through a polite live region, never
+take focus, pause auto-hide on hover or focus and fade in only when motion is
+allowed. Inside an open dialog they mount in the dialog's top layer so Hide and Open
+stay usable. Hide does not mark the notification read or dismissed. Events present at
+load are a baseline and never toast. Cross-tab toast deduplication remains planned.
+
 
 ### v1.24.0 — Exact-match readiness on assessment detail
 
