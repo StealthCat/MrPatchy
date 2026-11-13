@@ -936,8 +936,14 @@ reported a graceful stop, and it neither edits configuration nor stops a process
 Expected-worker notifications still come only from an explicit
 `MRPATCHY_EXPECTED_WORKER_IDS`.
 This remains worker-only self-report inventory, with readiness not assessed.
-Controller, endpoint-agent and GCP-node coverage, alerts and remote deployment
-acceptance remain planned. Rebuild the controller and keep worker versions matched.
+Controller web instances are listed separately. When `MRPATCHY_EXPECTED_CONTROLLER_IDS`
+is set, each listed controller that is missing, stale, stopped, has an invalid or
+unrecognized report, or runs a different version raises one administrator-only
+in-app notification, which resolves
+when it reports again. An invalid setting raises its own notification. These
+notifications grant no readiness, failover or response authority. Endpoint-agent
+resource metrics and readiness, GCP-node inventory and remote deployment acceptance
+remain planned. Rebuild the controller and keep worker versions matched.
 
 
 ### Worker controller/key startup gate (v0.13.0)
