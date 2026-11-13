@@ -1,6 +1,7 @@
 """Durable shared daily AI spend reservations, independent of diagnostic pruning."""
 from datetime import datetime, time as day_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+import hashlib
 import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -247,6 +248,45 @@ def publish_cap_notification(session,cfg,now):
         if current is None or current.lifecycle!='resolved':
             notifications.publish(session,**DAILY_CAP_NOTIFICATION,subject_revision='resolved',
                 severity='info',reason='The shared daily AI spend cap no longer blocks new paid AI work.',
+                deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+    return False
+
+
+UNPRICED_MODEL_NOTIFICATION=dict(source='ai-budget',kind='unpriced-model',subject_type='pricing-model',subject_id='saved-ai-model')
+
+
+def publish_unpriced_model_notification(session,cfg,now):
+    """Publish admin attention while capped admission cannot price the saved model.
+
+    The revision is bound to the catalog version and a digest of the saved model
+    ID, never to counts or times, so repeated collection publishes nothing new.
+    An invalid or expired catalog is left to the separate pricing-catalog alert
+    and neither publishes nor resolves this event. Read-only: it never reserves,
+    releases or authorizes spend and adds no SMTP/webhook alert.
+    """
+    from . import notifications
+    from .notifications import NotificationEvent, NotificationRevision
+    model=cfg.get('ai_model') or ''
+    if cfg.get('ai_enabled') and model and cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
+        result=ai_pricing.model_status(model,now)
+        if not result['ok'] and result['code']=='catalog':return False
+        if not result['ok']:
+            name=('model '+result['model']) if result['model'] else 'model ID'
+            message=('Capped AI admission cannot price the saved '+name+': it is not in the bundled public-price catalog '+
+                ai_pricing.VERSION+'. Every paid AI call, including triage, scoring and plans, is refused before sending '
+                'while a daily spend cap applies. Choose a catalogued model or change the AI control mode in Settings. '
+                'No provider request is sent and no spend is reserved.')
+            notifications.publish(session,**UNPRICED_MODEL_NOTIFICATION,
+                subject_revision='unpriced:'+ai_pricing.VERSION+':model-sha256:'+hashlib.sha256(model.encode('utf-8')).hexdigest(),
+                severity='high',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
+            return True
+    event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
+        for key,value in UNPRICED_MODEL_NOTIFICATION.items())))
+    if event is not None:
+        current=session.get(NotificationRevision,(event.id,event.revision))
+        if current is None or current.lifecycle!='resolved':
+            notifications.publish(session,**UNPRICED_MODEL_NOTIFICATION,subject_revision='resolved',
+                severity='info',reason='Capped AI admission no longer refuses calls because the saved model is unpriced.',
                 deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
     return False
 

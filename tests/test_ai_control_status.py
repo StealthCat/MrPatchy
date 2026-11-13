@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from app import ai_admission, ai_budget, ai_control_status, ai_provider_backoff
+from app import ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff
 from app.db import Session, Setting
 
 
@@ -19,10 +19,17 @@ def configure(*, enabled=True, model='fixture-model', mode='unthrottled', rate=2
         session.commit()
 
 
-def test_snapshot_uses_latest_simultaneous_gate_without_exposing_records(admin):
+def priced_catalog(monkeypatch):
+    # These cases exercise other gates; keep the #735 pricing gate open for them.
+    monkeypatch.setattr(ai_pricing, 'VERIFIED_AT', 0)
+    monkeypatch.setattr(ai_pricing, 'EXPIRES_AT', 4_000_000_000)
+
+
+def test_snapshot_uses_latest_simultaneous_gate_without_exposing_records(admin, monkeypatch):
+    priced_catalog(monkeypatch)
     now = 2_000_000_000.0
     budget_reset = ai_budget._window(now, 'UTC')[1]
-    configure(mode='rate_and_daily', cap=0.01)
+    configure(model='gpt-6-luna', mode='rate_and_daily', cap=0.01)
     with Session() as session:
         session.add_all([
             ai_admission.Admission(id='global', next_at=now + 60, admitted=7, updated=now, model='private-model'),
@@ -60,10 +67,11 @@ def test_indefinite_policy_or_configuration_blocker_refuses_a_claimed_time(admin
     assert [item['code'] for item in result['blockers']] == ['disabled', 'configuration', 'rate_throttle']
 
 
-def test_timezone_overlap_exposes_recheck_without_promising_headroom(admin):
+def test_timezone_overlap_exposes_recheck_without_promising_headroom(admin, monkeypatch):
+    priced_catalog(monkeypatch)
     now = datetime(2026, 3, 8, 8, 0, tzinfo=timezone.utc).timestamp()
     created = datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc).timestamp()
-    configure(mode='daily_cap', cap=1)
+    configure(model='gpt-6-luna', mode='daily_cap', cap=1)
     old_reset = ai_budget._window(created, 'Pacific/Pago_Pago')[1]
     configured_reset = ai_budget._window(now, 'Pacific/Kiritimati')[1]
     with Session() as session:
