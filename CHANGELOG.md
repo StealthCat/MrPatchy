@@ -1,3 +1,15 @@
+## 1.59.92 — 2026-11-13
+
+1. [PR #800](https://github.com/StealthCat/MrPatchy/pull/800): Applies the supplied systemd --user XDG config/data/cache homes and search directories when resolving user unit paths; invalid values are reported as coverage gaps rather than replaced by guessed defaults. This is an additive contract change with unchanged default output and system-scope resolution. Manager-environment collection, runtime-state collection, account enumeration, collector wiring and UI remain open under #702.
+
+## 1.59.91 — 2026-11-13
+
+1. [PR #793](https://github.com/StealthCat/MrPatchy/pull/793): Adds a high-severity, admin-only in-app warning when enabled SMTP or webhook delivery has an open alert with at least three recorded failures. Fixed channel-level text does not expose alert, host, URL, token, recipient or error details; the warning resolves when no alert meets the condition. Delivery, retry/backoff, acknowledgement, schema, roles and response authorization are unchanged. The threshold is fixed at three, there is no deep link, and an unreadable configuration alone cannot trigger a warning. Switching channels with an already-failing undelivered backlog can surface the channel-level warning before the new channel's next delivery attempt.
+
+## 1.59.90 — 2026-11-13
+
+1. [PR #795](https://github.com/StealthCat/MrPatchy/pull/795): Adds one admin-only in-app notification when a server with fresh telemetry has an overdue or future-dated file-integrity hash sweep. Fixed controller-classified text and resolution on recovery make the existing patching hold visible without echoing endpoint data; stale telemetry remains owned by the telemetry-loss alert. No schema, route, role, authorization or patching-gate changes. A missing sweep is not a clean-host or compromise verdict; detection is limited to active, non-enrolling servers with telemetry received within 120 seconds, and disable/delete resolution occurs on the next coordinator tick.
+
 ## 1.59.89 — 2026-11-13
 
 1. [PR #791](https://github.com/StealthCat/MrPatchy/pull/791): Update scoring now stops hourly retries after any non-transient, non-policy AI failure, including rejected credentials, quota/model failures and invalid or incomplete structured results. Affected scores are blocked under the current model/key signature and become eligible immediately after that configuration changes; one admin-only in-app notification is published while blocks remain and resolved when none remain. Startup adds one `update_scores.configuration` column to existing databases. Existing API fields and retry behavior for transient failures, policy waits and non-AI errors are unchanged. No route, role, response-authorization or UI change; no manual per-score retry, blocked advisory-plan coverage, or blocked-score count on the Investigations status card. This source update does not publish a Docker image.

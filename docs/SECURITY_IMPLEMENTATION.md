@@ -3305,7 +3305,31 @@ never partially expanded. System `%u`/`%U`/`%h`/`%s` follow current
 systemd releases resolved them from `User=`, and the collector does not yet record
 the systemd version, so this is listed as a limitation. Each record states `specifiers` as `none`, `expanded`,
 `partial` or `not_applicable` (templates). `$VAR` environment substitution,
-non-default XDG variables, collection wiring, UI and AI classification remain open.
+manager-environment collection, collection wiring, UI and AI classification remain open.
+
+### Non-default XDG directories for systemd --user — worker checkpoint #800
+
+Contract-only; roadmap F remains incomplete. `user_search_paths()` and
+`resolve_user()` accept an optional `xdg` mapping taken from the user manager's
+environment. It can carry `config_home`, `data_home` and `cache_home`, plus
+`config_dirs` and `data_dirs` (a list or a `:`-separated string).
+
+- **Search table:** follows `systemd.unit(5)`: `$XDG_CONFIG_HOME/systemd/user{.control,}`,
+  each `$XDG_CONFIG_DIRS/systemd/user` before `/etc/systemd/user`,
+  `$XDG_DATA_HOME/systemd/user`, and each `$XDG_DATA_DIRS/systemd/user`
+  before `/usr/local/lib/systemd/user`.
+- **Defaults:** absent or empty values retain the XDG Base Directory defaults;
+  output without `xdg` is unchanged.
+- **Invalid values:** relative, non-normalized, NUL/newline or wrong-type values
+  are not replaced by defaults. Their directories are omitted and an
+  `xdg_*_invalid` gap marks the result incomplete. Unknown keys and more than 32
+  directory entries also produce coverage gaps. Duplicate roots remain
+  `user_search_path_conflict`.
+- **Origins/specifiers:** account-home paths are `user`; config paths are
+  `administrator`; `/usr/share` is `vendor`, while local data directories
+  are `local`. `%E`/`%C` follow valid config/cache homes.
+- **Still open:** manager-environment collection, lingering/runtime state,
+  account enumeration, collection wiring, UI and AI classification.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
@@ -8140,3 +8164,47 @@ Deletion keeps its own `server-deleted` resolution. Deleting a server that is al
 
 The event remains advisory. Roles, audit, job cancellation and response authorization are unchanged, and there is no schema change. Configurable thresholds and warning-level notifications remain outstanding.
 
+Worker checkpoint #794 adds a file-integrity coverage producer
+(`app/integrity_sweep_notifications.py`), called from `operations.collect_alerts`
+on the coordinator tick. A stalled hash sweep already adds an `integrity` issue,
+which blocks automatic and scheduled patching, but its only signal was the
+raw-text `integrity` SMTP/webhook alert. That alert is kept out of the bell
+because it carries endpoint text.
+- **Trigger:** one admin-only `integrity-sweep`/`hash-sweep-stalled` event for
+  each active, non-enrolling server whose telemetry is fresh (`last_seen` within
+  120 seconds). It fires when either:
+  - the last hash sweep is more than 30 minutes old (`overdue`); this sustained
+    threshold avoids flapping around the 360-second ingest check;
+  - the sweep time is more than 120 seconds in the future (`future`).
+- **Payload:** `medium` severity, fixed text per category and a link to
+  `#servers/<host>/overview`. No endpoint paths, errors or timestamps are copied.
+- **Revisions:** an unchanged category publishes nothing, and a category change
+  appends a revision.
+- **Resolution:** the event resolves once on recovery, on stale telemetry (the
+  telemetry-loss producer owns that case) or when the server is disabled,
+  deleted or re-enrolling. Disable and delete resolve on the next coordinator
+  tick, so they can lag by about 30 seconds.
+- **Unchanged:** a rejected payload never blocks alert collection. The raw
+  `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
+  is acknowledged, remediated or authorized, and there is no schema change.
+- **Remaining:** a configurable threshold, and a native agent sweep-stall
+  acceptance test.
+
+
+### External alert-delivery failure notifications — worker checkpoint #792
+
+This adds a roadmap J health producer for the SMTP/webhook outbox itself. `operations.deliver_one()` retries each open alert with backoff and stores only a sanitized error class. Until now, a broken channel was visible only on per-alert rows in the Operations panel, so administrators who rely on email or a webhook could miss every alert without knowing it.
+
+`collect_alerts` now publishes one admin-only in-app event (`alert-delivery` / `delivery-failing`, severity high) when both of these are true:
+
+- external delivery is enabled;
+- at least one open, undelivered alert has recorded an error on 3 or more delivery attempts.
+
+The reason text is fixed per channel (SMTP email or webhook). It never contains alert messages, server names, URLs, tokens, recipients or error strings. The revision binds only to the channel, so more failures or a changing error class do not create new unread revisions. The event resolves once when no alert still meets the condition: delivery succeeded, the alert resolved or was acknowledged, or delivery was disabled or removed. A later failing episode reopens it as an unread revision. An unreadable delivery configuration is reported as an unknown channel and never raises.
+
+The producer is read-only. It never sends, retries, changes backoff or acknowledges anything, and it adds no `Alert` row, so a broken channel cannot alert about itself. There are no schema, role or response-authorization changes.
+
+**Remaining:**
+- The event has no deep link, because the Operations panel is a modal with no route.
+- The threshold is fixed.
+- A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.

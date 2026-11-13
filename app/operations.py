@@ -305,12 +305,19 @@ def collect_alerts(now=None):
             if host.id in overdue_hosts:
                 count=sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in s.scalars(select(Package).where(Package.host_id==host.id,Package.candidate!='')))
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
+        # In-app only: the raw integrity alert carries endpoint text; publish fixed controller-classified wording.
+        from . import integrity_sweep_notifications
+        try:integrity_sweep_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
         _resolve_operational_notifications(s,published,now)
+        # This producer observes the resolved outbox; it never sends or retries alerts.
+        from . import alert_delivery_notifications
+        alert_delivery_notifications.publish(s,now)
         s.commit()
 
 def delivery_error(error):
