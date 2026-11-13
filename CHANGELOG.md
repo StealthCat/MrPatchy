@@ -1,3 +1,8 @@
+## 1.59.83 — 2026-11-13
+
+1. [PR #764](https://github.com/StealthCat/MrPatchy/pull/764): When process triage misses the fleet known-good cache, the AI run timeline now explains why, before any paid provider call. The possible reasons are an administrator re-triage bypass, a changed-artifact bypass, incomplete exact verified context (with up to three fixed contract labels), no candidate, a revoked candidate, or a candidate that was not reusable at lookup time. Messages are fixed text with no evidence values or identifiers. The diagnostic is read-only and fails open, so lookup, reuse, billing, verdicts, approvals and response boundaries are unchanged. Closes #763.
+2. Compatibility and limits: no schema, API or configuration change. Each cache miss adds one pruned AI-run timeline event. The candidate state is read after lookup, so it reflects the current state rather than the state at lookup time. This source update does not publish a Docker image.
+
 ## 1.59.82 — 2026-11-13
 
 1. [PR #762](https://github.com/StealthCat/MrPatchy/pull/762): Expected controllers (`MRPATCHY_EXPECTED_CONTROLLER_IDS`) in an attention state now raise one administrator-only in-app notification each, linking to **Activity → Workers**, matching expected workers. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium. Text is fixed and copies no reported values. The revision is the state, so unchanged passes publish nothing. Recovery or removal from configuration resolves the event. An invalid configuration raises one separate event and leaves existing events unchanged, and a freshness window of startup grace suppresses new attention. Failures are logged without stopping the coordinator tick. Closes #761.

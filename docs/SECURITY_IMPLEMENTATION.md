@@ -2330,6 +2330,20 @@ no lookup, publication, revocation, approval or response semantics. Recording
 review completion, notifying administrator-initiated revocations, hit/miss
 reasons and saved-call estimates remain open.
 
+Worker checkpoint #763 explains process-triage cache misses. When the exact
+known-good lookup returns no hit, the worker opens a separate read-only session
+after the lookup mutation and adds one fixed-text `known_good_lookup` event to
+the AI run timeline. The event says the lookup was bypassed by administrator
+re-triage, bypassed by an authenticated artifact change, had ineligible context
+(with up to three fixed contract labels), found no candidate, found a revoked
+candidate, or found an active candidate that was not reusable at lookup time
+(unavailable then, or failed provenance revalidation).
+`lookup()`, hits, publication, revocation, budget, role and response
+boundaries are unchanged. A cache hit records no miss event, and a failed
+diagnostic is logged without affecting the verdict. The events are ordinary
+pruned AI-log diagnostics. Durable miss counters, saved-call estimates and
+matched production acceptance remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
