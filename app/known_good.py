@@ -428,6 +428,50 @@ def lookup(s, snapshot, model, policy_hashes, bypass=False):
     return None
 
 
+MISS_TEXT = {
+    'bypassed_refresh': 'Administrator re-triage bypassed the fleet known-good cache.',
+    'bypassed_changed': 'Authenticated artifact change bypassed the fleet known-good cache.',
+    'context_ineligible': 'Exact verified context is incomplete, so no cache lookup was possible',
+    'no_candidate': 'No fleet known-good candidate exists for this exact fingerprint.',
+    'candidate_revoked': 'The matching fleet known-good candidate is revoked.',
+    'candidate_unverified': 'The matching fleet known-good candidate failed provenance revalidation.',
+}
+MISS_REASON_LIMIT = 3
+
+
+def explain_miss(s, snapshot, model, policy_hashes, refresh=False, changed=False):
+    """Classify why ``lookup`` returned no hit, as fixed diagnostic text.
+
+    Read-only and advisory: it never grants reuse or alters lookup results. The
+    message contains only fixed labels, never evidence values or identifiers.
+    """
+    if refresh:
+        code, details = 'bypassed_refresh', []
+    elif changed:
+        code, details = 'bypassed_changed', []
+    else:
+        statuses = [_safe_probe(snapshot, model, policy_hash)
+            for policy_hash in dict.fromkeys(policy_hashes or [])]
+        fingerprints = [status['fingerprint'] for status in statuses if status['eligible']]
+        if not fingerprints:
+            details = []
+            for status in statuses:
+                for reason in status['reasons']:
+                    if reason['detail'] not in details:
+                        details.append(reason['detail'])
+            code, details = 'context_ineligible', details[:MISS_REASON_LIMIT]
+        else:
+            states = set(s.scalars(select(Entry.active).where(
+                Entry.fingerprint.in_(fingerprints))))
+            code = ('candidate_unverified' if True in states else
+                'candidate_revoked' if False in states else 'no_candidate')
+            details = []
+    message = MISS_TEXT[code]
+    if code == 'context_ineligible':
+        message += (': ' + ' '.join(details)) if details else '.'
+    return {'code': code, 'message': message}
+
+
 def link_reuse(s, row, hit):
     """Link a retained cache-sourced assessment to its current observation."""
     metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None

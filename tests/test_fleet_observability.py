@@ -40,7 +40,7 @@ def test_triage_persists_stages_error_and_redacts_provider(admin,monkeypatch):
     worker.investigate_one();ai_runs.heartbeat()
     data=admin.get('/api/ai/runs').json()['items'];assert len(data)==1 and data[0]['state']=='error' and data[0]['calls']==1
     detail=admin.get('/api/ai/runs/'+data[0]['id']).json()
-    assert [e['stage'] for e in detail['events'] if not e['stage'].startswith('timing_')]==['starting','api_request','api_response','failed']
+    assert [e['stage'] for e in detail['events'] if not e['stage'].startswith('timing_')]==['starting','known_good_lookup','api_request','api_response','failed']
     assert 'HTTP 401' in json.dumps(detail) and 'req_test' in json.dumps(detail)
     assert 'secret-api-key' not in json.dumps(detail) and '/private/process' not in json.dumps(detail)
     status=admin.get('/api/investigation-status').json();assert status['reason']=='blocked' and status['blocked']==1 and status['retry_at'] is None
