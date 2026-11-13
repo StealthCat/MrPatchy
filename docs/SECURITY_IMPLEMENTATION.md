@@ -2522,11 +2522,14 @@ That covers rejected keys, unsupported models, declined or invalid structured
 results, and evidence or validation refusals. A failed automatic proposal
 disappeared because automatic planning tries once per incident evidence revision.
 - **Notification:** `job_notifications` now publishes one admin-only
-  `operations`/`<action>` event per server and action when such a job fails.
-  It links to `#activity/jobs/<id>`. The reason is fixed text saying no plan
-  was proposed and nothing ran; no provider message, error or evidence is
-  copied. A later failure appends a revision; a later `complete` job of the same
-  action resolves it.
+  `operations`/`<action>` event per plan incident when such a job fails. The
+  event subject is the incident (`incident` for `security-plan`,
+  `startup-incident` for `startup-plan`), with `host_id` kept for
+  authorization, so a plan for one incident never resolves or overwrites
+  another incident's failure. It links to `#activity/jobs/<id>`. The reason is
+  fixed text saying no plan was proposed and nothing ran; no provider message,
+  error or evidence is copied. A later failure for the same incident appends a
+  revision; a later `complete` plan for the same incident resolves it.
 - **Not published:** controlled AI waits (budget, pacing, provider backoff,
   pause) keep the job queued. Automatic proposals the worker skips before any
   AI call, because the policy was turned off or the evidence changed, are

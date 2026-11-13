@@ -18,7 +18,11 @@ Policy:
   publishes here. Other actions publish nothing.
 - A ``failed`` AI response-plan job (``security-plan``/``startup-plan``,
   #806) follows the same failure/resolution rules, but only administrators
-  see it, because only administrators request and review plans. A controlled
+  see it, because only administrators request and review plans. A plan is
+  per incident, so its event is scoped to the plan's incident (security) or
+  startup-change incident (startup) rather than to the server: only a later
+  successful plan for the same incident resolves it, and failures for
+  different incidents stay separate events. A controlled
   AI wait (budget, pacing, provider backoff or pause) keeps the job queued and
   publishes nothing. An automatic proposal that the worker skips before any AI
   call, because the policy was turned off or the incident evidence changed,
@@ -46,6 +50,11 @@ PLAN_ACTIONS = {
     'startup-plan': 'AI startup-change response planning',
 }
 PLAN_MINIMUM_ROLE = 'admin'
+PLAN_SUBJECT_TYPES = {'security-plan': 'incident', 'startup-plan': 'startup-incident'}
+PLAN_RESOLVED = {
+    'security-plan': 'A later AI response plan for this security incident completed.',
+    'startup-plan': 'A later AI response plan for this startup-change incident completed.',
+}
 # Fixed worker refusals for automatic proposals that never reach the provider.
 AUTOMATIC_PLAN_DISABLED = 'Automatic AI planning is disabled; no AI call sent'
 AUTOMATIC_PLAN_STALE = 'Automatic incident evidence changed; no AI call sent'
@@ -57,9 +66,22 @@ def _link(job):
     return '#activity/jobs/' + job.id
 
 
+def _plan_incident(job):
+    incident_id = (job.payload or {}).get('incident_id')
+    return incident_id if isinstance(incident_id, str) and incident_id else None
+
+
+def _subject(job):
+    """Plan events are per incident; operation events are per server."""
+    if job.action in PLAN_ACTIONS:
+        return PLAN_SUBJECT_TYPES[job.action], _plan_incident(job)
+    return SUBJECT_TYPE, job.host_id
+
+
 def _active(session, job):
+    subject_type, subject_id = _subject(job)
     event = session.get(notifications.NotificationEvent, notifications._event_id(
-        SOURCE, job.action, SUBJECT_TYPE, job.host_id, job.host_id))
+        SOURCE, job.action, subject_type, subject_id, job.host_id))
     if not event:
         return None
     current = session.get(notifications.NotificationRevision, (event.id, event.revision))
@@ -75,7 +97,7 @@ def eligible(job):
     if not job or not job.host_id:
         return False
     if job.action in PLAN_ACTIONS:
-        return not _skipped_automatic_plan(job)
+        return _plan_incident(job) is not None and not _skipped_automatic_plan(job)
     return job.action in ACTIONS and not (job.action == 'patch' and (job.payload or {}).get('_schedule'))
 
 
@@ -89,11 +111,12 @@ def publish_outcome(session, job, *, now=None):
         return False
     plan = job.action in PLAN_ACTIONS
     label = PLAN_ACTIONS[job.action] if plan else ACTIONS[job.action]
-    common = dict(source=SOURCE, kind=job.action, subject_type=SUBJECT_TYPE,
-                  subject_id=job.host_id, host_id=job.host_id, deep_link=_link(job),
+    subject_type, subject_id = _subject(job)
+    common = dict(source=SOURCE, kind=job.action, subject_type=subject_type,
+                  subject_id=subject_id, host_id=job.host_id, deep_link=_link(job),
                   minimum_role=PLAN_MINIMUM_ROLE if plan else MINIMUM_ROLE, now=now)
     if job.state == 'failed':
-        reason = (label + ' failed on this server, so no response plan was proposed. Nothing ran '
+        reason = (label + ' failed for an incident on this server, so no response plan was proposed. Nothing ran '
                   'on the server. Open the operation for its error, then request a new plan after '
                   'fixing the cause; automatic planning only retries for new incident evidence.'
                   if plan else
@@ -105,7 +128,8 @@ def publish_outcome(session, job, *, now=None):
     if job.state == 'complete' and _active(session, job):
         _, created = notifications.publish(
             session, subject_revision='complete:' + job.id, severity='info',
-            reason='A later ' + label[0].lower() + label[1:] + ' completed on this server.',
+            reason=(PLAN_RESOLVED[job.action] if plan else
+                    'A later ' + label[0].lower() + label[1:] + ' completed on this server.'),
             lifecycle='resolved', **common)
         return created
     return False

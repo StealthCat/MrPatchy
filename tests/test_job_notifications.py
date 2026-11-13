@@ -188,13 +188,50 @@ def test_failed_plan_job_publishes_admin_only_fixed_event_and_success_resolves(a
     assert finish('plan-b', action=action, state='complete', payload={'incident_id': 'i'}) is True
     [item] = items('planner')
     assert item['lifecycle'] == 'resolved' and item['deep_link'] == '#activity/jobs/plan-b'
+    assert item['reason'] == job_notifications.PLAN_RESOLVED[action]
+    assert 'aI' not in item['reason']
+
+
+@pytest.mark.parametrize('action', sorted(job_notifications.PLAN_ACTIONS))
+def test_plan_success_for_another_incident_does_not_resolve_a_failure(admin, action):
+    seed()
+    admins_and_operators()
+    assert finish('plan-a', action=action, payload={'incident_id': 'incident-A'}) is True
+    assert finish('plan-b', action=action, state='complete',
+                  payload={'incident_id': 'incident-B'}) is False
+    [item] = items('planner')
+    assert item['lifecycle'] == 'active' and item['deep_link'] == '#activity/jobs/plan-a'
+    # A failure for a different incident is its own event, not a revision of A's.
+    assert finish('plan-c', action=action, payload={'incident_id': 'incident-C'}) is True
+    active = sorted(i['deep_link'] for i in items('planner') if i['lifecycle'] == 'active')
+    assert active == ['#activity/jobs/plan-a', '#activity/jobs/plan-c']
+    # Only a later success for incident A resolves A's event.
+    assert finish('plan-d', action=action, state='complete',
+                  payload={'incident_id': 'incident-A'}) is True
+    by_link = {i['deep_link']: i['lifecycle'] for i in items('planner')}
+    assert by_link == {'#activity/jobs/plan-d': 'resolved', '#activity/jobs/plan-c': 'active'}
+
+
+def test_plan_job_without_an_incident_publishes_nothing(admin):
+    seed()
+    admins_and_operators()
+    assert finish('plan-x', action='security-plan', payload={}) is False
+    assert items('planner') == []
+
+
+def test_operation_resolved_text_keeps_existing_wording(admin):
+    seed()
+    finish('agent-fail', action='agent-update', payload={})
+    finish('agent-ok', action='agent-update', state='complete', payload={})
+    [item] = items()
+    assert item['reason'] == 'A later agent update completed on this server.'
 
 
 def test_plan_actions_have_separate_events_and_do_not_resolve_each_other(admin):
     seed()
     admins_and_operators()
-    finish('security', action='security-plan', payload={})
-    assert finish('startup-ok', action='startup-plan', state='complete', payload={}) is False
+    finish('security', action='security-plan', payload={'incident_id': 'i'})
+    assert finish('startup-ok', action='startup-plan', state='complete', payload={'incident_id': 'i'}) is False
     [item] = items('planner')
     assert item['kind'] == 'security-plan' and item['lifecycle'] == 'active'
 
