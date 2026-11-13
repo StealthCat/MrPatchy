@@ -975,6 +975,10 @@ def _loop(reporter):
                             from . import worker_registry
                             worker_registry.publish_notifications()
                         except Exception:log.exception('Expected-worker notifications failed')
+                        try:
+                            from . import controller_registry
+                            controller_registry.publish_notifications()
+                        except Exception:log.exception('Expected-controller notifications failed')
                     # Resume observation, never the package transaction, after worker loss.
                     resume_busy={host_id for _,host_id in active_jobs.values()}
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
