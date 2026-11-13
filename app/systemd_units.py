@@ -47,6 +47,12 @@ An optional ``xdg`` mapping taken from the user manager's environment applies
 non-default ``XDG_CONFIG_HOME``/``XDG_DATA_HOME``/``XDG_CACHE_HOME`` and
 ``XDG_CONFIG_DIRS``/``XDG_DATA_DIRS``; an invalid value is a coverage gap and
 is never replaced by a guessed default.
+
+Both resolvers take an optional ``systemd_version`` (the manager's release,
+from ``parse_systemd_version``). Specifier meanings changed across releases, so
+a supplied version withholds every specifier that release did not support with
+its current meaning (``SPECIFIER_MIN_VERSION``); a withheld specifier stays raw
+as an ``unexpanded_specifier`` gap. Omitting the version keeps today's table.
 """
 from __future__ import annotations
 
@@ -128,6 +134,25 @@ SYSTEM_MANAGER_SPECIFIERS = {
     'u': 'root', 'U': '0', 'g': 'root', 'G': '0', 'h': '/root', 's': '/bin/sh',
     't': '/run', 'S': '/var/lib', 'C': '/var/cache', 'L': '/var/log', 'E': '/etc',
 }
+
+
+# First systemd release giving each manager specifier its current
+# systemd.unit(5) meaning (upstream NEWS): 228 made %u/%U/%h/%s always resolve
+# to the manager's user instead of User=; 236 added %S/%C/%L; 239 added %E and
+# the unit-name %j/%J; 240 added %g/%G. Older releases leave these unexpanded.
+SPECIFIER_MIN_VERSION = {
+    'u': 228, 'U': 228, 'h': 228, 's': 228,
+    'S': 236, 'C': 236, 'L': 236,
+    'E': 239, 'j': 239, 'J': 239,
+    'g': 240, 'G': 240,
+}
+MAX_SYSTEMD_VERSION = 9999
+MAX_VERSION_TEXT = 4096
+_VERSION_RE = re.compile(r'^systemd ([0-9]{1,4})(?: \(([\x21-\x7e][\x20-\x7e]{0,127})\))?$')
+VERSION_LIMITATION_APPLIED = ('Version-dependent specifiers follow the supplied systemd version; '
+                              'a specifier that release did not support stays raw as a gap.')
+VERSION_LIMITATION_INVALID = ('The supplied systemd version was invalid, so every version-dependent '
+                              'specifier stays raw as a gap.')
 
 
 def _gap(code: str, path: str = '', detail: str = '') -> dict[str, str]:
@@ -224,7 +249,41 @@ def _dropin_dirs(parts: dict[str, Any]) -> list[str]:
     return dirs
 
 
-def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
+def parse_systemd_version(text: Any) -> dict[str, Any]:
+    """Parse ``systemctl --version`` output into the manager's release number.
+
+    Only the first line is read: ``systemd N`` optionally followed by
+    `` (package-version)``. Returns ``{'version', 'package_version', 'gaps'}``;
+    anything not matching exactly (missing, oversized, NUL, leading zeros,
+    out-of-range or extra text) yields ``version`` None and a gap, never a guess.
+    """
+    gaps: list[dict[str, str]] = []
+    if not isinstance(text, str):
+        return {'version': None, 'package_version': None, 'gaps': [_gap('systemd_version_unreadable')]}
+    if len(text) > MAX_VERSION_TEXT or '\x00' in text:
+        return {'version': None, 'package_version': None,
+                'gaps': [_gap('systemd_version_unparsed', detail='oversized or NUL')]}
+    first = text.split('\n', 1)[0].rstrip(' \t\r')
+    match = _VERSION_RE.match(first)
+    version = int(match.group(1)) if match else None
+    if match is None or match.group(1).startswith('0') or not 0 < version <= MAX_SYSTEMD_VERSION:
+        gaps.append(_gap('systemd_version_unparsed', detail=first[:64]))
+        return {'version': None, 'package_version': None, 'gaps': gaps}
+    return {'version': version, 'package_version': match.group(2), 'gaps': gaps}
+
+
+def _version_withheld(systemd_version: Any) -> tuple[str, int | None, frozenset[str]]:
+    """Return (state, version, specifiers withheld) for an optional supplied version."""
+    if systemd_version is None:
+        return 'not_supplied', None, frozenset()
+    if isinstance(systemd_version, bool) or not isinstance(systemd_version, int) \
+            or not 0 < systemd_version <= MAX_SYSTEMD_VERSION:
+        return 'invalid', None, frozenset(SPECIFIER_MIN_VERSION)
+    return 'applied', systemd_version, frozenset(
+        k for k, minimum in SPECIFIER_MIN_VERSION.items() if systemd_version < minimum)
+
+
+def resolve(observations: Any, collected_roots: Any = None, systemd_version: Any = None) -> dict[str, Any]:
     """Resolve effective system units from captured observations.
 
     ``observations`` is a list of dicts with ``path`` and ``kind`` (``file``,
@@ -232,9 +291,12 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
     ``text`` (and optional ``truncated``) for files. ``collected_roots`` lists
     the search directories the collector actually enumerated; every other
     search directory is reported as an uncollected coverage gap.
+    ``systemd_version`` is the manager's release (see ``parse_systemd_version``);
+    when supplied, specifiers that release did not support with today's meaning
+    stay raw as gaps. Omitting it keeps the current ``systemd.unit(5)`` table.
     """
     return _resolve(observations, collected_roots, SEARCH_PATHS, _ENABLEMENT_ORIGINS, [],
-                    manager_specifiers=SYSTEM_MANAGER_SPECIFIERS)
+                    manager_specifiers=SYSTEM_MANAGER_SPECIFIERS, systemd_version=systemd_version)
 
 
 def _valid_dir(value: Any) -> bool:
@@ -375,7 +437,8 @@ def user_search_paths(home: Any, runtime_dir: Any,
 
 
 def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
-                 collected_roots: Any = None, xdg: Any = None) -> dict[str, Any]:
+                 collected_roots: Any = None, xdg: Any = None,
+                 systemd_version: Any = None) -> dict[str, Any]:
     """Resolve one account's effective ``systemd --user`` units.
 
     ``home`` and ``runtime_dir`` (``$XDG_RUNTIME_DIR``, normally
@@ -386,7 +449,8 @@ def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
     prefixes ``+``/``!`` relax sandboxing within the account and do not gain
     root, so ``privileged_exec`` is always false here. Enablement links in the
     account's own configuration directory count as enabled. ``xdg`` is the
-    optional user-manager XDG environment described in ``user_search_paths``.
+    optional user-manager XDG environment described in ``user_search_paths``;
+    ``systemd_version`` gates specifiers exactly as in ``resolve``.
     """
     table, gaps = user_search_paths(home, runtime_dir, xdg)
     valid_account = isinstance(account, str) and 0 < len(account) <= 255 and account.isprintable() \
@@ -409,17 +473,21 @@ def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
         manager['t'] = runtime_dir
     result = _resolve(observations, collected_roots, table, _ENABLEMENT_ORIGINS | {'user'}, gaps,
                       scope='user', account=account if valid_account else None,
-                      manager_specifiers=manager)
+                      manager_specifiers=manager, systemd_version=systemd_version)
     return result
 
 
 def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_origins,
              initial_gaps, scope: str = 'system', account: Any = None,
-             manager_specifiers: dict[str, str] | None = None) -> dict[str, Any]:
+             manager_specifiers: dict[str, str] | None = None,
+             systemd_version: Any = None) -> dict[str, Any]:
+    version_state, version, withheld = _version_withheld(systemd_version)
     rank = {root: i for i, (root, _) in enumerate(search_paths)}
     origins = dict(search_paths)
     roots_by_len = sorted(rank, key=len, reverse=True)
     gaps: list[dict[str, str]] = list(initial_gaps)
+    if version_state == 'invalid':
+        gaps.append(_gap('systemd_version_invalid', detail=repr(systemd_version)[:64]))
     obs = observations if isinstance(observations, list) else []
     if not isinstance(observations, list):
         gaps.append(_gap('invalid_observations'))
@@ -539,7 +607,7 @@ def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_o
             if declared is not None and declared != account:
                 gaps.append(_gap('user_unit_declared_user', unit['fragment'] or name, str(declared)[:256]))
             unit['privileged_exec'] = False
-        _expand_unit(unit, alias_target.get(name, name), manager_specifiers or {}, gaps)
+        _expand_unit(unit, alias_target.get(name, name), manager_specifiers or {}, gaps, withheld)
         referenced.add(unit['fragment'])
         units.append(unit)
         unit_index[name] = unit
@@ -589,6 +657,9 @@ def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_o
 
     gaps.sort(key=lambda g: (g['code'], g['path'], g['detail']))
     body = {'contract_version': CONTRACT_VERSION, 'units': units, 'triggers': triggers, 'gaps': gaps}
+    if version_state != 'not_supplied':
+        # Only present when supplied, so results without a version keep their digest.
+        body['systemd_version'] = version
     if scope == 'user':
         body = {**body, 'scope': 'user', 'account': account,
                 'search_paths': [{'path': root, 'origin': origin} for root, origin in search_paths]}
@@ -597,7 +668,7 @@ def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_o
         **body,
         'complete': not gaps,
         'runtime_state': 'not_collected',
-        'limitations': list(USER_LIMITATIONS if scope == 'user' else LIMITATIONS),
+        'limitations': _limitations(scope, version_state),
         'digest': digest,
     }
 
@@ -688,15 +759,34 @@ def expand_specifiers(value: str, table: dict[str, str]) -> tuple[str, list[str]
     return ''.join(out), []
 
 
+def _limitations(scope: str, version_state: str) -> list[str]:
+    if scope == 'user':
+        out = list(USER_LIMITATIONS)
+    elif version_state == 'not_supplied':
+        out = list(LIMITATIONS)
+    else:
+        # The User=-versus-manager ambiguity is settled by the supplied version.
+        out = [item for item in LIMITATIONS if not item.startswith('System %u/%U/%h/%s')]
+    if version_state == 'applied':
+        out.append(VERSION_LIMITATION_APPLIED)
+    elif version_state == 'invalid':
+        out.append(VERSION_LIMITATION_INVALID)
+    return out
+
+
 def _expand_unit(unit: dict[str, Any], id_name: str, manager: dict[str, str],
-                 gaps: list[dict[str, str]]) -> None:
-    """Attach ``expanded`` and ``specifiers`` to one resolved unit record."""
+                 gaps: list[dict[str, str]], withheld: frozenset[str] = frozenset()) -> None:
+    """Attach ``expanded`` and ``specifiers`` to one resolved unit record.
+
+    ``withheld`` specifiers are left unexpanded (and reported) because the
+    supplied systemd release did not give them their current meaning.
+    """
     names = name_specifiers(id_name) if not unit['template'] else None
     if names is None:
         unit['expanded'] = None
         unit['specifiers'] = 'not_applicable'
         return
-    table = {**manager, **names}
+    table = {k: v for k, v in {**manager, **names}.items() if k not in withheld}
     expanded: dict[str, dict[str, Any]] = {}
     missing: set[str] = set()
     used = False
