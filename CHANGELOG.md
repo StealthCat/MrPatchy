@@ -1,3 +1,7 @@
+## 1.59.97 — 2026-11-13
+
+1. [PR #814](https://github.com/StealthCat/MrPatchy/pull/814): Adds browser-side username-pattern and password-length constraints matching the existing sign-in API contract, rejecting invalid usernames before a request is sent. Frontend-only; the server-side validation and sanitized error handling are unchanged. No account or authentication behavior changes for valid credentials.
+
 ## 1.59.96 — 2026-11-13
 
 1. [PR #813](https://github.com/StealthCat/MrPatchy/pull/813): Keeps Account → Operations usable when saved SMTP/webhook settings cannot be decrypted and lets administrators replace them. Adds an admin-only in-app warning while open alerts await delivery. The GET notifications response adds `unreadable`; an existing `failing:unknown` event becomes `unreadable` once, creating a new unread revision. Replacement discards unrecoverable secrets, which must be entered again. The notice does not send or retry alerts; it has no deep link, and the advanced SMTP editor has no separate unreadable indicator. No schema, role or response-authorization change.

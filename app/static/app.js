@@ -515,7 +515,7 @@ async function backupModal(hostId){
 
 // Account controls are available to every role; authorization is enforced by the API.
 const usernameLabel=document.createElement('label');usernameLabel.textContent='Username';
-const usernameInput=document.createElement('input');usernameInput.name='username';usernameInput.value='admin';usernameInput.autocomplete='username';usernameLabel.append(usernameInput);
+const usernameInput=document.createElement('input');usernameInput.name='username';usernameInput.value='admin';usernameInput.autocomplete='username';usernameInput.pattern='[A-Za-z0-9_.\\-]{1,64}';usernameInput.title='Letters, digits, dot, underscore or hyphen (up to 64)';usernameLabel.append(usernameInput);
 usernameInput.required=true;usernameInput.maxLength=64;$('#login-form [name=password]').closest('label').before(usernameLabel);
 const otpLabel=document.createElement('label');otpLabel.textContent='Authenticator code (if enabled)';
 const otpInput=document.createElement('input');otpInput.name='otp';otpInput.autocomplete='one-time-code';otpInput.inputMode='numeric';otpInput.maxLength=16;otpLabel.append(otpInput);
