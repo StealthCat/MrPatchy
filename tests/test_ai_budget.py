@@ -8,6 +8,7 @@ import pytest
 
 from app import ai, ai_admission, ai_budget, ai_pricing, ai_provider_backoff, notifications, operations
 from app.db import Session, Setting
+from app.security import seal
 
 
 def configure(mode='daily_cap', cap=Decimal('0.01'), timezone='UTC', rate=20):
@@ -17,6 +18,8 @@ def configure(mode='daily_cap', cap=Decimal('0.01'), timezone='UTC', rate=20):
             'ai_control_mode': mode, 'ai_rate_per_hour': rate,
             'ai_daily_cap_usd': float(cap), 'ai_budget_timezone': timezone,
         }))
+        # A readable saved key, as required to enable AI (#769 reports an unusable one).
+        session.merge(Setting(key='openai_key', value={'encrypted': seal('fixture')}))
         session.commit()
 
 

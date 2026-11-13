@@ -6,6 +6,7 @@ import pytest
 from app import ai_provider_backoff, notifications, operations
 from app.db import Session, Setting, config
 from app.identity import User
+from app.security import seal
 
 T0 = 1_900_000_000.0
 LINK = '#settings/ai'
@@ -15,6 +16,7 @@ def configure(enabled=True):
     with Session() as session:
         session.merge(Setting(key='config', value={**config(session), 'ai_enabled': enabled,
                                                     'ai_model': 'gpt-6-luna'}))
+        session.merge(Setting(key='openai_key', value={'encrypted': seal('fixture')}))
         if not session.get(User, 'viewer'):
             session.add(User(username='viewer', password='x', role='viewer'))
         session.commit()

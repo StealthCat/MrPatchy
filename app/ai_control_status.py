@@ -2,7 +2,7 @@
 import time
 from decimal import Decimal, InvalidOperation
 
-from . import ai_admission, ai_budget, ai_pricing, ai_provider_backoff
+from . import ai_admission, ai_budget, ai_credential_notifications, ai_pricing, ai_provider_backoff
 from .db import Setting, config
 
 
@@ -17,6 +17,9 @@ PRICING_MESSAGES = {
     'catalog': 'The bundled public-price catalog is not currently valid, so capped admission cannot reserve spend for any call.',
     'model': 'The saved model has no verified catalog price, so capped admission cannot reserve spend for it.',
 }
+
+CREDENTIAL_MESSAGE = ('The saved API key cannot be decrypted with this controller\'s encryption key. Restore the '
+                      'matching encryption key or save the API key again before provider calls can start.')
 
 
 def _money_exhausted(value):
@@ -43,6 +46,8 @@ def snapshot(session, now=None):
         add('disabled', 'Central AI provider calls are disabled by an administrator.')
     if not settings['ai_model'] or session.get(Setting, 'openai_key') is None:
         add('configuration', 'A saved model and API key are required before provider calls can start.')
+    elif ai_credential_notifications.state(session)[0] == 'unreadable':
+        add('credential', CREDENTIAL_MESSAGE)
     if settings['ai_enabled'] and budget['enabled'] and settings['ai_model']:
         # Disabled AI is already explained by the `disabled` gate (#735 criterion 2).
         # Capped admission must quote every paid call from the bundled catalog;
