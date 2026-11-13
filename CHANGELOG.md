@@ -1,3 +1,8 @@
+## 1.59.72 — 2026-11-13
+
+1. [PR #745](https://github.com/StealthCat/MrPatchy/pull/745): Administrators get a medium-severity in-app notification, linking to the server's Maintenance tab, when a distribution-upgrade release plan is ready for its GO/no-go decision. A plan qualifies when it is ready, has no blockers, its sealed expiry has not passed, and its server is enabled and not deleted. Revisions are bound to the frozen plan digest, so a regenerated plan resurfaces as unread. GO, no-go, expiry, regeneration and server removal each publish exactly one resolved revision with a fixed reason. AI review text, configuration content and paths are never copied. Fixes #743.
+2. Compatibility and limits: an additive notification producer. It approves, declines or runs nothing, and makes no schema change. This source update does not publish a Docker image.
+
 ## 1.59.71 — 2026-11-12
 
 1. [PR #740](https://github.com/StealthCat/MrPatchy/pull/740): Administrators get an advance, low-severity in-app warning, linking to AI Settings, when counted shared daily AI spend reaches 80% of the cap. Counted spend is the same conservative total admission uses. The warning records the counted and remaining amounts, threshold, cap, budget day and next reset as of when it was raised. Its revision is bound to the window and cap, so later reservations in the same window cause no unread churn. It resolves when the cap is reached, at which point the existing exhausted notification takes over. It also resolves when the window resets, the cap is raised, the mode becomes uncapped or AI is disabled. Closes #739.
