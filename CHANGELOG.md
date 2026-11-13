@@ -1,3 +1,7 @@
+## 1.59.92 — 2026-11-13
+
+1. [PR #800](https://github.com/StealthCat/MrPatchy/pull/800): Applies the supplied systemd --user XDG config/data/cache homes and search directories when resolving user unit paths; invalid values are reported as coverage gaps rather than replaced by guessed defaults. This is an additive contract change with unchanged default output and system-scope resolution. Manager-environment collection, runtime-state collection, account enumeration, collector wiring and UI remain open under #702.
+
 ## 1.59.91 — 2026-11-13
 
 1. [PR #793](https://github.com/StealthCat/MrPatchy/pull/793): Adds a high-severity, admin-only in-app warning when enabled SMTP or webhook delivery has an open alert with at least three recorded failures. Fixed channel-level text does not expose alert, host, URL, token, recipient or error details; the warning resolves when no alert meets the condition. Delivery, retry/backoff, acknowledgement, schema, roles and response authorization are unchanged. The threshold is fixed at three, there is no deep link, and an unreadable configuration alone cannot trigger a warning. Switching channels with an already-failing undelivered backlog can surface the channel-level warning before the new channel's next delivery attempt.
