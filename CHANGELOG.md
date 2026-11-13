@@ -1,3 +1,62 @@
+## 1.59.73 — 2026-11-13
+
+1. [PR #760](https://github.com/StealthCat/MrPatchy/pull/760): Fixed: on MySQL/MariaDB with parallel triage workers, a second AI contradiction of the same fleet known-good candidate no longer discards its completed medium/high verdict and re-bills the provider. The contradiction path now re-reads the candidate under its row lock. A candidate that is already revoked or missing is left untouched, so the first contradiction or revocation remains the single record and audit event, and the verdict is saved. A still-active candidate is revoked whatever its version. The administrator revoke path keeps its strict version and already-revoked checks. Fixes #759.
+2. Compatibility and limits: no API, schema or configuration change. A racing contradiction now succeeds quietly instead of erroring and being retried. The regression tests interleave deterministically and do not run real parallel threads. This source update does not publish a Docker image.
+
+## 1.59.72 — 2026-11-13
+
+1. [PR #745](https://github.com/StealthCat/MrPatchy/pull/745): Administrators get a medium-severity in-app notification, linking to the server's Maintenance tab, when a distribution-upgrade release plan is ready for its GO/no-go decision. A plan qualifies when it is ready, has no blockers, its sealed expiry has not passed, and its server is enabled and not deleted. Revisions are bound to the frozen plan digest, so a regenerated plan resurfaces as unread. GO, no-go, expiry, regeneration and server removal each publish exactly one resolved revision with a fixed reason. AI review text, configuration content and paths are never copied. Fixes #743.
+2. Compatibility and limits: an additive notification producer. It approves, declines or runs nothing, and makes no schema change. This source update does not publish a Docker image.
+
+## 1.59.71 — 2026-11-12
+
+1. [PR #740](https://github.com/StealthCat/MrPatchy/pull/740): Administrators get an advance, low-severity in-app warning, linking to AI Settings, when counted shared daily AI spend reaches 80% of the cap. Counted spend is the same conservative total admission uses. The warning records the counted and remaining amounts, threshold, cap, budget day and next reset as of when it was raised. Its revision is bound to the window and cap, so later reservations in the same window cause no unread churn. It resolves when the cap is reached, at which point the existing exhausted notification takes over. It also resolves when the window resets, the cap is raised, the mode becomes uncapped or AI is disabled. Closes #739.
+2. Compatibility and limits: an additive notification within the existing cap producer, with no change to admission or schema. Amounts in the warning are a snapshot; Settings shows current totals. This source update does not publish a Docker image.
+
+## 1.59.70 — 2026-11-12
+
+1. [PR #738](https://github.com/StealthCat/MrPatchy/pull/738): **Activity → Workers** gains an administrator-only **Endpoint agents** section showing fleet-wide endpoint-agent health. Each agent shows the deployment type its verification receipt actually proves. It is backed by the admin-only, paginated `GET /api/operations/agents`, which returns rows worst-first with counts by health, freshness thresholds and coverage gaps. It reads retained agent-status receipts and telemetry collection times in batches of up to 500 for enabled, non-deleted servers. Classification is pure, and the endpoint never runs inspection, queues work, writes settings or changes authorization. Closes #737.
+2. Compatibility and limits: an additive read-only API and UI section, with no schema change. Health reflects retained receipts and freshness, not a live probe. This source update does not publish a Docker image.
+
+## 1.59.69 — 2026-11-12
+
+1. [PR #736](https://github.com/StealthCat/MrPatchy/pull/736): In daily-cap modes, a saved model that the bundled price catalog cannot price, or a catalog that is not valid, is now reported in advance instead of surfacing as a stream of generic blocked retries. A new pure `ai_pricing.model_status()` performs the same alias-aware check that `reservation()` applies, using the same fixed reason. While AI is enabled with a cap mode and a saved model, `GET /api/settings/ai-control-status` adds an indefinite `pricing` blocker with fixed text that omits the model ID, so `can_start_now` is false and there is no next start. Administrators also get an in-app notification while that blocker lasts, resolved once pricing is possible again. Closes #735.
+2. Compatibility and limits: an additive status blocker and notification, with no change to admission, pricing data or schema. `ok` never promises admission, because tier, tools, output bound and context size are still checked per call. Disabled AI reports only the existing disabled gate. This source update does not publish a Docker image.
+
+## 1.59.68 — 2026-11-12
+
+1. [PR #757](https://github.com/StealthCat/MrPatchy/pull/757): Fix workers and the embedded scheduler without `MRPATCHY_WORKER_ID` registering under a new random ID on every start, which produced duplicate registrations and false missing or stale entries after restarts and upgrades. Each runtime now generates an identity once and keeps it in a per-role slot under `DATA_DIR/worker-identities/`. The existing cross-process identity lock decides slot ownership, so replicas sharing a data volume get distinct identities and a restarted process reclaims a free slot. An explicit `MRPATCHY_WORKER_ID` still takes precedence. Unreadable, invalid or exhausted slots, and unavailable storage, fall back to a boot-only identity with a warning. Fixes #754.
+2. Compatibility and limits: no schema, API or UI change. On its first post-upgrade start, each unconfigured runtime registers once more under its new persistent ID. Earlier random-ID registrations, and those from scaled-down slots, remain as stale history and are not removed automatically (#755). Workers on other machines with their own data directories get their own identities. This source update does not publish a Docker image.
+
+## 1.59.67 — 2026-11-12
+
+1. [PR #734](https://github.com/StealthCat/MrPatchy/pull/734): Administrators get one in-app notification, linking to Investigations, while process investigations are blocked by a non-transient AI provider failure under the current model and key. Examples are a rejected key, unavailable quota and an unsupported model. Alert collection uses the same blocked predicate as the AI status, so items blocked under an earlier configuration are not counted. Revisions are bound to a re-hashed configuration digest, not counts, so a newly rejected configuration resurfaces as unread. The payload is fixed text with no provider message, key or evidence. The event resolves when nothing remains blocked and reopens on recurrence. Closes #733.
+2. Compatibility and limits: a read-only producer that never retries, unblocks, reserves spend or changes authorization, and adds no SMTP/webhook alert or schema change. This source update does not publish a Docker image.
+
+## 1.59.66 — 2026-11-12
+
+1. [PR #732](https://github.com/StealthCat/MrPatchy/pull/732): A failed operator-initiated patch, repository change, signing-key change, package repair, OS release upgrade or agent update now raises an operator-visible, medium-severity in-app notification linking to the job in Activity. Previously it appeared only in Activity. There is one event per server and action. A repeat failure adds an unread revision linking the newest job, and a later successful run of the same action resolves it. Scheduled patch runs and `recovery_required` jobs, which existing alerts already cover, publish nothing, and neither do cancelled jobs, read-only actions or jobs for deleted servers. Reasons use fixed wording, so job output never enters the payload. Publishing runs in the transaction that records the final job state, and a notification error is contained in a savepoint without changing the outcome. Closes #731.
+2. Compatibility and limits: an additive notification producer with no schema, API or role change. It retries, acknowledges and authorizes nothing. This source update does not publish a Docker image.
+
+## 1.59.65 — 2026-11-12
+
+1. [PR #730](https://github.com/StealthCat/MrPatchy/pull/730): When one account has several Mr Patchy tabs open, each new high or critical notification revision shows its toast in only one tab.
+   - Tabs claim admitted revisions in `localStorage`, bound to the signed-in user. The check-and-claim is atomic across tabs where the Web Locks API is available and best-effort otherwise.
+   - A tab fails open and shows its own toasts if storage or locks fail.
+   - Claims are bounded to 500 entries kept for 24 hours, hold no notification text, source or link, and are removed at logout.
+   - A higher revision can still toast once, and burst summaries count only the tab's own claims.
+   - Closes #729.
+2. Compatibility and limits: a client-only change to toast admission, with no API or schema change. Without Web Locks, simultaneous claims across tabs are best-effort. This source update does not publish a Docker image.
+
+## 1.59.64 — 2026-11-12
+
+1. [PR #728](https://github.com/StealthCat/MrPatchy/pull/728): The administrator Investigations page shows a **Shared AI start gates** card below the AI worker status, read from the existing `GET /api/settings/ai-control-status`.
+   - When the gates are open, it says so with the snapshot's limitations and never promises that a particular call will start.
+   - When blocked, it lists each blocker with its next eligible time, a reset recheck boundary marked as not a promised start, or a statement that an administrator must act. It also shows the overall next eligible start, or that there is none while an indefinite hold applies.
+   - An unavailable snapshot shows a retryable notice and is never shown as permission to start.
+   - Closes #727.
+2. Compatibility and limits: a client-only, administrator-only card using an existing API, with no API, schema or admission change. This source update does not publish a Docker image.
+
 ## 1.59.63 — 2026-11-12
 
 1. [PR #726](https://github.com/StealthCat/MrPatchy/pull/726): Add a pure CVE-exploitation containment eligibility contract (`app/cve_containment.py`). It decides whether one exploitation detection may automatically quarantine the artifact and/or terminate the process under a per-CVE policy, with modes `disabled`, `monitor_only` and `enforce`, bounded thresholds and exclusions.

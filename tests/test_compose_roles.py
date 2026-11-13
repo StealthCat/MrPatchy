@@ -10,9 +10,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_ENV_DIFF = (
-    "      # Set only for a single instance; replicas default to unique boot identities.\n"
+    "      # Set only for a single instance; replicas default to distinct persistent generated identities.\n"
     "      MRPATCHY_WORKER_ID: ${MRPATCHY_WORKER_ID:-}\n",
-    "      # Always empty here so every replica gets a unique boot identity, even when .env sets one.\n"
+    "      # Always empty here so replicas never share one ID, even when .env sets one. Each replica\n"
+    "      # instead claims a distinct generated ID that persists on the app-data volume across upgrades.\n"
     '      MRPATCHY_WORKER_ID: ""\n',
 )
 APP_DEPENDENCY = "    depends_on:\n      app:\n        condition: service_healthy\n"

@@ -2402,6 +2402,48 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
 
+Worker checkpoint #733 adds an AI configuration-blocker notification producer.
+A non-transient provider failure (rejected key, unavailable quota, unsupported
+model) leaves each affected process investigation `blocked`, with no automatic
+retry until the model or key changes or an administrator retries. While AI is
+enabled and at least one pending, unapproved behavior on an active, unpaused
+server is blocked under the current configuration, `operations.collect_alerts()`
+publishes one admin-only `ai-triage`/`configuration-blocked` notification that
+links to `#investigations`.
+- **Predicate:** it matches the blocked count in `ai_runs.status()`. Rows blocked
+  under an earlier model/key are eligible again and are not counted.
+- **Revision binding:** each revision is bound to a re-hashed digest of the
+  current configuration signature, never to counts, so more blocked items under
+  the same configuration add no revision. A later configuration that is also
+  rejected resurfaces as unread. The payload is fixed text: no provider message,
+  key material, path or evidence.
+- **Resolution:** one `resolved` revision is published when nothing remains
+  blocked, AI is disabled, or the affected servers are paused, disabled, deleted
+  or their behaviors approved. A recurrence reopens the event.
+- **Unchanged:** the producer only reads. It never retries, unblocks, reserves
+  spend or changes authorization, and it adds no SMTP/webhook alert.
+- **Limitation:** blocked update-scoring and advisory-plan work is not covered
+  yet. Neither is a missing or undecryptable saved key that never reaches a
+  provider call.
+
+Worker checkpoint #739 adds an advance warning to the daily-cap producer. While
+counted spend in an enabled cap mode is at least a fixed 80% of the cap but
+below it, one admin-only `ai-budget`/`daily-cap-warning` notification (severity
+low, `#settings/ai`) names the threshold, cap, budget timezone and next reset,
+plus the counted and remaining amounts recorded when the warning was raised.
+- **Revision binding:** as for the exhausted notification, the revision is bound
+  to the window and cap. The amounts are captured at threshold crossing, and an
+  active warning for the same window and cap is not republished, so later
+  reservations create no new unread revision. The text labels the amounts as
+  recorded at that time; Settings shows the current totals.
+- **Hand-over and resolution:** the warning resolves once when the cap is
+  reached (the exhausted notification then applies), the window resets, the cap
+  is raised, the mode becomes uncapped or AI is disabled.
+- **Unchanged:** admission, reservations, SMTP/webhook alerts and read/dismiss/
+  acknowledgement semantics. The threshold is not yet configurable, and
+  headroom smaller than the next call's quote but above 20% of the cap still
+  defers without notice.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
@@ -2410,6 +2452,37 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
 - Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts with unknown transmission outcomes and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
+
+### Unpriced saved model under a daily cap — worker checkpoint #735
+
+In `daily_cap` and `rate_and_daily` modes, capped admission must quote every
+paid call from the bundled price catalog. `ai_pricing.reservation()` refuses a saved model that is
+not catalogued (for example `gpt-5` or a fine-tune ID), so every capped call
+fails closed. Before this checkpoint nothing showed that in advance.
+- **Pure check:** `ai_pricing.model_status()` reports whether the catalog is
+  valid and can price the alias-resolved saved model. It shares its fixed reason
+  with `reservation()`. An `ok` result never promises that a call is admitted:
+  tier, tools, output bound and context size are still checked per call.
+- **Start-gate snapshot:** `GET /api/settings/ai-control-status` adds an
+  indefinite `pricing` blocker while AI is enabled in a cap mode and a saved
+  model cannot be priced or the catalog is not valid. Disabled AI reports only
+  the existing `disabled` gate. `can_start_now` is then false and there is no
+  automatic next start. The message is fixed and omits the model ID.
+- **Notification:** `operations.collect_alerts()` publishes one admin-only
+  `ai-budget`/`unpriced-model` notification (high severity, `#settings/ai`)
+  while AI is enabled, a cap mode applies, the catalog is valid and the saved
+  model is unpriced. The revision is bound to the catalog version and a SHA-256
+  of the model ID, so repeated collection creates no new revision. A different
+  unpriced model or catalog version resurfaces it as unread. The text names the
+  model only when it is a valid catalog identifier.
+- **Resolution:** one `resolved` revision is published when the model becomes
+  priced or is cleared, the mode becomes uncapped or AI is disabled. An invalid
+  catalog is left to the existing pricing-catalog alert and neither publishes
+  nor resolves this event.
+- **Unchanged:** both additions only read state. They never reserve, release or
+  authorize spend, change admission or add an SMTP/webhook alert.
+- **Limitation:** a missing API key is still reported only by the existing
+  `configuration` gate. Near-exhaustion of the cap remains undetected.
 
 ### Finite implementation and acceptance milestones
 
@@ -3426,6 +3499,27 @@ or response authority, which remains with #451. Still planned for this
 requirement: endpoint-agent and GCP-node inventory, readiness and HTTPS/Caddy
 checks, resource metrics, alerts and the unified dashboard acceptance.
 
+Implementation checkpoint (issue #737): Activity → Workers adds an admin-only
+**Endpoint agents** section backed by `GET /api/operations/agents`
+(`app/agent_fleet_health.py`). The section covers enabled, non-deleted servers
+and is built from the retained read-only agent verification receipt and the
+telemetry collection time. Each row is classified, worst first, as:
+
+- **offline:** live verification was unavailable, or the server is marked offline.
+- **degraded:** helpers are outdated, drifted or blocked, or the agent is verified
+  but telemetry is stale or missing (older than 15 minutes).
+- **unknown:** there is no receipt, the receipt is invalid, stale (older than
+  600 seconds) or future-dated, or enrollment is incomplete.
+- **healthy:** the agent is verified current and telemetry is fresh.
+
+The deployment type is shown as `systemd` only when the receipt names the
+expected `mrpatchy-agent.service` unit. Otherwise it is "not verified".
+Responses carry fixed reasons and an issue count only, with no receipt hashes,
+paths, addresses or telemetry. Settings rows are read in bounded batches rather
+than once per server. The view never inspects, repairs or authorizes anything.
+Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
+unified dashboard acceptance remain open.
+
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
 Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint below.
@@ -3521,6 +3615,28 @@ active. The reconciler never changes plan, incident or approval state, and
 read/dismiss grants nothing. Resolution can lag by up to one scheduler tick,
 which is about 30 seconds. Release-plan approvals and per-user targeting
 remain open.
+
+Worker checkpoint #743 adds the release-plan decision producer. A leader-only
+periodic reconciler (`app/release_notifications.py`) publishes one admin-only
+`release-plans` notification for each distribution-upgrade release plan that is
+`ready`, has no blockers, has not reached its sealed 24-hour `expires` and
+belongs to an active server.
+- **Payload:** fixed text, `medium` severity and a link to
+  `#servers/<host>/maintenance`, where Distribution upgrade plans are reviewed.
+  AI review text, configuration content, package names and paths are never copied.
+- **Revision binding:** each active revision is bound to the frozen plan digest,
+  so unchanged passes publish nothing. A regenerated plan with a new digest
+  resurfaces as unread.
+- **Resolution:** GO (`approved`/`running`/terminal phases), no-go, expiry,
+  regeneration back to `planning`, new blockers, plan deletion and server
+  disable/delete each publish one `resolved` revision.
+- **Bounds:** the pending scan reads at most one newest-first batch of plans
+  created within an eight-day lookback. Active events are scanned with the
+  rotating keyset cursor from #706, so unchanged events cannot hold the page.
+- **Unchanged:** the reconciler never changes plan, job or approval state and
+  queues nothing. The GO route keeps its digest, blocker, expiry and pending-job
+  checks, and read/dismiss grants nothing. Resolution can lag by about one
+  scheduler tick (~30 seconds). Per-user targeting remains open.
 
 ### Asynchronous delivery and access control
 
@@ -3679,6 +3795,28 @@ cross-tab toast deduplication (each open tab shows its own toast), producer and
 retention coverage, and the milestone 2 and 4 transport and end-to-end acceptance
 listed above.
 
+Worker checkpoint (issue #729): a bounded milestone-3 increment deduplicates live
+toasts across tabs of one account. Each tab still keeps its own arrival cursor.
+Before it shows a toast, a tab claims the event revision in same-origin
+`localStorage`, under one key bound to the signed-in username. When the Web Locks
+API is available, the check and the claim are atomic, so concurrent refreshes show
+one toast. Without it, a best-effort read-modify-write still covers tabs that do
+not refresh at the same moment, such as a hidden tab that catches up when it
+becomes visible.
+
+- **What is stored:** at most 500 claims of event ID, revision and time, kept for
+  24 hours. Claims hold no notification text, source or link. Claims from another
+  account are ignored, and reset or logout clears them.
+- **Higher revisions:** a higher revision can still toast once.
+- **Burst summaries:** a summary counts only the revisions this tab claimed.
+- **Storage unavailable:** the tab fails open and shows its own toast, as before.
+- **Unchanged:** the bell count, list and center. Hiding a toast is still local to
+  the tab and never reads, dismisses, acknowledges or responds.
+- **Known limit:** claims dedupe only within one browser profile and origin; other
+  browsers and devices each show their own toast.
+
+Milestones 2 and 4 remain open.
+
 Worker checkpoint (issue #687): a bounded milestone-2 increment retains arrival
 records for the existing `history_days` setting. The leader's hourly cleanup calls
 `prune_arrivals`, which deletes only the oldest contiguous prefix of sequenced
@@ -3826,6 +3964,29 @@ recovers or authorizes anything.
 Known limit: if no worker runs, no coordinator publishes, so the Workers page
 remains authoritative. Controller web instances, endpoint agents and GCP nodes are
 not covered by this producer.
+
+Implementation checkpoint (issue #731): failed server-changing operations now publish a
+milestone-1 failure/recovery producer. When an operator-initiated `patch`, `repository`,
+`key`, `repair`, `release-upgrade` or `agent-update` job ends `failed`, including a
+verified rollback, it publishes source `operations`, subject type `operation` and kind
+equal to the action. There is one event per server and action, with operator
+visibility, medium severity and a link to `#activity/jobs/<id>`. The publish happens in
+the same transaction that records the job state.
+
+- A later failure of the same action adds a revision linking the newest operation, so
+  it is unread again.
+- A later successful run resolves the event. A success with no active event publishes
+  nothing.
+- Scheduled patch runs are excluded because the `scheduled patching` alert already
+  covers them. `recovery_required` jobs are excluded because the `recovery` alert
+  covers them. Read-only and other actions publish nothing.
+- Reasons use fixed wording only. Job output and errors stay on the escaped
+  operation page.
+- A notification error is logged inside a savepoint and never changes the job's
+  recorded outcome.
+- Notifications never retry, reconcile, acknowledge or authorize anything.
+
+Milestones 2–4 remain open.
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -7678,6 +7839,25 @@ also still required before delivery.
 ### Mark shown notifications read — worker checkpoint #715
 
 The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
+
+### Shared AI start gates in the worker status card — worker checkpoint #727
+
+The administrator Investigations page now reads the #546 snapshot and shows a
+**Shared AI start gates** card next to the AI worker status. It shows whether the
+global gates are open, each blocker's fixed message and next eligible time, and
+whether a reset time is only a recheck boundary. It also shows the overall next
+eligible start, or that an indefinite hold (disabled or incomplete configuration)
+has no automatic next start. The snapshot's limitations are always listed, so an
+open gate is never presented as a guarantee that a call will start.
+
+The card loads independently of the queue status and investigation list. A
+failed or malformed snapshot shows a recoverable notice with a retry control,
+and a superseded response is discarded. Viewers never request the
+administrator-only route. This is display-only: admission, spend, pause,
+lifecycle and response authorization are unchanged. A browser regression covers
+the open, finite, indefinite, failure/retry, malformed/escaped and viewer cases,
+with 320/768/1440 px renders. Settings and AI-activity placement, a per-call
+preview and full queue/spend dashboard acceptance remain open.
 
 ### Batched outbound AI pause-policy reads — worker checkpoint #573
 

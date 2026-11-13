@@ -449,6 +449,15 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .badge.reporting { color:var(--mint);background:#9ee8d114; }
 .badge.stale,.badge.unknown,.badge.version_mismatch { color:var(--amber);background:#f7cf8a14; }
 .badge.stopped { color:var(--muted);background:#a7bdc714; }
+.badge.healthy { color:var(--mint);background:#9ee8d114; }
+.badge.degraded { color:var(--amber);background:#f7cf8a14; }
+.endpoint-agent-table { min-width:700px; }
+.endpoint-agent-table td { max-width:260px;overflow-wrap:anywhere; }
+.endpoint-agent-table td small { display:block;white-space:normal; }
+/* Long configuration identifiers (e.g. MRPATCHY_EXPECTED_CONTROLLER_IDS) must wrap on phones. */
+#controller-registrations, #endpoint-agent-health { overflow-wrap:anywhere; }
+.endpoint-agent-counts { display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center; }
+.endpoint-agent-pager { align-items:center; }
 
 /* Keep cooperative worker controls beside identity, reachable before horizontal scrolling. */
 .worker-registry-table td:first-child { min-width:180px; }

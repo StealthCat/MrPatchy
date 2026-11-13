@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_pricing,host_lifecycle,notifications
+from . import ai_budget,ai_pricing,host_lifecycle,notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -226,8 +226,11 @@ def collect_alerts(now=None):
                 # leaves the session untouched and never blocks SMTP/webhook alerts.
                 try:_operational_notification(s,host_id,kind,message,now)
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
+        ai_budget.publish_unpriced_model_notification(s,cfg,now)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
+        # In-app only: blocked triage already shows on the Investigations status card.
+        triage_block_notifications.publish(s,cfg,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine

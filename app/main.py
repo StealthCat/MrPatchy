@@ -61,7 +61,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.63"
+APP_VERSION = "1.59.73"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1147,6 +1147,12 @@ def registered_workers(offset:int=0,user=Depends(admin_user)):
 @app.get('/api/operations/controllers')
 def registered_controllers(offset:int=0,user=Depends(admin_user)):
     from .controller_registry import page
+    try:return page(offset)
+    except ValueError as error:raise HTTPException(400,str(error))
+
+@app.get('/api/operations/agents')
+def endpoint_agent_health(offset:int=0,user=Depends(admin_user)):
+    from .agent_fleet_health import page
     try:return page(offset)
     except ValueError as error:raise HTTPException(400,str(error))
 
