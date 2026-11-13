@@ -39,15 +39,15 @@ BLOCKED_SUFFIX=(' No automatic retry is scheduled until the saved AI model or AP
 
 
 def blocked_by(error):
-    """True for a non-transient provider rejection (HTTP 4xx) that cannot succeed unchanged.
+    """True for a non-transient, non-policy AI failure (#790 AC1).
 
-    Rejected keys, denied access, unknown models, unsupported request formats and
-    exhausted quota repeat on every identical request. Declined, incomplete or
-    invalid model output keeps the existing hourly error retry.
+    Matches process triage (`ai_retry.failed`): a rejected key, denied access,
+    unavailable quota, an unsupported model and declined, incomplete or invalid
+    structured results all stay blocked under the current model/key signature.
+    Transient failures, policy waits and exceptions that are not `AIError` keep
+    the existing hourly error retry or deferral.
     """
-    status=getattr(error,'provider_status',0)
-    return (isinstance(error,ai.AIError) and not error.transient and not error.policy_wait
-        and type(status) is int and 400<=status<500)
+    return isinstance(error,ai.AIError) and not error.transient and not error.policy_wait
 
 
 SCORE_HISTORY_INDEX = Index('ix_update_scores_host_name_state_candidate',

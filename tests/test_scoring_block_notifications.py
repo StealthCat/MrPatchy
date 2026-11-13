@@ -116,13 +116,37 @@ def test_transient_failure_keeps_existing_error_retry(admin, monkeypatch):
 
 @pytest.mark.parametrize('body', [
     {'status': 'incomplete', 'incomplete_details': {'reason': 'max_output_tokens'}},
+    {'status': 'completed', 'output': [{'content': [{'type': 'refusal', 'refusal': 'declined'}]}]},
+    {'status': 'completed', 'output': [{'content': [{'type': 'output_text', 'text': 'not json'}]}]},
     {'status': 'completed', 'output': [{'content': [{'type': 'output_text', 'text': '{"assessments": []}'}]}]},
 ])
-def test_response_quality_failures_keep_existing_error_retry(admin, monkeypatch, body):
-    """Only provider rejections block; a declined, incomplete or invalid result may succeed later."""
+def test_non_transient_result_failures_also_block(admin, monkeypatch, body):
+    """AC1: every non-transient, non-policy AIError blocks, as process triage does."""
     seed()
-    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: httpx.Response(
-        200, json=body, request=httpx.Request('POST', ai.URL)))
+    calls = []
+
+    def reply(*args, **kwargs):
+        calls.append(1)
+        return httpx.Response(200, json=body, request=httpx.Request('POST', ai.URL))
+
+    monkeypatch.setattr(ai.transport, 'post', reply)
+    update_scores.run_one()
+    assert states() == {'one': 'blocked'}
+    with Session() as s:
+        row = s.scalar(select(update_scores.UpdateScore))
+        assert row.configuration and update_scores.BLOCKED_SUFFIX.strip() in row.explanation
+    later(monkeypatch, 7200)
+    update_scores.run_one()
+    assert len(calls) == 1 and states() == {'one': 'blocked'}
+
+
+def test_non_ai_exceptions_keep_existing_error_retry(admin, monkeypatch):
+    seed()
+
+    def explode(*args, **kwargs):
+        raise RuntimeError('unexpected fixture failure')
+
+    monkeypatch.setattr(ai, 'request', explode)
     update_scores.run_one()
     assert states() == {'one': 'error'}
     with Session() as s:

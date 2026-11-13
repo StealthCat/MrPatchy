@@ -116,9 +116,7 @@ def http_error(response):
     delay=retry_after(response) if transient else 0
     if delay is None:
         transient=False;delay=0;detail+=' Provider retry delay is outside supported bounds; review before explicitly retrying.'
-    error=AIError(label+'. '+detail,transient=transient,retry_after=delay)
-    error.provider_status=status  # lets callers tell a provider rejection from a response-quality failure
-    return error
+    return AIError(label+'. '+detail,transient=transient,retry_after=delay)
 
 
 def list_models(key):

@@ -309,9 +309,7 @@ def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, mon
                 raise ai.AIError('Fixture wait', policy_wait=True, retry_after=600)
             if outcome == 'error':  # transient without a retry delay keeps the hourly error retry
                 raise ai.AIError('Fixture provider error', transient=True)
-            error = ai.AIError('Fixture provider error')  # non-transient rejection: blocked until model/key change
-            error.provider_status = 403
-            raise error
+            raise ai.AIError('Fixture provider error')  # non-transient: blocked until model/key change
 
         monkeypatch.setattr(ai, 'request', reject)
 

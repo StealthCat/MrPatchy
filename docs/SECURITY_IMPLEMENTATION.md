@@ -2476,15 +2476,18 @@ scoring. Before this checkpoint a non-transient provider rejection (rejected key
 denied access, unavailable quota or an unsupported model) marked the batch
 `error`, and the same request was resent on the next scoring pass an hour later,
 indefinitely.
-- **Blocking:** a non-transient provider HTTP 4xx rejection (now carried as
-  `AIError.provider_status`) marks the batch's scores `blocked` and records
-  the process-triage model/key signature (`ai_retry.configuration_signature`) in
-  the additive `update_scores.configuration` column. Blocked scores are not
-  selected again under that signature, so no further provider request is sent.
-  A changed saved model or key makes them eligible immediately. Declined,
-  incomplete or invalid model output, transient failures without a retry delay,
-  policy waits and exceptions that are not `AIError` keep the existing
-  `error`/`deferred` behaviour, because an unchanged retry may succeed.
+- **Blocking:** any non-transient, non-policy `ai.AIError` from a scoring
+  batch marks the batch's scores `blocked`, matching process triage
+  (`ai_retry.failed`). This covers provider rejections (rejected key, denied
+  access, unavailable quota, unsupported model) and declined, incomplete or
+  invalid structured results, including the scoring module's own batch
+  validation. The process-triage model/key signature
+  (`ai_retry.configuration_signature`) is recorded in the additive
+  `update_scores.configuration` column. Blocked scores are not selected again
+  under that signature, so no further provider request is sent; a changed saved
+  model or key makes them eligible immediately. Transient failures, policy
+  waits and exceptions that are not `AIError` keep the existing
+  `error`/`deferred` behaviour.
 - **Notification:** while AI and update scoring are enabled and a
   current-candidate score on an active, unpaused server is blocked under the
   current signature, `operations.collect_alerts()` publishes one admin-only
