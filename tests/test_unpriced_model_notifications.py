@@ -34,6 +34,8 @@ def current():
         return event, revision
 
 
+# The clock is explicit and the bundled window is the subject under test, so opt out of the #742 fresh-catalog pin.
+@pytest.mark.bundled_pricing_catalog
 def test_model_status_is_alias_aware_and_fails_closed():
     assert ai_pricing.model_status('gpt-6-luna', NOW) == {'ok': True, 'code': '', 'model': 'gpt-6-luna', 'reason': ''}
     assert ai_pricing.model_status('gpt-5-mini-2025-08-07', NOW)['model'] == 'gpt-5-mini'
@@ -62,6 +64,8 @@ def test_snapshot_reports_indefinite_pricing_gate_in_cap_modes(admin, mode):
     assert 'gpt-5' not in str(result)
 
 
+# The clock is explicit and the bundled window is the subject under test, so opt out of the #742 fresh-catalog pin.
+@pytest.mark.bundled_pricing_catalog
 def test_snapshot_reports_stale_catalog_and_omits_gate_when_priced_or_uncapped(admin):
     configure(model='gpt-6-luna')
     with Session() as session:
@@ -162,6 +166,8 @@ def test_priced_or_uncapped_configurations_never_publish(admin):
     assert current() == (None, None)
 
 
+# The clock is explicit and the bundled window is the subject under test, so opt out of the #742 fresh-catalog pin.
+@pytest.mark.bundled_pricing_catalog
 def test_expired_catalog_is_left_to_the_catalog_notification(admin):
     configure()
     operations.collect_alerts(EXPIRED)
