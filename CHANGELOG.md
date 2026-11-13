@@ -1,3 +1,7 @@
+## 1.59.98 — 2026-11-13
+
+1. [PR #817](https://github.com/StealthCat/MrPatchy/pull/817): Adds an administrator-only, CSRF-protected action to re-queue update scores blocked under the current AI configuration. The retry sends no provider request; the normal scheduler, lifecycle, pause, enablement, rate and daily-cap checks still apply. Adds the blocked-score count to the existing settings response. No schema or response-authorization change. Retry is fleet-wide and does not cover blocked advisory-plan work.
+
 ## 1.59.97 — 2026-11-13
 
 1. [PR #814](https://github.com/StealthCat/MrPatchy/pull/814): Adds browser-side username-pattern and password-length constraints matching the existing sign-in API contract, rejecting invalid usernames before a request is sent. Frontend-only; the server-side validation and sanitized error handling are unchanged. No account or authentication behavior changes for valid credentials.

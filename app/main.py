@@ -61,7 +61,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.97"
+APP_VERSION = "1.59.98"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1202,11 +1202,12 @@ def audit_detail(entry_id:int,user=Depends(admin_user)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(admin_user)):
-    from . import ai_budget,ai_provider_backoff
+    from . import ai_budget,ai_provider_backoff,scoring_block_notifications
     with Session() as s:
         cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
+            'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
 
@@ -1382,6 +1383,20 @@ def clear_provider_backoff(body:ProviderBackoffClearInput,user=Depends(admin_use
     with Session() as s:
         audit(s,'clear AI provider backoff',user['username']+' cleared reviewed active floor: '+body.reason.strip());s.commit()
     return {'cleared':active}
+
+@app.post('/api/update-scores/blocked/retry')
+def retry_blocked_update_scores(user=Depends(admin_user)):
+    """Re-queue update scores blocked under the current AI configuration (#815).
+
+    Sends no provider request: the scheduler still applies enablement, pause,
+    lifecycle and shared rate/daily-cap admission to the re-queued scores.
+    """
+    from . import scoring_block_notifications
+    with Session() as s:
+        retried=scoring_block_notifications.retry(s,config(s))
+        if retried:audit(s,'retry blocked AI update scores',user['username']+' re-queued '+str(retried)+' blocked update score(s)')
+        s.commit()
+    return {'retried':retried,'detail':(str(retried)+' blocked update score'+('' if retried==1 else 's')+' queued for the next scoring pass. AI pause, shared rate and daily-cap admission still apply.') if retried else 'No update scores are blocked under the current AI configuration.'}
 
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}

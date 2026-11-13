@@ -2516,6 +2516,23 @@ indefinitely.
   changing the saved model or key is the unblock path. Blocked advisory-plan
   work is still not covered.
 
+Worker checkpoint #815 adds the administrator retry for blocked update scores.
+Settings → AI reports `ai_scoring_blocked`, which uses the same predicate as the
+`ai-scoring`/`configuration-blocked` notification. When the count is non-zero,
+the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protected
+`POST /api/update-scores/blocked/retry`.
+- **Scope:** only scores that the notification counts are re-queued, as `pending`
+  with no hourly wait. These are current-signature `blocked` rows for the current
+  installed/candidate pair on active, unpaused servers. Blocked scores on paused,
+  disabled or deleted servers, superseded evidence and rows blocked under an
+  earlier configuration are unchanged. The UPDATE re-checks state and signature.
+- **No bypass:** the action sends no provider request. The normal scheduler still
+  applies AI and scoring enablement, pause, lifecycle, shared rate/daily-cap
+  admission and reservations. A repeat failure blocks again and resurfaces the
+  notification. Each non-empty retry is audited.
+- **Unchanged:** schema, roles, response authorization and SMTP/webhook alerts.
+  Blocked advisory-plan work is still not covered.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.

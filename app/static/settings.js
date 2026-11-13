@@ -70,6 +70,14 @@ function renderAISettings(data,revision,container){
  const keyForm=$('#ai-key-form'),form=$('#ai-settings-form'),select=$('#ai-model'),manual=$('#ai-model-manual');
  const keyResult=$('#ai-key-result'),saveResult=$('#ai-save-result'),testResult=$('#ai-test-result'),status=$('#ai-model-status'),refresh=$('#ai-model-refresh');
  const alive=()=>currentView(revision,'settings')&&container.isConnected;
+ // Inserted after the budget notice lookup so this notice never receives budget details.
+ if(data.ai_scoring_blocked>0)container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend',`<div class="notice" id="scoring-blocked"><strong>${esc(data.ai_scoring_blocked)} update ${data.ai_scoring_blocked===1?'score is':'scores are'} blocked</strong> by a non-transient AI provider failure under the saved model and key. No automatic retry is scheduled. After resolving the cause (for example restored quota or access), retry them; changing the saved model or key also makes them eligible.<br><button type="button" id="scoring-blocked-retry">Retry blocked scores</button><span id="scoring-blocked-result" class="help" role="status"></span></div>`);
+ const retryScoring=$('#scoring-blocked-retry');
+ if(retryScoring)retryScoring.onclick=async()=>{
+  const result=$('#scoring-blocked-result');retryScoring.disabled=true;result.textContent=' Queuing…';
+  try{const reply=await api('/update-scores/blocked/retry','POST');if(currentView(revision,'settings')&&result.isConnected)result.textContent=' '+reply.detail;}
+  catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=' '+error.message;retryScoring.disabled=false;}
+ };
  const clearBackoff=$('#provider-backoff-clear');
  if(clearBackoff)clearBackoff.onclick=()=>{
   modal('Review shared provider backoff',`<p>This floor was recorded ${date(providerBackoff.updated_at)} and currently blocks every new provider call until ${date(providerBackoff.next_at)}. Clear it only after reviewing provider availability, quota and the recorded reason. A newer or expired floor will be preserved.</p><p class="help">This sends no provider or target request. Rate, budget, item retry, pause, lifecycle and concurrency controls remain authoritative.</p><form id="provider-backoff-clear-form"><label>Reason<textarea name="reason" minlength="10" maxlength="1000" required></textarea></label><label>Type CLEAR BACKOFF<input name="confirmation" pattern="CLEAR BACKOFF" autocomplete="off" required></label><button class="primary">Clear reviewed provider backoff</button></form>`);
