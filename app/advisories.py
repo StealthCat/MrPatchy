@@ -96,3 +96,18 @@ def _applicability(vuln,records,eco,package,version):
     else:reason=record or 'Advisory ID is missing or invalid'
     return {'advisory_id':advisory_id if isinstance(advisory_id,str) and _ADVISORY_ID.fullmatch(advisory_id) else None,
             'cve_ids':[],'status':cve_exposure.UNCERTAIN,'reason':reason,'fixed_version':None,'fix_available':False}
+
+def retained(result):
+    """Return a stored scan result with uncertainty reasons reduced to fixed text.
+
+    Results stored before #798 may contain raw comparator exception text; this
+    read-side pass keeps those records uncertain while never returning that text.
+    """
+    if not isinstance(result,dict) or not isinstance(result.get('results'),list):return result
+    items=[]
+    for item in result['results']:
+        if isinstance(item,dict) and isinstance(item.get('applicability'),list):
+            item={**item,'applicability':[{**row,'reason':cve_exposure.sanitize_reason(row.get('reason'))}
+                if isinstance(row,dict) and 'reason' in row else row for row in item['applicability']]}
+        items.append(item)
+    return {**result,'results':items}
