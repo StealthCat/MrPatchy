@@ -3256,8 +3256,24 @@ as `declared_user`, a different value is a `user_unit_declared_user` gap, and
 An invalid home, runtime directory or account, or a runtime directory that would
 coincide with a system user directory, is an explicit gap; its directories are omitted.
 System units outside the user table are `outside_search_path` gaps.
-System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering and runtime state, host/boot/environment-dependent specifiers, `$VAR` substitution, enumerating accounts, collection wiring, UI and AI classification remain open.
+System-scope `resolve()` output is unchanged. Manager-environment and lingering-list collection, runtime state, host/boot/environment-dependent specifiers, `$VAR` substitution, enumerating accounts, collection wiring, UI and AI classification remain open.
 
+
+Worker checkpoint (issue #702, user manager environment and lingering): this
+is contract-only, so roadmap F remains incomplete. The new pure module
+`app/systemd_user_env.py` turns two captured, read-only observations into the
+per-account inputs that `resolve_user()` needs.
+`parse_manager_environment()` reads `systemctl --user show-environment` output,
+in plain `KEY=value` form and systemd's `KEY=$'...'` C-style quoting. It keeps
+only `HOME`, `XDG_RUNTIME_DIR` and the five XDG base-directory variables, and
+drops all other variables without echoing them. Malformed lines, invalid names,
+unsupported escapes, invalid UTF-8, duplicate keys, NUL/newline and over-cap
+input (over 64 KiB or 1,024 lines) become coverage gaps; affected keys are omitted
+and never guessed. `parse_linger()` validates a `/var/lib/systemd/linger`
+listing into sorted account names, rejecting invalid or over-cap entries as
+gaps. The manager environment and lingering list are not collected yet; runtime
+state, account enumeration, collector wiring, UI and AI classification remain
+open.
 
 Worker checkpoint (issue #702, specifier expansion): contract version 2 adds a
 bounded `expanded` view of `Exec*`, `User=`, `Group=`, `WorkingDirectory=`,
