@@ -2929,7 +2929,15 @@ The opt-in Operations advisory check now applies the pure `cve_exposure.classify
 - **UI:** the Reviewed fleet workflows dialog shows status counts and an escaped per-advisory list, with raw JSON retained in a collapsible section.
 - **No authority:** classification selects no patches, triggers no response or containment and calls no AI provider. `affected` means version applicability, not exploitation evidence; `uncertain` is never treated as safe.
 - **Compatibility:** no schema, route, setting or role change. RPM keeps its updateinfo path. Previously stored scans lack applicability and summary until a new scan; read-back returns stored data unchanged.
-- **Operational limit:** detail fetches are sequential and run during the advisory scan's per-host lock. A scan can hold that lock for up to 60 seconds, deferring queued work and causing per-host configuration changes to return 409 while it runs.
+- **Operational limit (narrowed by #796 below):** detail fetches are sequential and run during the advisory scan's per-host lock. A scan can hold that lock for up to 60 seconds, deferring queued work and causing per-host configuration changes to return 409 while it runs.
+
+#### Concurrent advisory detail fetches — worker checkpoint #796
+
+- **Concurrency:** detail records are fetched by a bounded pool of 8 workers sharing one pooled `httpx.Client` per scan. Redirects stay disabled, connection limits match the pool size, and the client is closed when the scan ends. Eight 0.2-second fixture fetches finish in about 0.2 seconds instead of 1.6.
+- **Unchanged bounds:** 200 records, chosen alphabetically, and one shared 60-second wall-clock budget. Each request's timeout is `min(30, remaining)`. A worker rechecks the deadline before sending, so a fetch that would start after the budget is never sent and is reported `uncertain` with the time-budget reason.
+- **Unchanged results:** every fail-closed reason stays the same, and per-package result order follows the batch query.
+- **Remaining limit:** the scan still runs inside the per-host lock. A scan with many slow records can still hold it for up to the 60-second budget, but a typical scan now holds it for about one-eighth of the serial time.
+- **No other change:** no schema, route, role, setting, UI, AI or response change.
 
 Requirement D remains incomplete: broad ingestion across supported distributions, persisted exposure windows and producers, scheduled scans and notifications, and exploitation monitoring/containment wiring remain outstanding.
 

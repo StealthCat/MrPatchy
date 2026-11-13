@@ -1,5 +1,7 @@
-"""Per-server OSV advisory applicability (roadmap D slice, #783)."""
+"""Per-server OSV advisory applicability (roadmap D slice, #783; concurrent details #796)."""
 import shutil
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -37,8 +39,17 @@ def _stub(monkeypatch, ids, records, failures=()):
         return SimpleNamespace(raise_for_status=lambda: None, json=lambda: records[advisory_id])
 
     monkeypatch.setattr(advisories.httpx, 'post', post)
-    monkeypatch.setattr(advisories.httpx, 'get', get)
+    _patch_detail_get(monkeypatch, get)
     return gets
+
+
+def _patch_detail_get(monkeypatch, get):
+    """Route detail fetches to ``get`` whether they use the pooled client or module httpx.get."""
+    closed = []
+    client = SimpleNamespace(get=lambda url, **kwargs: get(url, **kwargs), close=lambda: closed.append(True))
+    monkeypatch.setattr(advisories, '_detail_client', lambda: client, raising=False)
+    monkeypatch.setattr(advisories.httpx, 'get', get)
+    return closed
 
 
 def _by_id(result):
@@ -110,6 +121,8 @@ def test_route_stores_applicability_for_the_server(admin, monkeypatch):
 
 
 def test_detail_fetches_share_a_wall_clock_budget(monkeypatch):
+    # One worker keeps the fake clock deterministic; the concurrent budget test is below.
+    monkeypatch.setattr(advisories, 'DETAIL_FETCH_WORKERS', 1, raising=False)
     ids = ['UBUNTU-CVE-2026-002' + str(i) for i in range(3)]
     records = {i: _record(i, '1.2-4') for i in ids}
     clock = [1000.0]
@@ -123,9 +136,79 @@ def test_detail_fetches_share_a_wall_clock_budget(monkeypatch):
         clock[0] += advisories.DETAIL_FETCH_DEADLINE - 5  # each fetch consumes most of the budget
         return original_get(url, **kwargs)
 
-    monkeypatch.setattr(advisories.httpx, 'get', slow_get)
+    _patch_detail_get(monkeypatch, slow_get)
     result = advisories.scan(INV, ['libfoo1:amd64'])
     assert len(gets) == 2 and timeouts[0] == 30 and timeouts[1] == 5
     rows = result['results'][0]['applicability']
     assert [row['status'] for row in rows] == ['affected', 'affected', 'uncertain']
     assert 'time budget' in rows[2]['reason']
+
+
+def test_detail_fetches_overlap_on_one_pooled_client(monkeypatch):
+    ids = ['UBUNTU-CVE-2026-003' + str(i) for i in range(8)]
+    records = {i: _record(i, '1.2-4') for i in ids}
+    gets = _stub(monkeypatch, ids, records)
+    lock = threading.Lock()
+    active, peak = [0], [0]
+    base = advisories._detail_client().get
+
+    def delayed(url, **kwargs):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        try:
+            time.sleep(0.2)
+            return base(url, **kwargs)
+        finally:
+            with lock:
+                active[0] -= 1
+
+    closed = _patch_detail_get(monkeypatch, delayed)
+    started = time.monotonic()
+    result = advisories.scan(INV, ['libfoo1:amd64'])
+    elapsed = time.monotonic() - started
+    # Serial fetching takes at least 8 x 0.2 s = 1.6 s.
+    assert elapsed < 0.8, elapsed
+    assert peak[0] > 1
+    assert sorted(gets) == sorted(ids)
+    assert closed == [True]
+    rows = result['results'][0]['applicability']
+    # Results keep the advisory order the batch query returned.
+    assert [row['advisory_id'] for row in rows] == ids
+    assert [row['status'] for row in rows] == ['affected'] * 8
+
+
+def test_pooled_client_limits_match_the_worker_pool():
+    client = advisories._detail_client()
+    try:
+        assert client.follow_redirects is False
+        pool = client._transport._pool
+        assert pool._max_connections == advisories.DETAIL_FETCH_WORKERS
+    finally:
+        client.close()
+
+
+def test_concurrent_fetches_never_start_after_the_shared_budget(monkeypatch):
+    monkeypatch.setattr(advisories, 'DETAIL_FETCH_WORKERS', 2)
+    monkeypatch.setattr(advisories, 'DETAIL_FETCH_DEADLINE', 0.3)
+    ids = ['UBUNTU-CVE-2026-004' + str(i) for i in range(6)]
+    records = {i: _record(i, '1.2-4') for i in ids}
+    gets = _stub(monkeypatch, ids, records)
+    base = advisories._detail_client().get
+    timeouts = []
+
+    def slow(url, **kwargs):
+        timeouts.append(kwargs['timeout'])
+        time.sleep(0.2)
+        return base(url, **kwargs)
+
+    _patch_detail_get(monkeypatch, slow)
+    result = advisories.scan(INV, ['libfoo1:amd64'])
+    rows = result['results'][0]['applicability']
+    # Two workers fit two rounds of 0.2 s into a 0.3 s budget; later fetches are never sent.
+    assert 2 <= len(gets) <= 4
+    assert all(0 < timeout <= 0.3 for timeout in timeouts)
+    late = [row for row in rows if row['status'] == 'uncertain']
+    assert len(late) == len(ids) - len(gets)
+    assert all('time budget' in row['reason'] for row in late)
+    assert result['summary']['unaffected'] == 0
