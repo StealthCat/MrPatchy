@@ -3678,6 +3678,32 @@ the existing external delivery configuration and alert lifecycle.
 - Link events to the actual subject and evidence revision, not only a host/kind aggregate. Deduplicate repeated unchanged observations and group related occurrences without suppressing distinct findings. New, reopened, materially changed or escalated findings must resurface even after an earlier notification was read or acknowledged. Routine successes and unchanged known-good cache hits must not create a notification storm.
 - Persist stable event IDs, occurrence/revision and safe subject metadata with the originating state change, using a transactional outbox or equivalent committed-event record. Never announce a rolled-back result. Support replay and idempotent consumers across multiple workers/controllers and restarts; an in-memory callback in one process is insufficient. Integrate the current aggregate Alert lifecycle carefully without silently changing global acknowledgement or resolution behavior.
 
+Worker checkpoint #794 adds a file-integrity coverage producer
+(`app/integrity_sweep_notifications.py`), called from `operations.collect_alerts`
+on the coordinator tick. A stalled hash sweep already adds an `integrity` issue,
+which blocks automatic and scheduled patching, but its only signal was the
+raw-text `integrity` SMTP/webhook alert. That alert is kept out of the bell
+because it carries endpoint text.
+- **Trigger:** one admin-only `integrity-sweep`/`hash-sweep-stalled` event for
+  each active, non-enrolling server whose telemetry is fresh (`last_seen` within
+  120 seconds). It fires when either:
+  - the last hash sweep is more than 30 minutes old (`overdue`); this sustained
+    threshold avoids flapping around the 360-second ingest check;
+  - the sweep time is more than 120 seconds in the future (`future`).
+- **Payload:** `medium` severity, fixed text per category and a link to
+  `#servers/<host>/overview`. No endpoint paths, errors or timestamps are copied.
+- **Revisions:** an unchanged category publishes nothing, and a category change
+  appends a revision.
+- **Resolution:** the event resolves once on recovery, on stale telemetry (the
+  telemetry-loss producer owns that case) or when the server is disabled,
+  deleted or re-enrolling. Disable and delete resolve on the next coordinator
+  tick, so they can lag by about 30 seconds.
+- **Unchanged:** a rejected payload never blocks alert collection. The raw
+  `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
+  is acknowledged, remediated or authorized, and there is no schema change.
+- **Remaining:** a configurable threshold, and a native agent sweep-stall
+  acceptance test.
+
 Worker checkpoint #706 adds the approval producer for AI response plans. A
 leader-only periodic reconciler (`app/plan_notifications.py`) publishes one
 admin-only `ai-plans` notification for each security-incident or
@@ -3720,32 +3746,6 @@ belongs to an active server.
   queues nothing. The GO route keeps its digest, blocker, expiry and pending-job
   checks, and read/dismiss grants nothing. Resolution can lag by about one
   scheduler tick (~30 seconds). Per-user targeting remains open.
-
-Worker checkpoint #794 adds a file-integrity coverage producer
-(`app/integrity_sweep_notifications.py`), called from `operations.collect_alerts`
-on the coordinator tick. A stalled hash sweep already adds an `integrity` issue,
-which blocks automatic and scheduled patching, but its only signal was the
-raw-text `integrity` SMTP/webhook alert. That alert is kept out of the bell
-because it carries endpoint text.
-- **Trigger:** one admin-only `integrity-sweep`/`hash-sweep-stalled` event for
-  each active, non-enrolling server whose telemetry is fresh (`last_seen` within
-  120 seconds). It fires when either:
-  - the last hash sweep is more than 30 minutes old (`overdue`); this sustained
-    threshold avoids flapping around the 360-second ingest check;
-  - the sweep time is more than 120 seconds in the future (`future`).
-- **Payload:** `medium` severity, fixed text per category and a link to
-  `#servers/<host>/overview`. No endpoint paths, errors or timestamps are copied.
-- **Revisions:** an unchanged category publishes nothing, and a category change
-  appends a revision.
-- **Resolution:** the event resolves once on recovery, on stale telemetry (the
-  telemetry-loss producer owns that case) or when the server is disabled,
-  deleted or re-enrolling. Disable and delete resolve on the next coordinator
-  tick, so they can lag by about 30 seconds.
-- **Unchanged:** a rejected payload never blocks alert collection. The raw
-  `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
-  is acknowledged, remediated or authorized, and there is no schema change.
-- **Remaining:** a configurable threshold, and a native agent sweep-stall
-  acceptance test.
 
 ### Asynchronous delivery and access control
 
