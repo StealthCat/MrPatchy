@@ -8197,3 +8197,28 @@ The producer is read-only. It never sends, retries, changes backoff or acknowled
 - The event has no deep link, because the Operations panel is a modal with no route.
 - The threshold is fixed.
 - A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.
+
+
+### Scheduled malware-scan coverage notifications — worker checkpoint #816
+
+This adds a roadmap J coverage producer, `app/scan_coverage_notifications.py`. `operations.collect_alerts` calls it on the coordinator tick. Before this change, the only place a scheduled malware scan (`security-policy:<host>`, run by `incidents.schedule_tick`) showed it had failed, lost coverage or stopped arriving was the fleet Security coverage page. No SMTP/webhook alert and no in-app event was raised for it.
+
+- **Scope:** active, non-enrolling and non-deleted servers with scheduled scanning enabled. The producer reads the latest `security-scan` job and that job's own receipt, and classifies them with the same `security_coverage.assessment` the coverage page uses.
+- **Trigger:** one admin-only `security-scan` / `scheduled-scan-coverage` event per server, for one of these categories:
+  - `failed`: the latest scan failed, was blocked or was interrupted;
+  - `incomplete`: the receipt is missing, or it records gaps, an unavailable scanner, stale or unverifiable signatures, or invalid metadata;
+  - `overdue`: no completed scan within the configured interval plus a one-hour grace period, for example while response holds, recovery-required operations or a full queue pause the scheduler.
+- **Payload:** `medium` severity, fixed text per category, and a link to `#servers/<host>/security`. Paths, rule names, engine output, errors and timestamps are never copied.
+- **Revisions:** an unchanged category publishes nothing, and a category change appends one revision. A queued or running scan leaves the event unchanged.
+- **Resolution:** the event resolves once when any of these happens:
+  - a recorded scan arrives;
+  - a scan with findings arrives, which the `malware-detection` incident producer owns;
+  - scheduled scanning is disabled;
+  - the server is disabled, deleted or re-enrolling.
+
+  A later failing episode reopens the event as an unread revision.
+- **Unchanged:** the producer never enqueues, retries or cancels scans, and never changes patching state, the scheduler, incidents or response authorization. A rejected payload never blocks SMTP/webhook alert collection. There is no schema or role change.
+- **Remaining:**
+  - YARA scans have no schedule, so they are not covered.
+  - The grace period is fixed.
+  - Execution-triggered scan coverage keeps its existing `execution scan coverage` operational alert.
