@@ -8196,7 +8196,7 @@ The producer is read-only. It never sends, retries, changes backoff or acknowled
 **Remaining:**
 - The event has no deep link, because the Operations panel is a modal with no route.
 - The threshold is fixed.
-- A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.
+- ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
@@ -8216,3 +8216,14 @@ succeeds or the server is disabled or deleted.
 The raw-text `repository` SMTP/webhook alert is unchanged and stays outside
 the in-app allowlist; no outbox alert kind is added. The notification is
 attention only and grants no retry, remediation or patch authority.
+
+
+### Unreadable alert-delivery configuration — worker checkpoint #812
+
+A saved SMTP/webhook delivery configuration that can no longer be decrypted (for example after the encryption key changed) previously made `GET /api/operations/notifications`, `PUT /api/operations/notifications` and `PUT /api/operations/smtp` fail with 500. Administrators could neither open Account → Operations nor replace the configuration. `deliver_one()` raised before counting an attempt, so no alert was delivered and the #792 producer never saw a failure.
+
+- **Routes:** the GET route now returns `unreadable: true` with no stored values and no ciphertext; readable configurations return `unreadable: false`. Both save routes replace an unreadable value. Secrets cannot be retained, so the token or password must be entered again.
+- **Delivery:** `deliver_one()` returns without counting an attempt or raising.
+- **Notice:** while the configuration is unreadable and at least one open alert is undelivered, the admin-only `alert-delivery`/`delivery-failing` event is published at subject revision `unreadable` with high severity and fixed text. Repeated polls add no unread revision. It resolves once a readable configuration is saved or nothing is left undelivered. An unreadable configuration with nothing undelivered stays quiet. The former `failing:unknown` revision is replaced by `unreadable`, so an event already active on that revision gains one unread revision after upgrade.
+- **UI:** the Operations panel shows a warning explaining that external delivery has stopped and the configuration must be saved again.
+- **Unchanged:** the notice never sends, retries, acknowledges or authorizes anything. There are no schema, role or response-authorization changes.

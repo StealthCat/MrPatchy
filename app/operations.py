@@ -344,8 +344,11 @@ def deliver_one():
     with Session() as s:
         setting=s.get(Setting,'notifications')
         if not setting:return
-        cfg=json.loads(unseal(setting.value['encrypted']))
-        if not cfg.get('enabled'):return
+        # An unreadable configuration cannot be delivered; alert_delivery_notifications
+        # raises the in-app notice. Count no attempt and never raise into the poll executor.
+        try:cfg=json.loads(unseal(setting.value['encrypted']))
+        except Exception:return
+        if not isinstance(cfg,dict) or not cfg.get('enabled'):return
         alert=next((row for row in s.scalars(select(Alert).where(Alert.state=='open',Alert.notified==0).order_by(Alert.attempted).limit(200)) if time.time()-row.attempted>=min(3600,30*2**min(row.attempts,7))),None)
         if not alert:return
         alert.attempted=time.time();alert.attempts+=1;s.commit()

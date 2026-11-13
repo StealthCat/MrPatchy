@@ -30,6 +30,10 @@ MESSAGE = ('External {channel} alert delivery keeps failing: at least one open a
            'delivery attempts and has not been delivered. Administrators may not be receiving server alerts outside '
            'Mr Patchy. Review Account → Operations for the per-alert delivery error and the delivery configuration. '
            'Delivery is still retried with backoff; this notice does not send, acknowledge or resolve any alert.')
+UNREADABLE = ('The saved external alert delivery configuration cannot be read (for example after the encryption key '
+              'changed), so Mr Patchy cannot tell whether SMTP/webhook delivery is enabled and makes no delivery '
+              'attempts. At least one open alert has not been delivered outside Mr Patchy. Re-save or remove the '
+              'delivery configuration in Account → Operations. This notice does not send, acknowledge or resolve any alert.')
 RESOLVED = 'External alert delivery no longer has repeatedly failing undelivered alerts.'
 
 
@@ -54,13 +58,26 @@ def failing_count(session):
         Alert.state == 'open', Alert.notified == 0, Alert.attempts >= FAILED_ATTEMPTS, Alert.error != ''))
 
 
+def undelivered_count(session):
+    """Open alerts not yet delivered, regardless of attempts."""
+    from .operations import Alert
+    return session.scalar(select(func.count()).select_from(Alert).where(Alert.state == 'open', Alert.notified == 0))
+
+
 def publish(session, now):
     """Publish or resolve the admin event in the caller's transaction. Returns True while failing."""
     channel = delivery_channel(session)
-    if channel is not None and failing_count(session):
-        label = CHANNELS.get(channel, 'SMTP/webhook')
-        notifications.publish(session, **IDENTITY, subject_revision='failing:' + (channel if channel in CHANNELS else 'unknown'),
-                              severity='high', reason=MESSAGE.format(channel=label, attempts=FAILED_ATTEMPTS),
+    if channel == 'unknown':
+        # deliver_one() stops before counting an attempt when the configuration cannot be
+        # decrypted, so failing_count() would stay zero forever. Any undelivered open alert
+        # is then enough: none of them can be delivered until the configuration is fixed.
+        if undelivered_count(session):
+            notifications.publish(session, **IDENTITY, subject_revision='unreadable', severity='high',
+                                  reason=UNREADABLE, minimum_role='admin', now=now)
+            return True
+    elif channel is not None and failing_count(session):
+        notifications.publish(session, **IDENTITY, subject_revision='failing:' + channel,
+                              severity='high', reason=MESSAGE.format(channel=CHANNELS[channel], attempts=FAILED_ATTEMPTS),
                               minimum_role='admin', now=now)
         return True
     event = session.scalar(select(notifications.NotificationEvent).where(
