@@ -1,3 +1,8 @@
+## 1.59.77 — 2026-11-13
+
+1. [PR #746](https://github.com/StealthCat/MrPatchy/pull/746): When a complete medium, high or unknown AI result contradicts an exact fleet known-good candidate and the candidate is automatically revoked, administrators now get an in-app notification. The fleet-scoped event is high severity for a high-risk result and medium otherwise, with fixed text containing only the risk and the linked-assessment count. It links to the original assessment's history, which shows that the candidate was revoked and links to the contradicting assessment. Closes #744.
+2. Compatibility and limits: an additive notification in the existing revocation path, with no change to revocation, reuse policy or schema. Integrated after #760: a racing contradiction that finds the candidate already revoked publishes no second notice. It carries no paths, host names, model output or evidence. This source update does not publish a Docker image.
+
 ## 1.59.76 — 2026-11-13
 
 1. [PR #751](https://github.com/StealthCat/MrPatchy/pull/751): Startup awareness: the pure systemd unit contract now resolves per-user (`systemd --user`) units for an account. It applies the documented user search-path precedence, including Debian's pre-usrmerge `/lib/systemd/user`, labels origins as `user`, and binds each unit to the owning account. Invalid homes, system paths passed as user paths, and search-path collisions with the runtime directory are reported as coverage gaps with `complete: false`. There is no collection or UI change yet. Part of #702, which stays open.

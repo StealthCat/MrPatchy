@@ -620,9 +620,18 @@ def invalidate_contradiction(s, row, revoked_at=None):
     # Idempotent under the row lock: the exact fingerprint is contradicted
     # whatever version is current, and an already revoked candidate is left
     # untouched (its first contradiction or revocation remains the record).
-    return _invalidate(s, hit['fingerprint'], hit['version'],
+    revoked = _invalidate(s, hit['fingerprint'], hit['version'],
         'assessment:'+row.id, reason, revoked_at,
         'invalidate contradicted known-good candidate', strict=False)
+    if revoked is None:
+        # Nothing changed in this save, so there is nothing new to announce.
+        return None
+    revoked = {**revoked, 'source_assessment_id': hit['assessment_id'],
+        'source_subject': hit['source_subject']}
+    # Same transaction as the revocation: a rolled-back save announces nothing.
+    from . import known_good_notifications
+    known_good_notifications.publish_contradiction(s, revoked, risk, now=revoked_at)
+    return revoked
 
 
 def _contradiction(s, saved):
