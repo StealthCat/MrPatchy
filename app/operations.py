@@ -151,6 +151,10 @@ def _pricing_catalog_alert(s,cfg,record,now):
             severity='info',reason='The AI public-price catalog no longer needs administrator attention.',
             deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
 
+REPOSITORY_REFRESH_MESSAGE=('Repository metadata refresh is failing and no refresh has succeeded within two refresh '
+    'intervals. Package updates and scheduled patching on this server are blocked until a refresh succeeds. Review '
+    'Repositories and the latest refresh operation in Activity.')
+
 # Human-attention server alerts mirrored into in-app notifications:
 # alert kind -> (notification kind, severity, server tab for the deep link).
 # Messages for these kinds are composed from counts, states and record IDs only.
@@ -170,6 +174,9 @@ OPERATIONAL_NOTIFICATIONS={
     'service coverage':('service-coverage','medium','security'),
     'execution scan coverage':('execution-scan-coverage','medium','security'),
     'scheduled patching':('scheduled-patching','medium','patching'),
+    # Notification-only (no outbox Alert): the `repository` alert carries raw endpoint text, so the
+    # bell reports refresh failure only once it blocks patching, with fixed text (see REPOSITORY_REFRESH_MESSAGE).
+    'repository refresh':('repository-refresh','medium','repositories'),
     'agent health':('agent-health','medium','agent'),
     'startup baseline':('startup-baseline','medium','integrity'),
 }
@@ -301,6 +308,11 @@ def collect_alerts(now=None):
                 if assessment['state']!='matches':
                     record(host,'startup baseline','Startup inventory '+assessment['state']+' against the reviewed baseline. Review File integrity; differences are not a malware verdict.')
             if host.repo_error:record(host,'repository',host.repo_error[:8000])
+            if host.repo_error and (not host.last_repo or now-host.last_repo>cfg['repo_minutes']*120):
+                # Same staleness threshold as validate_patch; fixed text keeps one revision per outage.
+                published.add((host.id,OPERATIONAL_NOTIFICATIONS['repository refresh'][0]))
+                try:_operational_notification(s,host.id,'repository refresh',REPOSITORY_REFRESH_MESSAGE,now)
+                except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for repository refresh on %s',host.id)
             if host.id in overdue_hosts:
                 count=sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in s.scalars(select(Package).where(Package.host_id==host.id,Package.candidate!='')))
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')

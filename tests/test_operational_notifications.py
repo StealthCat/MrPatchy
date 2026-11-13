@@ -94,7 +94,7 @@ def test_recovery_alert_publishes_deduplicates_changes_resolves_and_reopens(admi
 def test_only_allowlisted_kinds_publish_and_viewers_cannot_see_them(admin):
     # Stale telemetry, raw integrity JSON and repository errors stay outbox-only.
     add_host(last_seen=1, integrity={'path': '/etc/passwd', 'raw': 'endpoint text'},
-             repo_error='E: repository https://user:secret@example invalid')
+             repo_error='E: repository https://user:secret@example invalid', last_repo=time.time())
     add_job('job-r')
     with Session() as s:
         s.add(User(username='viewer', password='x', role='viewer'))
@@ -167,8 +167,77 @@ def test_startup_baseline_links_to_the_file_integrity_review_panel(admin):
         assert revision.reason == alert.message and 'File integrity' in alert.message
 
 
+def refresh_events(s):
+    return [event for event in operational_events(s) if event.kind == 'repository-refresh']
+
+
+def test_persistent_repository_refresh_failure_notifies_once_with_fixed_text_and_resolves(admin):
+    now = time.time()
+    with Session() as s:
+        stale = operations.config(s)['repo_minutes'] * 120
+    secret = 'E: https://user:secret@mirror.example/ubuntu 404 endpoint text'
+    add_host(last_repo=now - stale - 60, repo_error=secret)
+    with Session() as s:
+        s.add(User(username='viewer', password='x', role='viewer'))
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        # A later poll with a different endpoint error keeps one revision: the text is fixed.
+        s.get(Host, HOST).repo_error = secret + ' (retry)'
+        s.commit()
+    operations.collect_alerts(now + 300)
+    with Session() as s:
+        [event] = refresh_events(s)
+        revision = current(s, event)
+        assert (event.subject_type, event.subject_id, event.host_id, event.minimum_role) == (
+            'server', HOST, HOST, 'admin')
+        assert event.revision == 1 and revision.lifecycle == 'active' and revision.severity == 'medium'
+        assert revision.deep_link == '#servers/' + HOST + '/repositories'
+        assert revision.reason == operations.REPOSITORY_REFRESH_MESSAGE
+        assert 'secret' not in revision.reason and 'endpoint text' not in revision.reason
+        assert notifications.unread_count(s, 'viewer') == 0
+        assert notifications.unread_count(s, 'admin') == 1
+        # The SMTP/webhook alert keeps its raw message and no new outbox kind is introduced.
+        alert = s.query(operations.Alert).filter_by(kind='repository').one()
+        assert alert.message == secret + ' (retry)'
+        assert 'repository refresh' not in {row.kind for row in s.query(operations.Alert)}
+        # A successful refresh clears the error and refreshes the metadata timestamp.
+        host = s.get(Host, HOST)
+        host.repo_error = ''
+        host.last_repo = now + 400
+        s.commit()
+
+    operations.collect_alerts(now + 400)
+    with Session() as s:
+        [event] = refresh_events(s)
+        assert event.revision == 2 and current(s, event).lifecycle == 'resolved'
+
+
+def test_transient_refresh_failure_with_fresh_metadata_does_not_notify(admin):
+    now = time.time()
+    add_host(last_repo=now - 60, repo_error='E: temporary failure resolving mirror')
+    operations.collect_alerts(now)
+    with Session() as s:
+        assert refresh_events(s) == []
+        assert s.query(operations.Alert).filter_by(kind='repository').count() == 1
+
+
+def test_never_refreshed_failing_server_notifies_and_deletion_resolves(admin):
+    add_host(repo_error='E: no release file')
+    operations.collect_alerts()
+    with Session() as s:
+        [event] = refresh_events(s)
+        assert current(s, event).lifecycle == 'active'
+        s.get(Host, HOST).deleted_at = time.time()
+        s.commit()
+    operations.collect_alerts()
+    with Session() as s:
+        [event] = refresh_events(s)
+        assert current(s, event).lifecycle == 'resolved'
+
+
 def test_allowlist_is_well_formed():
-    tabs = {'history', 'security', 'patching', 'agent', 'integrity'}
+    tabs = {'history', 'security', 'patching', 'agent', 'integrity', 'repositories'}
     kinds = [value[0] for value in operations.OPERATIONAL_NOTIFICATIONS.values()]
     assert len(kinds) == len(set(kinds))
     for notification_kind, severity, tab in operations.OPERATIONAL_NOTIFICATIONS.values():
