@@ -510,7 +510,56 @@ def summary(s):
         Assessment, Assessment.id == Observation.assessment_id,
     ).where(Assessment.source == 'known_good').subquery()
     statement = select(entries, reuse).select_from(entries.join(reuse, true()))
-    return dict(s.execute(statement).mappings().one())
+    counts = dict(s.execute(statement).mappings().one())
+    counts['avoided_estimate'] = avoided_estimate(s)
+    return counts
+
+
+def avoided_estimate(s):
+    """Estimate provider work avoided by retained reuse from each source run's receipts.
+
+    Each reuse assessment is attributed to its candidate's originating AI run.
+    Only fully priced source runs contribute USD; a pruned, unpriced or partly
+    priced source is counted separately and never treated as free. Call counts
+    come from every retained source run. This is an estimate from local
+    receipts, not a provider invoice, and it does not measure cache misses.
+    """
+    from decimal import Decimal
+    from .ai_assessments import Assessment
+    from . import ai_runs
+
+    result = {'reuse_with_priced_source': 0, 'reuse_with_unpriced_source': 0,
+        'reuse_with_unavailable_source': 0, 'estimated_calls': 0,
+        'estimated_usd': None, 'currency': 'USD'}
+    per_entry = s.execute(select(Observation.fingerprint, func.count()).join(
+        Entry, Entry.fingerprint == Observation.fingerprint).join(
+        Assessment, Assessment.id == Observation.assessment_id,
+    ).where(Assessment.source == 'known_good').group_by(Observation.fingerprint)).all()
+    amount = Decimal(0)
+    for start in range(0, len(per_entry), LOOKUP_READ_BATCH):
+        batch = dict(per_entry[start:start + LOOKUP_READ_BATCH])
+        runs = dict(s.execute(select(Entry.fingerprint, Assessment.run_id).join(
+            Assessment, Assessment.id == Entry.assessment_id).where(
+            Entry.fingerprint.in_(batch))).all())
+        run_ids = {value for value in runs.values() if value}
+        rows = {row.id: row for row in s.scalars(select(ai_runs.AIRun).where(
+            ai_runs.AIRun.id.in_(run_ids)))} if run_ids else {}
+        receipts = ai_runs.call_receipts(s, list(rows))
+        for fingerprint, reused in batch.items():
+            run = rows.get(runs.get(fingerprint) or '')
+            cost = ai_runs.cost_summary(run, receipts[run.id]) if run else None
+            if cost is None or cost['status'] == 'no_calls' or cost['in_progress']:
+                result['reuse_with_unavailable_source'] += reused
+                continue
+            result['estimated_calls'] += reused * cost['total_calls']
+            if cost['status'] == 'estimated':
+                result['reuse_with_priced_source'] += reused
+                amount += reused * Decimal(cost['estimated_usd'])
+            else:
+                result['reuse_with_unpriced_source'] += reused
+    if result['reuse_with_priced_source']:
+        result['estimated_usd'] = format(amount, 'f')
+    return result
 
 
 def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action, strict=True):

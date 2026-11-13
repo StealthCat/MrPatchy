@@ -2330,6 +2330,19 @@ explicitly requested or the entry no longer matches/is no longer valid.
 - Keep cache records and their minimum provenance independent of ordinary AI-log pruning; unavailable source evidence must never leave an unverifiable trusted hit. Respect fleet/tenant access boundaries, protect cached evidence and expose cache hit/miss/invalidation reasons and saved calls/cost estimates. Cache lookup may serve retained/local assessments while provider AI is paused; it cannot bypass a restriction on sharing evidence or making a new call.
 - Validate exact cross-server hits with zero provider calls, same-name/different-hash and same-hash/different-behavior misses, script/config/provenance/privilege changes, incomplete/unverified evidence, revoked entries, concurrent first encounters, manual re-triage, changed follow-up evidence, log retention and role isolation on SQLite/MySQL. Preserve per-host observations/audit and existing explicit approval boundaries.
 
+Worker checkpoint #749 adds an **estimate** of avoided provider work to the
+known-good summary endpoint and Fleet known-good cache panel. Each retained reuse assessment is attributed to its
+candidate's originating AI investigation run. Avoided calls are that run's
+recorded call count. Avoided USD sums the run's priced receipts only when every
+call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
+partly priced, pruned, unlinked or still running is counted separately and
+never treated as free, so incomplete coverage makes the figures lower bounds.
+The estimate reads candidates in bounded batches without loading evidence or
+snapshots. It is not a provider invoice, does not measure misses and does not
+predict what a fresh investigation would cost today. Lookup, publication,
+revocation, pause, budget, role, approval and response boundaries are
+unchanged. Hit/miss reasons and matched production acceptance remain open.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
