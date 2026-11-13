@@ -1,3 +1,22 @@
+## 1.59.86 — 2026-11-13
+
+1. [PR #789](https://github.com/StealthCat/MrPatchy/pull/789): The pure systemd unit contract now provides a bounded expanded view for fixed unit-name and manager specifiers in commands, accounts and paths. Host, boot and environment-dependent specifiers remain raw as coverage gaps; raw configuration is unchanged. Contract version 2 changes the record digest. No collection, UI, schema or response-authorization behavior changes. The systemd version is not collected, so legacy specifier semantics may differ; collection wiring and UI remain open under #702.
+
+## 1.59.85 — 2026-11-13
+
+1. [PR #784](https://github.com/StealthCat/MrPatchy/pull/784): Operations advisory matches now show per-server applicability as Affected, Fixed, Not affected or Uncertain using the server's distribution, source package and installed version. The dialog shows escaped status details and counts while retaining raw results; failures and lookups beyond the bounds remain Uncertain, not safe. Closes #783.
+2. Compatibility and limits: no schema, route, setting or role change; RPM keeps its updateinfo path. Existing stored scans gain applicability and summary only after a new scan. Each scan makes sequential OSV detail requests (up to 200 records or a shared 60-second budget); the per-host lock can be held for that duration, deferring queued jobs and making configuration changes return 409. If the fetch bound is reached, alphabetically earlier IDs are classified and the rest remain Uncertain. Classification is not exploitation evidence and authorizes no patching or response. Broader distribution ingestion, persisted exposure windows, scheduled scans/notifications and containment wiring remain incomplete. This source update does not publish a Docker image.
+
+## 1.59.84 — 2026-11-13
+
+1. [PR #786](https://github.com/StealthCat/MrPatchy/pull/786): Disabling a server now resolves its active agent-spool notification with a fixed explanation because polling has stopped. If critical pressure or new loss persists after re-enabling, the same event reopens as unread. Deletion retains its own resolution; if credential cleanup fails after the server is disabled, the disabled resolution is retained and retrying deletion adds no duplicate revision. Closes #785.
+2. Compatibility and limits: no schema, API or configuration change; the notification remains advisory and authorizes no remediation. Stale-telemetry and warning-level notifications and configurable thresholds remain out of scope. This source update does not publish a Docker image.
+
+## 1.59.83 — 2026-11-13
+
+1. [PR #764](https://github.com/StealthCat/MrPatchy/pull/764): When process triage misses the fleet known-good cache, the AI run timeline now explains why, before any paid provider call. The possible reasons are an administrator re-triage bypass, a changed-artifact bypass, incomplete exact verified context (with up to three fixed contract labels), no candidate, a revoked candidate, or a candidate that was not reusable at lookup time. Messages are fixed text with no evidence values or identifiers. The diagnostic is read-only and fails open, so lookup, reuse, billing, verdicts, approvals and response boundaries are unchanged. Closes #763.
+2. Compatibility and limits: no schema, API or configuration change. Each cache miss adds one pruned AI-run timeline event. The candidate state is read after lookup, so it reflects the current state rather than the state at lookup time. This source update does not publish a Docker image.
+
 ## 1.59.82 — 2026-11-13
 
 1. [PR #762](https://github.com/StealthCat/MrPatchy/pull/762): Expected controllers (`MRPATCHY_EXPECTED_CONTROLLER_IDS`) in an attention state now raise one administrator-only in-app notification each, linking to **Activity → Workers**, matching expected workers. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium. Text is fixed and copies no reported values. The revision is the state, so unchanged passes publish nothing. Recovery or removal from configuration resolves the event. An invalid configuration raises one separate event and leaves existing events unchanged, and a freshness window of startup grace suppresses new attention. Failures are logged without stopping the coordinator tick. Closes #761.

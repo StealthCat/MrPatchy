@@ -2330,6 +2330,20 @@ no lookup, publication, revocation, approval or response semantics. Recording
 review completion, notifying administrator-initiated revocations, hit/miss
 reasons and saved-call estimates remain open.
 
+Worker checkpoint #763 explains process-triage cache misses. When the exact
+known-good lookup returns no hit, the worker opens a separate read-only session
+after the lookup mutation and adds one fixed-text `known_good_lookup` event to
+the AI run timeline. The event says the lookup was bypassed by administrator
+re-triage, bypassed by an authenticated artifact change, had ineligible context
+(with up to three fixed contract labels), found no candidate, found a revoked
+candidate, or found an active candidate that was not reusable at lookup time
+(unavailable then, or failed provenance revalidation).
+`lookup()`, hits, publication, revocation, budget, role and response
+boundaries are unchanged. A cache hit records no miss event, and a failed
+diagnostic is logged without affecting the verdict. The events are ordinary
+pruned AI-log diagnostics. Durable miss counters, saved-call estimates and
+matched production acceptance remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -2935,6 +2949,21 @@ exploitation detectors, typed automatic containment, server/fleet views,
 notifications and real-target acceptance remain planned. A vulnerable version, an
 advisory match or AI output still authorizes no containment.
 
+### Per-server advisory applicability — worker checkpoint #783
+
+The opt-in Operations advisory check now applies the pure `cve_exposure.classify()` contract to OSV matches stored for a server.
+
+- **Full records:** `querybatch` returns advisory IDs only. The scan fetches each distinct valid ID from `https://api.osv.dev/v1/vulns/{id}`, without redirects, up to 200 detail records and a shared 60-second wall-clock budget.
+- **Exact match:** each record is classified against the server's exact ecosystem, source package and installed source version.
+- **Stored fields:** each result item gains an `applicability` list (`affected`, `fixed`, `unaffected` or `uncertain`, with reason, CVE aliases and lowest complete fixed version). The scan gains counts by status. Existing vulnerability, coverage, ecosystem and checked fields remain.
+- **Fail closed:** retrieval failure, mismatched record ID, invalid ID or exhausted fetch/time budget yields `uncertain`, never `unaffected`. When the count bound is reached, IDs are processed alphabetically and the remainder stay uncertain.
+- **UI:** the Reviewed fleet workflows dialog shows status counts and an escaped per-advisory list, with raw JSON retained in a collapsible section.
+- **No authority:** classification selects no patches, triggers no response or containment and calls no AI provider. `affected` means version applicability, not exploitation evidence; `uncertain` is never treated as safe.
+- **Compatibility:** no schema, route, setting or role change. RPM keeps its updateinfo path. Previously stored scans lack applicability and summary until a new scan; read-back returns stored data unchanged.
+- **Operational limit:** detail fetches are sequential and run during the advisory scan's per-host lock. A scan can hold that lock for up to 60 seconds, deferring queued work and causing per-host configuration changes to return 409 while it runs.
+
+Requirement D remains incomplete: broad ingestion across supported distributions, persisted exposure windows and producers, scheduled scans and notifications, and exploitation monitoring/containment wiring remain outstanding.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
@@ -3200,9 +3229,7 @@ unit carries an origin class (vendor location, overridden, custom, runtime,
 generated or transient), and `package_verified` is always false. Uncollected search
 directories, unreadable, oversized or malformed input, invalid names, unresolved,
 dangling or foreign links, missing trigger targets and over-cap input all become
-explicit coverage gaps. The result carries a deterministic digest. Runtime unit
-state, per-user units, specifier expansion, read-only collection wiring, package
-provenance, UI and AI classification remain open, so roadmap F is not complete.
+explicit coverage gaps. The result carries a deterministic digest. Runtime unit state, read-only collection wiring, package provenance, UI and AI classification remain open, so roadmap F is not complete. Fixed systemd specifiers are covered by the #702 checkpoint below; host/boot/environment-dependent specifiers and `$VAR` substitution remain explicit gaps.
 
 Worker checkpoint (issue #702, per-user units): the same contract adds
 `resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
@@ -3221,10 +3248,29 @@ as `declared_user`, a different value is a `user_unit_declared_user` gap, and
 An invalid home, runtime directory or account, or a runtime directory that would
 coincide with a system user directory, is an explicit gap; its directories are omitted.
 System units outside the user table are `outside_search_path` gaps.
-System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering
-and runtime state, specifier expansion, enumerating accounts, collection wiring,
-UI and AI classification remain open.
+System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering and runtime state, host/boot/environment-dependent specifiers, `$VAR` substitution, enumerating accounts, collection wiring, UI and AI classification remain open.
 
+
+Worker checkpoint (issue #702, specifier expansion): contract version 2 adds a
+bounded `expanded` view of `Exec*`, `User=`, `Group=`, `WorkingDirectory=`,
+`RootDirectory=` and `EnvironmentFile=` to every non-template unit. Raw `config`,
+`exec` and `account` are unchanged. Name specifiers `%n %N %p %P %i %I %j %J %f %%`
+follow `systemd.unit(5)`, including unescaping for `%P %I %J %f`. An alias record
+uses its canonical name. Manager specifiers are expanded only where the scope fixes
+their value. For the system manager these are `%u`=root, `%U`=0, `%g`=root, `%G`=0,
+`%h`=/root, `%s`=/bin/sh, `%t`=/run, `%S`=/var/lib, `%C`=/var/cache, `%L`=/var/log
+and `%E`=/etc. For a user manager they are `%u` (the account), `%h` (home), `%t`
+(runtime directory), `%E` (~/.config) and `%C` (~/.cache). Every other specifier stays
+raw and becomes an `unexpanded_specifier` gap that names the letters. That covers
+host and boot identity, `%T`/`%V` (which depend on the environment), the user
+manager's `%U`/`%G`/`%g`/`%s`, `%S`/`%L` (whose values changed between systemd
+releases), unknown letters and a trailing `%`. A value with any such specifier is
+never partially expanded. System `%u`/`%U`/`%h`/`%s` follow current
+`systemd.unit(5)`, where they name the manager's user rather than `User=`. Older
+systemd releases resolved them from `User=`, and the collector does not yet record
+the systemd version, so this is listed as a limitation. Each record states `specifiers` as `none`, `expanded`,
+`partial` or `not_applicable` (templates). `$VAR` environment substitution,
+non-default XDG variables, collection wiring, UI and AI classification remain open.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
@@ -8016,7 +8062,17 @@ The event links to the server summary's spool card. An episode stays open withou
 The event is advisory. It never acknowledges, restarts, drains or remediates anything, and it does not change response authorization. There is no schema change.
 
 **Remaining:**
-- Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.
+- ~~Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.~~ Addressed by the #785 worker checkpoint below.
 - Stale telemetry raises no spool notification. Worker/agent liveness producers cover stale telemetry separately.
 - Warning-level pressure is shown on the summary card only.
 - Configurable thresholds remain outstanding.
+
+
+### Spool attention resolves on server disable — worker checkpoint #785
+
+Disabling a server through the lifecycle endpoint stops polling, so fresh telemetry could never resolve an open spool episode. In the same transaction as the disable, the controller now adds one `info`, `resolved` revision (`server-disabled`) to a still-active `agent-spool` / `spool-health` event. The fixed text says monitoring is paused and that the event reopens if pressure or new loss persists after the server is re-enabled. A disable with no active episode publishes nothing.
+
+Deletion keeps its own `server-deleted` resolution. Deleting a server that is already disabled adds no further revision. If deletion commits the disable but local credential cleanup then fails, the server stays disabled and the episode is resolved with the same `server-disabled` revision, so a retried deletion adds no further revision. After the server is re-enabled, the next critical or new-loss poll reopens the same event as an unread active revision.
+
+The event remains advisory. Roles, audit, job cancellation and response authorization are unchanged, and there is no schema change. Configurable thresholds and warning-level notifications remain outstanding.
+
