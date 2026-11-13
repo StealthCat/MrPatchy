@@ -249,11 +249,19 @@ def remove_registration(identity,boot,username):
         if not row or data.get('id')!=identity or str(data.get('boot_id') or '')!=boot:raise HTTPException(409,'Worker registration changed or is unavailable; refresh before removing it')
         state,_,age=report_state(data,time.time())
         if not removable(row,data,state,age):raise HTTPException(409,'Worker is reporting recently; it would register again. Stop or retire it before removing its registration')
-        s.delete(row)
-        control=s.get(Setting,control_key(identity))
-        if control:s.delete(control)
-        audit(s,'worker registration removed',username+' '+identity+' '+(boot or 'no-boot')+' '+state)
-        s.commit()
+        # A stale heartbeat does not prove the process exited. A live worker holds its identity lock for its
+        # whole lifetime, so a held lock means a running (possibly hung) process still owns this registration.
+        identity_lock=Lock('worker-identity:'+identity)
+        if not identity_lock.acquire(False):raise HTTPException(409,'A worker process is still running with this identity; its heartbeat is late, not absent. Stop or retire it before removing its registration')
+        try:
+            s.delete(row)
+            # Keep a drain request unless the boot reported a graceful stop: control is bound to boot_id, so a
+            # retained row is inert for new boots but keeps a recovering boot drained instead of silently resuming it.
+            control=s.get(Setting,control_key(identity))
+            if control and state=='stopped':s.delete(control)
+            audit(s,'worker registration removed',username+' '+identity+' '+(boot or 'no-boot')+' '+state)
+            s.commit()
+        finally:identity_lock.release()
     return {'ok':True,'id':identity,'state':state}
 
 

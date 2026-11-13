@@ -61,7 +61,8 @@ def test_remove_stale_registration_updates_inferred_count_and_audits(admin,monke
     data=admin.get('/api/operations/workers').json()
     assert [row['id'] for row in data['expected']]==['keep'] and [row['id'] for row in data['items']]==['keep']
     with Session() as s:
-        assert s.get(Setting,registry.control_key('gone')) is None
+        # Stale is not proof of exit: the boot-bound drain is retained (only a graceful stop clears it).
+        assert registry.control_value(s,'gone',BOOT)=={'revision':1,'action':'drain'}
         assert any(row.action=='worker registration removed' and 'gone' in row.detail for row in s.scalars(select(AuditLog)))
 
 
@@ -142,3 +143,39 @@ def test_too_many_registrations_reports_inference_error(admin,monkeypatch):
     for name in ('a','b','c'):report(name,1)
     data=registry.page(now=1000)
     assert data['expected']==[] and 'More than 2' in data['expectation_error']
+
+
+def test_removing_stale_drained_registration_keeps_its_drain(admin,monkeypatch):
+    # A stale heartbeat does not prove the process is gone: a hung-but-alive boot must stay drained on recovery.
+    monkeypatch.delenv('MRPATCHY_EXPECTED_WORKER_IDS',raising=False)
+    now=time.time()
+    report('hung',now-600,state='drained')
+    with Session() as s:s.add(Setting(key=registry.control_key('hung'),value={'boot_id':BOOT,'revision':1,'action':'drain','requested':now}));s.commit()
+    assert admin.post('/api/operations/workers/remove',json={'worker_id':'hung','boot_id':BOOT}).status_code==200
+    with Session() as s:
+        assert s.get(Setting,registry.record_key('hung')) is None
+        assert registry.control_value(s,'hung',BOOT)=={'revision':1,'action':'drain'}
+
+
+def test_remove_refuses_registration_whose_identity_is_still_held(admin,monkeypatch):
+    # The worker holds worker-identity:<id> for its lifetime; a held lock proves a live process owns it.
+    monkeypatch.delenv('MRPATCHY_EXPECTED_WORKER_IDS',raising=False)
+    report('alive',time.time()-600)
+    from app.coordination import Lock
+    held=Lock('worker-identity:alive')
+    assert held.acquire(False)
+    try:
+        result=admin.post('/api/operations/workers/remove',json={'worker_id':'alive','boot_id':BOOT})
+        assert result.status_code==409 and 'running' in result.json()['detail']
+        with Session() as s:assert s.get(Setting,registry.record_key('alive')) is not None
+    finally:held.release()
+    assert admin.post('/api/operations/workers/remove',json={'worker_id':'alive','boot_id':BOOT}).status_code==200
+
+
+def test_removing_gracefully_stopped_registration_clears_its_control(admin,monkeypatch):
+    monkeypatch.delenv('MRPATCHY_EXPECTED_WORKER_IDS',raising=False)
+    now=time.time()
+    report('done',now-900,state='stopped')
+    with Session() as s:s.add(Setting(key=registry.control_key('done'),value={'boot_id':BOOT,'revision':2,'action':'drain','requested':now}));s.commit()
+    assert admin.post('/api/operations/workers/remove',json={'worker_id':'done','boot_id':BOOT}).status_code==200
+    with Session() as s:assert s.get(Setting,registry.control_key('done')) is None

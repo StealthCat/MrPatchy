@@ -43,7 +43,7 @@ module.exports=async(page,capture)=>{
   await page.locator('#expected-worker-source').getByText('Source: controller configuration',{exact:false}).waitFor();
   assert.equal(await page.locator('.worker-remove').count(),1,'Only the non-live registration is removable');
   const callsBeforeRemove=calls;await page.getByRole('button',{name:'Remove registration',exact:true}).click();
-  await page.locator('#worker-remove-form').getByText('Remove registration',{exact:true}).waitFor();await page.locator('#modal').getByText('does not stop a running process',{exact:false}).waitFor();
+  await page.locator('#worker-remove-form').getByText('Remove registration',{exact:true}).waitFor();await page.locator('#modal').getByText('Removal is refused while a process still holds this worker identity',{exact:false}).waitFor();
   assert.equal(removals.length,0,'Removal requires confirmation');await capture('worker-remove-review-desktop');
   await page.locator('#worker-remove-form button').evaluate(button=>{button.click();button.click();});
   await page.locator('#modal').waitFor({state:'hidden'});
