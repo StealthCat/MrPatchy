@@ -1,3 +1,8 @@
+## 1.59.73 — 2026-11-13
+
+1. [PR #760](https://github.com/StealthCat/MrPatchy/pull/760): Fixed: on MySQL/MariaDB with parallel triage workers, a second AI contradiction of the same fleet known-good candidate no longer discards its completed medium/high verdict and re-bills the provider. The contradiction path now re-reads the candidate under its row lock. A candidate that is already revoked or missing is left untouched, so the first contradiction or revocation remains the single record and audit event, and the verdict is saved. A still-active candidate is revoked whatever its version. The administrator revoke path keeps its strict version and already-revoked checks. Fixes #759.
+2. Compatibility and limits: no API, schema or configuration change. A racing contradiction now succeeds quietly instead of erroring and being retried. The regression tests interleave deterministically and do not run real parallel threads. This source update does not publish a Docker image.
+
 ## 1.59.72 — 2026-11-13
 
 1. [PR #745](https://github.com/StealthCat/MrPatchy/pull/745): Administrators get a medium-severity in-app notification, linking to the server's Maintenance tab, when a distribution-upgrade release plan is ready for its GO/no-go decision. A plan qualifies when it is ready, has no blockers, its sealed expiry has not passed, and its server is enabled and not deleted. Revisions are bound to the frozen plan digest, so a regenerated plan resurfaces as unread. GO, no-go, expiry, regeneration and server removal each publish exactly one resolved revision with a fixed reason. AI review text, configuration content and paths are never copied. Fixes #743.
