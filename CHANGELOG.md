@@ -1,3 +1,7 @@
+## 1.59.94 — 2026-11-13
+
+1. [PR #807](https://github.com/StealthCat/MrPatchy/pull/807): Fixes #805's intermittent command-output browser-test race by forcing a delayed host lookup and waiting for text from this test's fixture before asserting. Test-only; no runtime behavior change. Other hash-navigation waits were not audited.
+
 ## 1.59.93 — 2026-11-13
 
 1. [PR #801](https://github.com/StealthCat/MrPatchy/pull/801): Adds pure parsers for systemd --user environment and lingering-list inputs, retaining only documented HOME/XDG values and reporting malformed or capped inputs as coverage gaps. This is additive and performs no I/O or response action. Collecting those inputs, account enumeration, runtime state, collector wiring and UI remain open under #702.
