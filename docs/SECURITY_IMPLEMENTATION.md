@@ -2435,6 +2435,37 @@ links to `#investigations`.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
+### Unpriced saved model under a daily cap — worker checkpoint #735
+
+In `daily_cap` and `rate_and_daily` modes, capped admission must quote every
+paid call from the bundled price catalog. `ai_pricing.reservation()` refuses a saved model that is
+not catalogued (for example `gpt-5` or a fine-tune ID), so every capped call
+fails closed. Before this checkpoint nothing showed that in advance.
+- **Pure check:** `ai_pricing.model_status()` reports whether the catalog is
+  valid and can price the alias-resolved saved model. It shares its fixed reason
+  with `reservation()`. An `ok` result never promises that a call is admitted:
+  tier, tools, output bound and context size are still checked per call.
+- **Start-gate snapshot:** `GET /api/settings/ai-control-status` adds an
+  indefinite `pricing` blocker while AI is enabled in a cap mode and a saved
+  model cannot be priced or the catalog is not valid. Disabled AI reports only
+  the existing `disabled` gate. `can_start_now` is then false and there is no
+  automatic next start. The message is fixed and omits the model ID.
+- **Notification:** `operations.collect_alerts()` publishes one admin-only
+  `ai-budget`/`unpriced-model` notification (high severity, `#settings/ai`)
+  while AI is enabled, a cap mode applies, the catalog is valid and the saved
+  model is unpriced. The revision is bound to the catalog version and a SHA-256
+  of the model ID, so repeated collection creates no new revision. A different
+  unpriced model or catalog version resurfaces it as unread. The text names the
+  model only when it is a valid catalog identifier.
+- **Resolution:** one `resolved` revision is published when the model becomes
+  priced or is cleared, the mode becomes uncapped or AI is disabled. An invalid
+  catalog is left to the existing pricing-catalog alert and neither publishes
+  nor resolves this event.
+- **Unchanged:** both additions only read state. They never reserve, release or
+  authorize spend, change admission or add an SMTP/webhook alert.
+- **Limitation:** a missing API key is still reported only by the existing
+  `configuration` gate. Near-exhaustion of the cap remains undetected.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
