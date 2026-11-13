@@ -1,3 +1,7 @@
+## 1.59.95 — 2026-11-13
+
+1. [PR #768](https://github.com/StealthCat/MrPatchy/pull/768): Adds an admin-only notification when repository refresh failures leave metadata stale enough to block patching, with fixed text and a link to the server's Repositories tab. It resolves after refresh recovery or server disable/delete. Additive behavior for existing installations; the threshold is twice `repo_minutes`, and raw repository errors remain in the existing SMTP/webhook alert only.
+
 ## 1.59.94 — 2026-11-13
 
 1. [PR #807](https://github.com/StealthCat/MrPatchy/pull/807): Fixes #805's intermittent command-output browser-test race by forcing a delayed host lookup and waiting for text from this test's fixture before asserting. Test-only; no runtime behavior change. Other hash-navigation waits were not audited.
