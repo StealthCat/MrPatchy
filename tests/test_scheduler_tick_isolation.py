@@ -40,7 +40,7 @@ def test_failed_tick_does_not_skip_other_ticks_or_dispatch(admin, monkeypatch, c
     submitted = []
     monkeypatch.setattr(worker, 'submit_job', lambda *args: admitted.append(step[0]) or False)
     monkeypatch.setattr(worker, 'reconcile_interrupted_advisory_jobs', lambda: None)
-    monkeypatch.setattr(worker.operations, 'collect_alerts', lambda: None)
+    monkeypatch.setattr(worker.operations, 'collect_alerts', lambda **_: None)
 
     class Pool:
         def __init__(self, **kwargs): pass
