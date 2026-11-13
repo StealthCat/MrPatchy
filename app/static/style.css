@@ -553,3 +553,11 @@ button.danger { border-color: var(--red); color: var(--red); }
 
 .file-status-hash{overflow-wrap:anywhere;word-break:break-all}
 .file-status-panel td{vertical-align:top}
+/* Recorded command output (#753): keep whitespace and columns, scroll inside the block. */
+.command-output { position:relative; min-width:0; max-width:100%; margin:8px 0; }
+.command-output-tools { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:10px; margin-bottom:6px; }
+.command-output-tools button { margin:0; }
+.command-output-status { font-size:12px; color:var(--muted, inherit); }
+.command-output pre { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; line-height:1.55; white-space:pre; overflow-wrap:normal; word-break:normal; tab-size:8; overflow:auto; max-width:100%; margin:0; user-select:text; }
+.command-output pre.command-output-empty { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media(max-width:600px){.command-output pre{font-size:11px;padding:12px}.command-output-tools{justify-content:flex-start}}
