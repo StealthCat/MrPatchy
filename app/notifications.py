@@ -644,34 +644,48 @@ def prune_resolved(cutoff, *, factory=Session, batch=RESOLVED_PRUNE_BATCH):
     """
     if type(batch) is not int or batch < 1:
         raise ValueError('Notification resolved prune batch must be positive')
+    eligible = (
+        select(NotificationEvent.id)
+        .join(NotificationRevision, and_(
+            NotificationRevision.event_id == NotificationEvent.id,
+            NotificationRevision.revision == NotificationEvent.revision))
+        .where(NotificationRevision.lifecycle == 'resolved',
+               NotificationEvent.updated < cutoff))
     events = revisions = 0
     after = ''
     while True:
         with factory() as session:
-            ids = session.scalars(
-                select(NotificationEvent.id)
-                .join(NotificationRevision, and_(
-                    NotificationRevision.event_id == NotificationEvent.id,
-                    NotificationRevision.revision == NotificationEvent.revision))
-                .where(NotificationRevision.lifecycle == 'resolved',
-                       NotificationEvent.updated < cutoff,
-                       NotificationEvent.id > after)
+            candidates = session.scalars(
+                eligible.where(NotificationEvent.id > after)
                 .order_by(NotificationEvent.id).limit(batch)).all()
-            if not ids:
+            if not candidates:
                 return events, revisions
-            result = session.execute(
-                delete(NotificationRevision)
-                .where(NotificationRevision.event_id.in_(ids),
-                       NotificationRevision.created < cutoff)
-                .execution_options(synchronize_session=False))
-            session.execute(
-                delete(NotificationUserState)
-                .where(NotificationUserState.event_id.in_(ids),
-                       NotificationUserState.updated < cutoff)
-                .execution_options(synchronize_session=False))
-            session.commit()
-            events += len(ids)
-            revisions += result.rowcount or 0
-            after = ids[-1]
-            if len(ids) < batch:
+            # Revalidate under the event row locks before deleting.  A publisher
+            # may reopen or change a candidate after the non-locking selection;
+            # the locking read sees its committed revision (and waits for an
+            # uncommitted one), so a now-active event keeps all of its history.
+            # Publishers update the event row, so they serialize behind these
+            # locks until this batch commits.
+            ids = session.scalars(
+                eligible.where(NotificationEvent.id.in_(candidates))
+                .order_by(NotificationEvent.id)
+                .with_for_update(of=NotificationEvent)).all()
+            if not ids:
+                session.rollback()
+            else:
+                result = session.execute(
+                    delete(NotificationRevision)
+                    .where(NotificationRevision.event_id.in_(ids),
+                           NotificationRevision.created < cutoff)
+                    .execution_options(synchronize_session=False))
+                session.execute(
+                    delete(NotificationUserState)
+                    .where(NotificationUserState.event_id.in_(ids),
+                           NotificationUserState.updated < cutoff)
+                    .execution_options(synchronize_session=False))
+                session.commit()
+                events += len(ids)
+                revisions += result.rowcount or 0
+            after = candidates[-1]
+            if len(candidates) < batch:
                 return events, revisions

@@ -4084,7 +4084,10 @@ the existing `history_days` cutoff, after arrival pruning.
   never reuses a pruned revision number. Replay cursors, exact-revision read/dismiss
   and cross-tab toast keys therefore cannot collide.
 - **Races:** rows written at or after the cutoff, such as a racing publish, read or
-  dismiss, are never deleted.
+  dismiss, are never deleted. Each batch rechecks eligibility with a locking read
+  of the event rows before deleting, so an event reopened or changed after the
+  candidate selection keeps all of its earlier revisions. Publishers update the
+  event row, so they wait for the batch to commit.
 - **Batches:** work runs in bounded batches of 500 events, each committed
   separately. A failure is logged and does not stop the cleanup loop.
 

@@ -123,3 +123,72 @@ def test_bounded_batches_cover_every_qualifying_event(admin):
 def test_invalid_batch_is_rejected():
     with pytest.raises(ValueError):
         N.prune_resolved(CUTOFF, batch=0)
+
+
+class _ReopenAfterSelection:
+    """Session wrapper that commits a reopen from a second session after the
+    prune's first (candidate) selection, before it deletes anything."""
+
+    def __init__(self, reopen):
+        self.reopen = reopen
+        self.selections = 0
+
+    def __call__(self):
+        wrapper = self
+
+        class Wrapped:
+            def __init__(self):
+                self.session = Session()
+
+            def __enter__(self):
+                self.session.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self.session.__exit__(*exc)
+
+            def scalars(self, *args, **kwargs):
+                result = self.session.scalars(*args, **kwargs)
+                wrapper.selections += 1
+                if wrapper.selections == 1:
+                    rows = result.all()
+                    wrapper.reopen()
+                    return _Rows(rows)
+                return result
+
+            def __getattr__(self, name):
+                return getattr(self.session, name)
+
+        return Wrapped()
+
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return self.rows
+
+
+def test_event_reopened_after_candidate_selection_keeps_its_history(admin):
+    with Session() as session:
+        event_id = publish(session, 'reopened', 1000)
+        publish(session, 'reopened', 2000, lifecycle='resolved')
+        stays_resolved = publish(session, 'stays-resolved', 1000)
+        publish(session, 'stays-resolved', 2000, lifecycle='resolved')
+        session.commit()
+
+    def reopen():
+        # A second session reopens the candidate and commits mid-prune.
+        with Session() as other:
+            publish(other, 'reopened', CUTOFF + 50, subject_revision='r2')
+            other.commit()
+
+    factory = _ReopenAfterSelection(reopen)
+    assert N.prune_resolved(CUTOFF, factory=factory) == (1, 2)
+    assert factory.selections >= 2
+    # The now-active event keeps its prior history and the new revision.
+    assert revisions(event_id) == [1, 2, 3]
+    with Session() as session:
+        assert session.get(N.NotificationEvent, event_id).revision == 3
+    assert revisions(stays_resolved) == []
