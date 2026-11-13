@@ -161,7 +161,7 @@ def test_unreadable_configuration_never_raises(admin):
         assert alert_delivery_notifications.delivery_channel(s) == 'unknown'
         assert alert_delivery_notifications.publish(s, time.time()) is True
         s.commit()
-    assert revisions() == [('active', 'high', 'failing:unknown')]
+    assert revisions() == [('active', 'high', 'unreadable')]  # #812: one unreadable-configuration notice
 
 
 def test_nothing_is_published_without_repeated_recorded_failures(admin):

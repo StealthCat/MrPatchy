@@ -1723,8 +1723,16 @@ class NotificationInput(BaseModel):
     clear_token:bool=False
 
 def notification_config(s):
+    """Saved alert-delivery settings; ``None`` when a saved value cannot be decrypted or parsed.
+
+    An unreadable value (for example after the encryption key changed) must not lock
+    administrators out of viewing or replacing it, so callers treat it as having no
+    retained values instead of raising."""
     row=s.get(Setting,'notifications')
-    return json.loads(unseal(row.value['encrypted'])) if row else {}
+    if not row:return {}
+    try:value=json.loads(unseal(row.value['encrypted']))
+    except Exception:return None  # Any decryption/format failure: never echo the stored text.
+    return value if isinstance(value,dict) else None
 
 def retain_notification_secret(previous,value,secret,clear,identity):
     if clear:value[secret]=''
@@ -1737,10 +1745,10 @@ def retain_notification_secret(previous,value,secret,clear,identity):
 @app.get('/api/operations/notifications')
 def notification_settings(user=Depends(admin_user)):
     with Session() as s:
-        value=notification_config(s)
+        value=notification_config(s);unreadable=value is None;value=value or {}
         return {k:v for k,v in value.items() if k not in ('password','token')}|{
             'channel':value.get('channel','webhook'),'password_configured':bool(value.get('password')),
-            'token_configured':bool(value.get('token'))}
+            'token_configured':bool(value.get('token')),'unreadable':unreadable}
 
 @app.put('/api/operations/notifications')
 def notifications(body:NotificationInput,user=Depends(admin_user)):
@@ -1749,7 +1757,7 @@ def notifications(body:NotificationInput,user=Depends(admin_user)):
     if body.enabled and (url.scheme!='https' or not url.hostname or url.username or url.password or url.fragment):raise HTTPException(400,'Use an HTTPS webhook URL without embedded credentials')
     if any(c in body.token for c in '\r\n'):raise HTTPException(400,'Invalid token')
     with Session() as s:
-        previous=notification_config(s)
+        previous=notification_config(s) or {}
         value=body.model_dump(exclude={'clear_token'});value['channel']='webhook'
         retain_notification_secret(previous if previous.get('channel','webhook')=='webhook' else {},value,'token',body.clear_token,('url',))
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
@@ -1986,7 +1994,7 @@ def smtp_save(body:SMTPInput,user=Depends(admin_user)):
     from .mail import validate
     value=validate(body.model_dump(exclude={'clear_password'}));value['channel']='smtp'
     with Session() as s:
-        previous=notification_config(s)
+        previous=notification_config(s) or {}
         retain_notification_secret(previous if previous.get('channel')=='smtp' else {},value,'password',body.clear_password,('host','port','mode','username'))
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
