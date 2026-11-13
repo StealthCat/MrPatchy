@@ -315,6 +315,9 @@ def collect_alerts(now=None):
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
         _resolve_operational_notifications(s,published,now)
+        # This producer observes the resolved outbox; it never sends or retries alerts.
+        from . import alert_delivery_notifications
+        alert_delivery_notifications.publish(s,now)
         s.commit()
 
 def delivery_error(error):
