@@ -2435,6 +2435,37 @@ links to `#investigations`.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
+### Unpriced saved model under a daily cap — worker checkpoint #735
+
+In `daily_cap` and `rate_and_daily` modes, capped admission must quote every
+paid call from the bundled price catalog. `ai_pricing.reservation()` refuses a saved model that is
+not catalogued (for example `gpt-5` or a fine-tune ID), so every capped call
+fails closed. Before this checkpoint nothing showed that in advance.
+- **Pure check:** `ai_pricing.model_status()` reports whether the catalog is
+  valid and can price the alias-resolved saved model. It shares its fixed reason
+  with `reservation()`. An `ok` result never promises that a call is admitted:
+  tier, tools, output bound and context size are still checked per call.
+- **Start-gate snapshot:** `GET /api/settings/ai-control-status` adds an
+  indefinite `pricing` blocker while AI is enabled in a cap mode and a saved
+  model cannot be priced or the catalog is not valid. Disabled AI reports only
+  the existing `disabled` gate. `can_start_now` is then false and there is no
+  automatic next start. The message is fixed and omits the model ID.
+- **Notification:** `operations.collect_alerts()` publishes one admin-only
+  `ai-budget`/`unpriced-model` notification (high severity, `#settings/ai`)
+  while AI is enabled, a cap mode applies, the catalog is valid and the saved
+  model is unpriced. The revision is bound to the catalog version and a SHA-256
+  of the model ID, so repeated collection creates no new revision. A different
+  unpriced model or catalog version resurfaces it as unread. The text names the
+  model only when it is a valid catalog identifier.
+- **Resolution:** one `resolved` revision is published when the model becomes
+  priced or is cleared, the mode becomes uncapped or AI is disabled. An invalid
+  catalog is left to the existing pricing-catalog alert and neither publishes
+  nor resolves this event.
+- **Unchanged:** both additions only read state. They never reserve, release or
+  authorize spend, change admission or add an SMTP/webhook alert.
+- **Limitation:** a missing API key is still reported only by the existing
+  `configuration` gate. Near-exhaustion of the cap remains undetected.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
@@ -3450,6 +3481,27 @@ or response authority, which remains with #451. Still planned for this
 requirement: endpoint-agent and GCP-node inventory, readiness and HTTPS/Caddy
 checks, resource metrics, alerts and the unified dashboard acceptance.
 
+Implementation checkpoint (issue #737): Activity → Workers adds an admin-only
+**Endpoint agents** section backed by `GET /api/operations/agents`
+(`app/agent_fleet_health.py`). The section covers enabled, non-deleted servers
+and is built from the retained read-only agent verification receipt and the
+telemetry collection time. Each row is classified, worst first, as:
+
+- **offline:** live verification was unavailable, or the server is marked offline.
+- **degraded:** helpers are outdated, drifted or blocked, or the agent is verified
+  but telemetry is stale or missing (older than 15 minutes).
+- **unknown:** there is no receipt, the receipt is invalid, stale (older than
+  600 seconds) or future-dated, or enrollment is incomplete.
+- **healthy:** the agent is verified current and telemetry is fresh.
+
+The deployment type is shown as `systemd` only when the receipt names the
+expected `mrpatchy-agent.service` unit. Otherwise it is "not verified".
+Responses carry fixed reasons and an issue count only, with no receipt hashes,
+paths, addresses or telemetry. Settings rows are read in bounded batches rather
+than once per server. The view never inspects, repairs or authorizes anything.
+Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
+unified dashboard acceptance remain open.
+
 ### Expected-controller health notifications — worker checkpoint #761
 
 On the elected coordinator's tick, after the expected-worker producer, each
@@ -3468,8 +3520,8 @@ always apply. A failure is logged and never stops the coordinator tick. Version
 comparison uses the coordinator process's source version. Notifications are
 attention only: they assess no HTTP/TLS readiness, grant no failover, serving or
 response authority, and read/dismiss stays separate from acknowledgement. Still
-planned for this requirement: endpoint-agent and GCP-node inventory, readiness and
-HTTPS/Caddy checks, resource metrics and unified dashboard acceptance.
+planned for this requirement: endpoint-agent resource metrics and readiness,
+GCP-node inventory, HTTPS/Caddy checks and unified dashboard acceptance.
 
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
