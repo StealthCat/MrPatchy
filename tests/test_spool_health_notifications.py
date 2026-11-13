@@ -154,3 +154,49 @@ def test_deleting_a_server_without_an_active_episode_publishes_nothing(admin):
     with Session() as s:
         assert agent_spool_health.resolve_host_notification(s, 'sp') is False
     assert revisions() == 2
+
+
+def set_enabled(client, enabled):
+    record = client.get('/api/hosts/sp/summary').json()['host']
+    response = client.put('/api/hosts/sp/lifecycle', json={
+        'enabled': enabled, 'expected_revision': record['lifecycle_revision'],
+        'reason': 'Lifecycle change after reviewing pending work.'})
+    assert response.status_code == 200, response.text
+
+
+def test_disabling_a_server_resolves_active_spool_notification(admin):
+    seed()
+    poll(queued=999, dropped=1, observations=5)
+    set_enabled(admin, False)
+    [item] = items(admin)
+    assert item['lifecycle'] == 'resolved' and item['severity'] == 'info' and item['revision'] == 2
+    assert 'disabled' in item['reason'] and 'reopens' in item['reason']
+    with Session() as s:
+        current = s.get(notifications.NotificationRevision, (item['id'], 2))
+        assert current.subject_revision == 'server-disabled'
+    set_enabled(admin, True)
+    assert revisions() == 2  # re-enabling publishes nothing by itself
+    poll(queued=999, dropped=1, observations=5)  # pressure persists after re-enable
+    [item] = items(admin)
+    assert item['lifecycle'] == 'active' and item['revision'] == 3 and not item['read']
+
+
+def test_disabling_a_server_without_an_active_episode_publishes_nothing(admin):
+    seed()
+    poll(queued=100)
+    set_enabled(admin, False)
+    assert revisions() == 0 and items(admin) == []
+
+
+def test_deleting_an_already_disabled_server_adds_no_revision(admin):
+    seed()
+    poll(queued=999)
+    set_enabled(admin, False)
+    record = admin.get('/api/hosts/sp/summary').json()['host']
+    response = admin.request('DELETE', '/api/hosts/sp', json={
+        'confirmation': record['name'], 'expected_revision': record['lifecycle_revision'],
+        'reason': 'Remove management after reviewing operations and retained records.'})
+    assert response.status_code == 200, response.text
+    assert revisions() == 2
+    [item] = items(admin)
+    assert item['lifecycle'] == 'resolved' and 'disabled' in item['reason']
