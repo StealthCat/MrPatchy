@@ -38,7 +38,7 @@ def test_missing_active_and_revoked_candidates_are_distinguished(client):
         assert explain(s)['code'] == 'no_candidate'
         s.add(row); status = known_good.publish(s, row); s.commit()
         assert known_good.lookup(s, complete(), 'gpt-fixture', [sha('9')]) is not None
-        # An active entry that lookup refuses failed provenance revalidation.
+        # An active entry that lookup refuses is not reusable at lookup time.
         s.get(ai_assessments.Assessment, row.id).result = {
             **row.result, 'explanation': 'Mutated after publication'}
         s.commit()

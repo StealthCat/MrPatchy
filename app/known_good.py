@@ -431,10 +431,12 @@ def lookup(s, snapshot, model, policy_hashes, bypass=False):
 MISS_TEXT = {
     'bypassed_refresh': 'Administrator re-triage bypassed the fleet known-good cache.',
     'bypassed_changed': 'Authenticated artifact change bypassed the fleet known-good cache.',
+    # No trailing period: explain_miss appends '.' or ': <reason details>'.
     'context_ineligible': 'Exact verified context is incomplete, so no cache lookup was possible',
     'no_candidate': 'No fleet known-good candidate exists for this exact fingerprint.',
     'candidate_revoked': 'The matching fleet known-good candidate is revoked.',
-    'candidate_unverified': 'The matching fleet known-good candidate failed provenance revalidation.',
+    'candidate_unverified': ('A matching fleet known-good candidate exists now but was not '
+        'reusable at lookup time: it was unavailable or failed provenance revalidation.'),
 }
 MISS_REASON_LIMIT = 3
 
@@ -461,6 +463,11 @@ def explain_miss(s, snapshot, model, policy_hashes, refresh=False, changed=False
                         details.append(reason['detail'])
             code, details = 'context_ineligible', details[:MISS_REASON_LIMIT]
         else:
+            # Read after lookup, so states reflect now, not lookup time. An active
+            # row here means lookup refused it (provenance revalidation is its only
+            # rejection of an active entry) or another worker stored it after the
+            # lookup; the candidate_unverified text covers both without implying
+            # tampering. Update this if lookup gains other rejection reasons.
             states = set(s.scalars(select(Entry.active).where(
                 Entry.fingerprint.in_(fingerprints))))
             code = ('candidate_unverified' if True in states else
