@@ -1,3 +1,7 @@
+## 1.59.88 — 2026-11-13
+
+1. [PR #799](https://github.com/StealthCat/MrPatchy/pull/799): Advisory applicability results no longer expose internal version-comparator exception text (CodeQL `py/stack-trace-exposure`, alert #14). Comparison failures remain `uncertain` with a fixed reason, and legacy stored results are sanitized when read. Existing statuses, counts and fixed versions are unchanged; no schema, route, role, UI or response-authorization change. Previously stored text remains in the database until a new scan replaces the record. This source update does not publish a Docker image.
+
 ## 1.59.87 — 2026-11-13
 
 1. [PR #788](https://github.com/StealthCat/MrPatchy/pull/788): Resolved in-app notification history older than the configured `history_days` retention is now pruned during hourly leader cleanup in batches of 500. Only events whose current revision is resolved before the cutoff are removed; active histories and recently resolved events are retained. The event identity row remains so a recurring event gets the next unread revision number. Each batch rechecks event state under a row lock, preserving prior history if an event is reopened while pruning. No schema, route, UI, role or response-authorization change. Already-open tabs may show a pruned resolved event until their next refresh, and the identity row remains for each distinct event. This source update does not publish a Docker image.

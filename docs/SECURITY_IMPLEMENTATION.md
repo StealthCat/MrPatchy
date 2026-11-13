@@ -2933,6 +2933,14 @@ The opt-in Operations advisory check now applies the pure `cve_exposure.classify
 
 Requirement D remains incomplete: broad ingestion across supported distributions, persisted exposure windows and producers, scheduled scans and notifications, and exploitation monitoring/containment wiring remain outstanding.
 
+#### Fixed uncertainty reasons for advisory applicability — worker checkpoint #798
+
+Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-scanning/14), `py/stack-trace-exposure`. Before this fix, `cve_exposure.classify()` copied raw `ValueError`/`TypeError`/`OSError` text from the version comparator into the `uncertain` reason. The advisory scan then stored that reason and the advisory API returned it, so a missing or failing `dpkg` exposed interpreter and path details to administrators.
+
+- **Fixed reasons only:** range validation now returns reasons from a closed, fixed set rather than raising. Any comparator exception is reported as `version comparison failed`, and exception text is never read. Native comparisons pre-check Debian syntax, so the actionable `version does not have valid Debian version syntax` reason is kept.
+- **Retained results:** `GET /api/operations/{host}/advisories` passes stored scans through `advisories.retained()`. Inside an `Applicability could not be established:` reason, only known problems survive and anything else becomes `version comparison failed`. The status stays `uncertain`, and the stored row is not rewritten.
+- **Unchanged:** affected, fixed and unaffected results, their reasons and fixed versions; every fail-closed path; and the schema, routes, roles and response authorization.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
