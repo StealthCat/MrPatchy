@@ -8197,3 +8197,22 @@ The producer is read-only. It never sends, retries, changes backoff or acknowled
 - The event has no deep link, because the Operations panel is a modal with no route.
 - The threshold is fixed.
 - A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.
+
+### Repository-refresh failure in-app notifications — worker checkpoint #767
+
+`operations.collect_alerts` now publishes an admin-only, medium-severity
+`repository-refresh` operational notification when an enabled, non-deleted,
+non-enrolling server has a repository refresh error, and its last successful
+refresh is missing or older than `repo_minutes × 120` seconds. That is the
+same staleness threshold `validate_patch` and scheduled execution use to block
+patching. The notification links to the server's Repositories tab.
+
+The reason is fixed text and never carries the endpoint error, which may hold
+mirror URLs or credentials. Repeated passes therefore keep one revision per
+outage. A transient failure with fresh metadata publishes nothing. The
+existing operational resolution path resolves the notification when a refresh
+succeeds or the server is disabled or deleted.
+
+The raw-text `repository` SMTP/webhook alert is unchanged and stays outside
+the in-app allowlist; no outbox alert kind is added. The notification is
+attention only and grants no retry, remediation or patch authority.
