@@ -1,3 +1,8 @@
+## 1.59.84 — 2026-11-13
+
+1. [PR #786](https://github.com/StealthCat/MrPatchy/pull/786): Disabling a server now resolves its active agent-spool notification with a fixed explanation because polling has stopped. If critical pressure or new loss persists after re-enabling, the same event reopens as unread. Deletion retains its own resolution; if credential cleanup fails after the server is disabled, the disabled resolution is retained and retrying deletion adds no duplicate revision. Closes #785.
+2. Compatibility and limits: no schema, API or configuration change; the notification remains advisory and authorizes no remediation. Stale-telemetry and warning-level notifications and configurable thresholds remain out of scope. This source update does not publish a Docker image.
+
 ## 1.59.83 — 2026-11-13
 
 1. [PR #764](https://github.com/StealthCat/MrPatchy/pull/764): When process triage misses the fleet known-good cache, the AI run timeline now explains why, before any paid provider call. The possible reasons are an administrator re-triage bypass, a changed-artifact bypass, incomplete exact verified context (with up to three fixed contract labels), no candidate, a revoked candidate, or a candidate that was not reusable at lookup time. Messages are fixed text with no evidence values or identifiers. The diagnostic is read-only and fails open, so lookup, reuse, billing, verdicts, approvals and response boundaries are unchanged. Closes #763.
