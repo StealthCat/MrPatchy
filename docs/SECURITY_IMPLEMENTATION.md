@@ -3941,6 +3941,17 @@ event in the approval's own transaction, and revoking it while the verdict is st
 medium/high re-publishes the event as active; the notification never grants or
 withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
 
+Worker checkpoint (issue #747): deleting a server resolves its still-active
+`ai-triage`/`process-verdict` events. Each gets one `info`, `resolved`
+revision with fixed text and keeps viewer visibility and the host. Before this
+change, startup-change and malware-incident notifications were resolved on server
+deletion, but a deleted server's medium/high triage verdict stayed active and
+unread indefinitely, with a link to the deleted server. Resolution runs in the
+deletion transaction and is idempotent. Already-resolved events and other servers'
+events are untouched. Behavior rows, verdicts, approvals and history are
+unchanged. No schema, route, UI or auth change. Individual behaviors are never
+deleted on main, so server deletion is the reachable case of the gap noted above.
+
 Worker checkpoint (issue #698): a bounded milestone-1 producer covers expected-worker
 health. When `MRPATCHY_EXPECTED_WORKER_IDS` is configured, the elected coordinator's
 30-second tick publishes one admin-only `deployment`/`worker-health` event per

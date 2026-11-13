@@ -1,3 +1,8 @@
+## 1.59.74 — 2026-11-13
+
+1. [PR #748](https://github.com/StealthCat/MrPatchy/pull/748): Fixed: deleting a server now resolves its still-active AI process-triage notifications. Before this fix, a medium or high verdict on a deleted server stayed active and unread on every viewer's badge, linking to the deleted server's Investigations page. Deletion now adds exactly one resolved info revision with fixed text for each still-active triage event on that server. The revision is added inside the deletion transaction, next to the existing startup-change and incident resolvers. Already-resolved events and other servers' events are untouched, and behaviors, verdicts, approvals and history are unchanged. Fixes #747.
+2. Compatibility and limits: no schema, route, UI or authorization change. Disabling a server without deleting it still leaves its triage events active, the same as the startup and incident producers. This source update does not publish a Docker image.
+
 ## 1.59.73 — 2026-11-13
 
 1. [PR #760](https://github.com/StealthCat/MrPatchy/pull/760): Fixed: on MySQL/MariaDB with parallel triage workers, a second AI contradiction of the same fleet known-good candidate no longer discards its completed medium/high verdict and re-bills the provider. The contradiction path now re-reads the candidate under its row lock. A candidate that is already revoked or missing is left untouched, so the first contradiction or revocation remains the single record and audit event, and the verdict is saved. A still-active candidate is revoked whatever its version. The administrator revoke path keeps its strict version and already-revoked checks. Fixes #759.
