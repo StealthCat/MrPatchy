@@ -3228,6 +3228,21 @@ System units outside the user table are `outside_search_path` gaps.
 System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering and runtime state, host/boot/environment-dependent specifiers, `$VAR` substitution, enumerating accounts, collection wiring, UI and AI classification remain open.
 
 
+Worker checkpoint (issue #702, user manager environment and lingering): this is
+contract-only, so roadmap F remains incomplete. The new pure module
+`app/systemd_user_env.py` turns two captured, read-only observations into the
+per-account inputs that `resolve_user()` needs.
+`parse_manager_environment()` reads `systemctl --user show-environment` output,
+in both its plain `KEY=value` form and systemd's `KEY=$'...'` C-style quoting. It
+keeps only `HOME`, `XDG_RUNTIME_DIR` and the five XDG base-directory variables,
+and drops every other variable without echoing it. A malformed line, invalid
+name, unsupported escape, invalid UTF-8, duplicate key, NUL or newline, or
+over-cap input (more than 64 KiB or 1,024 lines) becomes a coverage gap and the
+affected key is omitted, never guessed. `parse_linger()` validates a
+`/var/lib/systemd/linger` listing into a sorted set of accounts, and rejects
+invalid or over-cap entries as gaps. Running the collection commands, account
+enumeration, runtime unit state, UI and AI classification remain open.
+
 Worker checkpoint (issue #702, specifier expansion): contract version 2 adds a
 bounded `expanded` view of `Exec*`, `User=`, `Group=`, `WorkingDirectory=`,
 `RootDirectory=` and `EnvironmentFile=` to every non-template unit. Raw `config`,
