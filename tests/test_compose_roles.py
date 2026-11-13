@@ -126,3 +126,28 @@ def test_worker_renders_without_controller_only_variables():
     result = _config(["compose.worker.yaml"], "mrpatchy-workers",
                      {"MRPATCHY_CONTROLLER_DATA_VOLUME": "mrpatchy_app-data"})
     assert result.returncode == 0, result.stderr
+
+
+EXPECTED_ENV = {"MRPATCHY_EXPECTED_WORKER_IDS": "w1,w2", "MRPATCHY_EXPECTED_CONTROLLER_IDS": "c1"}
+
+
+def _expected_env(service):
+    env = service.get("environment", {})
+    return {key: env.get(key) for key in EXPECTED_ENV}
+
+
+def test_expected_inventory_reaches_the_coordinator_tick_in_workers():
+    # The app sets DISABLE_SCHEDULER, so expected-worker and expected-controller notifications are
+    # published only from a worker's coordinator tick; the variables must reach it (#773).
+    _compose()
+    env = {"ADMIN_PASSWORD": "x", "MRPATCHY_CONTROLLER_DATA_VOLUME": "mrpatchy_app-data", **EXPECTED_ENV}
+    full = json.loads(_config(["compose.yaml"], "mrpatchy", env).stdout)
+    controller = json.loads(_config(["compose.controller.yaml"], "mrpatchy", env).stdout)
+    worker = json.loads(_config(["compose.worker.yaml"], "mrpatchy-workers", env).stdout)
+    assert full["services"]["app"]["environment"]["DISABLE_SCHEDULER"] == "1"
+    for service in (full["services"]["app"], full["services"]["worker"],
+                    controller["services"]["app"], worker["services"]["worker"]):
+        assert _expected_env(service) == EXPECTED_ENV
+    unset = json.loads(_config(["compose.yaml"], "mrpatchy", {"ADMIN_PASSWORD": "x"}).stdout)
+    for name in ("app", "worker"):
+        assert _expected_env(unset["services"][name]) == dict.fromkeys(EXPECTED_ENV, "")

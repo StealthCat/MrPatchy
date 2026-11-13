@@ -18,6 +18,10 @@ services:
       MRPATCHY_POLL_CONCURRENCY: ${MRPATCHY_POLL_CONCURRENCY:-8}
       MRPATCHY_AI_CONCURRENCY: ${MRPATCHY_AI_CONCURRENCY:-4}
       MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
+      # The coordinator tick runs in workers (the app sets DISABLE_SCHEDULER), so the expected-worker
+      # and expected-controller attention notifications read these here, not on the app.
+      MRPATCHY_EXPECTED_WORKER_IDS: ${MRPATCHY_EXPECTED_WORKER_IDS:-}
+      MRPATCHY_EXPECTED_CONTROLLER_IDS: ${MRPATCHY_EXPECTED_CONTROLLER_IDS:-}
       MRPATCHY_DEPLOYMENT_TYPE: docker
       # Always empty here so replicas never share one ID, even when .env sets one. Each replica
       # instead claims a distinct generated ID that persists on the app-data volume across upgrades.
