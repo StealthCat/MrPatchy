@@ -1,3 +1,48 @@
+## 1.59.77 — 2026-11-13
+
+1. [PR #746](https://github.com/StealthCat/MrPatchy/pull/746): When a complete medium, high or unknown AI result contradicts an exact fleet known-good candidate and the candidate is automatically revoked, administrators now get an in-app notification. The fleet-scoped event is high severity for a high-risk result and medium otherwise, with fixed text containing only the risk and the linked-assessment count. It links to the original assessment's history, which shows that the candidate was revoked and links to the contradicting assessment. Closes #744.
+2. Compatibility and limits: an additive notification in the existing revocation path, with no change to revocation, reuse policy or schema. Integrated after #760: a racing contradiction that finds the candidate already revoked publishes no second notice. It carries no paths, host names, model output or evidence. This source update does not publish a Docker image.
+
+## 1.59.76 — 2026-11-13
+
+1. [PR #751](https://github.com/StealthCat/MrPatchy/pull/751): Startup awareness: the pure systemd unit contract now resolves per-user (`systemd --user`) units for an account. It applies the documented user search-path precedence, including Debian's pre-usrmerge `/lib/systemd/user`, labels origins as `user`, and binds each unit to the owning account. Invalid homes, system paths passed as user paths, and search-path collisions with the runtime directory are reported as coverage gaps with `complete: false`. There is no collection or UI change yet. Part of #702, which stays open.
+2. Compatibility and limits: additive only, and the existing `resolve()` signature and output are unchanged. Not yet supported: non-default XDG variables, lingering and runtime active state, specifier expansion, account enumeration, and wiring collection into the startup inventory, UI and AI classification. This source update does not publish a Docker image.
+
+## 1.59.75 — 2026-11-13
+
+1. [PR #750](https://github.com/StealthCat/MrPatchy/pull/750): The Fleet known-good cache panel shows an estimate of the provider calls and USD spend avoided by retained cache reuse. Each reuse is attributed to its candidate's originating assessment run: calls from the run's recorded count, and spend only when every call has a priced receipt. Reuse with unpriced, partly priced or unavailable sources is counted separately, never as free. `GET /api/ai/known-good/summary` adds an `avoided_estimate` object, leaving the existing counts unchanged. The panel labels the figures as lower bounds when coverage is incomplete and as not a provider invoice. Fixes #749.
+2. Compatibility and limits: an additive response field and panel line, with no schema change. Reads are batched and load no evidence. Estimates use retained local records and public prices. This source update does not publish a Docker image.
+
+## 1.59.74 — 2026-11-13
+
+1. [PR #748](https://github.com/StealthCat/MrPatchy/pull/748): Fixed: deleting a server now resolves its still-active AI process-triage notifications. Before this fix, a medium or high verdict on a deleted server stayed active and unread on every viewer's badge, linking to the deleted server's Investigations page. Deletion now adds exactly one resolved info revision with fixed text for each still-active triage event on that server. The revision is added inside the deletion transaction, next to the existing startup-change and incident resolvers. Already-resolved events and other servers' events are untouched, and behaviors, verdicts, approvals and history are unchanged. Fixes #747.
+2. Compatibility and limits: no schema, route, UI or authorization change. Disabling a server without deleting it still leaves its triage events active, the same as the startup and incident producers. This source update does not publish a Docker image.
+
+## 1.59.73 — 2026-11-13
+
+1. [PR #760](https://github.com/StealthCat/MrPatchy/pull/760): Fixed: on MySQL/MariaDB with parallel triage workers, a second AI contradiction of the same fleet known-good candidate no longer discards its completed medium/high verdict and re-bills the provider. The contradiction path now re-reads the candidate under its row lock. A candidate that is already revoked or missing is left untouched, so the first contradiction or revocation remains the single record and audit event, and the verdict is saved. A still-active candidate is revoked whatever its version. The administrator revoke path keeps its strict version and already-revoked checks. Fixes #759.
+2. Compatibility and limits: no API, schema or configuration change. A racing contradiction now succeeds quietly instead of erroring and being retried. The regression tests interleave deterministically and do not run real parallel threads. This source update does not publish a Docker image.
+
+## 1.59.72 — 2026-11-13
+
+1. [PR #745](https://github.com/StealthCat/MrPatchy/pull/745): Administrators get a medium-severity in-app notification, linking to the server's Maintenance tab, when a distribution-upgrade release plan is ready for its GO/no-go decision. A plan qualifies when it is ready, has no blockers, its sealed expiry has not passed, and its server is enabled and not deleted. Revisions are bound to the frozen plan digest, so a regenerated plan resurfaces as unread. GO, no-go, expiry, regeneration and server removal each publish exactly one resolved revision with a fixed reason. AI review text, configuration content and paths are never copied. Fixes #743.
+2. Compatibility and limits: an additive notification producer. It approves, declines or runs nothing, and makes no schema change. This source update does not publish a Docker image.
+
+## 1.59.71 — 2026-11-12
+
+1. [PR #740](https://github.com/StealthCat/MrPatchy/pull/740): Administrators get an advance, low-severity in-app warning, linking to AI Settings, when counted shared daily AI spend reaches 80% of the cap. Counted spend is the same conservative total admission uses. The warning records the counted and remaining amounts, threshold, cap, budget day and next reset as of when it was raised. Its revision is bound to the window and cap, so later reservations in the same window cause no unread churn. It resolves when the cap is reached, at which point the existing exhausted notification takes over. It also resolves when the window resets, the cap is raised, the mode becomes uncapped or AI is disabled. Closes #739.
+2. Compatibility and limits: an additive notification within the existing cap producer, with no change to admission or schema. Amounts in the warning are a snapshot; Settings shows current totals. This source update does not publish a Docker image.
+
+## 1.59.70 — 2026-11-12
+
+1. [PR #738](https://github.com/StealthCat/MrPatchy/pull/738): **Activity → Workers** gains an administrator-only **Endpoint agents** section showing fleet-wide endpoint-agent health. Each agent shows the deployment type its verification receipt actually proves. It is backed by the admin-only, paginated `GET /api/operations/agents`, which returns rows worst-first with counts by health, freshness thresholds and coverage gaps. It reads retained agent-status receipts and telemetry collection times in batches of up to 500 for enabled, non-deleted servers. Classification is pure, and the endpoint never runs inspection, queues work, writes settings or changes authorization. Closes #737.
+2. Compatibility and limits: an additive read-only API and UI section, with no schema change. Health reflects retained receipts and freshness, not a live probe. This source update does not publish a Docker image.
+
+## 1.59.69 — 2026-11-12
+
+1. [PR #736](https://github.com/StealthCat/MrPatchy/pull/736): In daily-cap modes, a saved model that the bundled price catalog cannot price, or a catalog that is not valid, is now reported in advance instead of surfacing as a stream of generic blocked retries. A new pure `ai_pricing.model_status()` performs the same alias-aware check that `reservation()` applies, using the same fixed reason. While AI is enabled with a cap mode and a saved model, `GET /api/settings/ai-control-status` adds an indefinite `pricing` blocker with fixed text that omits the model ID, so `can_start_now` is false and there is no next start. Administrators also get an in-app notification while that blocker lasts, resolved once pricing is possible again. Closes #735.
+2. Compatibility and limits: an additive status blocker and notification, with no change to admission, pricing data or schema. `ok` never promises admission, because tier, tools, output bound and context size are still checked per call. Disabled AI reports only the existing disabled gate. This source update does not publish a Docker image.
+
 ## 1.59.68 — 2026-11-12
 
 1. [PR #757](https://github.com/StealthCat/MrPatchy/pull/757): Fix workers and the embedded scheduler without `MRPATCHY_WORKER_ID` registering under a new random ID on every start, which produced duplicate registrations and false missing or stale entries after restarts and upgrades. Each runtime now generates an identity once and keeps it in a per-role slot under `DATA_DIR/worker-identities/`. The existing cross-process identity lock decides slot ownership, so replicas sharing a data volume get distinct identities and a restarted process reclaims a free slot. An explicit `MRPATCHY_WORKER_ID` still takes precedence. Unreadable, invalid or exhausted slots, and unavailable storage, fall back to a boot-only identity with a warning. Fixes #754.

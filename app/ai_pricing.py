@@ -148,6 +148,29 @@ def tier_multipliers(model):
     return multipliers
 
 
+UNPRICED_MODEL_REASON = 'The selected model has no verified price for a safe reservation.'
+
+
+def model_status(model, now=None):
+    """Return whether the bundled catalog can price a saved model ID at all.
+
+    Pure and read-only. It checks only catalog validity and the alias-resolved
+    model. A specific call can still be refused for its tier, tools, output
+    bound or context size, so ``ok`` never promises that a call will be admitted.
+    """
+    catalog = catalog_status(now)
+    if not catalog['fresh']:
+        return {'ok': False, 'code': 'catalog', 'model': '', 'reason': catalog['reason']}
+    requested = identifier(model)
+    if not requested:
+        return {'ok': False, 'code': 'model', 'model': '',
+                'reason': 'The saved model ID is not a catalog identifier, so no price can be verified for a safe reservation.'}
+    resolved = ALIASES.get(requested, requested)
+    if resolved not in RATES:
+        return {'ok': False, 'code': 'model', 'model': requested, 'reason': UNPRICED_MODEL_REASON}
+    return {'ok': True, 'code': '', 'model': resolved, 'reason': ''}
+
+
 def reservation(payload, now=None):
     """Return a conservative USD ceiling before a capped provider call.
 
@@ -161,7 +184,7 @@ def reservation(payload, now=None):
     requested = identifier(payload.get('model'))
     model = ALIASES.get(requested, requested)
     if model not in RATES:
-        return {'ok': False, 'reason': 'The selected model has no verified price for a safe reservation.'}
+        return {'ok': False, 'reason': UNPRICED_MODEL_REASON}
     output = payload.get('max_output_tokens')
     if type(output) is not int or not 1 <= output <= 1_000_000:
         return {'ok': False, 'reason': 'The request has no bounded output-token maximum for a safe reservation.'}

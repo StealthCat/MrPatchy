@@ -186,6 +186,7 @@ EXPECTED_ROLES = {
     ('DELETE','/api/operations/sso-bindings/{digest}'):'admin',
     ('GET','/api/operations/workers'):'admin',
     ('GET','/api/operations/controllers'):'admin',
+    ('GET','/api/operations/agents'):'admin',
     ('POST','/api/operations/workers/control'):'admin',
     ('GET','/api/operations/{host_id}/advisories'):'admin',
     ('POST','/api/operations/{host_id}/advisories'):'admin',
