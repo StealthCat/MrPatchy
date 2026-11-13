@@ -256,3 +256,46 @@ def test_short_stale_enrolling_and_disabled_servers_do_not_report_telemetry_loss
     with Session() as s:
         [event] = telemetry_events(s)
         assert current(s, event).lifecycle == 'resolved'
+
+
+def test_coordinator_outage_does_not_flood_telemetry_loss_until_observed_for_threshold(admin):
+    # After a controller/coordinator outage every server's last_seen is old; the first leader
+    # tick runs before asynchronous polls land, so the silence is the coordinator's own gap.
+    now = time.time()
+    add_host(last_seen=now - 3600)
+    add_host(OTHER, last_seen=now - 3600)
+    operations.collect_alerts(now, observing_since=now)
+    operations.collect_alerts(now + operations.TELEMETRY_LOST_SECONDS, observing_since=now)
+    with Session() as s:
+        assert telemetry_events(s) == []
+        # Polls landed for one server; the other stays silent.
+        s.get(Host, OTHER).last_seen = now + operations.TELEMETRY_LOST_SECONDS + 30
+        s.commit()
+    operations.collect_alerts(now + operations.TELEMETRY_LOST_SECONDS + 60, observing_since=now)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.subject_id == HOST and current(s, event).lifecycle == 'active'
+        assert event.revision == 1
+
+
+def test_leader_change_keeps_existing_telemetry_loss_active_without_new_revision(admin):
+    now = time.time()
+    add_host(last_seen=now - 3600)
+    operations.collect_alerts(now)
+    # A new leader starts observing: the genuine outage stays active rather than resolving and reopening.
+    operations.collect_alerts(now + 30, observing_since=now + 30)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 1 and current(s, event).lifecycle == 'active'
+        s.get(Host, HOST).last_seen = now + 60
+        s.commit()
+    operations.collect_alerts(now + 60, observing_since=now + 30)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 2 and current(s, event).lifecycle == 'resolved'
+
+
+def test_worker_passes_leadership_start_to_alert_collection():
+    source = (Path(__file__).resolve().parents[1] / 'app' / 'worker.py').read_text()
+    assert 'if is_leader:leader_since=now' in source
+    assert 'operations.collect_alerts(observing_since=leader_since)' in source

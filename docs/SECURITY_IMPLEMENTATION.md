@@ -7814,3 +7814,11 @@ reopens it. The 120-second `stale` SMTP/webhook alert is unchanged and stays
 outside the in-app allowlist; no outbox alert kind is added. The notification
 is attention only and grants no response or remediation authority. A
 configurable threshold and deployment-type agent health (#737) remain open.
+
+Post-review fix: the coordinator records when it acquired scheduler leadership
+and passes it to `collect_alerts(observing_since=...)`. New telemetry-lost events
+are published only after the coordinator has observed for longer than the
+threshold. Without this, the first tick after a controller or coordinator outage
+would run before the asynchronous polls refresh `last_seen` and would flag every
+server. An already-active event stays active across a leader change, without a
+new revision, until telemetry resumes.
