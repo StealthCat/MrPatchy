@@ -172,7 +172,14 @@ OPERATIONAL_NOTIFICATIONS={
     'scheduled patching':('scheduled-patching','medium','patching'),
     'agent health':('agent-health','medium','agent'),
     'startup baseline':('startup-baseline','medium','integrity'),
+    # Notification-only (no outbox Alert): the 120-second `stale` alert flaps, so the bell
+    # only reports telemetry silence that has persisted for TELEMETRY_LOST_SECONDS.
+    'telemetry lost':('telemetry-lost','high','agent'),
 }
+TELEMETRY_LOST_SECONDS=900
+TELEMETRY_LOST_MESSAGE=('No telemetry has arrived from this server for at least 15 minutes. It may be powered off, '
+    'unreachable, or its agent or SSH access may have failed. Review Agent health and Connection. Security '
+    'coverage is unavailable while telemetry is missing; this is not a clean-host verdict.')
 OPERATIONAL_NOTIFICATION_SOURCE='operations'
 OPERATIONAL_NOTIFICATION_SUBJECT='server'
 
@@ -290,6 +297,11 @@ def collect_alerts(now=None):
             if recovery:record(host,'recovery',str(len(recovery))+' operation(s) require console recovery/reconciliation. See Activity: '+', '.join(recovery[:10]))
             if host.state=='enrolling':continue
             if now-host.last_seen>120:record(host,'stale','Telemetry has not arrived within 120 seconds')
+            if now-host.last_seen>TELEMETRY_LOST_SECONDS:
+                # Fixed text keeps one stable revision per outage; resolution reuses the operational path.
+                published.add((host.id,OPERATIONAL_NOTIFICATIONS['telemetry lost'][0]))
+                try:_operational_notification(s,host.id,'telemetry lost',TELEMETRY_LOST_MESSAGE,now)
+                except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for telemetry loss on %s',host.id)
             if host.integrity:record(host,'integrity',json.dumps(host.integrity)[:8000])
             agent=settings.get('agent-status:'+host.id)
             if agent and agent.value.get('state') not in ('current','outdated'):

@@ -7800,3 +7800,17 @@ strict fallback and the 100-candidate SQL bound. It does not claim a production 
 or complete native-context, MySQL concurrency, provider-invoice, multi-controller or
 remaining faster-triage acceptance. Coordinator integration, exact-head checks and a
 fresh code scan remain required before delivery.
+
+### Telemetry-loss in-app notifications — worker checkpoint #765
+
+`operations.collect_alerts` now publishes an admin-only, high-severity
+`telemetry-lost` operational notification when an enabled, non-deleted,
+non-enrolling server has sent no telemetry for `TELEMETRY_LOST_SECONDS` (15
+minutes). It links to the server's Agent health tab. The reason is fixed text
+with no endpoint data or changing timestamps, so repeated passes keep one
+revision per outage. The existing operational resolution path resolves it when
+telemetry resumes or the server is disabled or deleted, and a later outage
+reopens it. The 120-second `stale` SMTP/webhook alert is unchanged and stays
+outside the in-app allowlist; no outbox alert kind is added. The notification
+is attention only and grants no response or remediation authority. A
+configurable threshold and deployment-type agent health (#737) remain open.
