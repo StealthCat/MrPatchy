@@ -8227,3 +8227,22 @@ A saved SMTP/webhook delivery configuration that can no longer be decrypted (for
 - **Notice:** while the configuration is unreadable and at least one open alert is undelivered, the admin-only `alert-delivery`/`delivery-failing` event is published at subject revision `unreadable` with high severity and fixed text. Repeated polls add no unread revision. It resolves once a readable configuration is saved or nothing is left undelivered. An unreadable configuration with nothing undelivered stays quiet. The former `failing:unknown` revision is replaced by `unreadable`, so an event already active on that revision gains one unread revision after upgrade.
 - **UI:** the Operations panel shows a warning explaining that external delivery has stopped and the configuration must be saved again.
 - **Unchanged:** the notice never sends, retries, acknowledges or authorizes anything. There are no schema, role or response-authorization changes.
+
+
+### OS support-lifecycle notifications — worker checkpoint #341 (roadmap J)
+
+This delivers the "lifecycle alerts" item of #341's remaining scope. The server Overview already showed the reviewed vendor lifecycle from `os_lifecycle.evaluate`, but nothing told administrators when a release crossed its standard-support end date or had no reviewed support phase left.
+
+`operations.collect_alerts` now calls `app/os_lifecycle_notifications.py` on each coordinator tick. It uses the same `repo_minutes × 120` inventory freshness window as the Overview card.
+
+- **Trigger:** one admin-only `os-lifecycle`/`support-ended` event per active, non-enrolling, non-deleted server whose exact Debian/Ubuntu release is:
+  - `ended`: no reviewed vendor support phase remains (high);
+  - `subscription`: Ubuntu standard support ended and extended coverage depends on an Ubuntu Pro entitlement the inventory does not observe (medium);
+  - `lts-unverified`: Debian standard support ended and the host is not verified as eligible for Debian LTS (medium).
+- **Quiet:** standard support and verified Debian LTS coverage publish nothing.
+- **Payload:** the reason text is composed only from the controller's reviewed catalog: the release label and end dates. It never copies endpoint `os-release` text. It links to `#servers/<host>/overview`.
+- **Revisions:** the subject revision binds the category, vendor and release. Repeated ticks add nothing, and a category change (for example, an Ubuntu Pro window ending) appends an unread revision.
+- **Resolution:** the event resolves on an upgrade to a supported release, on an unknown, unsupported or derivative release, or when the server is disabled, deleted or re-enrolling.
+- **Freshness:** stale or missing inventory holds the current state. It neither opens a new event nor falsely resolves an existing one, because freshness gaps cannot prove an upgrade. The Overview card already discloses those gaps.
+- **Unchanged:** a rejected payload never blocks alert collection, and no SMTP/webhook `Alert` row is added. The producer changes no patching, upgrade, subscription, schema, role or response-authorization state, and it acknowledges or authorizes nothing.
+- **Remaining (#341):** a configurable advance-warning window before an end date, Ubuntu Pro entitlement discovery, RPM/vendor catalog coverage, catalog refresh and signing, the migration queue and plans, fleet filters and reports, and real-target acceptance.

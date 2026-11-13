@@ -319,6 +319,10 @@ def collect_alerts(now=None):
         from . import integrity_sweep_notifications
         try:integrity_sweep_notifications.publish(s,hosts,now)
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
+        # In-app only: lifecycle text comes from the reviewed catalog, never endpoint text.
+        from . import os_lifecycle_notifications
+        try:os_lifecycle_notifications.publish(s,hosts,now,cfg['repo_minutes']*120)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app OS lifecycle notifications')
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)
