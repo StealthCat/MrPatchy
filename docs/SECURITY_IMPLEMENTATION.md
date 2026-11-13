@@ -2918,6 +2918,21 @@ exploitation detectors, typed automatic containment, server/fleet views,
 notifications and real-target acceptance remain planned. A vulnerable version, an
 advisory match or AI output still authorizes no containment.
 
+### Per-server advisory applicability — worker checkpoint #783
+
+The opt-in Operations advisory check now applies the pure `cve_exposure.classify()` contract to OSV matches stored for a server.
+
+- **Full records:** `querybatch` returns advisory IDs only. The scan fetches each distinct valid ID from `https://api.osv.dev/v1/vulns/{id}`, without redirects, up to 200 detail records and a shared 60-second wall-clock budget.
+- **Exact match:** each record is classified against the server's exact ecosystem, source package and installed source version.
+- **Stored fields:** each result item gains an `applicability` list (`affected`, `fixed`, `unaffected` or `uncertain`, with reason, CVE aliases and lowest complete fixed version). The scan gains counts by status. Existing vulnerability, coverage, ecosystem and checked fields remain.
+- **Fail closed:** retrieval failure, mismatched record ID, invalid ID or exhausted fetch/time budget yields `uncertain`, never `unaffected`. When the count bound is reached, IDs are processed alphabetically and the remainder stay uncertain.
+- **UI:** the Reviewed fleet workflows dialog shows status counts and an escaped per-advisory list, with raw JSON retained in a collapsible section.
+- **No authority:** classification selects no patches, triggers no response or containment and calls no AI provider. `affected` means version applicability, not exploitation evidence; `uncertain` is never treated as safe.
+- **Compatibility:** no schema, route, setting or role change. RPM keeps its updateinfo path. Previously stored scans lack applicability and summary until a new scan; read-back returns stored data unchanged.
+- **Operational limit:** detail fetches are sequential and run during the advisory scan's per-host lock. A scan can hold that lock for up to 60 seconds, deferring queued work and causing per-host configuration changes to return 409 while it runs.
+
+Requirement D remains incomplete: broad ingestion across supported distributions, persisted exposure windows and producers, scheduled scans and notifications, and exploitation monitoring/containment wiring remain outstanding.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
