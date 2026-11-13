@@ -776,6 +776,18 @@ def _assess_behavior(s,row,cfg,secret):
     with host_lifecycle.activity([row.host_id],'ai'):
         return _assess_active_behavior(s,row,cfg,secret)
 
+def _explain_known_good_miss(missed,model,policy_hashes):
+    """Record why the known-good cache missed; advisory diagnostics only."""
+    if not missed:return
+    from . import known_good
+    try:
+        with Session() as read:
+            explained=known_good.explain_miss(read,missed['evidence'],model,policy_hashes,
+                refresh=missed['refresh'],changed=missed['changed'])
+    except Exception:
+        log.warning('Known-good miss diagnostic unavailable',exc_info=True);return
+    ai_runs.event('known_good_lookup',explained['message'])
+
 def _assess_active_behavior(s,row,cfg,secret):
     from . import ai_assessments,ai_claims,known_good,triage_notifications
     lease=ai_claims.current.get()
@@ -793,11 +805,15 @@ def _assess_active_behavior(s,row,cfg,secret):
         row.evidence=file_status.before_ai(s,row)
         s.commit()
 
+    missed={}
     def reuse(write,saved):
+        refresh=bool(write.get(ai_assessments.Refresh,saved.id))
+        changed=saved.evidence.get('file_assessment',{}).get('status')=='changed'
         hit=known_good.lookup(write,saved.evidence,cfg['ai_model'],policy_hashes,
-            bypass=bool(write.get(ai_assessments.Refresh,saved.id)) or
-                saved.evidence.get('file_assessment',{}).get('status')=='changed')
-        if not hit:return False
+            bypass=refresh or changed)
+        if not hit:
+            missed.update(evidence=copy.deepcopy(saved.evidence),refresh=refresh,changed=changed)
+            return False
         result=hit['result']
         saved.verdict='low'
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
@@ -815,6 +831,7 @@ def _assess_active_behavior(s,row,cfg,secret):
                 if reuse(write,saved):return
         elif reuse(s,row):
             s.commit();return
+    _explain_known_good_miss(missed,cfg['ai_model'],policy_hashes)
     inputs=[]
     def assess(evidence):
         prepared=ai.investigation_input(evidence)
