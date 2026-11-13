@@ -1,3 +1,8 @@
+## 1.59.70 — 2026-11-12
+
+1. [PR #738](https://github.com/StealthCat/MrPatchy/pull/738): **Activity → Workers** gains an administrator-only **Endpoint agents** section showing fleet-wide endpoint-agent health. Each agent shows the deployment type its verification receipt actually proves. It is backed by the admin-only, paginated `GET /api/operations/agents`, which returns rows worst-first with counts by health, freshness thresholds and coverage gaps. It reads retained agent-status receipts and telemetry collection times in batches of up to 500 for enabled, non-deleted servers. Classification is pure, and the endpoint never runs inspection, queues work, writes settings or changes authorization. Closes #737.
+2. Compatibility and limits: an additive read-only API and UI section, with no schema change. Health reflects retained receipts and freshness, not a live probe. This source update does not publish a Docker image.
+
 ## 1.59.69 — 2026-11-12
 
 1. [PR #736](https://github.com/StealthCat/MrPatchy/pull/736): In daily-cap modes, a saved model that the bundled price catalog cannot price, or a catalog that is not valid, is now reported in advance instead of surfacing as a stream of generic blocked retries. A new pure `ai_pricing.model_status()` performs the same alias-aware check that `reservation()` applies, using the same fixed reason. While AI is enabled with a cap mode and a saved model, `GET /api/settings/ai-control-status` adds an indefinite `pricing` blocker with fixed text that omits the model ID, so `can_start_now` is false and there is no next start. Administrators also get an in-app notification while that blocker lasts, resolved once pricing is possible again. Closes #735.
