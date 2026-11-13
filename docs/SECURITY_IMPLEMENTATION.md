@@ -7999,7 +7999,17 @@ The event links to the server summary's spool card. An episode stays open withou
 The event is advisory. It never acknowledges, restarts, drains or remediates anything, and it does not change response authorization. There is no schema change.
 
 **Remaining:**
-- Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.
+- ~~Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.~~ Addressed by the #785 worker checkpoint below.
 - Stale telemetry raises no spool notification. Worker/agent liveness producers cover stale telemetry separately.
 - Warning-level pressure is shown on the summary card only.
 - Configurable thresholds remain outstanding.
+
+
+### Spool attention resolves on server disable — worker checkpoint #785
+
+Disabling a server through the lifecycle endpoint stops polling, so fresh telemetry could never resolve an open spool episode. In the same transaction as the disable, the controller now adds one `info`, `resolved` revision (`server-disabled`) to a still-active `agent-spool` / `spool-health` event. The fixed text says monitoring is paused and that the event reopens if pressure or new loss persists after the server is re-enabled. A disable with no active episode publishes nothing.
+
+Deletion keeps its own `server-deleted` resolution. Deleting a server that is already disabled adds no further revision. If deletion commits the disable but local credential cleanup then fails, the server stays disabled and the episode is resolved with the same `server-disabled` revision, so a retried deletion adds no further revision. After the server is re-enabled, the next critical or new-loss poll reopens the same event as an unread active revision.
+
+The event remains advisory. Roles, audit, job cancellation and response authorization are unchanged, and there is no schema change. Configurable thresholds and warning-level notifications remain outstanding.
+
