@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_pricing,alert_delivery_notifications,host_lifecycle,notifications,triage_block_notifications
+from . import ai_budget,ai_pricing,host_lifecycle,notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -310,6 +310,7 @@ def collect_alerts(now=None):
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
         # In-app only, after resolution above, so a broken channel never alerts about itself.
+        from . import alert_delivery_notifications
         alert_delivery_notifications.publish(s,now)
         _resolve_operational_notifications(s,published,now)
         s.commit()
