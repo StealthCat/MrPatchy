@@ -16,6 +16,13 @@ Policy:
 - Scheduled patch runs are covered by the ``scheduled patching`` operational
   alert, and ``recovery_required`` jobs by the ``recovery`` alert, so neither
   publishes here. Other actions publish nothing.
+- A ``failed`` AI response-plan job (``security-plan``/``startup-plan``,
+  #806) follows the same failure/resolution rules, but only administrators
+  see it, because only administrators request and review plans. A controlled
+  AI wait (budget, pacing, provider backoff or pause) keeps the job queued and
+  publishes nothing. An automatic proposal that the worker skips before any AI
+  call, because the policy was turned off or the incident evidence changed,
+  is a superseded attempt rather than a failure and publishes nothing.
 
 Notifications never retry, acknowledge, reconcile or authorize anything.
 """
@@ -34,6 +41,14 @@ ACTIONS = {
     'release-upgrade': 'OS release upgrade',
     'agent-update': 'Agent update',
 }
+PLAN_ACTIONS = {
+    'security-plan': 'AI security incident response planning',
+    'startup-plan': 'AI startup-change response planning',
+}
+PLAN_MINIMUM_ROLE = 'admin'
+# Fixed worker refusals for automatic proposals that never reach the provider.
+AUTOMATIC_PLAN_DISABLED = 'Automatic AI planning is disabled; no AI call sent'
+AUTOMATIC_PLAN_STALE = 'Automatic incident evidence changed; no AI call sent'
 
 log = logging.getLogger(__name__)
 
@@ -51,9 +66,17 @@ def _active(session, job):
     return current if current and current.lifecycle == 'active' else None
 
 
+def _skipped_automatic_plan(job):
+    return ((job.payload or {}).get('automatic') is True
+            and (job.output or '').startswith((AUTOMATIC_PLAN_DISABLED, AUTOMATIC_PLAN_STALE)))
+
+
 def eligible(job):
-    return bool(job and job.host_id and job.action in ACTIONS
-                and not (job.action == 'patch' and (job.payload or {}).get('_schedule')))
+    if not job or not job.host_id:
+        return False
+    if job.action in PLAN_ACTIONS:
+        return not _skipped_automatic_plan(job)
+    return job.action in ACTIONS and not (job.action == 'patch' and (job.payload or {}).get('_schedule'))
 
 
 def publish_outcome(session, job, *, now=None):
@@ -64,15 +87,20 @@ def publish_outcome(session, job, *, now=None):
     from .db import Host
     if not eligible(job) or session.get(Host, job.host_id) is None:
         return False
-    label = ACTIONS[job.action]
+    plan = job.action in PLAN_ACTIONS
+    label = PLAN_ACTIONS[job.action] if plan else ACTIONS[job.action]
     common = dict(source=SOURCE, kind=job.action, subject_type=SUBJECT_TYPE,
-                  subject_id=job.host_id, host_id=job.host_id,
-                  deep_link=_link(job), minimum_role=MINIMUM_ROLE, now=now)
+                  subject_id=job.host_id, host_id=job.host_id, deep_link=_link(job),
+                  minimum_role=PLAN_MINIMUM_ROLE if plan else MINIMUM_ROLE, now=now)
     if job.state == 'failed':
+        reason = (label + ' failed on this server, so no response plan was proposed. Nothing ran '
+                  'on the server. Open the operation for its error, then request a new plan after '
+                  'fixing the cause; automatic planning only retries for new incident evidence.'
+                  if plan else
+                  label + ' failed on this server. Open the operation for its error and any '
+                  'receipt. Nothing is retried automatically.')
         _, created = notifications.publish(
-            session, subject_revision='failed:' + job.id, severity='medium',
-            reason=label + ' failed on this server. Open the operation for its error and any '
-                   'receipt. Nothing is retried automatically.', **common)
+            session, subject_revision='failed:' + job.id, severity='medium', reason=reason, **common)
         return created
     if job.state == 'complete' and _active(session, job):
         _, created = notifications.publish(
