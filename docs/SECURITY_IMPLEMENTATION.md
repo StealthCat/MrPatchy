@@ -2316,20 +2316,6 @@ endpoint. The panel adds presentation only: lookup, publication, revocation,
 role, approval and response boundaries are unchanged. Hit/miss reasons,
 saved-call or cost estimates and matched production acceptance remain open.
 
-Worker checkpoint #744 notifies administrators when an AI contradiction
-automatically revokes a fleet known-good candidate. In the same transaction as
-the revocation, `known_good.invalidate_contradiction` publishes one fleet-scoped,
-admin-only `ai-known-good`/`candidate-contradicted` event keyed by the candidate
-fingerprint. Severity is `high` for a high-risk contradiction and `medium` for
-medium or unknown. The reason is fixed text with only the risk word and the
-linked-assessment count. The deep link opens the original candidate's history
-page, which already shows the revocation and links to the contradictory
-assessment. Rolled-back saves, calls that revoke nothing and administrator API
-revocations publish nothing. The producer adds no SMTP/webhook alert and changes
-no lookup, publication, revocation, approval or response semantics. Recording
-review completion, notifying administrator-initiated revocations, hit/miss
-reasons and saved-call estimates remain open.
-
 Worker checkpoint #781 records administrator review completion for a revoked
 candidate. The admin-only, CSRF-protected `POST /api/ai/known-good/{fingerprint}/review`
 takes the expected version, the expected revocation time and a review note. It
@@ -2345,6 +2331,20 @@ candidate, whichever kind produced it, with fixed text. Review never reactivates
 behavior, rewrites an assessment or authorizes a response; active, unknown,
 changed or already-reviewed revocations are refused. Per-assessment review
 remains out of scope.
+
+Worker checkpoint #744 notifies administrators when an AI contradiction
+automatically revokes a fleet known-good candidate. In the same transaction as
+the revocation, `known_good.invalidate_contradiction` publishes one fleet-scoped,
+admin-only `ai-known-good`/`candidate-contradicted` event keyed by the candidate
+fingerprint. Severity is `high` for a high-risk contradiction and `medium` for
+medium or unknown. The reason is fixed text with only the risk word and the
+linked-assessment count. The deep link opens the original candidate's history
+page, which already shows the revocation and links to the contradictory
+assessment. Rolled-back saves, calls that revoke nothing and administrator API
+revocations publish nothing. The producer adds no SMTP/webhook alert and changes
+no lookup, publication, revocation, approval or response semantics. Recording
+review completion, notifying administrator-initiated revocations, hit/miss
+reasons and saved-call estimates remain open.
 
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
