@@ -1,3 +1,7 @@
+## 1.59.96 — 2026-11-13
+
+1. [PR #813](https://github.com/StealthCat/MrPatchy/pull/813): Keeps Account → Operations usable when saved SMTP/webhook settings cannot be decrypted and lets administrators replace them. Adds an admin-only in-app warning while open alerts await delivery. The GET notifications response adds `unreadable`; an existing `failing:unknown` event becomes `unreadable` once, creating a new unread revision. Replacement discards unrecoverable secrets, which must be entered again. The notice does not send or retry alerts; it has no deep link, and the advanced SMTP editor has no separate unreadable indicator. No schema, role or response-authorization change.
+
 ## 1.59.95 — 2026-11-13
 
 1. [PR #768](https://github.com/StealthCat/MrPatchy/pull/768): Adds an admin-only notification when repository refresh failures leave metadata stale enough to block patching, with fixed text and a link to the server's Repositories tab. It resolves after refresh recovery or server disable/delete. Additive behavior for existing installations; the threshold is twice `repo_minutes`, and raw repository errors remain in the existing SMTP/webhook alert only.
