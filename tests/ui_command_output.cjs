@@ -38,5 +38,22 @@ module.exports=async(page,capture)=>{
   job.output='';await page.goto(new URL('/#activity/jobs/output-operation',page.url()).href);await page.getByText('No output recorded yet.').waitFor();
   assert.equal(await page.getByRole('button',{name:'Copy output',exact:true}).count(),0,'no copy control for missing output');
   assert.equal(await page.evaluate(()=>window.__outputInjected),undefined);
+  // Non-secure origins use the textarea fallback. Inside an open modal dialog (the package-operation
+  // modal) everything outside the dialog is inert, so the fallback must select text within the dialog
+  // rather than report a false "Output copied." with an empty clipboard.
+  const fallback=await page.evaluate(async text=>{
+   const result={};
+   Object.defineProperty(navigator,'clipboard',{value:undefined,configurable:true});
+   document.execCommand=()=>{const a=document.activeElement;result.copied=a&&a.tagName==='TEXTAREA'?a.value.slice(a.selectionStart,a.selectionEnd):String(getSelection());return true;};
+   const dialog=document.createElement('dialog');document.body.append(dialog);
+   try{
+    dialog.innerHTML=PatchyUI.commandOutput(text,'Fallback output');dialog.showModal();
+    dialog.querySelector('[data-copy-output]').click();
+    for(let n=0;n<50&&!dialog.querySelector('.command-output-status').textContent;n++)await new Promise(r=>setTimeout(r,10));
+    result.status=dialog.querySelector('.command-output-status').textContent;result.leftover=dialog.querySelectorAll('textarea').length;
+   }finally{dialog.close();dialog.remove();delete navigator.clipboard;delete document.execCommand;}
+   return result;
+  },'line1\n  line2\twith tab');
+  assert.deepEqual(fallback,{copied:'line1\n  line2\twith tab',status:'Output copied.',leftover:0},'fallback copy inside a modal dialog copies the exact text');
  }finally{job.output=output;await page.unroute('**/api/jobs/output-operation*',detail);await page.unroute('**/api/jobs',list);await page.unroute('**/api/jobs?*',list);await page.context().clearPermissions();await page.setViewportSize({width:1440,height:1000});}
 };
