@@ -39,6 +39,9 @@ module.exports=async(page,capture)=>{
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
       await capture('ai-known-good-lookups-'+width);
     }
+    await page.locator('[data-nav=overview]').click();
+    await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
+    assert.equal(await panel.count(),0);
     const before=calls;
     const identity=async route=>{const response=await route.fetch();route.fulfill({response,json:{...await response.json(),role:'viewer'}});};
     await page.route('**/api/identity',identity);
