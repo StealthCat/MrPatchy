@@ -191,3 +191,43 @@ def test_approval_without_active_event_or_with_stale_revision_publishes_nothing(
         s.commit()
     assert approve(admin, True, expected='0' * 64).status_code == 409  # rejected: nothing announced
     assert [(r[1], r[2]) for r in history()] == [('high', 'active')]
+
+
+def delete_server(admin, identifier):
+    record = admin.get('/api/hosts/' + identifier + '/summary').json()['host']
+    response = admin.request('DELETE', '/api/hosts/' + identifier, json={
+        'confirmation': record['name'], 'expected_revision': record['lifecycle_revision'],
+        'reason': 'Remove management after reviewing operations and retained records.'})
+    assert response.status_code == 200, response.text
+
+
+def test_server_deletion_resolves_only_that_servers_active_triage_events(admin):
+    seed()
+    with Session() as s:
+        s.add(Host(id='two', name='two', address='192.0.2.2', fingerprint=''))
+        s.add(Behavior(id='other', host_id='two', verdict='high', evidence={}))
+        s.add(Behavior(id='calm', host_id='one', verdict='high', evidence={}))
+        s.flush()
+        for row in s.scalars(select(Behavior)):
+            row.verdict = 'high'
+            triage_notifications.publish_verdict(s, row, now=1)
+        calm = s.get(Behavior, 'calm')
+        calm.verdict = 'low'
+        triage_notifications.publish_verdict(s, calm, now=2)  # Already resolved before deletion.
+        s.commit()
+    with Session() as s:
+        assert notifications.unread_count(s, 'viewer') == 3
+    delete_server(admin, 'one')
+    by_subject = {item['subject_id']: item for item in viewer_items()}
+    deleted = by_subject['subject']
+    assert deleted['lifecycle'] == 'resolved' and deleted['severity'] == 'info' and deleted['revision'] == 2
+    assert deleted['host_id'] == 'one' and 'deleted' in deleted['reason']
+    assert '/srv/' not in deleted['reason'] and 'Model text' not in deleted['reason']
+    assert by_subject['calm']['revision'] == 2 and 'low risk' in by_subject['calm']['reason']
+    assert by_subject['other']['lifecycle'] == 'active' and by_subject['other']['revision'] == 1
+    with Session() as s:
+        # Re-running is idempotent and history is retained untouched.
+        assert triage_notifications.resolve_host_notifications(s, 'one') == 0
+        s.commit()
+        assert s.get(Behavior, 'subject').verdict == 'high' and not s.get(Behavior, 'subject').approved
+        assert s.scalar(select(func.count()).select_from(notifications.NotificationRevision)) == 5
