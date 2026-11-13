@@ -1,3 +1,7 @@
+## 1.59.87 — 2026-11-13
+
+1. [PR #788](https://github.com/StealthCat/MrPatchy/pull/788): Resolved in-app notification history older than the configured `history_days` retention is now pruned during hourly leader cleanup in batches of 500. Only events whose current revision is resolved before the cutoff are removed; active histories and recently resolved events are retained. The event identity row remains so a recurring event gets the next unread revision number. Each batch rechecks event state under a row lock, preserving prior history if an event is reopened while pruning. No schema, route, UI, role or response-authorization change. Already-open tabs may show a pruned resolved event until their next refresh, and the identity row remains for each distinct event. This source update does not publish a Docker image.
+
 ## 1.59.86 — 2026-11-13
 
 1. [PR #789](https://github.com/StealthCat/MrPatchy/pull/789): The pure systemd unit contract now provides a bounded expanded view for fixed unit-name and manager specifiers in commands, accounts and paths. Host, boot and environment-dependent specifiers remain raw as coverage gaps; raw configuration is unchanged. Contract version 2 changes the record digest. No collection, UI, schema or response-authorization behavior changes. The systemd version is not collected, so legacy specifier semantics may differ; collection wiring and UI remain open under #702.

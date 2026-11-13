@@ -4117,6 +4117,35 @@ Milestones 2–4 remain open.
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
+Worker checkpoint (issue #787): this increment adds a milestone-1 retention policy
+for resolved notification history. Before it, only `notification_arrivals` were
+pruned. Revisions and per-user read/dismiss rows of resolved events grew without
+bound. The leader's hourly cleanup now calls `notifications.prune_resolved()` with
+the existing `history_days` cutoff, after arrival pruning.
+
+- **What is pruned:** an event whose current revision is `resolved` and whose last
+  update precedes the cutoff loses all of its revisions and per-user state. It then
+  disappears from lists, counts and arrivals.
+- **What is kept:** active events keep every revision at any age, so actionable
+  history stays discoverable. Resolved events newer than the cutoff are untouched.
+- **Identity row:** the event identity row stays. A recurring subject continues its
+  revision sequence, so the new active revision is unread, appears in arrivals and
+  never reuses a pruned revision number. Replay cursors, exact-revision read/dismiss
+  and cross-tab toast keys therefore cannot collide.
+- **Races:** rows written at or after the cutoff, such as a racing publish, read or
+  dismiss, are never deleted. Each batch rechecks eligibility with a locking read
+  of the event rows before deleting, so an event reopened or changed after the
+  candidate selection keeps all of its earlier revisions. Publishers update the
+  event row, so they wait for the batch to commit.
+- **Batches:** work runs in bounded batches of 500 events, each committed
+  separately. A failure is logged and does not stop the cleanup loop.
+
+Limits: identity rows of pruned events are retained, which is one small row per
+distinct subject. Superseded revisions of long-lived active events are not pruned.
+Pruning does not change the stream digest, so an already open tab can keep showing
+a pruned resolved item until its next authoritative refresh. No schema, route, UI,
+role or response-authorization change.
+
 The current glass theme, existing mascot artwork and incremental UI polish are
 starting points, not evidence that this milestone is finished. Use
 [the UI design guide](UI_DESIGN.md) to maintain one consistent design system.
