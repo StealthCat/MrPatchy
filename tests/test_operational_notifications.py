@@ -168,7 +168,7 @@ def test_startup_baseline_links_to_the_file_integrity_review_panel(admin):
 
 
 def test_allowlist_is_well_formed():
-    tabs = {'history', 'security', 'patching', 'agent', 'integrity', 'overview'}
+    tabs = {'history', 'security', 'patching', 'agent', 'integrity'}
     kinds = [value[0] for value in operations.OPERATIONAL_NOTIFICATIONS.values()]
     assert len(kinds) == len(set(kinds))
     for notification_kind, severity, tab in operations.OPERATIONAL_NOTIFICATIONS.values():

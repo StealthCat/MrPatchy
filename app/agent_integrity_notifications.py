@@ -49,9 +49,9 @@ def message(changed, metadata, baseline_missing):
     if metadata:
         parts.append(f'{metadata} managed agent file(s) have changed ownership or permissions, '
                      'or their metadata is missing.')
-    return (' '.join(parts) + ' The agent or its privileged helper may have been modified. Review Integrity '
-            'findings on this server and re-run the installer from a trusted source if the change was not '
-            'expected. This notification does not repair files or authorize any response.')
+    return (' '.join(parts) + ' The agent or its privileged helper may have been modified. Review Agent health '
+            'and the Integrity findings on this server\'s Overview; run a live check or a reviewed repair if the '
+            'change was not expected. This notification does not repair files or authorize any response.')
 
 
 def publish(hosts, now, notify, published):

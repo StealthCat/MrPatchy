@@ -56,7 +56,7 @@ def test_changed_managed_file_publishes_deduplicates_revises_and_resolves(admin)
         assert (event.subject_type, event.subject_id, event.host_id, event.revision) == ('server', HOST, HOST, 1)
         assert event.minimum_role == 'admin'
         assert revision.severity == 'high' and revision.lifecycle == 'active'
-        assert revision.deep_link == '#servers/' + HOST + '/overview'
+        assert revision.deep_link == '#servers/' + HOST + '/agent'
         assert '1 managed agent file(s) differ from the enrolled SHA-256' in revision.reason
         assert 'does not repair files or authorize any response' in revision.reason
         # The raw outbox alert is unchanged and still SMTP/webhook-only.

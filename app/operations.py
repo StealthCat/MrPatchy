@@ -168,7 +168,7 @@ OPERATIONAL_NOTIFICATIONS={
     'response verification':('response-verification','medium','security'),
     # Notification-only (no outbox Alert): agent_integrity_notifications classifies controller-written
     # managed-file findings into counts, so raw endpoint text never reaches the bell.
-    'agent integrity':('agent-integrity','high','overview'),
+    'agent integrity':('agent-integrity','high','agent'),
     'service health':('service-health','medium','security'),
     'service coverage':('service-coverage','medium','security'),
     'execution scan coverage':('execution-scan-coverage','medium','security'),

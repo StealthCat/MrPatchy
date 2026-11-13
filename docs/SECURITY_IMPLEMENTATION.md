@@ -3696,8 +3696,9 @@ server.
   Only findings the controller writes for paths in the server's own enrolled
   baseline count. Collector, eBPF, spool, telemetry-age and hash-sweep findings
   are ignored, and so is endpoint text that copies a finding string.
-- **Payload:** fixed text with category counts and a link to the server
-  Overview, where Integrity findings are listed. Paths and endpoint text are
+- **Payload:** fixed text with category counts and a link to the server's
+  Agent health tab, which offers live verification and reviewed repair. The
+  text also points to the Integrity findings on the server's Overview. Paths and endpoint text are
   never copied.
 - **Lifecycle:** identical counts publish nothing, and a count change appends a
   revision. The notification resolves through the shared operational path when
