@@ -59,7 +59,7 @@ services:
       MRPATCHY_AI_CONCURRENCY: ${MRPATCHY_AI_CONCURRENCY:-4}
       MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
       MRPATCHY_DEPLOYMENT_TYPE: docker
-      # Set only for a single instance; replicas default to unique boot identities.
+      # Set only for a single instance; replicas default to distinct persistent generated identities.
       MRPATCHY_WORKER_ID: ${MRPATCHY_WORKER_ID:-}
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mrpatchy.db}
     volumes:
