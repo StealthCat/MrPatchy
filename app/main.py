@@ -61,7 +61,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.87"
+APP_VERSION = "1.59.88"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1909,7 +1909,8 @@ def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(admin_user)):
 def get_advisories(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
-        return row.value if row else {'results':[],'coverage':'Not checked'}
+        from .advisories import retained
+        return retained(row.value) if row else {'results':[],'coverage':'Not checked'}
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
