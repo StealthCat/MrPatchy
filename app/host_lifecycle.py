@@ -195,5 +195,7 @@ def remove(s,host,expected,confirmation,actor,reason):
     host.deleted_at=time.time();host.enabled=False;host.state='deleted';host.lifecycle_revision=str(uuid.uuid4())
     from . import incidents
     incidents.resolve_host_notifications(s,host.id)
+    from . import triage_notifications
+    triage_notifications.resolve_host_notifications(s,host.id)
     audit(s,'delete server',host.id+' '+actor+' '+reason.strip()+'; local credentials removed; history retained')
     s.commit()
