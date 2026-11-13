@@ -914,8 +914,11 @@ version; no agent/schema update is required for these review pages.
 On the controller, optionally set `MRPATCHY_EXPECTED_WORKER_IDS=worker-east,worker-west`
 to list up to 100 unique case-sensitive worker identities in Activity → Workers.
 Set each worker's `MRPATCHY_WORKER_ID` to the corresponding stable identity. Each
-replica needs a unique ID; do not assign one shared ID to scaled replicas. Restart
-the controller after changing its environment. Keep this deployment configuration
+replica needs a unique ID; do not assign one shared ID to scaled replicas. Docker
+Compose passes the same value, and `MRPATCHY_EXPECTED_CONTROLLER_IDS`, to workers,
+whose coordinator tick raises the expected-worker and expected-controller
+notifications. In split deployments, set the same values for every worker stack.
+Recreate the controller and worker containers after changing them. Keep this deployment configuration
 in your normal protected installation/backup configuration. Removing an expectation
 does not remove registration history, drain a worker or stop a process.
 

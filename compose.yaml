@@ -11,6 +11,7 @@ services:
       COOKIE_SECURE: "true"
       DISABLE_SCHEDULER: "1"
       MRPATCHY_EXPECTED_WORKER_IDS: ${MRPATCHY_EXPECTED_WORKER_IDS:-}
+      MRPATCHY_EXPECTED_CONTROLLER_IDS: ${MRPATCHY_EXPECTED_CONTROLLER_IDS:-}
       MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
       MRPATCHY_DEPLOYMENT_TYPE: docker
       # Trust only our dedicated Caddy hop, never arbitrary management clients.
@@ -58,6 +59,10 @@ services:
       MRPATCHY_POLL_CONCURRENCY: ${MRPATCHY_POLL_CONCURRENCY:-8}
       MRPATCHY_AI_CONCURRENCY: ${MRPATCHY_AI_CONCURRENCY:-4}
       MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
+      # The coordinator tick runs in workers (the app sets DISABLE_SCHEDULER), so the expected-worker
+      # and expected-controller attention notifications read these here, not on the app.
+      MRPATCHY_EXPECTED_WORKER_IDS: ${MRPATCHY_EXPECTED_WORKER_IDS:-}
+      MRPATCHY_EXPECTED_CONTROLLER_IDS: ${MRPATCHY_EXPECTED_CONTROLLER_IDS:-}
       MRPATCHY_DEPLOYMENT_TYPE: docker
       # Set only for a single instance; replicas default to distinct persistent generated identities.
       MRPATCHY_WORKER_ID: ${MRPATCHY_WORKER_ID:-}

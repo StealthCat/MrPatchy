@@ -154,6 +154,11 @@ def build_document(config, output, root=ROOT):
             MRPATCHY_POLL_CONCURRENCY=str(config.polls),
             MRPATCHY_AI_CONCURRENCY=str(config.ai),
         )
+        # Workers run the coordinator tick that publishes expected-worker attention, so they need
+        # the same inventory as the apps. A worker-only stack can't know the fleet-wide set and
+        # keeps the .env pass-through instead.
+        if worker_ids and config.apps:
+            service["environment"]["MRPATCHY_EXPECTED_WORKER_IDS"] = ",".join(worker_ids)
         service["mem_limit"] = config.worker_memory
         services[name] = service
 
