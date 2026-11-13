@@ -3159,6 +3159,27 @@ explicit coverage gaps. The result carries a deterministic digest. Runtime unit
 state, per-user units, specifier expansion, read-only collection wiring, package
 provenance, UI and AI classification remain open, so roadmap F is not complete.
 
+Worker checkpoint (issue #702, per-user units): the same contract adds
+`resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
+account's `systemd --user` manager. `user_search_paths()` builds the documented
+user table, highest first: `~/.config/systemd/user.control`, runtime control,
+transient and generator.early, `~/.config/systemd/user`, `/etc/xdg/systemd/user`,
+`/etc/systemd/user`, `$XDG_RUNTIME_DIR/systemd/user`, `/run/systemd/user`, generator,
+`~/.local/share/systemd/user`, `/usr/local/share` and `/usr/share`, `/usr/local/lib`,
+`/usr/lib` and `/lib` `systemd/user`, then generator.late. Precedence, drop-ins,
+masking, aliases, enablement and trigger rules are unchanged. Units and drop-ins
+from the account's own directories have origin `user`, are classed custom (or
+vendor-overridden when they shadow a vendor user unit) and their `.wants` links
+count as enablement. The owning account is the effective identity: `User=` is kept
+as `declared_user`, a different value is a `user_unit_declared_user` gap, and
+`privileged_exec` is false because `+`/`!` cannot gain root in a user manager.
+An invalid home, runtime directory or account, or a runtime directory that would
+coincide with a system user directory, is an explicit gap; its directories are omitted.
+System units outside the user table are `outside_search_path` gaps.
+System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering
+and runtime state, specifier expansion, enumerating accounts, collection wiring,
+UI and AI classification remain open.
+
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 

@@ -1,3 +1,8 @@
+## 1.59.76 — 2026-11-13
+
+1. [PR #751](https://github.com/StealthCat/MrPatchy/pull/751): Startup awareness: the pure systemd unit contract now resolves per-user (`systemd --user`) units for an account. It applies the documented user search-path precedence, including Debian's pre-usrmerge `/lib/systemd/user`, labels origins as `user`, and binds each unit to the owning account. Invalid homes, system paths passed as user paths, and search-path collisions with the runtime directory are reported as coverage gaps with `complete: false`. There is no collection or UI change yet. Part of #702, which stays open.
+2. Compatibility and limits: additive only, and the existing `resolve()` signature and output are unchanged. Not yet supported: non-default XDG variables, lingering and runtime active state, specifier expansion, account enumeration, and wiring collection into the startup inventory, UI and AI classification. This source update does not publish a Docker image.
+
 ## 1.59.75 — 2026-11-13
 
 1. [PR #750](https://github.com/StealthCat/MrPatchy/pull/750): The Fleet known-good cache panel shows an estimate of the provider calls and USD spend avoided by retained cache reuse. Each reuse is attributed to its candidate's originating assessment run: calls from the run's recorded count, and spend only when every call has a priced receipt. Reuse with unpriced, partly priced or unavailable sources is counted separately, never as free. `GET /api/ai/known-good/summary` adds an `avoided_estimate` object, leaving the existing counts unchanged. The panel labels the figures as lower bounds when coverage is incomplete and as not a provider invoice. Fixes #749.
