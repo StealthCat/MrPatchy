@@ -1,3 +1,8 @@
+## 1.59.75 — 2026-11-13
+
+1. [PR #750](https://github.com/StealthCat/MrPatchy/pull/750): The Fleet known-good cache panel shows an estimate of the provider calls and USD spend avoided by retained cache reuse. Each reuse is attributed to its candidate's originating assessment run: calls from the run's recorded count, and spend only when every call has a priced receipt. Reuse with unpriced, partly priced or unavailable sources is counted separately, never as free. `GET /api/ai/known-good/summary` adds an `avoided_estimate` object, leaving the existing counts unchanged. The panel labels the figures as lower bounds when coverage is incomplete and as not a provider invoice. Fixes #749.
+2. Compatibility and limits: an additive response field and panel line, with no schema change. Reads are batched and load no evidence. Estimates use retained local records and public prices. This source update does not publish a Docker image.
+
 ## 1.59.74 — 2026-11-13
 
 1. [PR #748](https://github.com/StealthCat/MrPatchy/pull/748): Fixed: deleting a server now resolves its still-active AI process-triage notifications. Before this fix, a medium or high verdict on a deleted server stayed active and unread on every viewer's badge, linking to the deleted server's Investigations page. Deletion now adds exactly one resolved info revision with fixed text for each still-active triage event on that server. The revision is added inside the deletion transaction, next to the existing startup-change and incident resolvers. Already-resolved events and other servers' events are untouched, and behaviors, verdicts, approvals and history are unchanged. Fixes #747.
