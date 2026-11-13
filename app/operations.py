@@ -158,6 +158,9 @@ def _pricing_catalog_alert(s,cfg,record,now):
 # server disabled) stay SMTP/webhook-only so endpoint text and polling noise
 # never reach the bell.
 OPERATIONAL_NOTIFICATIONS={
+    # Notification-only (no outbox Alert): published by deadline_notifications with fixed
+    # text naming the highest overdue priority; severity follows that priority.
+    'patch deadline':('patch-deadline','medium','patching'),
     'recovery':('recovery-required','high','history'),
     'disabled server recovery':('disabled-server-recovery','high','security'),
     'file response hold':('file-response-hold','high','security'),
@@ -176,9 +179,10 @@ OPERATIONAL_NOTIFICATIONS={
 OPERATIONAL_NOTIFICATION_SOURCE='operations'
 OPERATIONAL_NOTIFICATION_SUBJECT='server'
 
-def _operational_notification(s,host_id,kind,message,now):
+def _operational_notification(s,host_id,kind,message,now,severity=None):
     """Publish one allowlisted server alert as a durable active notification."""
-    notification_kind,severity,tab=OPERATIONAL_NOTIFICATIONS[kind]
+    notification_kind,default_severity,tab=OPERATIONAL_NOTIFICATIONS[kind]
+    severity=severity or default_severity
     notifications.publish(s,source=OPERATIONAL_NOTIFICATION_SOURCE,kind=notification_kind,
         subject_type=OPERATIONAL_NOTIFICATION_SUBJECT,subject_id=host_id,host_id=host_id,
         subject_revision='message-sha256:'+hashlib.sha256(message.encode()).hexdigest(),
@@ -307,6 +311,8 @@ def collect_alerts(now=None):
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)
+        from . import deadline_notifications
+        deadline_notifications.publish(s,hosts,cfg,now,lambda *args:_operational_notification(s,*args),published)
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
         _resolve_operational_notifications(s,published,now)
