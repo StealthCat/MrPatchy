@@ -1,5 +1,6 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import persistence
+from . import cron_loading, persistence
+from .db import Host
 from .incidents import digest
 
 CATALOG=(
@@ -13,7 +14,7 @@ CATALOG=(
 )
 GAPS=[
     'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar), anacron and at queues are not parsed into jobs.',
-    'Parsed jobs are data from the hashed file only: referenced scripts are not inspected, and cron.d naming rules, PATH/SHELL settings and whether the cron daemon runs are not evaluated.',
+    'Parsed jobs are data from the hashed file only: referenced scripts are not inspected, and PATH/SHELL settings and whether the cron daemon runs are not evaluated. /etc/crontab and /etc/cron.d files are checked against the distribution cron defaults for names, root ownership and permission bits from stored metadata; '+cron_loading.LIMITATION+' User spool crontab ownership/mode rules are not evaluated.',
     'Vendor/user systemd units, effective precedence, generated/transient units and runtime state are not enumerated.',
     'Anacron/at queues, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
@@ -47,19 +48,24 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
     revision=digest({'inspection':latest['id'],'inventory':inventory,'baseline':assessment['baseline']})
     if expected_digest and expected_digest!=revision:raise ValueError('Startup inventory or baseline changed; reopen the browser')
     changes={r['path']:r['kind'] for r in assessment['comparison']['changes']} if assessment['comparison']['state']=='compared' else None
+    host=s.get(Host,host_id);family=cron_loading.family_of(host.inventory if host else None)
+    loading={e['path']:cron_loading.assess(e,family) for e in inventory['entries'] if cron_loading.applies(e['path'])}
     rows=[]
     for entry in inventory['entries']:
         key,label=mechanism(entry['path'])
         row={k:entry[k] for k in ('path','kind','uid','gid','mode','size','sha256','target') if k in entry}
         row.update(mechanism=key,mechanism_label=label,change=changes.get(entry['path'],'unchanged') if changes is not None else 'not_compared',origin='not_assessed',jobs_state=jobs_state(entry))
         if 'cron' in entry:row['cron']=entry['cron']
+        if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         if q.casefold() in (entry['path']+' '+label+' '+jobs).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     catalog=[{'id':key,'label':label,'observed_files':sum(mechanism(e['path'])[0]==key for e in inventory['entries'])} for key,label,_ in CATALOG]
     parsed=[e for e in inventory['entries'] if 'cron' in e]
     cron={'files':len(parsed),'jobs':sum(len(e['cron']['jobs']) for e in parsed),'unparsed':sum(e['cron']['unparsed'] for e in parsed),
-          'truncated':any(e['cron']['truncated'] for e in parsed),'not_reported':sum(jobs_state(e)=='not_reported' for e in inventory['entries'])}
+          'truncated':any(e['cron']['truncated'] for e in parsed),'not_reported':sum(jobs_state(e)=='not_reported' for e in inventory['entries']),
+          'skipped_files':sum(r['state']=='skipped' for r in loading.values()),'unknown_loading':sum(r['state']=='unknown' for r in loading.values()),
+          'loading_family':family,'loading_limitation':cron_loading.LIMITATION}
     return {'state':inventory['state'],'items':rows[offset:offset+25],'cron':cron,'more':len(rows)>offset+25,'total':len(rows),'digest':revision,
         'inspection_id':latest['id'],'created':latest['created'],'baseline_state':assessment['state'],'catalog':catalog,'scope':inventory['scope'],
         'missing_roots':inventory['missing_roots'],'skipped':inventory['skipped'],'gaps':GAPS+inventory['gaps'],
