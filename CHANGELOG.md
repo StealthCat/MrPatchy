@@ -1,3 +1,7 @@
+## 1.59.93 — 2026-11-13
+
+1. [PR #801](https://github.com/StealthCat/MrPatchy/pull/801): Adds pure parsers for systemd --user environment and lingering-list inputs, retaining only documented HOME/XDG values and reporting malformed or capped inputs as coverage gaps. This is additive and performs no I/O or response action. Collecting those inputs, account enumeration, runtime state, collector wiring and UI remain open under #702.
+
 ## 1.59.92 — 2026-11-13
 
 1. [PR #800](https://github.com/StealthCat/MrPatchy/pull/800): Applies the supplied systemd --user XDG config/data/cache homes and search directories when resolving user unit paths; invalid values are reported as coverage gaps rather than replaced by guessed defaults. This is an additive contract change with unchanged default output and system-scope resolution. Manager-environment collection, runtime-state collection, account enumeration, collector wiring and UI remain open under #702.
