@@ -1,3 +1,8 @@
+## 1.59.85 — 2026-11-13
+
+1. [PR #784](https://github.com/StealthCat/MrPatchy/pull/784): Operations advisory matches now show per-server applicability as Affected, Fixed, Not affected or Uncertain using the server's distribution, source package and installed version. The dialog shows escaped status details and counts while retaining raw results; failures and lookups beyond the bounds remain Uncertain, not safe. Closes #783.
+2. Compatibility and limits: no schema, route, setting or role change; RPM keeps its updateinfo path. Existing stored scans gain applicability and summary only after a new scan. Each scan makes sequential OSV detail requests (up to 200 records or a shared 60-second budget); the per-host lock can be held for that duration, deferring queued jobs and making configuration changes return 409. If the fetch bound is reached, alphabetically earlier IDs are classified and the rest remain Uncertain. Classification is not exploitation evidence and authorizes no patching or response. Broader distribution ingestion, persisted exposure windows, scheduled scans/notifications and containment wiring remain incomplete. This source update does not publish a Docker image.
+
 ## 1.59.84 — 2026-11-13
 
 1. [PR #786](https://github.com/StealthCat/MrPatchy/pull/786): Disabling a server now resolves its active agent-spool notification with a fixed explanation because polling has stopped. If critical pressure or new loss persists after re-enabling, the same event reopens as unread. Deletion retains its own resolution; if credential cleanup fails after the server is disabled, the disabled resolution is retained and retrying deletion adds no duplicate revision. Closes #785.
