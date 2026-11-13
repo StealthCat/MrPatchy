@@ -215,24 +215,73 @@ def status(session,now=None):
 
 
 DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
+DAILY_CAP_WARNING_NOTIFICATION=dict(source='ai-budget',kind='daily-cap-warning',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
+# Fixed advance-warning fraction of the cap; configurable thresholds are not yet offered.
+DAILY_CAP_WARNING_FRACTION=Decimal('0.8')
+
+
+def _resolve_notification(session,spec,reason,now):
+    from . import notifications
+    from .notifications import NotificationEvent, NotificationRevision
+    event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
+        for key,value in spec.items())))
+    if event is not None:
+        current=session.get(NotificationRevision,(event.id,event.revision))
+        if current is None or current.lifecycle!='resolved':
+            notifications.publish(session,**spec,subject_revision='resolved',severity='info',reason=reason,
+                deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
 
 
 def publish_cap_notification(session,cfg,now):
     """Publish admin attention while the current capped window has no remaining spend.
 
-    The revision is bound to the budget window (timezone and reset), never to
-    amounts, so further reservations or reconciliation in the same window do not
-    create new revisions. This reads the same conservative total that admission
-    uses but neither reserves, releases nor authorizes anything. It runs in the
+    A separate advance warning is active while counted spend is at least
+    DAILY_CAP_WARNING_FRACTION of the cap but below it, and resolves once the
+    cap is reached so only the exhausted notification remains active.
+
+    The revision is bound to the budget window (timezone and reset) and cap. The
+    warning records counted and remaining amounts when it is raised and is not
+    republished while active for the same window and cap, so further
+    reservations or reconciliation in that window do not create new revisions.
+    This reads the same conservative total that admission uses but neither
+    reserves, releases nor authorizes anything. It runs in the
     caller's transaction and adds no SMTP/webhook alert.
     """
     from . import notifications
     from .notifications import NotificationEvent, NotificationRevision
     capped=bool(cfg.get('ai_enabled')) and cfg['ai_control_mode'] in ai_pricing.CAP_MODES
+    warning=False
     if capped:
         _enabled,name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,cfg,now)
+        reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
+        if counted<cap and counted>=cap*DAILY_CAP_WARNING_FRACTION:
+            # Advance warning only: admission is unchanged and still decides each call.
+            warning=True
+            subject_revision='nearing:'+name+':'+repr(float(reset))+':'+_money(cap)
+            event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
+                for key,value in DAILY_CAP_WARNING_NOTIFICATION.items())))
+            current=session.get(NotificationRevision,(event.id,event.revision)) if event is not None else None
+            # The amounts are captured when spend first crosses the threshold for this
+            # window and cap. The reason is part of the revision fingerprint, so an
+            # active warning for the same window and cap is left unchanged rather than
+            # republished with live amounts; Settings shows current totals.
+            if current is None or current.lifecycle!='active' or current.subject_revision!=subject_revision:
+                remaining=max(cap-counted,Decimal(0))
+                message=('Counted AI spend reached $'+_money(counted)+' of the shared daily cap of $'+_money(cap)+
+                    ' ('+name+' day), at least '+str(int(DAILY_CAP_WARNING_FRACTION*100))+'% of the cap, leaving $'+
+                    _money(remaining)+' before the reset at '+reset_text+'. These amounts were recorded when the '
+                    'warning was raised; Settings shows current totals. When a call\'s conservative reservation no longer fits, new paid AI work, including triage, scoring '
+                    'and plans, is deferred, not discarded. Review the cap or mode in Settings if that is not intended. Counted spend '
+                    'conservatively includes reserved and uncertain charges; it is a local estimate, not a provider invoice.')
+                notifications.publish(session,**DAILY_CAP_WARNING_NOTIFICATION,
+                    subject_revision=subject_revision,
+                    severity='low',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
+    if not warning:
+        _resolve_notification(session,DAILY_CAP_WARNING_NOTIFICATION,
+            'Shared daily AI spend is no longer approaching the cap: the window reset, the cap or mode changed, AI was '
+            'disabled, or the cap was reached and its own notification applies.',now)
+    if capped:
         if counted>=cap:
-            reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
             message=('The shared daily AI spend cap of $'+_money(cap)+' ('+name+' day) has no remaining safe reservation. '
                 'New paid AI work, including triage, scoring and plans, is deferred, not discarded, until the reset at '+reset_text+
                 ' or until an administrator changes the cap or mode. Counted spend conservatively includes reserved and '

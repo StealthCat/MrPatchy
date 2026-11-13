@@ -1,3 +1,8 @@
+## 1.59.71 — 2026-11-12
+
+1. [PR #740](https://github.com/StealthCat/MrPatchy/pull/740): Administrators get an advance, low-severity in-app warning, linking to AI Settings, when counted shared daily AI spend reaches 80% of the cap. Counted spend is the same conservative total admission uses. The warning records the counted and remaining amounts, threshold, cap, budget day and next reset as of when it was raised. Its revision is bound to the window and cap, so later reservations in the same window cause no unread churn. It resolves when the cap is reached, at which point the existing exhausted notification takes over. It also resolves when the window resets, the cap is raised, the mode becomes uncapped or AI is disabled. Closes #739.
+2. Compatibility and limits: an additive notification within the existing cap producer, with no change to admission or schema. Amounts in the warning are a snapshot; Settings shows current totals. This source update does not publish a Docker image.
+
 ## 1.59.70 — 2026-11-12
 
 1. [PR #738](https://github.com/StealthCat/MrPatchy/pull/738): **Activity → Workers** gains an administrator-only **Endpoint agents** section showing fleet-wide endpoint-agent health. Each agent shows the deployment type its verification receipt actually proves. It is backed by the admin-only, paginated `GET /api/operations/agents`, which returns rows worst-first with counts by health, freshness thresholds and coverage gaps. It reads retained agent-status receipts and telemetry collection times in batches of up to 500 for enabled, non-deleted servers. Classification is pure, and the endpoint never runs inspection, queues work, writes settings or changes authorization. Closes #737.
