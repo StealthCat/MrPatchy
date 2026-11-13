@@ -3194,6 +3194,27 @@ System-scope `resolve()` output is unchanged. Non-default XDG variables, lingeri
 and runtime state, specifier expansion, enumerating accounts, collection wiring,
 UI and AI classification remain open.
 
+Worker checkpoint (issue #702, specifier expansion): contract version 2 adds a
+bounded `expanded` view of `Exec*`, `User=`, `Group=`, `WorkingDirectory=`,
+`RootDirectory=` and `EnvironmentFile=` to every non-template unit. Raw `config`,
+`exec` and `account` are unchanged. Name specifiers `%n %N %p %P %i %I %j %J %f %%`
+follow `systemd.unit(5)`, including unescaping for `%P %I %J %f`. An alias record
+uses its canonical name. Manager specifiers are expanded only where the scope fixes
+their value. For the system manager these are `%u`=root, `%U`=0, `%g`=root, `%G`=0,
+`%h`=/root, `%s`=/bin/sh, `%t`=/run, `%S`=/var/lib, `%C`=/var/cache, `%L`=/var/log
+and `%E`=/etc. For a user manager they are `%u` (the account), `%h` (home), `%t`
+(runtime directory), `%E` (~/.config) and `%C` (~/.cache). Every other specifier stays
+raw and becomes an `unexpanded_specifier` gap that names the letters. That covers
+host and boot identity, `%T`/`%V` (which depend on the environment), the user
+manager's `%U`/`%G`/`%g`/`%s`, `%S`/`%L` (whose values changed between systemd
+releases), unknown letters and a trailing `%`. A value with any such specifier is
+never partially expanded. System `%u`/`%U`/`%h`/`%s` follow current
+`systemd.unit(5)`, where they name the manager's user rather than `User=`. Older
+systemd releases resolved them from `User=`, and the collector does not yet record
+the systemd version, so this is listed as a limitation. Each record states `specifiers` as `none`, `expanded`,
+`partial` or `not_applicable` (templates). `$VAR` environment substitution,
+non-default XDG variables, collection wiring, UI and AI classification remain open.
+
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
