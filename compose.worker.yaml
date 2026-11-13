@@ -19,7 +19,8 @@ services:
       MRPATCHY_AI_CONCURRENCY: ${MRPATCHY_AI_CONCURRENCY:-4}
       MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
       MRPATCHY_DEPLOYMENT_TYPE: docker
-      # Always empty here so every replica gets a unique boot identity, even when .env sets one.
+      # Always empty here so replicas never share one ID, even when .env sets one. Each replica
+      # instead claims a distinct generated ID that persists on the app-data volume across upgrades.
       MRPATCHY_WORKER_ID: ""
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mrpatchy.db}
     volumes:
