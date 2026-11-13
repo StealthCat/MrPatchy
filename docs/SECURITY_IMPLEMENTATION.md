@@ -3241,6 +3241,30 @@ the systemd version, so this is listed as a limitation. Each record states `spec
 `partial` or `not_applicable` (templates). `$VAR` environment substitution,
 non-default XDG variables, collection wiring, UI and AI classification remain open.
 
+Worker checkpoint (issue #702, non-default XDG directories): contract-only, so
+roadmap F remains incomplete. `user_search_paths()` and `resolve_user()` accept an
+optional `xdg` mapping taken from the user manager's environment. It can carry
+`config_home`, `data_home` and `cache_home`, plus `config_dirs` and `data_dirs`
+(a list or a `:`-separated string).
+
+- **Search table:** the user table follows `systemd.unit(5)` with those values:
+  `$XDG_CONFIG_HOME/systemd/user{.control,}`, each `$XDG_CONFIG_DIRS/systemd/user`
+  ahead of `/etc/systemd/user`, `$XDG_DATA_HOME/systemd/user`, and each
+  `$XDG_DATA_DIRS/systemd/user` ahead of `/usr/local/lib/systemd/user`.
+- **Defaults:** absent or empty values keep the XDG Base Directory defaults, so
+  output without `xdg` is unchanged.
+- **Invalid values:** a supplied value that is relative, non-normalised, contains
+  NUL or newline, or has the wrong type is never replaced by a default. Its
+  directories are omitted and an `xdg_*_invalid` gap makes the result incomplete.
+  Unknown keys (`xdg_unknown_key`) and more than 32 directory entries
+  (`xdg_*_dirs_cap`) are also gaps. Duplicate roots remain `user_search_path_conflict`.
+- **Origins:** directories under the account home are `user`. `/etc/xdg` and other
+  config dirs are `administrator`. `/usr/share` is `vendor`, and `/usr/local/share`
+  and other data dirs are `local`, so they are never package defaults.
+- **Specifiers:** `%E`/`%C` follow a valid `config_home`/`cache_home`.
+- **Still open:** collecting the manager environment, lingering and runtime state,
+  enumerating accounts, collection wiring, UI and AI classification.
+
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
 Discovery increment only; the startup-awareness requirement remains incomplete.
