@@ -8139,3 +8139,21 @@ because it carries endpoint text.
 - **Remaining:** a configurable threshold, and a native agent sweep-stall
   acceptance test.
 
+
+### External alert-delivery failure notifications — worker checkpoint #792
+
+This adds a roadmap J health producer for the SMTP/webhook outbox itself. `operations.deliver_one()` retries each open alert with backoff and stores only a sanitized error class. Until now, a broken channel was visible only on per-alert rows in the Operations panel, so administrators who rely on email or a webhook could miss every alert without knowing it.
+
+`collect_alerts` now publishes one admin-only in-app event (`alert-delivery` / `delivery-failing`, severity high) when both of these are true:
+
+- external delivery is enabled;
+- at least one open, undelivered alert has recorded an error on 3 or more delivery attempts.
+
+The reason text is fixed per channel (SMTP email or webhook). It never contains alert messages, server names, URLs, tokens, recipients or error strings. The revision binds only to the channel, so more failures or a changing error class do not create new unread revisions. The event resolves once when no alert still meets the condition: delivery succeeded, the alert resolved or was acknowledged, or delivery was disabled or removed. A later failing episode reopens it as an unread revision. An unreadable delivery configuration is reported as an unknown channel and never raises.
+
+The producer is read-only. It never sends, retries, changes backoff or acknowledges anything, and it adds no `Alert` row, so a broken channel cannot alert about itself. There are no schema, role or response-authorization changes.
+
+**Remaining:**
+- The event has no deep link, because the Operations panel is a modal with no route.
+- The threshold is fixed.
+- A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.
