@@ -511,6 +511,8 @@ def summary(s):
     ).where(Assessment.source == 'known_good').subquery()
     statement = select(entries, reuse).select_from(entries.join(reuse, true()))
     counts = dict(s.execute(statement).mappings().one())
+    from . import known_good_review
+    counts['reuse_assessments_pending_review'] = known_good_review.pending_reuse(s)
     counts['avoided_estimate'] = avoided_estimate(s)
     return counts
 
@@ -674,14 +676,18 @@ def assessment(row, s=None):
             linked = s.scalar(select(func.count(Observation.assessment_id)).where(
                 Observation.fingerprint == saved.fingerprint)) or 0
             contradiction = _contradiction(s, saved) if not active else None
+            from . import known_good_review
+            review = known_good_review.current(s, saved, linked) if not active else None
             status = {**status, 'active': active,
-                'review_required': not active,
+                'review_required': not active and review is None,
                 'linked_assessments': linked,
                 'revoked_at': saved.revoked_at if not active else 0,
                 'revoked_by': ('AI assessment' if contradiction else saved.revoked_by) if not active else '',
                 'revoked_reason': saved.revoked_reason if not active else ''}
             if contradiction:
                 status = {**status, **contradiction}
+            if review:
+                status = {**status, **review}
         if row.source == 'known_good':
             metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None
             local_observation = s.get(Observation, row.id)
