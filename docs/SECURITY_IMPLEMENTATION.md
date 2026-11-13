@@ -3278,7 +3278,31 @@ never partially expanded. System `%u`/`%U`/`%h`/`%s` follow current
 systemd releases resolved them from `User=`, and the collector does not yet record
 the systemd version, so this is listed as a limitation. Each record states `specifiers` as `none`, `expanded`,
 `partial` or `not_applicable` (templates). `$VAR` environment substitution,
-non-default XDG variables, collection wiring, UI and AI classification remain open.
+manager-environment collection, collection wiring, UI and AI classification remain open.
+
+### Non-default XDG directories for systemd --user — worker checkpoint #800
+
+Contract-only; roadmap F remains incomplete. `user_search_paths()` and
+`resolve_user()` accept an optional `xdg` mapping taken from the user manager's
+environment. It can carry `config_home`, `data_home` and `cache_home`, plus
+`config_dirs` and `data_dirs` (a list or a `:`-separated string).
+
+- **Search table:** follows `systemd.unit(5)`: `$XDG_CONFIG_HOME/systemd/user{.control,}`,
+  each `$XDG_CONFIG_DIRS/systemd/user` before `/etc/systemd/user`,
+  `$XDG_DATA_HOME/systemd/user`, and each `$XDG_DATA_DIRS/systemd/user`
+  before `/usr/local/lib/systemd/user`.
+- **Defaults:** absent or empty values retain the XDG Base Directory defaults;
+  output without `xdg` is unchanged.
+- **Invalid values:** relative, non-normalized, NUL/newline or wrong-type values
+  are not replaced by defaults. Their directories are omitted and an
+  `xdg_*_invalid` gap marks the result incomplete. Unknown keys and more than 32
+  directory entries also produce coverage gaps. Duplicate roots remain
+  `user_search_path_conflict`.
+- **Origins/specifiers:** account-home paths are `user`; config paths are
+  `administrator`; `/usr/share` is `vendor`, while local data directories
+  are `local`. `%E`/`%C` follow valid config/cache homes.
+- **Still open:** manager-environment collection, lingering/runtime state,
+  account enumeration, collection wiring, UI and AI classification.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
