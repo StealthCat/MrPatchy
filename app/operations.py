@@ -235,6 +235,7 @@ def collect_alerts(now=None,observing_since=None):
                 # leaves the session untouched and never blocks SMTP/webhook alerts.
                 try:_operational_notification(s,host_id,kind,message,now)
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
+        ai_budget.publish_unpriced_model_notification(s,cfg,now)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
         # In-app only: blocked triage already shows on the Investigations status card.
