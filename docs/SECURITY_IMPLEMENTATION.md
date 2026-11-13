@@ -3239,6 +3239,29 @@ directories, unreadable, oversized or malformed input, invalid names, unresolved
 dangling or foreign links, missing trigger targets and over-cap input all become
 explicit coverage gaps. The result carries a deterministic digest. Runtime unit state, read-only collection wiring, package provenance, UI and AI classification remain open, so roadmap F is not complete. Fixed systemd specifiers are covered by the #702 checkpoint below; host/boot/environment-dependent specifiers and `$VAR` substitution remain explicit gaps.
 
+Worker checkpoint (issue #702, account enumeration): this is contract-only, so
+roadmap F remains incomplete. The new pure module `app/systemd_user_accounts.py`
+decides which accounts' `systemd --user` managers to resolve, from captured
+read-only observations. `parse_login_defs()` reads `UID_MIN`/`UID_MAX` from
+`/etc/login.defs`. Absent keys use the documented `login.defs(5)` defaults
+(1000/60000) and are listed as `defaulted`. A non-decimal value (including the
+octal and hexadecimal forms shadow-utils also accepts), an inverted range or an
+uncollected file falls back to those defaults with a gap. Duplicate keys follow
+shadow-utils (last value wins) and are reported. `parse_passwd()` reads `getent
+passwd` output into name, UID, GID, home and shell. It never carries the password
+or GECOS fields forward, and a malformed line is identified only by its line
+number. Malformed lines, invalid names or IDs, and over-cap input (4 MiB or
+50,000 lines) become gaps. A name that appears more than once is dropped as
+ambiguous. `candidate_accounts()` combines these with a validated lingering
+list. The candidates are root, regular accounts in the UID range and every
+lingering account. Each one has a `default_runtime_dir` of `/run/user/<uid>` (the
+logind convention, not an observation) and an `interactive_shell` flag.
+Non-interactive accounts are kept, because lingering or `su -s` sessions still
+start their manager. Lingering names missing from passwd, unusable homes, and
+incomplete or uncollected upstream observations are reported as gaps. A vendor
+`/usr/etc/login.defs` is not merged. Running the collection commands, observed
+runtime directories, runtime unit state, UI and AI classification remain open.
+
 Worker checkpoint (issue #702, per-user units): the same contract adds
 `resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
 account's `systemd --user` manager. `user_search_paths()` builds the documented
@@ -3279,29 +3302,6 @@ systemd releases resolved them from `User=`, and the collector does not yet reco
 the systemd version, so this is listed as a limitation. Each record states `specifiers` as `none`, `expanded`,
 `partial` or `not_applicable` (templates). `$VAR` environment substitution,
 non-default XDG variables, collection wiring, UI and AI classification remain open.
-
-Worker checkpoint (issue #702, account enumeration): this is contract-only, so
-roadmap F remains incomplete. The new pure module `app/systemd_user_accounts.py`
-decides which accounts' `systemd --user` managers to resolve, from captured
-read-only observations. `parse_login_defs()` reads `UID_MIN`/`UID_MAX` from
-`/etc/login.defs`. Absent keys use the documented `login.defs(5)` defaults
-(1000/60000) and are listed as `defaulted`. A non-decimal value (including the
-octal and hexadecimal forms shadow-utils also accepts), an inverted range or an
-uncollected file falls back to those defaults with a gap. Duplicate keys follow
-shadow-utils (last value wins) and are reported. `parse_passwd()` reads `getent
-passwd` output into name, UID, GID, home and shell. It never carries the password
-or GECOS fields forward, and a malformed line is identified only by its line
-number. Malformed lines, invalid names or IDs, and over-cap input (4 MiB or
-50,000 lines) become gaps. A name that appears more than once is dropped as
-ambiguous. `candidate_accounts()` combines these with a validated lingering
-list. The candidates are root, regular accounts in the UID range and every
-lingering account. Each one has a `default_runtime_dir` of `/run/user/<uid>` (the
-logind convention, not an observation) and an `interactive_shell` flag.
-Non-interactive accounts are kept, because lingering or `su -s` sessions still
-start their manager. Lingering names missing from passwd, unusable homes, and
-incomplete or uncollected upstream observations are reported as gaps. A vendor
-`/usr/etc/login.defs` is not merged. Running the collection commands, observed
-runtime directories, runtime unit state, UI and AI classification remain open.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
