@@ -1,3 +1,8 @@
+## 1.59.78 — 2026-11-13
+
+1. [PR #752](https://github.com/StealthCat/MrPatchy/pull/752): Administrators now get an in-app notification when a server's agent event spool reaches critical pressure (at least 90% full; medium severity) or reports newly lost observation batches (high severity). One episode stays open without flooding and escalates at most once. It resolves automatically once spool use is below 70% with no new loss, reopens as a fresh unread revision if pressure or loss returns, and resolves when the server is deleted. Reason text is fixed and the event is administrator-only. Refs #108, which stays open.
+2. Compatibility and limits: additive, with no new settings, routes or schema change. A server that already reports critical pressure or new loss is notified on its first poll after upgrade. A disabled server's open episode stays active until the server is re-enabled and polled, or deleted. Stale telemetry raises no spool event. Warning-level pressure appears only on the summary card, and thresholds are fixed. This source update does not publish a Docker image.
+
 ## 1.59.77 — 2026-11-13
 
 1. [PR #746](https://github.com/StealthCat/MrPatchy/pull/746): When a complete medium, high or unknown AI result contradicts an exact fleet known-good candidate and the candidate is automatically revoked, administrators now get an in-app notification. The fleet-scoped event is high severity for a high-risk result and medium otherwise, with fixed text containing only the risk and the linked-assessment count. It links to the original assessment's history, which shows that the candidate was revoked and links to the contradicting assessment. Closes #744.
