@@ -116,7 +116,7 @@ def test_score_invalid_batch_not_accepted(admin,monkeypatch,bad):
         else:value['assessments'].pop()
         return completed(value)
     monkeypatch.setattr(ai.transport,'post',post);update_scores.run_one()
-    with Session() as s:assert all(r.score is None and r.state=='error' for r in s.scalars(select(update_scores.UpdateScore)))
+    with Session() as s:assert all(r.score is None and r.state=='blocked' and r.configuration for r in s.scalars(select(update_scores.UpdateScore)))
 
 
 def test_score_inflight_candidate_change_is_discarded(admin,monkeypatch):
