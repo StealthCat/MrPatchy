@@ -1,3 +1,8 @@
+## 1.59.82 — 2026-11-13
+
+1. [PR #762](https://github.com/StealthCat/MrPatchy/pull/762): Expected controllers (`MRPATCHY_EXPECTED_CONTROLLER_IDS`) in an attention state now raise one administrator-only in-app notification each, linking to **Activity → Workers**, matching expected workers. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium. Text is fixed and copies no reported values. The revision is the state, so unchanged passes publish nothing. Recovery or removal from configuration resolves the event. An invalid configuration raises one separate event and leaves existing events unchanged, and a freshness window of startup grace suppresses new attention. Failures are logged without stopping the coordinator tick. Closes #761.
+2. Compatibility and limits: an additive notification producer, with no schema or API change. It carries no readiness, failover, serving or response authority. Nothing is published when no controllers are configured. This source update does not publish a Docker image.
+
 ## 1.59.81 — 2026-11-13
 
 1. [PR #758](https://github.com/StealthCat/MrPatchy/pull/758): Operation output on the operation detail page, the Operations list and package-operation history now renders as plain-text monospace. It preserves whitespace and column alignment, treats markup in command output as literal text, and scrolls long lines in place on desktop and mobile without stretching the page. A Copy output control copies the exact original text. On plain-HTTP deployments the copy fallback also works inside the package-operation dialog. Fixes #753.
