@@ -107,3 +107,25 @@ def test_route_stores_applicability_for_the_server(admin, monkeypatch):
     stored = admin.get('/api/operations/advisory-host/advisories').json()
     assert stored['summary']['affected'] == 1
     assert stored['results'][0]['applicability'][0]['status'] == 'affected'
+
+
+def test_detail_fetches_share_a_wall_clock_budget(monkeypatch):
+    ids = ['UBUNTU-CVE-2026-002' + str(i) for i in range(3)]
+    records = {i: _record(i, '1.2-4') for i in ids}
+    clock = [1000.0]
+    monkeypatch.setattr(advisories.time, 'monotonic', lambda: clock[0])
+    gets = _stub(monkeypatch, ids, records)
+    original_get = advisories.httpx.get
+    timeouts = []
+
+    def slow_get(url, **kwargs):
+        timeouts.append(kwargs['timeout'])
+        clock[0] += advisories.DETAIL_FETCH_DEADLINE - 5  # each fetch consumes most of the budget
+        return original_get(url, **kwargs)
+
+    monkeypatch.setattr(advisories.httpx, 'get', slow_get)
+    result = advisories.scan(INV, ['libfoo1:amd64'])
+    assert len(gets) == 2 and timeouts[0] == 30 and timeouts[1] == 5
+    rows = result['results'][0]['applicability']
+    assert [row['status'] for row in rows] == ['affected', 'affected', 'uncertain']
+    assert 'time budget' in rows[2]['reason']

@@ -7,6 +7,8 @@ from . import cve_exposure
 
 # Full OSV records are needed for range data: querybatch returns IDs only.
 MAX_DETAIL_FETCHES=200
+# Wall-clock budget for all detail fetches in one synchronous scan; later records become uncertain.
+DETAIL_FETCH_DEADLINE=60
 OSV_VULN_URL='https://api.osv.dev/v1/vulns/'
 _ADVISORY_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}')
 STATUSES=(cve_exposure.AFFECTED,cve_exposure.FIXED,cve_exposure.UNAFFECTED,cve_exposure.UNCERTAIN)
@@ -67,11 +69,15 @@ def scan(inventory,names):
 def _fetch_records(ids):
     """Fetch full OSV records by ID; a missing entry or reason string means uncertain."""
     records={};valid=sorted(i for i in ids if isinstance(i,str) and _ADVISORY_ID.fullmatch(i))
+    deadline=time.monotonic()+DETAIL_FETCH_DEADLINE
     for index,advisory_id in enumerate(valid):
         if index>=MAX_DETAIL_FETCHES:
             records[advisory_id]='Advisory detail limit of '+str(MAX_DETAIL_FETCHES)+' records per scan was reached';continue
+        remaining=deadline-time.monotonic()
+        if remaining<=0:
+            records[advisory_id]='Advisory detail time budget of '+str(DETAIL_FETCH_DEADLINE)+' seconds per scan was reached';continue
         try:
-            response=httpx.get(OSV_VULN_URL+advisory_id,timeout=30,follow_redirects=False)
+            response=httpx.get(OSV_VULN_URL+advisory_id,timeout=min(30,remaining),follow_redirects=False)
             response.raise_for_status();record=response.json()
         except Exception:  # noqa: BLE001 - any retrieval failure is uncertainty, never safety
             records[advisory_id]='Advisory detail could not be retrieved';continue
