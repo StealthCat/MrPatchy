@@ -193,7 +193,12 @@ def remove(s,host,expected,confirmation,actor,reason):
     # while credential removal is incomplete.
     set_enabled(s,host,False,expected,actor,reason,deleting=True);s.commit()
     try:remove_credentials(host.id)
-    except (OSError,ValueError):raise ValueError('Server disabled, but local credential cleanup failed. Refresh and retry deletion after reviewing controller storage') from None
+    except (OSError,ValueError):
+        # The server stays committed as disabled until deletion is retried, so close
+        # its spool episode as disabled rather than leaving it active indefinitely.
+        from . import agent_spool_health
+        if agent_spool_health.resolve_host_notification(s,host.id,'server-disabled'):s.commit()
+        raise ValueError('Server disabled, but local credential cleanup failed. Refresh and retry deletion after reviewing controller storage') from None
     from . import persistence
     persistence.resolve_host_notifications(s,host.id)
     from . import agent_spool_health

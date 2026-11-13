@@ -200,3 +200,30 @@ def test_deleting_an_already_disabled_server_adds_no_revision(admin):
     assert revisions() == 2
     [item] = items(admin)
     assert item['lifecycle'] == 'resolved' and 'disabled' in item['reason']
+
+
+def test_failed_credential_cleanup_resolves_spool_notification_as_disabled(admin, monkeypatch):
+    from app import host_lifecycle
+    seed()
+    poll(queued=999)
+
+    def fail(host_id):
+        raise OSError('simulated storage failure')
+    monkeypatch.setattr(host_lifecycle, 'remove_credentials', fail)
+    record = admin.get('/api/hosts/sp/summary').json()['host']
+    response = admin.request('DELETE', '/api/hosts/sp', json={
+        'confirmation': record['name'], 'expected_revision': record['lifecycle_revision'],
+        'reason': 'Remove management after reviewing operations and retained records.'})
+    assert response.status_code >= 400
+    with Session() as s:
+        host = s.get(Host, 'sp')
+        assert not host.enabled and not host.deleted_at
+    [item] = items(admin)
+    assert item['lifecycle'] == 'resolved' and item['revision'] == 2 and 'disabled' in item['reason']
+    monkeypatch.undo()
+    record = admin.get('/api/hosts/sp/summary').json()['host']
+    response = admin.request('DELETE', '/api/hosts/sp', json={
+        'confirmation': record['name'], 'expected_revision': record['lifecycle_revision'],
+        'reason': 'Retry removal after reviewing controller storage.'})
+    assert response.status_code == 200, response.text
+    assert revisions() == 2  # the retried deletion adds no further revision
