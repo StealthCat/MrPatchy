@@ -2485,6 +2485,36 @@ plus the counted and remaining amounts recorded when the warning was raised.
   headroom smaller than the next call's quote but above 20% of the cap still
   defers without notice.
 
+Worker checkpoint #819 detects daily-cap headroom that no paid call can use.
+Counted spend can stay below the cap while the remaining headroom is smaller
+than any Mr Patchy call's conservative reservation. Capped admission then defers
+every paid call until the reset, while neither the exhausted notice nor (below
+80% of the cap) the advance warning applies.
+- **Lower bound:** `budget_headroom_notifications.minimum_call_reservation()`
+  quotes the saved model with the smallest bounded output any billable path uses
+  (the investigation's `INVESTIGATION_TOKENS`), an empty input and the default
+  tier. `ai_pricing.reservation()` is monotonic in input bytes and output tokens,
+  so every real call's quote is at least this amount. A path that adds a smaller
+  output bound or a cheaper tier must lower this floor.
+- **Notification:** while AI is enabled in a cap mode, the model is priced,
+  counted spend is below the cap and the headroom is below the bound,
+  `operations.collect_alerts()` publishes one admin-only
+  `ai-budget`/`daily-cap-headroom` notification (medium, `#settings/ai`). It
+  names the cap, remaining amount, minimum reservation, timezone and reset, as
+  recorded when raised; the model ID is not included.
+- **Revision binding:** a digest of the window, cap, catalog version and model
+  digest. An active notice for the same binding is not republished; a later
+  window resurfaces it as unread.
+- **Resolution:** one `resolved` revision when the headroom fits, the window
+  resets, the cap is raised, the mode becomes uncapped, AI is disabled, the cap
+  is reached (the exhausted notice applies) or the model becomes unpriced (the
+  unpriced-model notice applies).
+- **Unchanged:** admission, reservations, SMTP/webhook alerts, read/dismiss/
+  acknowledgement and response authorization. The producer only reads.
+- **Limitation:** headroom that fits the smallest call but not a particular
+  larger request (for example a release plan) still defers that request
+  without a notice, because no queued payload is quoted here.
+
 Worker checkpoint #790 extends configuration blocking to update-importance
 scoring. Before this checkpoint a non-transient provider rejection (rejected key,
 denied access, unavailable quota or an unsupported model) marked the batch
