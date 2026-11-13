@@ -2426,6 +2426,24 @@ links to `#investigations`.
   yet. Neither is a missing or undecryptable saved key that never reaches a
   provider call.
 
+Worker checkpoint #739 adds an advance warning to the daily-cap producer. While
+counted spend in an enabled cap mode is at least a fixed 80% of the cap but
+below it, one admin-only `ai-budget`/`daily-cap-warning` notification (severity
+low, `#settings/ai`) names the threshold, cap, budget timezone and next reset,
+plus the counted and remaining amounts recorded when the warning was raised.
+- **Revision binding:** as for the exhausted notification, the revision is bound
+  to the window and cap. The amounts are captured at threshold crossing, and an
+  active warning for the same window and cap is not republished, so later
+  reservations create no new unread revision. The text labels the amounts as
+  recorded at that time; Settings shows the current totals.
+- **Hand-over and resolution:** the warning resolves once when the cap is
+  reached (the exhausted notification then applies), the window resets, the cap
+  is raised, the mode becomes uncapped or AI is disabled.
+- **Unchanged:** admission, reservations, SMTP/webhook alerts and read/dismiss/
+  acknowledgement semantics. The threshold is not yet configurable, and
+  headroom smaller than the next call's quote but above 20% of the cap still
+  defers without notice.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
