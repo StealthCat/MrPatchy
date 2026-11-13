@@ -62,10 +62,9 @@ def _stub(monkeypatch, record):
         return SimpleNamespace(raise_for_status=lambda: None,
                                json=lambda: {'results': [{'vulns': [{'id': record['id']}]}]})
 
-    def get(url, **kwargs):
-        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: record)
+    # Stub the detail fetch as a whole so this test is independent of its transport (#797).
     monkeypatch.setattr(advisories.httpx, 'post', post)
-    monkeypatch.setattr(advisories.httpx, 'get', get)
+    monkeypatch.setattr(advisories, '_fetch_records', lambda ids: {i: record for i in ids})
 
 
 def _host():
