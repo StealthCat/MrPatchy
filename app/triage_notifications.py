@@ -16,6 +16,8 @@ Significance policy (advisory only):
 - An administrator approval resolves an active event in the approval's own
   transaction. Revoking that approval while the verdict is still significant
   re-publishes the event as active.
+- Deleting a server resolves its still-active triage events, because a
+  deleted server is never investigated again.
 
 Notifications never approve a behavior, acknowledge anything or authorize a
 response.
@@ -93,3 +95,30 @@ def publish_approval(session, behavior, *, now=None):
                 'remains advisory and this notification authorizes nothing.'),
         lifecycle='resolved')
     return created
+
+
+def resolve_host_notifications(session, host_id, *, now=None):
+    """Resolve still-active triage notifications for a deleted server.
+
+    Behavior rows, verdicts and approvals are untouched. The caller owns the
+    surrounding transaction. Returns the number of revisions added.
+    """
+    from sqlalchemy import select
+    event, revision = notifications.NotificationEvent, notifications.NotificationRevision
+    subjects = session.execute(
+        select(event.subject_id)
+        .join(revision, (revision.event_id == event.id) & (revision.revision == event.revision))
+        .where(event.source == SOURCE, event.kind == KIND, event.subject_type == SUBJECT_TYPE,
+               event.host_id == host_id, revision.lifecycle == 'active')).scalars().all()
+    added = 0
+    for subject in subjects:
+        _, created = notifications.publish(
+            session, source=SOURCE, kind=KIND, subject_type=SUBJECT_TYPE,
+            subject_id=subject, host_id=host_id, deep_link=_link(host_id),
+            minimum_role='viewer', now=now, subject_revision='server-deleted', severity='info',
+            reason=('The server was deleted, so this AI triage verdict no longer needs '
+                    'attention here. Investigation history is retained; the assessment '
+                    'remains advisory.'),
+            lifecycle='resolved')
+        added += created
+    return added

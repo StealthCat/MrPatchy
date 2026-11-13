@@ -2316,6 +2316,20 @@ endpoint. The panel adds presentation only: lookup, publication, revocation,
 role, approval and response boundaries are unchanged. Hit/miss reasons,
 saved-call or cost estimates and matched production acceptance remain open.
 
+Worker checkpoint #744 notifies administrators when an AI contradiction
+automatically revokes a fleet known-good candidate. In the same transaction as
+the revocation, `known_good.invalidate_contradiction` publishes one fleet-scoped,
+admin-only `ai-known-good`/`candidate-contradicted` event keyed by the candidate
+fingerprint. Severity is `high` for a high-risk contradiction and `medium` for
+medium or unknown. The reason is fixed text with only the risk word and the
+linked-assessment count. The deep link opens the original candidate's history
+page, which already shows the revocation and links to the contradictory
+assessment. Rolled-back saves, calls that revoke nothing and administrator API
+revocations publish nothing. The producer adds no SMTP/webhook alert and changes
+no lookup, publication, revocation, approval or response semantics. Recording
+review completion, notifying administrator-initiated revocations, hit/miss
+reasons and saved-call estimates remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -2329,6 +2343,19 @@ explicitly requested or the entry no longer matches/is no longer valid.
 - Add an explicit administrator **Re-triage** action for completed/cached safe items, separate from retrying failed work. It bypasses cache lookup for the selected observation while respecting pause, data-sharing, throttling, daily reservations and current evidence. Show whether the user is refreshing one observation or revoking/replacing the shared entry, require explicit scope for fleet trust changes and audit both. Preserve prior assessments; a new suspicious/unknown result revokes the corresponding reusable safe entry and schedules linked review.
 - Keep cache records and their minimum provenance independent of ordinary AI-log pruning; unavailable source evidence must never leave an unverifiable trusted hit. Respect fleet/tenant access boundaries, protect cached evidence and expose cache hit/miss/invalidation reasons and saved calls/cost estimates. Cache lookup may serve retained/local assessments while provider AI is paused; it cannot bypass a restriction on sharing evidence or making a new call.
 - Validate exact cross-server hits with zero provider calls, same-name/different-hash and same-hash/different-behavior misses, script/config/provenance/privilege changes, incomplete/unverified evidence, revoked entries, concurrent first encounters, manual re-triage, changed follow-up evidence, log retention and role isolation on SQLite/MySQL. Preserve per-host observations/audit and existing explicit approval boundaries.
+
+Worker checkpoint #749 adds an **estimate** of avoided provider work to the
+known-good summary endpoint and Fleet known-good cache panel. Each retained reuse assessment is attributed to its
+candidate's originating AI investigation run. Avoided calls are that run's
+recorded call count. Avoided USD sums the run's priced receipts only when every
+call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
+partly priced, pruned, unlinked or still running is counted separately and
+never treated as free, so incomplete coverage makes the figures lower bounds.
+The estimate reads candidates in bounded batches without loading evidence or
+snapshots. It is not a provider invoice, does not measure misses and does not
+predict what a fresh investigation would cost today. Lookup, publication,
+revocation, pause, budget, role, approval and response boundaries are
+unchanged. Hit/miss reasons and matched production acceptance remain open.
 
 ### Throttling, daily cap and unthrottled operation
 
@@ -3146,6 +3173,27 @@ explicit coverage gaps. The result carries a deterministic digest. Runtime unit
 state, per-user units, specifier expansion, read-only collection wiring, package
 provenance, UI and AI classification remain open, so roadmap F is not complete.
 
+Worker checkpoint (issue #702, per-user units): the same contract adds
+`resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
+account's `systemd --user` manager. `user_search_paths()` builds the documented
+user table, highest first: `~/.config/systemd/user.control`, runtime control,
+transient and generator.early, `~/.config/systemd/user`, `/etc/xdg/systemd/user`,
+`/etc/systemd/user`, `$XDG_RUNTIME_DIR/systemd/user`, `/run/systemd/user`, generator,
+`~/.local/share/systemd/user`, `/usr/local/share` and `/usr/share`, `/usr/local/lib`,
+`/usr/lib` and `/lib` `systemd/user`, then generator.late. Precedence, drop-ins,
+masking, aliases, enablement and trigger rules are unchanged. Units and drop-ins
+from the account's own directories have origin `user`, are classed custom (or
+vendor-overridden when they shadow a vendor user unit) and their `.wants` links
+count as enablement. The owning account is the effective identity: `User=` is kept
+as `declared_user`, a different value is a `user_unit_declared_user` gap, and
+`privileged_exec` is false because `+`/`!` cannot gain root in a user manager.
+An invalid home, runtime directory or account, or a runtime directory that would
+coincide with a system user directory, is an explicit gap; its directories are omitted.
+System units outside the user table are `outside_search_path` gaps.
+System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering
+and runtime state, specifier expansion, enumerating accounts, collection wiring,
+UI and AI classification remain open.
+
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
@@ -3940,6 +3988,17 @@ response authorization are unchanged. An administrator approval resolves an acti
 event in the approval's own transaction, and revoking it while the verdict is still
 medium/high re-publishes the event as active; the notification never grants or
 withdraws approval. Behavior deletion does not yet resolve the event. Startup, malware and CVE finding producers, and milestones 2–4, remain open.
+
+Worker checkpoint (issue #747): deleting a server resolves its still-active
+`ai-triage`/`process-verdict` events. Each gets one `info`, `resolved`
+revision with fixed text and keeps viewer visibility and the host. Before this
+change, startup-change and malware-incident notifications were resolved on server
+deletion, but a deleted server's medium/high triage verdict stayed active and
+unread indefinitely, with a link to the deleted server. Resolution runs in the
+deletion transaction and is idempotent. Already-resolved events and other servers'
+events are untouched. Behavior rows, verdicts, approvals and history are
+unchanged. No schema, route, UI or auth change. Individual behaviors are never
+deleted on main, so server deletion is the reachable case of the gap noted above.
 
 Worker checkpoint (issue #698): a bounded milestone-1 producer covers expected-worker
 health. When `MRPATCHY_EXPECTED_WORKER_IDS` is configured, the elected coordinator's
@@ -7914,3 +7973,20 @@ threshold. Without this, the first tick after a controller or coordinator outage
 would run before the asynchronous polls refresh `last_seen` and would flag every
 server. An already-active event stays active across a leader change, without a
 new revision, until telemetry resumes.
+
+### Agent event-spool attention notifications — worker checkpoint #108
+
+This adds a roadmap J health/coverage producer and closes the alerting gap left open in #108. Each time the controller ingests a fresh telemetry snapshot from an enabled server, it publishes one admin-only in-app event per server (`agent-spool` / `spool-health`) in either case:
+
+- the agent spool is at **critical** pressure (≥90% of its byte capacity), with severity medium;
+- the agent reported **newly lost** observation batches, compared with the previous retained counters (the same delta as the existing integrity issue), with severity high.
+
+The event links to the server summary's spool card. An episode stays open without republishing while use remains at warning or above, while loss continues, or while counters are unusable. It escalates at most once, when loss and critical pressure combine. It resolves only after a usable reading below the warning threshold with no new loss. A later episode reopens the same event as an unread revision. Cumulative loss counters that are only retained never raise attention by themselves, and polling cannot flood users. Deleting a server resolves its still-active event. Reason text is fixed and contains no counters, paths, payloads or server-supplied text.
+
+The event is advisory. It never acknowledges, restarts, drains or remediates anything, and it does not change response authorization. There is no schema change.
+
+**Remaining:**
+- Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.
+- Stale telemetry raises no spool notification. Worker/agent liveness producers cover stale telemetry separately.
+- Warning-level pressure is shown on the summary card only.
+- Configurable thresholds remain outstanding.

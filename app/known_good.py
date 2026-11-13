@@ -510,15 +510,69 @@ def summary(s):
         Assessment, Assessment.id == Observation.assessment_id,
     ).where(Assessment.source == 'known_good').subquery()
     statement = select(entries, reuse).select_from(entries.join(reuse, true()))
-    return dict(s.execute(statement).mappings().one())
+    counts = dict(s.execute(statement).mappings().one())
+    counts['avoided_estimate'] = avoided_estimate(s)
+    return counts
 
 
-def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action):
+def avoided_estimate(s):
+    """Estimate provider work avoided by retained reuse from each source run's receipts.
+
+    Each reuse assessment is attributed to its candidate's originating AI run.
+    Only fully priced source runs contribute USD; a pruned, unpriced or partly
+    priced source is counted separately and never treated as free. Call counts
+    come from every retained source run. This is an estimate from local
+    receipts, not a provider invoice, and it does not measure cache misses.
+    """
+    from decimal import Decimal
+    from .ai_assessments import Assessment
+    from . import ai_runs
+
+    result = {'reuse_with_priced_source': 0, 'reuse_with_unpriced_source': 0,
+        'reuse_with_unavailable_source': 0, 'estimated_calls': 0,
+        'estimated_usd': None, 'currency': 'USD'}
+    per_entry = s.execute(select(Observation.fingerprint, func.count()).join(
+        Entry, Entry.fingerprint == Observation.fingerprint).join(
+        Assessment, Assessment.id == Observation.assessment_id,
+    ).where(Assessment.source == 'known_good').group_by(Observation.fingerprint)).all()
+    amount = Decimal(0)
+    for start in range(0, len(per_entry), LOOKUP_READ_BATCH):
+        batch = dict(per_entry[start:start + LOOKUP_READ_BATCH])
+        runs = dict(s.execute(select(Entry.fingerprint, Assessment.run_id).join(
+            Assessment, Assessment.id == Entry.assessment_id).where(
+            Entry.fingerprint.in_(batch))).all())
+        run_ids = {value for value in runs.values() if value}
+        rows = {row.id: row for row in s.scalars(select(ai_runs.AIRun).where(
+            ai_runs.AIRun.id.in_(run_ids)))} if run_ids else {}
+        receipts = ai_runs.call_receipts(s, list(rows))
+        for fingerprint, reused in batch.items():
+            run = rows.get(runs.get(fingerprint) or '')
+            cost = ai_runs.cost_summary(run, receipts[run.id]) if run else None
+            if cost is None or cost['status'] == 'no_calls' or cost['in_progress']:
+                result['reuse_with_unavailable_source'] += reused
+                continue
+            result['estimated_calls'] += reused * cost['total_calls']
+            if cost['status'] == 'estimated':
+                result['reuse_with_priced_source'] += reused
+                amount += reused * Decimal(cost['estimated_usd'])
+            else:
+                result['reuse_with_unpriced_source'] += reused
+    if result['reuse_with_priced_source']:
+        result['estimated_usd'] = format(amount, 'f')
+    return result
+
+
+def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action, strict=True):
     saved = s.scalar(select(Entry).where(
         Entry.fingerprint == fingerprint).with_for_update())
+    if not strict and (saved is None or not saved.active):
+        # A concurrent contradiction (or an administrator) already revoked
+        # this exact candidate after our unlocked lookup. The goal state holds,
+        # so the caller's verdict save must proceed rather than roll back.
+        return None
     if saved is None:
         raise LookupError('Known-good candidate not found')
-    if saved.version != version:
+    if strict and saved.version != version:
         raise ValueError('Known-good candidate version changed; reopen the assessment before submitting')
     if not saved.active:
         raise ValueError('Known-good candidate is already revoked; reopen the assessment to review its current state')
@@ -563,9 +617,21 @@ def invalidate_contradiction(s, row, revoked_at=None):
         return None
     reason = (f'Retained AI assessment {row.id} classified the same exact '
         f'verified context as {risk}; every linked assessment requires review.')
-    return _invalidate(s, hit['fingerprint'], hit['version'],
+    # Idempotent under the row lock: the exact fingerprint is contradicted
+    # whatever version is current, and an already revoked candidate is left
+    # untouched (its first contradiction or revocation remains the record).
+    revoked = _invalidate(s, hit['fingerprint'], hit['version'],
         'assessment:'+row.id, reason, revoked_at,
-        'invalidate contradicted known-good candidate')
+        'invalidate contradicted known-good candidate', strict=False)
+    if revoked is None:
+        # Nothing changed in this save, so there is nothing new to announce.
+        return None
+    revoked = {**revoked, 'source_assessment_id': hit['assessment_id'],
+        'source_subject': hit['source_subject']}
+    # Same transaction as the revocation: a rolled-back save announces nothing.
+    from . import known_good_notifications
+    known_good_notifications.publish_contradiction(s, revoked, risk, now=revoked_at)
+    return revoked
 
 
 def _contradiction(s, saved):
