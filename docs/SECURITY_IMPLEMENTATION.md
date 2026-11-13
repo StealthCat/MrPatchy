@@ -3680,6 +3680,33 @@ belongs to an active server.
 - Filter event payloads, list/detail reads and unread counts by the user's current role and subject access before transmission. Recheck/terminate streams on session expiry, logout, account disable or permission changes; reset all account-scoped client state during account switching. Use authenticated same-origin transport, avoid credentials in event/query data and preserve CSRF protection for read-state/acknowledgement mutations. Escape all untrusted text and keep secrets, raw prompts/provider bodies and unnecessary endpoint evidence out of notifications.
 - Keep deterministic human-attention notifications available when AI is disabled, paused or unavailable. Significant new findings may create an alert, but delivery/read state never grants destructive-action authority or bypasses the existing reviewed/automatic response policies. Preserve the existing SMTP/webhook channel behavior unless separately changed by an administrator.
 
+### Managed agent file integrity notifications — worker checkpoint #777
+
+The raw `integrity` alert stays SMTP/webhook-only because it serializes
+endpoint-supplied collector text. A separate producer,
+`app/agent_integrity_notifications.py`, runs on each alert pass and publishes
+one admin-only, `high`-severity `agent-integrity` notification per affected
+server.
+
+- **Trigger:** the latest stored snapshot reports at least one of these:
+  - an enrolled managed file whose SHA-256 differs from the enrollment baseline, or which is missing
+  - an enrolled managed file whose ownership, mode or metadata changed
+  - a missing managed baseline
+
+  Only findings the controller writes for paths in the server's own enrolled
+  baseline count. Collector, eBPF, spool, telemetry-age and hash-sweep findings
+  are ignored, and so is endpoint text that copies a finding string.
+- **Payload:** fixed text with category counts and a link to the server
+  Overview, where Integrity findings are listed. Paths and endpoint text are
+  never copied.
+- **Lifecycle:** identical counts publish nothing, and a count change appends a
+  revision. The notification resolves through the shared operational path when
+  the findings clear, or when the server is disabled, deleted or re-enrolling.
+  A rejected payload keeps the event active and never blocks SMTP/webhook
+  collection.
+- **Unchanged:** nothing repairs files, acknowledges alerts or authorizes a
+  response.
+
 ### Finite delivery and acceptance milestones
 
 1. **Event model and producers:** deliver subject/revision-aware committed events, source/severity policy, safe deduplication/reopening/escalation, recipient authorization and per-user read state, with migration/retention and existing alert-lifecycle coverage.

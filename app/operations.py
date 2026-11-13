@@ -166,6 +166,9 @@ OPERATIONAL_NOTIFICATIONS={
     'service hold':('service-hold','high','security'),
     'response integrity':('response-integrity','high','security'),
     'response verification':('response-verification','medium','security'),
+    # Notification-only (no outbox Alert): agent_integrity_notifications classifies controller-written
+    # managed-file findings into counts, so raw endpoint text never reaches the bell.
+    'agent integrity':('agent-integrity','high','overview'),
     'service health':('service-health','medium','security'),
     'service coverage':('service-coverage','medium','security'),
     'execution scan coverage':('execution-scan-coverage','medium','security'),
@@ -256,6 +259,8 @@ def collect_alerts(now=None):
             overdue_hosts.update(s.scalars(select(Package.host_id).where(Package.host_id.in_(chunk),Package.candidate!='',Package.available_since>0,
                 Package.available_since<now- min(cfg['deadlines'].values())*3600).distinct()))
         settings={row.key:row for row in s.scalars(select(Setting).where(Setting.key.in_([prefix+owner for owner in ids for prefix in ('agent-status:','persistence-baseline:')])))} if ids else {}
+        from . import agent_integrity_notifications
+        agent_integrity_notifications.publish(hosts,now,lambda *args:_operational_notification(s,*args),published)
         for host in hosts:
             if not host_lifecycle.active(host):
                 record(host,'server disabled','Server management is intentionally disabled. Polling, scheduled work and host AI requests are suspended.')
