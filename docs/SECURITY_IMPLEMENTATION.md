@@ -2471,6 +2471,34 @@ plus the counted and remaining amounts recorded when the warning was raised.
   headroom smaller than the next call's quote but above 20% of the cap still
   defers without notice.
 
+Worker checkpoint #790 extends configuration blocking to update-importance
+scoring. Before this checkpoint a non-transient provider rejection (rejected key,
+denied access, unavailable quota or an unsupported model) marked the batch
+`error`, and the same request was resent on the next scoring pass an hour later,
+indefinitely.
+- **Blocking:** a non-transient provider HTTP 4xx rejection (now carried as
+  `AIError.provider_status`) marks the batch's scores `blocked` and records
+  the process-triage model/key signature (`ai_retry.configuration_signature`) in
+  the additive `update_scores.configuration` column. Blocked scores are not
+  selected again under that signature, so no further provider request is sent.
+  A changed saved model or key makes them eligible immediately. Declined,
+  incomplete or invalid model output, transient failures without a retry delay,
+  policy waits and exceptions that are not `AIError` keep the existing
+  `error`/`deferred` behaviour, because an unchanged retry may succeed.
+- **Notification:** while AI and update scoring are enabled and a
+  current-candidate score on an active, unpaused server is blocked under the
+  current signature, `operations.collect_alerts()` publishes one admin-only
+  `ai-scoring`/`configuration-blocked` notification (low severity,
+  `#settings/ai`). The text is fixed; the revision is bound to a re-hashed
+  signature digest, so further blocked scores add no revision. One `resolved`
+  revision follows a configuration change, disabled AI or scoring, paused,
+  disabled or deleted servers, or superseded package evidence.
+- **Unchanged:** routes, roles, admission, reservations, SMTP/webhook alerts and
+  response authorization. Scores remain advisory.
+- **Limitation:** there is no administrator retry action for a blocked score;
+  changing the saved model or key is the unblock path. Blocked advisory-plan
+  work is still not covered.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.

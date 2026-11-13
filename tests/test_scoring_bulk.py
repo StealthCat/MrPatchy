@@ -256,7 +256,7 @@ def test_scoring_candidate_queries_only_load_scheduling_fields(admin):
         finally:
             event.remove(engine,'before_cursor_execute',observe)
         assert len(score_reads)==6,score_reads
-        fields=('id','host_id','name','state','attempted','next_at')
+        fields=('id','host_id','name','state','attempted','next_at','configuration')
         projection='SELECT '+', '.join('update_scores.'+field for field in fields)
         assert all(statement==projection for statement in score_reads),score_reads[0]
         assert len(candidates)==450 and all(row.state=='complete' for _,_,_,row,_ in candidates)
@@ -287,7 +287,7 @@ def test_due_deferred_items_across_chunk_boundaries_are_not_starved(admin,monkey
         assert sum(row.state=='deferred' for row in s.scalars(select(update_scores.UpdateScore)))==508
 
 
-@pytest.mark.parametrize('outcome', ['complete', 'superseded', 'deferred', 'error'])
+@pytest.mark.parametrize('outcome', ['complete', 'superseded', 'deferred', 'error', 'blocked'])
 def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, monkeypatch, outcome):
     seed(5, completed=0)
     if outcome in ('complete', 'superseded'):
@@ -307,7 +307,11 @@ def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, mon
         def reject(*args, **kwargs):
             if outcome == 'deferred':
                 raise ai.AIError('Fixture wait', policy_wait=True, retry_after=600)
-            raise ai.AIError('Fixture provider error')
+            if outcome == 'error':  # transient without a retry delay keeps the hourly error retry
+                raise ai.AIError('Fixture provider error', transient=True)
+            error = ai.AIError('Fixture provider error')  # non-transient rejection: blocked until model/key change
+            error.provider_status = 403
+            raise error
 
         monkeypatch.setattr(ai, 'request', reject)
 
@@ -327,7 +331,7 @@ def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, mon
     with Session() as session:
         run = session.scalars(select(ai_runs.AIRun)).one()
         rows = session.scalars(select(update_scores.UpdateScore)).all()
-        assert run.state == ('complete' if outcome == 'superseded' else outcome)
+        assert run.state == {'superseded': 'complete', 'blocked': 'error'}.get(outcome, outcome)
         assert len(rows) == 5
         assert {row.run_id for row in rows} == {run.id}
         assert {row.state for row in rows} == {outcome}
