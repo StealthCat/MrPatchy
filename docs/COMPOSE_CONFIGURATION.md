@@ -39,7 +39,10 @@ roots, memory/PID limits, networks and volume names. `compose.worker.yaml` repea
 the `compose.yaml` worker definition without the dependency on a local app, and a
 test keeps the two in sync. It has no Caddy, TLS mount, published port, admin
 password or fixed container name. `MRPATCHY_WORKER_ID` is always empty in this file,
-so every replica gets a unique boot identity.
+so replicas never share one configured ID. Each replica instead claims a distinct
+generated identity that persists in `worker-identities/` on the shared data volume,
+so restarts, container recreation and `git pull` upgrades reconnect under the same
+registrations rather than adding new ones (see "Worker identity persistence" below).
 
 ```sh
 # Controller (project "mrpatchy", data volume "mrpatchy_app-data").
@@ -133,13 +136,37 @@ An external Docker volume name does not share data across machines. Remote-host
 workers, network-mounted SQLite and a full HA cluster are outside this generator's
 validated deployment scope; see the outstanding cluster roadmap (#446–#454).
 
-Worker IDs default to unique boot identities even if `.env` contains a single
-`MRPATCHY_WORKER_ID`, preventing accidentally duplicated IDs. An optional prefix
+Worker IDs default to unique persistent generated identities even if `.env` contains
+a single `MRPATCHY_WORKER_ID`, preventing accidentally duplicated IDs. An optional prefix
 assigns `<prefix>-1`, `<prefix>-2`, etc., and configures the generated apps' expected
 worker inventory. Prefixes must be unique across every stack using the same state.
 When workers are in a separate stack, configure the controller's
 `MRPATCHY_EXPECTED_WORKER_IDS` in its environment as appropriate. Drain workers
 through the existing UI and verify their state before planned maintenance.
+
+## Worker identity persistence
+
+A worker or embedded scheduler without `MRPATCHY_WORKER_ID` generates its identity
+once and stores it in a numbered slot under `DATA_DIR/worker-identities/<role>/`
+(`/data` in Compose). On each start the process takes the lowest slot whose identity
+is not held by another running process, using the same cross-process identity lock
+that rejects duplicate IDs. As a result:
+
+- Restarting, recreating or upgrading (`git pull` then `up --build`) a worker keeps its
+  ID and reuses its existing registration with a new boot ID.
+- Replicas sharing one data volume take distinct slots, so `--scale worker=3` keeps
+  the same three IDs across recreation. Which replica container holds which ID may
+  change; the set of identities stays stable.
+- Workers and the embedded scheduler use separate slot pools.
+- An explicit `MRPATCHY_WORKER_ID` always takes precedence and is not written to a slot.
+
+Scaling down leaves the higher slots unused; their registrations remain as stale
+history. When a process ends without releasing its lock (for example a MySQL lock
+held until the server notices a lost connection), a replacement starts under the
+next free slot until the old lock clears. If the data volume is not writable or every
+slot is held, the process logs a warning and uses a boot-only identity. An unreadable
+or invalid slot file is logged and skipped, not overwritten. Deleting
+`worker-identities/` makes the next starts generate new identities.
 
 ## Multiple apps: topology, not an HA guarantee
 

@@ -2416,6 +2416,48 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
 
+Worker checkpoint #733 adds an AI configuration-blocker notification producer.
+A non-transient provider failure (rejected key, unavailable quota, unsupported
+model) leaves each affected process investigation `blocked`, with no automatic
+retry until the model or key changes or an administrator retries. While AI is
+enabled and at least one pending, unapproved behavior on an active, unpaused
+server is blocked under the current configuration, `operations.collect_alerts()`
+publishes one admin-only `ai-triage`/`configuration-blocked` notification that
+links to `#investigations`.
+- **Predicate:** it matches the blocked count in `ai_runs.status()`. Rows blocked
+  under an earlier model/key are eligible again and are not counted.
+- **Revision binding:** each revision is bound to a re-hashed digest of the
+  current configuration signature, never to counts, so more blocked items under
+  the same configuration add no revision. A later configuration that is also
+  rejected resurfaces as unread. The payload is fixed text: no provider message,
+  key material, path or evidence.
+- **Resolution:** one `resolved` revision is published when nothing remains
+  blocked, AI is disabled, or the affected servers are paused, disabled, deleted
+  or their behaviors approved. A recurrence reopens the event.
+- **Unchanged:** the producer only reads. It never retries, unblocks, reserves
+  spend or changes authorization, and it adds no SMTP/webhook alert.
+- **Limitation:** blocked update-scoring and advisory-plan work is not covered
+  yet. Neither is a missing or undecryptable saved key that never reaches a
+  provider call.
+
+Worker checkpoint #739 adds an advance warning to the daily-cap producer. While
+counted spend in an enabled cap mode is at least a fixed 80% of the cap but
+below it, one admin-only `ai-budget`/`daily-cap-warning` notification (severity
+low, `#settings/ai`) names the threshold, cap, budget timezone and next reset,
+plus the counted and remaining amounts recorded when the warning was raised.
+- **Revision binding:** as for the exhausted notification, the revision is bound
+  to the window and cap. The amounts are captured at threshold crossing, and an
+  active warning for the same window and cap is not republished, so later
+  reservations create no new unread revision. The text labels the amounts as
+  recorded at that time; Settings shows the current totals.
+- **Hand-over and resolution:** the warning resolves once when the cap is
+  reached (the exhausted notification then applies), the window resets, the cap
+  is raised, the mode becomes uncapped or AI is disabled.
+- **Unchanged:** admission, reservations, SMTP/webhook alerts and read/dismiss/
+  acknowledgement semantics. The threshold is not yet configurable, and
+  headroom smaller than the next call's quote but above 20% of the cap still
+  defers without notice.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
@@ -2424,6 +2466,37 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
 - Reconcile reservations to returned usage and a retained price snapshot using decimal currency arithmetic. Failed/refused/incomplete responses and retries may cost money. Missing usage, unknown prices, timeouts with unknown transmission outcomes and lost responses are uncertain costs, never zero: retain a conservative reservation and expose a reconciliation state; block capped admission if a safe bound cannot be calculated. Do not release a possibly billed reservation merely because a lease expires or a day resets. Attribute cross-midnight calls consistently and show outstanding exposure against available headroom.
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
+
+### Unpriced saved model under a daily cap — worker checkpoint #735
+
+In `daily_cap` and `rate_and_daily` modes, capped admission must quote every
+paid call from the bundled price catalog. `ai_pricing.reservation()` refuses a saved model that is
+not catalogued (for example `gpt-5` or a fine-tune ID), so every capped call
+fails closed. Before this checkpoint nothing showed that in advance.
+- **Pure check:** `ai_pricing.model_status()` reports whether the catalog is
+  valid and can price the alias-resolved saved model. It shares its fixed reason
+  with `reservation()`. An `ok` result never promises that a call is admitted:
+  tier, tools, output bound and context size are still checked per call.
+- **Start-gate snapshot:** `GET /api/settings/ai-control-status` adds an
+  indefinite `pricing` blocker while AI is enabled in a cap mode and a saved
+  model cannot be priced or the catalog is not valid. Disabled AI reports only
+  the existing `disabled` gate. `can_start_now` is then false and there is no
+  automatic next start. The message is fixed and omits the model ID.
+- **Notification:** `operations.collect_alerts()` publishes one admin-only
+  `ai-budget`/`unpriced-model` notification (high severity, `#settings/ai`)
+  while AI is enabled, a cap mode applies, the catalog is valid and the saved
+  model is unpriced. The revision is bound to the catalog version and a SHA-256
+  of the model ID, so repeated collection creates no new revision. A different
+  unpriced model or catalog version resurfaces it as unread. The text names the
+  model only when it is a valid catalog identifier.
+- **Resolution:** one `resolved` revision is published when the model becomes
+  priced or is cleared, the mode becomes uncapped or AI is disabled. An invalid
+  catalog is left to the existing pricing-catalog alert and neither publishes
+  nor resolves this event.
+- **Unchanged:** both additions only read state. They never reserve, release or
+  authorize spend, change admission or add an SMTP/webhook alert.
+- **Limitation:** a missing API key is still reported only by the existing
+  `configuration` gate. Near-exhaustion of the cap remains undetected.
 
 ### Finite implementation and acceptance milestones
 
@@ -2818,6 +2891,68 @@ exploitation detectors, typed automatic containment, server/fleet views,
 notifications and real-target acceptance remain planned. A vulnerable version, an
 advisory match or AI output still authorizes no containment.
 
+### Exploitation containment eligibility contract — worker checkpoint #725
+
+Status: **bounded slice; requirement D remains planned/incomplete.**
+`app/cve_containment.py` is a pure, deterministic contract with no I/O, provider call,
+storage or executor. Nothing calls it yet, so runtime behavior is unchanged.
+
+- `evaluate(policy, detection, now=)` checks one CVE-specific exploitation detection
+  against a per-CVE policy. The policy holds:
+  - a `disabled`, `monitor_only` or `enforce` mode and an explicit CVE list;
+  - the action scope and a minimum rule confidence (`medium` at the lowest);
+  - a minimum number of distinct supporting evidence kinds (at least one);
+  - a maximum rule age (30 days at most);
+  - a maximum applicability-assessment age (one day by default, 30 days at most);
+  - path and hash exclusions and an `allow_uncertain_applicability` opt-in.
+- Only `confirmed_exploitation` can authorize anything, and it requires all of
+  the following:
+  - an authenticated, fresh detection rule that names the same CVE and matched
+    the exact artifact sha256;
+  - a rule confidence that meets the policy;
+  - an applicability assessment bound to the same server and CVE showing
+    `affected`, or `uncertain` only when the policy opts in;
+  - enough supporting observations bound to the same server, evidence revision
+    and artifact.
+
+  The other outcomes are `not_in_policy`, `unverified_rule`,
+  `unverified_applicability`, `not_exposed`, `suspected_exploitation` and
+  `invalid`.
+- A `fixed` or `unaffected` endpoint yields `not_exposed`, with an
+  `artifact_left_to_malware_policy` gap. The requirement E contract can still act
+  on that artifact.
+- A vulnerable version, an advisory match or a CVSS score is never exploitation
+  evidence. Supplied AI enrichment is ignored and reported as
+  `ai_output_not_authoritative`. The function has no AI-availability input, so AI
+  outages and per-server AI pause cannot change the decision.
+- Quarantine and termination reuse #682's checks and helpers:
+  - hash-bound file and process identities;
+  - pseudo-filesystem and pid-1 refusal;
+  - path exclusions applied to the process executable as well as the file;
+  - hash exclusions;
+  - effect statements;
+  - `still_bound` rechecks immediately before execution.
+
+  Each action is decided independently. The binding digest covers the CVE and the
+  rule version, for duplicate suppression.
+- Malformed or injection-shaped policies, detections and evaluation times fail
+  closed with no authorized action. This covers non-ASCII CVE digits, overflowing
+  integers, duplicate CVEs, `str`/`dict` subclasses, and one evidence event
+  reused under several kinds.
+- A rule version dated after the observation is refused.
+- The binding is a target-identity key for suppressing duplicate executions. It
+  is not a decision key, so it must not suppress a later decision with a
+  different classification.
+
+Remaining for requirement D:
+- advisory ingestion and stored per-endpoint exposure records;
+- CVE-specific exploitation detectors that produce this evidence;
+- persisted, audited policies with an administrator UI;
+- typed executors shared with requirement E;
+- alerts and incidents;
+- server and fleet views;
+- real-target and benign-lookalike acceptance drills.
+
 
 ## Planned: known and unknown malware detection with automatic response
 
@@ -2957,6 +3092,30 @@ requirement.
 - Feed evidence-supported suspicious findings into the planned malware investigation/response policy. A custom entry or AI suspicion alone does not authorize quarantine, termination or deletion; reuse the established evidence and response-policy checks.
 - Validate native Debian/RPM and supported init/cron layouts, per-user/root jobs, unit precedence/drop-ins, transient/generated entries, package defaults versus legitimate edits, malicious and benign lookalikes, prompt injection/redaction, referenced-file changes, large inventories, offline/permission gaps and AI pause. Include real-target acceptance and migration/helper documentation. Do not mark this requirement complete solely because the existing metadata inventory or manual AI plan exists.
 
+Worker checkpoint (issue #717): a pure, I/O-free contract (`app/sysv_init.py`)
+parses captured SysV boot material into typed records. For `/etc/init.d`
+scripts it returns the interpreter, execute bit, full-text SHA-256 and the LSB
+`INIT INFO` fields (Provides, Required/Should-Start/Stop, Default-Start/Stop,
+descriptions and `X-` extension names), never the script body. Runlevel entries
+from `/etc/rc[0-6S].d` and `/etc/rc.d/rc[0-6].d` become start/stop links with
+order numbers and resolved init-script targets. Links to paths outside the init
+directory, name/target mismatches, regular files and unrecognized names are
+explicit gaps. A combining step reports per-service enabled runlevels, start
+orders, links without a captured script, start and stop links in one runlevel,
+installed links that differ from LSB `Default-Start` and start links to a
+non-executable script as observations, not verdicts. `/etc/rc.local` becomes
+bounded logical command lines with per-line SHA-256, the top-level `exit` line
+(an `exit` inside an open `if`, `case`, loop, function, brace group or subshell is
+not top-level, even when unindented), a count of lines after it, which stay in the
+command list flagged `after_exit` rather than being dropped, and gaps for a missing shebang, missing
+execute bit, uninterpreted heredocs and unterminated continuations. Over-limit,
+non-UTF-8 or binary input produces explicit gaps, and over-cap input yields no
+partial records. Every record keeps `origin: not_assessed`. The contract does
+not collect from targets, show anything in the UI, attest package defaults,
+classify entries or authorize any response. Agent collection, inventory/UI
+wiring, provenance, AI classification and native acceptance remain open, so
+roadmap F is still incomplete.
+
 Worker checkpoint (issue #711): a pure, I/O-free contract
 (`app/scheduled_jobs.py`) parses captured anacrontab text and individual at
 spool jobs into typed records. For anacrontab it returns jobs with numeric or
@@ -3036,6 +3195,122 @@ hashes, and it never executes or sources anything.
 **Not covered:** `run-parts` directories (`cron.daily` and similar), anacron, at queues, referenced-script inspection, cron.d naming rules, PATH/SHELL effects, daemon state, systemd units/timers, package-default provenance and AI classification.
 
 Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
+
+
+### Startup-entry provenance classification contract — worker checkpoint #720
+
+Contract increment only; the startup-awareness requirement and its provenance
+milestone remain incomplete. `app/startup_provenance.py` is a pure, I/O-free
+classifier. It takes already-collected evidence about one startup file (crontab,
+anacrontab, systemd unit, drop-in or override, SysV script, `rc.local`) and returns
+exactly one class with its basis, verification strength (`authenticated`,
+`unauthenticated` or `none`) and explicit gaps:
+
+- `verified_default`: the observed SHA-256 equals an authenticated vendor artifact
+  for the exact package and version of the single installed owner.
+- `modified`: package-owned, and the bytes differ from the authenticated artifact or
+  from the target's own package-database digest.
+- `unverifiable`: package-owned without an authenticated exact-version comparison,
+  or generator output.
+- `custom`: a complete ownership query found no owning package.
+- `unknown`: missing, malformed, oversized or conflicting evidence, a diverted path,
+  more than one owner, an incomplete ownership query, or a transient unit.
+
+**Fail-closed rules**
+- Package ownership alone never yields `verified_default`. A match against the
+  target's own package database (sha256, or dpkg md5 with an observed MD5) is
+  labelled unauthenticated and stays `unverifiable`.
+- An authenticated artifact or database digest for another package or version is
+  never used; it is recorded as a gap.
+- A conflict never raises trust: a vendor-artifact match with a differing database
+  digest is `unknown`. Authenticated evidence wins the other way round: bytes that
+  differ from the vendor artifact are `modified` even when the target's database
+  agrees with them (`package_db_disagrees` gap), so rewriting both cannot hide a change.
+- Entries in a modified file are classified individually, multiset-matched, only
+  against authenticated default entry digests; otherwise entries inherit the file's
+  class. An entry's behaviour also depends on content outside the entries (`PATH`,
+  `SHELL`, `CRON_TZ`, anacron ranges, unit sections), so a matching entry is
+  `verified_default` only when the observed `context_sha256` equals the authenticated
+  artifact's. A changed context gives `modified_outside_entries`, and a missing one
+  gives `entry_context_not_compared` (or `modified_outside_entries` when the entries
+  are unchanged but the file differs). In both cases the matching entries are
+  `modified`, and added entries are `custom`. Matched default entries must also keep
+  the authenticated order, because systemd `Exec*` order and an empty `ExecStart=`
+  reset are significant; reordering gives `default_entries_reordered`. When the entries
+  and context are identical but the file bytes still differ, the result discloses
+  `file_differs_outside_compared_content`.
+- A declined (`accepted: false`) or malformed baseline record never blocks
+  classification. A non-finite or out-of-range acceptance time is dropped. Paths or
+  names that contain C0/C1 control characters, DEL, or Unicode line or paragraph
+  separators fail closed.
+- Drop-ins and overrides are classified on their own bytes and report the unit they
+  modify. Administrator baseline acceptance is a separate field and never changes the
+  class. Every result carries `safety: not_assessed`.
+
+**Not covered:** collecting ownership, package-database digests or authenticated
+vendor artifacts from targets; persistence; UI; AI classification; response actions.
+No schema, API, auth or response-authorization change.
+
+### Startup mechanism catalog and coverage contract — worker checkpoint #723
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/startup_catalog.py` is a pure, versioned catalog of the boot, schedule,
+login, event and loader mechanisms on the supported `debian` and `rpm` families.
+It covers:
+
+- cron, run-parts directories, the user cron spool, anacron and at queues;
+- systemd system, user, generated and transient units, generator executables and
+  shutdown/sleep hooks;
+- SysV scripts and runlevel links, and rc.local;
+- system and user shell startup files, XDG autostart, SSH rc hooks and
+  `authorized_keys` forced commands;
+- PAM, MOTD and X session hooks, network dispatcher and logrotate hooks, and
+  apt/dnf hooks;
+- udev rules, loader preload/search paths, modules-load and modprobe.
+
+Each entry records its trigger, system or per-user scope, family-specific
+locations (including pre-usrmerge Debian `/lib` paths), and whether an entry
+parser exists on main. Only system and user crontabs have one. Every result
+states that the catalog is not exhaustive.
+
+- **Per-mechanism coverage.** `coverage()` maps a collection's scope to a state
+  for each mechanism: `covered`, `partial`, `absent_reported` or
+  `not_collected`. It names every location that was uncollected, partly
+  collected, failed or reported missing. A reported missing path is explicitly
+  not a safety verdict.
+- **Failed and incomplete collections.** Roots with a collection gap (for
+  example a symlink, or budget, depth or entry limits) count as
+  `collection_failed`. An unfinished collection never yields `covered`.
+- **Alias locations.** The catalog marks pre-usrmerge Debian `/lib/...` paths and
+  the RPM `/etc/init.d` and `/etc/rc.local` links as aliases of their canonical
+  locations. The agent refuses to follow symlinks, so on merged-/usr and RHEL
+  systems these roots fail. An alias takes its canonical location's state, and
+  records `alias_of`, only when the collector reports that the root's fully
+  resolved absolute path (`realpath`-equivalent, whether the link is the root
+  itself or an ancestor such as merged-/usr `/lib`) is exactly that location.
+  Any other path, or a symlink at a non-alias location, keeps the failure. A
+  raw relative `readlink` value or other unresolved target gives that root no
+  alias credit and adds a `symlink_target_unresolved` gap without discarding
+  the rest of the collection.
+- **Parsed entries.** `entries_parsed` is true only when the collection reports
+  parsed entries, the collection finished, and at least one of the mechanism's
+  locations was fully collected. A home-relative missing root means the path is
+  absent in every enumerated home.
+- **Administrator scope.** Administrator custom roots are passed separately and
+  never credited to a mechanism. Home-relative locations count as collected only
+  when every account home was enumerated.
+- **Validating additional scope.** `validate_additional_scope()` mirrors the
+  agent's 16-path limit and its `/proc`, `/sys`, `/dev`, `/run` and Mr Patchy
+  state-directory exclusions. It rejects paths that are invalid, duplicated or
+  overlapping, and paths that overlap a catalog or home-relative location. Each
+  rejection gives a per-index reason without echoing the input back. An unknown
+  family is checked against every family's locations.
+- **Malformed input.** Unknown families and malformed or contradictory
+  collections fail closed with a gap.
+
+**Not covered:** agent collection of the new locations, persistence and UI
+wiring of the coverage result, and AI classification. No schema, API or UI
+change.
 
 
 ## v0.3.0 — opt-in cross-source advisory AI evidence
@@ -3238,6 +3513,27 @@ or response authority, which remains with #451. Still planned for this
 requirement: endpoint-agent and GCP-node inventory, readiness and HTTPS/Caddy
 checks, resource metrics, alerts and the unified dashboard acceptance.
 
+Implementation checkpoint (issue #737): Activity → Workers adds an admin-only
+**Endpoint agents** section backed by `GET /api/operations/agents`
+(`app/agent_fleet_health.py`). The section covers enabled, non-deleted servers
+and is built from the retained read-only agent verification receipt and the
+telemetry collection time. Each row is classified, worst first, as:
+
+- **offline:** live verification was unavailable, or the server is marked offline.
+- **degraded:** helpers are outdated, drifted or blocked, or the agent is verified
+  but telemetry is stale or missing (older than 15 minutes).
+- **unknown:** there is no receipt, the receipt is invalid, stale (older than
+  600 seconds) or future-dated, or enrollment is incomplete.
+- **healthy:** the agent is verified current and telemetry is fresh.
+
+The deployment type is shown as `systemd` only when the receipt names the
+expected `mrpatchy-agent.service` unit. Otherwise it is "not verified".
+Responses carry fixed reasons and an issue count only, with no receipt hashes,
+paths, addresses or telemetry. Settings rows are read in bounded batches rather
+than once per server. The view never inspects, repairs or authorizes anything.
+Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
+unified dashboard acceptance remain open.
+
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
 Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint below.
@@ -3333,6 +3629,28 @@ active. The reconciler never changes plan, incident or approval state, and
 read/dismiss grants nothing. Resolution can lag by up to one scheduler tick,
 which is about 30 seconds. Release-plan approvals and per-user targeting
 remain open.
+
+Worker checkpoint #743 adds the release-plan decision producer. A leader-only
+periodic reconciler (`app/release_notifications.py`) publishes one admin-only
+`release-plans` notification for each distribution-upgrade release plan that is
+`ready`, has no blockers, has not reached its sealed 24-hour `expires` and
+belongs to an active server.
+- **Payload:** fixed text, `medium` severity and a link to
+  `#servers/<host>/maintenance`, where Distribution upgrade plans are reviewed.
+  AI review text, configuration content, package names and paths are never copied.
+- **Revision binding:** each active revision is bound to the frozen plan digest,
+  so unchanged passes publish nothing. A regenerated plan with a new digest
+  resurfaces as unread.
+- **Resolution:** GO (`approved`/`running`/terminal phases), no-go, expiry,
+  regeneration back to `planning`, new blockers, plan deletion and server
+  disable/delete each publish one `resolved` revision.
+- **Bounds:** the pending scan reads at most one newest-first batch of plans
+  created within an eight-day lookback. Active events are scanned with the
+  rotating keyset cursor from #706, so unchanged events cannot hold the page.
+- **Unchanged:** the reconciler never changes plan, job or approval state and
+  queues nothing. The GO route keeps its digest, blocker, expiry and pending-job
+  checks, and read/dismiss grants nothing. Resolution can lag by about one
+  scheduler tick (~30 seconds). Per-user targeting remains open.
 
 ### Asynchronous delivery and access control
 
@@ -3491,6 +3809,28 @@ cross-tab toast deduplication (each open tab shows its own toast), producer and
 retention coverage, and the milestone 2 and 4 transport and end-to-end acceptance
 listed above.
 
+Worker checkpoint (issue #729): a bounded milestone-3 increment deduplicates live
+toasts across tabs of one account. Each tab still keeps its own arrival cursor.
+Before it shows a toast, a tab claims the event revision in same-origin
+`localStorage`, under one key bound to the signed-in username. When the Web Locks
+API is available, the check and the claim are atomic, so concurrent refreshes show
+one toast. Without it, a best-effort read-modify-write still covers tabs that do
+not refresh at the same moment, such as a hidden tab that catches up when it
+becomes visible.
+
+- **What is stored:** at most 500 claims of event ID, revision and time, kept for
+  24 hours. Claims hold no notification text, source or link. Claims from another
+  account are ignored, and reset or logout clears them.
+- **Higher revisions:** a higher revision can still toast once.
+- **Burst summaries:** a summary counts only the revisions this tab claimed.
+- **Storage unavailable:** the tab fails open and shows its own toast, as before.
+- **Unchanged:** the bell count, list and center. Hiding a toast is still local to
+  the tab and never reads, dismisses, acknowledges or responds.
+- **Known limit:** claims dedupe only within one browser profile and origin; other
+  browsers and devices each show their own toast.
+
+Milestones 2 and 4 remain open.
+
 Worker checkpoint (issue #687): a bounded milestone-2 increment retains arrival
 records for the existing `history_days` setting. The leader's hourly cleanup calls
 `prune_arrivals`, which deletes only the oldest contiguous prefix of sequenced
@@ -3638,6 +3978,29 @@ recovers or authorizes anything.
 Known limit: if no worker runs, no coordinator publishes, so the Workers page
 remains authoritative. Controller web instances, endpoint agents and GCP nodes are
 not covered by this producer.
+
+Implementation checkpoint (issue #731): failed server-changing operations now publish a
+milestone-1 failure/recovery producer. When an operator-initiated `patch`, `repository`,
+`key`, `repair`, `release-upgrade` or `agent-update` job ends `failed`, including a
+verified rollback, it publishes source `operations`, subject type `operation` and kind
+equal to the action. There is one event per server and action, with operator
+visibility, medium severity and a link to `#activity/jobs/<id>`. The publish happens in
+the same transaction that records the job state.
+
+- A later failure of the same action adds a revision linking the newest operation, so
+  it is unread again.
+- A later successful run resolves the event. A success with no active event publishes
+  nothing.
+- Scheduled patch runs are excluded because the `scheduled patching` alert already
+  covers them. `recovery_required` jobs are excluded because the `recovery` alert
+  covers them. Read-only and other actions publish nothing.
+- Reasons use fixed wording only. Job output and errors stay on the escaped
+  operation page.
+- A notification error is logged inside a savepoint and never changes the job's
+  recorded outcome.
+- Notifications never retry, reconcile, acknowledge or authorize anything.
+
+Milestones 2–4 remain open.
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -7123,6 +7486,21 @@ updates, reconcile provider invoices, add provider-derived billing truth or comp
 the remaining multi-controller/reset acceptance. Final delivery still requires the
 coordinator's exact-head full test matrix and fresh code scan.
 
+### Date-independent capped-AI tests — worker checkpoint #741
+
+The capped-admission test suite no longer depends on the wall clock falling inside the
+bundled price catalog's reviewed window. A shared autouse test fixture
+(`tests/pricing_catalog.py`, wired in `tests/conftest.py`) patches
+`ai_pricing.VERIFIED_AT`/`EXPIRES_AT` for each test to a window that covers both the
+bundled reviewed window and the real clock. Expiry, staleness and lifecycle-alert tests
+already derive their clocks from those attributes, so they still exercise the exact
+boundaries. Tests can opt out with the `bundled_pricing_catalog` marker.
+
+Runtime catalog dates, expiry semantics and fail-closed capped admission are unchanged;
+refreshing prices remains a separate reviewed source change. A regression guard checks
+that the real expired catalog still refuses capped admission and that the pinned window
+admits the same reservation after the bundled expiry.
+
 ### Compose memory bounding — partial #201 checkpoint
 
 The production Compose `app`, `worker` and `caddy` services set `mem_limit` with
@@ -7475,6 +7853,25 @@ also still required before delivery.
 ### Mark shown notifications read — worker checkpoint #715
 
 The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
+
+### Shared AI start gates in the worker status card — worker checkpoint #727
+
+The administrator Investigations page now reads the #546 snapshot and shows a
+**Shared AI start gates** card next to the AI worker status. It shows whether the
+global gates are open, each blocker's fixed message and next eligible time, and
+whether a reset time is only a recheck boundary. It also shows the overall next
+eligible start, or that an indefinite hold (disabled or incomplete configuration)
+has no automatic next start. The snapshot's limitations are always listed, so an
+open gate is never presented as a guarantee that a call will start.
+
+The card loads independently of the queue status and investigation list. A
+failed or malformed snapshot shows a recoverable notice with a retry control,
+and a superseded response is discarded. Viewers never request the
+administrator-only route. This is display-only: admission, spend, pause,
+lifecycle and response authorization are unchanged. A browser regression covers
+the open, finite, indefinite, failure/retry, malformed/escaped and viewer cases,
+with 320/768/1440 px renders. Settings and AI-activity placement, a per-call
+preview and full queue/spend dashboard acceptance remain open.
 
 ### Batched outbound AI pause-policy reads — worker checkpoint #573
 

@@ -1,3 +1,109 @@
+## 1.59.73 — 2026-11-13
+
+1. [PR #760](https://github.com/StealthCat/MrPatchy/pull/760): Fixed: on MySQL/MariaDB with parallel triage workers, a second AI contradiction of the same fleet known-good candidate no longer discards its completed medium/high verdict and re-bills the provider. The contradiction path now re-reads the candidate under its row lock. A candidate that is already revoked or missing is left untouched, so the first contradiction or revocation remains the single record and audit event, and the verdict is saved. A still-active candidate is revoked whatever its version. The administrator revoke path keeps its strict version and already-revoked checks. Fixes #759.
+2. Compatibility and limits: no API, schema or configuration change. A racing contradiction now succeeds quietly instead of erroring and being retried. The regression tests interleave deterministically and do not run real parallel threads. This source update does not publish a Docker image.
+
+## 1.59.72 — 2026-11-13
+
+1. [PR #745](https://github.com/StealthCat/MrPatchy/pull/745): Administrators get a medium-severity in-app notification, linking to the server's Maintenance tab, when a distribution-upgrade release plan is ready for its GO/no-go decision. A plan qualifies when it is ready, has no blockers, its sealed expiry has not passed, and its server is enabled and not deleted. Revisions are bound to the frozen plan digest, so a regenerated plan resurfaces as unread. GO, no-go, expiry, regeneration and server removal each publish exactly one resolved revision with a fixed reason. AI review text, configuration content and paths are never copied. Fixes #743.
+2. Compatibility and limits: an additive notification producer. It approves, declines or runs nothing, and makes no schema change. This source update does not publish a Docker image.
+
+## 1.59.71 — 2026-11-12
+
+1. [PR #740](https://github.com/StealthCat/MrPatchy/pull/740): Administrators get an advance, low-severity in-app warning, linking to AI Settings, when counted shared daily AI spend reaches 80% of the cap. Counted spend is the same conservative total admission uses. The warning records the counted and remaining amounts, threshold, cap, budget day and next reset as of when it was raised. Its revision is bound to the window and cap, so later reservations in the same window cause no unread churn. It resolves when the cap is reached, at which point the existing exhausted notification takes over. It also resolves when the window resets, the cap is raised, the mode becomes uncapped or AI is disabled. Closes #739.
+2. Compatibility and limits: an additive notification within the existing cap producer, with no change to admission or schema. Amounts in the warning are a snapshot; Settings shows current totals. This source update does not publish a Docker image.
+
+## 1.59.70 — 2026-11-12
+
+1. [PR #738](https://github.com/StealthCat/MrPatchy/pull/738): **Activity → Workers** gains an administrator-only **Endpoint agents** section showing fleet-wide endpoint-agent health. Each agent shows the deployment type its verification receipt actually proves. It is backed by the admin-only, paginated `GET /api/operations/agents`, which returns rows worst-first with counts by health, freshness thresholds and coverage gaps. It reads retained agent-status receipts and telemetry collection times in batches of up to 500 for enabled, non-deleted servers. Classification is pure, and the endpoint never runs inspection, queues work, writes settings or changes authorization. Closes #737.
+2. Compatibility and limits: an additive read-only API and UI section, with no schema change. Health reflects retained receipts and freshness, not a live probe. This source update does not publish a Docker image.
+
+## 1.59.69 — 2026-11-12
+
+1. [PR #736](https://github.com/StealthCat/MrPatchy/pull/736): In daily-cap modes, a saved model that the bundled price catalog cannot price, or a catalog that is not valid, is now reported in advance instead of surfacing as a stream of generic blocked retries. A new pure `ai_pricing.model_status()` performs the same alias-aware check that `reservation()` applies, using the same fixed reason. While AI is enabled with a cap mode and a saved model, `GET /api/settings/ai-control-status` adds an indefinite `pricing` blocker with fixed text that omits the model ID, so `can_start_now` is false and there is no next start. Administrators also get an in-app notification while that blocker lasts, resolved once pricing is possible again. Closes #735.
+2. Compatibility and limits: an additive status blocker and notification, with no change to admission, pricing data or schema. `ok` never promises admission, because tier, tools, output bound and context size are still checked per call. Disabled AI reports only the existing disabled gate. This source update does not publish a Docker image.
+
+## 1.59.68 — 2026-11-12
+
+1. [PR #757](https://github.com/StealthCat/MrPatchy/pull/757): Fix workers and the embedded scheduler without `MRPATCHY_WORKER_ID` registering under a new random ID on every start, which produced duplicate registrations and false missing or stale entries after restarts and upgrades. Each runtime now generates an identity once and keeps it in a per-role slot under `DATA_DIR/worker-identities/`. The existing cross-process identity lock decides slot ownership, so replicas sharing a data volume get distinct identities and a restarted process reclaims a free slot. An explicit `MRPATCHY_WORKER_ID` still takes precedence. Unreadable, invalid or exhausted slots, and unavailable storage, fall back to a boot-only identity with a warning. Fixes #754.
+2. Compatibility and limits: no schema, API or UI change. On its first post-upgrade start, each unconfigured runtime registers once more under its new persistent ID. Earlier random-ID registrations, and those from scaled-down slots, remain as stale history and are not removed automatically (#755). Workers on other machines with their own data directories get their own identities. This source update does not publish a Docker image.
+
+## 1.59.67 — 2026-11-12
+
+1. [PR #734](https://github.com/StealthCat/MrPatchy/pull/734): Administrators get one in-app notification, linking to Investigations, while process investigations are blocked by a non-transient AI provider failure under the current model and key. Examples are a rejected key, unavailable quota and an unsupported model. Alert collection uses the same blocked predicate as the AI status, so items blocked under an earlier configuration are not counted. Revisions are bound to a re-hashed configuration digest, not counts, so a newly rejected configuration resurfaces as unread. The payload is fixed text with no provider message, key or evidence. The event resolves when nothing remains blocked and reopens on recurrence. Closes #733.
+2. Compatibility and limits: a read-only producer that never retries, unblocks, reserves spend or changes authorization, and adds no SMTP/webhook alert or schema change. This source update does not publish a Docker image.
+
+## 1.59.66 — 2026-11-12
+
+1. [PR #732](https://github.com/StealthCat/MrPatchy/pull/732): A failed operator-initiated patch, repository change, signing-key change, package repair, OS release upgrade or agent update now raises an operator-visible, medium-severity in-app notification linking to the job in Activity. Previously it appeared only in Activity. There is one event per server and action. A repeat failure adds an unread revision linking the newest job, and a later successful run of the same action resolves it. Scheduled patch runs and `recovery_required` jobs, which existing alerts already cover, publish nothing, and neither do cancelled jobs, read-only actions or jobs for deleted servers. Reasons use fixed wording, so job output never enters the payload. Publishing runs in the transaction that records the final job state, and a notification error is contained in a savepoint without changing the outcome. Closes #731.
+2. Compatibility and limits: an additive notification producer with no schema, API or role change. It retries, acknowledges and authorizes nothing. This source update does not publish a Docker image.
+
+## 1.59.65 — 2026-11-12
+
+1. [PR #730](https://github.com/StealthCat/MrPatchy/pull/730): When one account has several Mr Patchy tabs open, each new high or critical notification revision shows its toast in only one tab.
+   - Tabs claim admitted revisions in `localStorage`, bound to the signed-in user. The check-and-claim is atomic across tabs where the Web Locks API is available and best-effort otherwise.
+   - A tab fails open and shows its own toasts if storage or locks fail.
+   - Claims are bounded to 500 entries kept for 24 hours, hold no notification text, source or link, and are removed at logout.
+   - A higher revision can still toast once, and burst summaries count only the tab's own claims.
+   - Closes #729.
+2. Compatibility and limits: a client-only change to toast admission, with no API or schema change. Without Web Locks, simultaneous claims across tabs are best-effort. This source update does not publish a Docker image.
+
+## 1.59.64 — 2026-11-12
+
+1. [PR #728](https://github.com/StealthCat/MrPatchy/pull/728): The administrator Investigations page shows a **Shared AI start gates** card below the AI worker status, read from the existing `GET /api/settings/ai-control-status`.
+   - When the gates are open, it says so with the snapshot's limitations and never promises that a particular call will start.
+   - When blocked, it lists each blocker with its next eligible time, a reset recheck boundary marked as not a promised start, or a statement that an administrator must act. It also shows the overall next eligible start, or that there is none while an indefinite hold applies.
+   - An unavailable snapshot shows a retryable notice and is never shown as permission to start.
+   - Closes #727.
+2. Compatibility and limits: a client-only, administrator-only card using an existing API, with no API, schema or admission change. This source update does not publish a Docker image.
+
+## 1.59.63 — 2026-11-12
+
+1. [PR #726](https://github.com/StealthCat/MrPatchy/pull/726): Add a pure CVE-exploitation containment eligibility contract (`app/cve_containment.py`). It decides whether one exploitation detection may automatically quarantine the artifact and/or terminate the process under a per-CVE policy, with modes `disabled`, `monitor_only` and `enforce`, bounded thresholds and exclusions.
+   - `confirmed_exploitation` requires all of:
+     - an authenticated, fresh rule that names the CVE and matched the exact artifact hash at sufficient confidence;
+     - a fresh, server-bound applicability assessment of `affected` (or `uncertain` only with opt-in);
+     - distinct supporting evidence kinds bound to the same server, evidence revision and artifact.
+   - A vulnerable version, advisory or CVSS score is never exploitation evidence on its own. AI enrichment is ignored, and AI availability cannot affect the decision.
+   - Quarantine and termination reuse the malware-containment identity checks from #683.
+   - Malformed input fails closed.
+   - Closes #725.
+2. Compatibility and limits: an unwired contract only. No detector, policy storage, executor, API, UI or schema change, and no response action is authorized at runtime. This source update does not publish a Docker image.
+
+## 1.59.62 — 2026-11-12
+
+1. [PR #724](https://github.com/StealthCat/MrPatchy/pull/724): Add a pure startup mechanism catalog and coverage contract (`app/startup_catalog.py`). It catalogs 26 mechanisms, each with a stable ID, label, trigger, scope, parse level and per-family locations:
+   - cron, anacron and at;
+   - systemd system, generated, transient and user units, generators and hooks;
+   - SysV and rc.local;
+   - shell startup files, XDG autostart, SSH rc hooks and `authorized_keys` commands;
+   - PAM, MOTD and X session hooks;
+   - network, logrotate and package-manager hooks;
+   - udev, ld.so preload and search paths, and module loading.
+
+   Only the cron mechanisms claim entry-level parsing, matching the parsers on main. Every result carries a `catalog_not_exhaustive` gap, and an administrator-configurable additional scope is supported. Closes #723.
+2. Compatibility and limits: an unwired contract for a later collection and view slice. No collection, schema, API or UI change. This source update does not publish a Docker image.
+
+## 1.59.61 — 2026-11-12
+
+1. [PR #742](https://github.com/StealthCat/MrPatchy/pull/742): Fix capped-AI tests depending on the wall clock being inside the bundled price catalog's validity window. CI on main and on every PR would otherwise have started failing at 2026-11-26 00:00 UTC, when the catalog expires. An autouse test fixture now pins a catalog window that covers both the bundled reviewed window and the current clock. Tests marked `bundled_pricing_catalog` opt out. A regression guard confirms that the source constants are unchanged and that a genuinely expired catalog still refuses capped admission without a ledger row. Fixes #741.
+2. Compatibility and limits: test-suite change only. Runtime behaviour is unchanged, and the bundled catalog's expiry still fails closed in production. This source update does not publish a Docker image.
+
+## 1.59.60 — 2026-11-12
+
+1. [PR #722](https://github.com/StealthCat/MrPatchy/pull/722): Add a pure startup-entry provenance contract (`app/startup_provenance.py`). It classifies one startup file and its entries (crontab, anacrontab, systemd unit, drop-in or override, SysV script or `rc.local`) as `verified_default`, `modified`, `unverifiable`, `custom` or `unknown`. Each result carries its basis, verification strength, explicit gaps, a separate baseline field and `safety: not_assessed`. Package ownership or a match against the target's own package database alone is never `verified_default`. Evidence for another package or version is recorded as a gap. Entries in a modified file are classified individually, and default entries whose execution context is unverified or changed are reported as modified. Closes #720.
+2. Compatibility and limits: an unwired contract only. It feeds later wiring of the startup parsers, which still report provenance as `not_assessed`. No collection, schema, API or UI change, and provenance is not a safety verdict. This source update does not publish a Docker image.
+
+## 1.59.59 — 2026-11-12
+
+1. [PR #718](https://github.com/StealthCat/MrPatchy/pull/718): Add a pure, I/O-free SysV contract (`app/sysv_init.py`) that turns captured SysV boot material into typed, bounded records.
+   - `parse_init_script()` reports the interpreter, execute bit, full-text SHA-256 and size, and the LSB `INIT INFO` fields, never the script body.
+   - `parse_rc_links()` resolves start and stop links, with their order numbers, from captured runlevel directories.
+   - `effective_services()` reports enabled runlevels, start orders, orphan links, and observations (not verdicts) such as start and stop links in one runlevel, links that differ from LSB defaults, and start links to non-executable scripts.
+   - `parse_rc_local()` returns bounded logical commands with digests, background flags, and the top-level `exit` with the commands after it flagged. An `exit` inside a conditional, loop or function is not treated as top-level, and invalid text becomes a gap instead of an error.
+   - Closes #717.
+2. Compatibility and limits: an unwired contract only. No collection, schema, API or UI change. Native collection, inventory wiring and provenance remain open in roadmap F. This source update does not publish a Docker image.
+
 ## 1.59.58 — 2026-11-12
 
 1. [PR #721](https://github.com/StealthCat/MrPatchy/pull/721): The notification bell panel shows a live-update status line and the last synchronization time.

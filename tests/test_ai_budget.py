@@ -642,3 +642,109 @@ def test_released_rows_and_headroom_do_not_notify_and_viewers_cannot_see_it(admi
         assert event.id in {item['id'] for item in notifications.list_for_user(session, 'admin')}
         assert notifications.list_for_user(session, 'viewer')==[]
         assert notifications.unread_count(session, 'viewer')==0
+
+
+def warning_event(session):
+    return session.query(notifications.NotificationEvent).filter_by(source='ai-budget', kind='daily-cap-warning').one_or_none()
+
+
+def test_nearing_daily_cap_warns_once_per_window_and_hands_over_at_exhaustion(admin):
+    configure(mode='rate_and_daily', cap=Decimal('1'))
+    ledger('0.79')
+    ledger('2', status='released')
+    operations.collect_alerts(DAY+120)
+    with Session() as session:
+        assert warning_event(session) is None and cap_event(session) is None
+    ledger('0.01', status='uncertain')
+    operations.collect_alerts(DAY+180)
+    with Session() as session:
+        event=warning_event(session);revision=cap_revision(session, event)
+        assert event.revision==1 and event.minimum_role=='admin' and event.host_id==''
+        assert revision.lifecycle=='active' and revision.severity=='low'
+        assert revision.deep_link=='#settings/ai'
+        assert 'reached $0.8 of the shared daily cap of $1 (UTC day), at least 80% of the cap' in revision.reason
+        assert 'leaving $0.2 before the reset' in revision.reason
+        first_reason=revision.reason
+        assert '2026-11-01T00:00:00Z' in revision.reason and 'not a provider invoice' in revision.reason
+        assert cap_event(session) is None
+        notifications.mark_read(session, 'admin', event.id, event.revision, now=DAY+200)
+        session.commit()
+    # Further spend below the cap in the same window is not a new observation.
+    ledger('0.1', status='sent')
+    operations.collect_alerts(DAY+240)
+    with Session() as session:
+        event=warning_event(session)
+        assert event.revision==1 and cap_revision(session, event).reason==first_reason
+        assert notifications.unread_count(session, 'admin')==0
+        assert not session.query(operations.Alert).filter(operations.Alert.kind.like('%cap%')).count()
+    # Reaching the cap resolves the warning; only the exhausted notification is active.
+    ledger('0.1')
+    operations.collect_alerts(DAY+300)
+    operations.collect_alerts(DAY+360)
+    with Session() as session:
+        event=warning_event(session)
+        assert event.revision==2 and cap_revision(session, event).lifecycle=='resolved'
+        assert cap_revision(session, cap_event(session)).lifecycle=='active'
+    # A new window that crosses the threshold warns again as unread.
+    ledger('0.85', created=DAY+86400+100, reset=DAY+2*86400)
+    operations.collect_alerts(DAY+86400+130)
+    with Session() as session:
+        event=warning_event(session);revision=cap_revision(session, event)
+        assert event.revision==3 and revision.lifecycle=='active'
+        assert '2026-11-02T00:00:00Z' in revision.reason
+        assert cap_revision(session, cap_event(session)).lifecycle=='resolved'
+
+
+@pytest.mark.parametrize('change', ['reset', 'raise_cap', 'rate_mode', 'unthrottled', 'disabled'])
+def test_cap_warning_resolves_when_spend_no_longer_nears_the_cap(admin, change):
+    configure(mode='daily_cap', cap=Decimal('1'))
+    ledger('0.9')
+    operations.collect_alerts(DAY+120)
+    now=DAY+180
+    if change=='reset':now=DAY+86400+10
+    elif change=='raise_cap':configure(mode='daily_cap', cap=Decimal('2'))
+    elif change=='rate_mode':configure(mode='rate')
+    elif change=='unthrottled':configure(mode='unthrottled')
+    else:
+        with Session() as session:
+            row=session.get(Setting, 'config');row.value={**row.value, 'ai_enabled': False};session.commit()
+    operations.collect_alerts(now)
+    operations.collect_alerts(now+60)
+    with Session() as session:
+        event=warning_event(session)
+        assert event.revision==2 and cap_revision(session, event).lifecycle=='resolved'
+        assert cap_event(session) is None
+
+
+@pytest.mark.parametrize('mode,enabled', [
+    ('rate',True),('unthrottled',True),('legacy',True),('daily_cap',False),('rate_and_daily',False),
+])
+def test_uncapped_or_disabled_modes_never_create_cap_warning(admin, mode, enabled):
+    configure(mode=mode, cap=Decimal('1'))
+    with Session() as session:
+        row=session.get(Setting, 'config');row.value={**row.value, 'ai_enabled': enabled};session.commit()
+    ledger('0.9', status='settled')
+    operations.collect_alerts(DAY+120)
+    with Session() as session:
+        assert warning_event(session) is None
+
+
+def test_cap_warning_is_admin_only_and_does_not_change_admission(admin, monkeypatch):
+    from app.identity import User
+    with Session() as session:
+        session.add(User(username='viewer', password='x', role='viewer'))
+        session.add(User(username='operator', password='x', role='operator'));session.commit()
+    configure(mode='daily_cap', cap=Decimal('1'))
+    ledger('0.85')
+    with Session() as session:
+        before=ai_budget.status(session, DAY+120)
+    operations.collect_alerts(DAY+120)
+    with Session() as session:
+        event=warning_event(session)
+        assert event.id in {item['id'] for item in notifications.list_for_user(session, 'admin')}
+        for user in ('viewer', 'operator'):
+            assert notifications.list_for_user(session, user)==[]
+            assert notifications.unread_count(session, user)==0
+        after=ai_budget.status(session, DAY+120)
+        assert before==after
+        assert session.query(ai_budget.BudgetEntry).count()==1

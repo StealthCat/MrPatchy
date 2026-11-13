@@ -481,6 +481,70 @@ def test_incomplete_or_contextually_different_result_does_not_invalidate_candida
         assert s.get(known_good.Entry,published['fingerprint']).active
 
 
+def contradicting(id,host):
+    return retained(id,host,'behavior-'+host,complete(),{
+        'risk':'high','explanation':'Unsafe with complete evidence',
+        'recommended_checks':'Review the retained evidence','requested_checks':[]})
+
+
+def test_concurrent_contradiction_after_unlocked_lookup_is_idempotent(client,monkeypatch):
+    """#759: a second contradiction racing the first must not abort its verdict save."""
+    source=retained()
+    with Session() as s:
+        s.add(source);published=known_good.publish(s,source);s.commit()
+    first=contradicting('11111111-1111-1111-1111-111111111111','host-two')
+    second=contradicting('22222222-2222-2222-2222-222222222222','host-three')
+    original,done=known_good.lookup,[]
+    def interleaved(s,*args,**kwargs):
+        hit=original(s,*args,**kwargs)
+        if not done:
+            done.append(True)
+            # The first worker commits its contradiction between the second
+            # worker's unlocked lookup and its row lock.
+            with Session() as other:
+                other.add(first);known_good.invalidate_contradiction(other,first);other.commit()
+        return hit
+    monkeypatch.setattr(known_good,'lookup',interleaved)
+    with Session() as s:
+        assert known_good.invalidate_contradiction(s,second) is None
+        s.add(second);s.commit()
+    with Session() as s:
+        entry=s.get(known_good.Entry,published['fingerprint'])
+        events=s.scalars(select(Audit).where(
+            Audit.action=='invalidate contradicted known-good candidate')).all()
+        assert s.get(ai_assessments.Assessment,second.id) is not None
+    assert done and not entry.active
+    assert entry.revoked_by=='assessment:'+first.id
+    assert len(events)==1 and first.id in events[0].detail
+
+
+def test_contradiction_revokes_active_candidate_whatever_its_version(client,monkeypatch):
+    source=retained()
+    with Session() as s:
+        s.add(source);published=known_good.publish(s,source);s.commit()
+    original=known_good.lookup
+    monkeypatch.setattr(known_good,'lookup',lambda *args,**kwargs:{
+        **original(*args,**kwargs),'version':published['version']+1})
+    row=contradicting('33333333-3333-3333-3333-333333333333','host-two')
+    with Session() as s:
+        revoked=known_good.invalidate_contradiction(s,row);s.commit()
+    with Session() as s:
+        entry=s.get(known_good.Entry,published['fingerprint'])
+    assert revoked['active'] is False and not entry.active
+    assert entry.revoked_by=='assessment:'+row.id
+
+
+def test_admin_revoke_keeps_strict_version_and_already_revoked_checks(client):
+    source=retained()
+    with Session() as s:
+        s.add(source);published=known_good.publish(s,source);s.commit()
+        with pytest.raises(ValueError,match='version changed'):
+            known_good.revoke(s,published['fingerprint'],published['version']+1,'admin','Reason')
+        known_good.revoke(s,published['fingerprint'],published['version'],'admin','Reason')
+        with pytest.raises(ValueError,match='already revoked'):
+            known_good.revoke(s,published['fingerprint'],published['version'],'admin','Reason')
+
+
 def test_contradiction_link_is_exposed_only_after_exact_identity_revalidation(client):
     source=retained();changed=complete()
     changed['investigation']['details']['known_good_context']['configuration']['manifest_sha256']=sha('0')

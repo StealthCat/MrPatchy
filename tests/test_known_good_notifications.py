@@ -97,6 +97,42 @@ def test_rolled_back_contradiction_publishes_nothing(client):
         assert revisions(s) == []
 
 
+def test_concurrent_contradiction_after_unlocked_lookup_publishes_once(client, monkeypatch):
+    """A contradiction that finds the candidate already revoked under the row
+    lock (#759 idempotency) changes nothing and must announce nothing."""
+    source = retained()
+    with Session() as s:
+        s.add(source)
+        published = known_good.publish(s, source)
+        s.commit()
+    first = contradicting('high')
+    second = retained('44444444-4444-4444-4444-444444444444', 'host-three', 'behavior-three',
+                      complete(), {'risk': 'medium', 'explanation': 'Also unsafe',
+                                   'recommended_checks': 'Review evidence', 'requested_checks': []})
+    original, done = known_good.lookup, []
+
+    def interleaved(s, *args, **kwargs):
+        hit = original(s, *args, **kwargs)
+        if not done:
+            done.append(True)
+            with Session() as other:
+                other.add(first)
+                assert known_good.invalidate_contradiction(other, first)
+                other.commit()
+        return hit
+
+    monkeypatch.setattr(known_good, 'lookup', interleaved)
+    with Session() as s:
+        assert known_good.invalidate_contradiction(s, second) is None
+        s.add(second)
+        s.commit()
+    with Session() as s:
+        assert done and not s.get(known_good.Entry, published['fingerprint']).active
+        rows = revisions(s)
+        assert len(rows) == 1
+        assert rows[0].subject_revision.endswith(CONTRADICTION_ID)
+
+
 def test_administrator_revocation_is_not_notified(admin):
     source = retained()
     with Session() as s:
