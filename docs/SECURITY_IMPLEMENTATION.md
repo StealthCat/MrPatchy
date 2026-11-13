@@ -3198,9 +3198,7 @@ unit carries an origin class (vendor location, overridden, custom, runtime,
 generated or transient), and `package_verified` is always false. Uncollected search
 directories, unreadable, oversized or malformed input, invalid names, unresolved,
 dangling or foreign links, missing trigger targets and over-cap input all become
-explicit coverage gaps. The result carries a deterministic digest. Runtime unit
-state, per-user units, specifier expansion, read-only collection wiring, package
-provenance, UI and AI classification remain open, so roadmap F is not complete.
+explicit coverage gaps. The result carries a deterministic digest. Runtime unit state, read-only collection wiring, package provenance, UI and AI classification remain open, so roadmap F is not complete. Fixed systemd specifiers are covered by the #702 checkpoint below; host/boot/environment-dependent specifiers and `$VAR` substitution remain explicit gaps.
 
 Worker checkpoint (issue #702, per-user units): the same contract adds
 `resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
@@ -3219,10 +3217,29 @@ as `declared_user`, a different value is a `user_unit_declared_user` gap, and
 An invalid home, runtime directory or account, or a runtime directory that would
 coincide with a system user directory, is an explicit gap; its directories are omitted.
 System units outside the user table are `outside_search_path` gaps.
-System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering
-and runtime state, specifier expansion, enumerating accounts, collection wiring,
-UI and AI classification remain open.
+System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering and runtime state, host/boot/environment-dependent specifiers, `$VAR` substitution, enumerating accounts, collection wiring, UI and AI classification remain open.
 
+
+Worker checkpoint (issue #702, specifier expansion): contract version 2 adds a
+bounded `expanded` view of `Exec*`, `User=`, `Group=`, `WorkingDirectory=`,
+`RootDirectory=` and `EnvironmentFile=` to every non-template unit. Raw `config`,
+`exec` and `account` are unchanged. Name specifiers `%n %N %p %P %i %I %j %J %f %%`
+follow `systemd.unit(5)`, including unescaping for `%P %I %J %f`. An alias record
+uses its canonical name. Manager specifiers are expanded only where the scope fixes
+their value. For the system manager these are `%u`=root, `%U`=0, `%g`=root, `%G`=0,
+`%h`=/root, `%s`=/bin/sh, `%t`=/run, `%S`=/var/lib, `%C`=/var/cache, `%L`=/var/log
+and `%E`=/etc. For a user manager they are `%u` (the account), `%h` (home), `%t`
+(runtime directory), `%E` (~/.config) and `%C` (~/.cache). Every other specifier stays
+raw and becomes an `unexpanded_specifier` gap that names the letters. That covers
+host and boot identity, `%T`/`%V` (which depend on the environment), the user
+manager's `%U`/`%G`/`%g`/`%s`, `%S`/`%L` (whose values changed between systemd
+releases), unknown letters and a trailing `%`. A value with any such specifier is
+never partially expanded. System `%u`/`%U`/`%h`/`%s` follow current
+`systemd.unit(5)`, where they name the manager's user rather than `User=`. Older
+systemd releases resolved them from `User=`, and the collector does not yet record
+the systemd version, so this is listed as a limitation. Each record states `specifiers` as `none`, `expanded`,
+`partial` or `not_applicable` (templates). `$VAR` environment substitution,
+non-default XDG variables, collection wiring, UI and AI classification remain open.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 

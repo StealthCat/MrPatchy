@@ -1,3 +1,7 @@
+## 1.59.86 — 2026-11-13
+
+1. [PR #789](https://github.com/StealthCat/MrPatchy/pull/789): The pure systemd unit contract now provides a bounded expanded view for fixed unit-name and manager specifiers in commands, accounts and paths. Host, boot and environment-dependent specifiers remain raw as coverage gaps; raw configuration is unchanged. Contract version 2 changes the record digest. No collection, UI, schema or response-authorization behavior changes. The systemd version is not collected, so legacy specifier semantics may differ; collection wiring and UI remain open under #702.
+
 ## 1.59.85 — 2026-11-13
 
 1. [PR #784](https://github.com/StealthCat/MrPatchy/pull/784): Operations advisory matches now show per-server applicability as Affected, Fixed, Not affected or Uncertain using the server's distribution, source package and installed version. The dialog shows escaped status details and counts while retaining raw results; failures and lookups beyond the bounds remain Uncertain, not safe. Closes #783.
