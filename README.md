@@ -925,11 +925,25 @@ does not remove registration history, drain a worker or stop a process.
 The expected inventory is independent of registration pagination. Missing means no
 matching registration, not a verified stopped process. Stale clocks, stopped reports,
 version mismatches and drain states remain explicit. Invalid configuration shows an
-error instead of silently treating the deployment as complete. Empty configuration
-means expectations are not configured; it does not mean all workers are present.
+error instead of silently treating the deployment as complete. When the variable is
+unset, the page infers expected workers from up to 500 retained registrations,
+counting each identity once. A stale, stopped or unknown worker therefore stays
+expected and flagged, and with no registrations the page shows zero expected. The page
+labels which source it used. Administrators can remove an obsolete stale, stopped or
+heartbeat-less registration after confirmation. Removal is audited and refused while a
+process still holds that worker identity. It keeps a pending drain unless the worker
+reported a graceful stop, and it neither edits configuration nor stops a process.
+Expected-worker notifications still come only from an explicit
+`MRPATCHY_EXPECTED_WORKER_IDS`.
 This remains worker-only self-report inventory, with readiness not assessed.
-Controller, endpoint-agent and GCP-node coverage, alerts and remote deployment
-acceptance remain planned. Rebuild the controller and keep worker versions matched.
+Controller web instances are listed separately. When `MRPATCHY_EXPECTED_CONTROLLER_IDS`
+is set, each listed controller that is missing, stale, stopped, has an invalid or
+unrecognized report, or runs a different version raises one administrator-only
+in-app notification, which resolves
+when it reports again. An invalid setting raises its own notification. These
+notifications grant no readiness, failover or response authority. Endpoint-agent
+resource metrics and readiness, GCP-node inventory and remote deployment acceptance
+remain planned. Rebuild the controller and keep worker versions matched.
 
 
 ### Worker controller/key startup gate (v0.13.0)

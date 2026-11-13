@@ -3568,6 +3568,27 @@ than once per server. The view never inspects, repairs or authorizes anything.
 Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
 unified dashboard acceptance remain open.
 
+### Expected-controller health notifications — worker checkpoint #761
+
+On the elected coordinator's tick, after the expected-worker producer, each
+controller configured in `MRPATCHY_EXPECTED_CONTROLLER_IDS` that is `missing`,
+`stale` or `stopped` (high), or `unknown` or `version_mismatch` (medium),
+publishes one admin-only `deployment` / `controller-health` notification linked to
+Activity → Workers. The subject revision is the classified state, so unchanged
+passes publish nothing and a state change resurfaces even after it was read.
+Reasons are fixed text built from the configured identity and the classification;
+reported registration values are never copied. Recovery to `reporting`, or removing
+the identity from the configuration, resolves the event. An invalid configuration
+publishes a separate `controller-expectation` event and leaves earlier controller
+events untouched, because removal cannot be proven. One freshness window of startup
+grace suppresses new attention while co-started controllers register; resolutions
+always apply. A failure is logged and never stops the coordinator tick. Version
+comparison uses the coordinator process's source version. Notifications are
+attention only: they assess no HTTP/TLS readiness, grant no failover, serving or
+response authority, and read/dismiss stays separate from acknowledgement. Still
+planned for this requirement: endpoint-agent resource metrics and readiness,
+GCP-node inventory, HTTPS/Caddy checks and unified dashboard acceptance.
+
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
 Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint below.
