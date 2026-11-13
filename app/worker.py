@@ -785,8 +785,21 @@ def _explain_known_good_miss(missed,model,policy_hashes):
             explained=known_good.explain_miss(read,missed['evidence'],model,policy_hashes,
                 refresh=missed['refresh'],changed=missed['changed'])
     except Exception:
-        log.warning('Known-good miss diagnostic unavailable',exc_info=True);return
+        log.warning('Known-good miss diagnostic unavailable',exc_info=True)
+        _count_known_good_lookup(None)
+        return
+    _count_known_good_lookup(explained['code'])
     ai_runs.event('known_good_lookup',explained['message'])
+
+def _count_known_good_lookup(code):
+    """Durably count one cache miss outcome; never affects the investigation."""
+    from . import known_good_lookups
+    outcome=code if code in known_good_lookups.MISSES else known_good_lookups.UNCLASSIFIED
+    try:
+        with Session() as write:
+            known_good_lookups.record(write,outcome);write.commit()
+    except Exception:
+        log.warning('Known-good lookup counter unavailable',exc_info=True)
 
 def _assess_active_behavior(s,row,cfg,secret):
     from . import ai_assessments,ai_claims,known_good,triage_notifications
@@ -819,6 +832,12 @@ def _assess_active_behavior(s,row,cfg,secret):
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
         assessment=ai_assessments.record_reuse(write,saved,hit)
         known_good.link_reuse(write,assessment,hit)
+        from . import known_good_lookups
+        try:
+            # Counted inside the reuse transaction: a rolled-back reuse is not a hit.
+            with write.begin_nested():known_good_lookups.record(write,known_good_lookups.HIT)
+        except Exception:
+            log.warning('Known-good lookup counter unavailable',exc_info=True)
         from .file_trust import record_reuse
         record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)

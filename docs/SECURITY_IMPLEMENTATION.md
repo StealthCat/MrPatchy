@@ -2344,6 +2344,20 @@ diagnostic is logged without affecting the verdict. The events are ordinary
 pruned AI-log diagnostics. Durable miss counters, saved-call estimates and
 matched production acceptance remain open.
 
+Worker checkpoint #802 adds durable process-triage lookup counters. Table
+`ai_known_good_lookup_counts` keeps one row per UTC day and fixed outcome:
+`hit`, each miss reason above, or `miss_unclassified` when the explainer
+fails. Rows hold counts only, never evidence, identifiers or hosts, and are
+kept for 400 days independently of AI-log pruning. A hit is counted inside the
+reuse transaction; a miss is counted in a separate short write after the
+lookup. Increments are atomic across workers on SQLite and MySQL, and a failed
+counter write is logged without changing the verdict, reuse or investigation.
+The administrator-only `GET /api/ai/known-good/lookups` returns the last 30 UTC
+days by outcome, shown on demand in a **Cache lookup outcomes** panel in fleet
+AI logs. Startup-provenance lookups are not counted. Lookup, publication,
+revocation, pause, budget, role, approval and response boundaries are
+unchanged. Matched production acceptance remains open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless

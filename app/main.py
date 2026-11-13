@@ -1096,6 +1096,13 @@ def known_good_summary(user=Depends(admin_user)):
         return known_good.summary(s)
 
 
+@app.get('/api/ai/known-good/lookups')
+def known_good_lookups_summary(user=Depends(admin_user)):
+    from . import known_good_lookups
+    with Session() as s:
+        return known_good_lookups.summary(s)
+
+
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
