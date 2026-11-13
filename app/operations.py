@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_credential_notifications,ai_pricing,host_lifecycle,notifications,triage_block_notifications
+from . import ai_budget,ai_credential_notifications,ai_pricing,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -233,6 +233,7 @@ def collect_alerts(now=None):
         ai_budget.publish_cap_notification(s,cfg,now)
         # In-app only: blocked triage already shows on the Investigations status card.
         triage_block_notifications.publish(s,cfg,now)
+        scoring_block_notifications.publish(s,cfg,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine
@@ -306,6 +307,10 @@ def collect_alerts(now=None):
             if host.id in overdue_hosts:
                 count=sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in s.scalars(select(Package).where(Package.host_id==host.id,Package.candidate!='')))
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
+        # In-app only: the raw integrity alert carries endpoint text; publish fixed controller-classified wording.
+        from . import integrity_sweep_notifications
+        try:integrity_sweep_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)

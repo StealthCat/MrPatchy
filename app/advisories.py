@@ -3,6 +3,18 @@ import re
 import time
 import httpx
 from .apt import paragraphs
+from . import cve_exposure
+
+# Full OSV records are needed for range data: querybatch returns IDs only.
+MAX_DETAIL_FETCHES=200
+# Wall-clock budget for all detail fetches in one synchronous scan; later records become uncertain.
+DETAIL_FETCH_DEADLINE=60
+OSV_VULN_URL='https://api.osv.dev/v1/vulns/'
+_ADVISORY_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}')
+STATUSES=(cve_exposure.AFFECTED,cve_exposure.FIXED,cve_exposure.UNAFFECTED,cve_exposure.UNCERTAIN)
+COVERAGE=('Matching advisory IDs, not proof that unlisted packages are safe. Applicability compares the installed '
+    'source version with this distribution release\'s vendor ranges only; "affected" is version applicability, not '
+    'evidence of exploitation, and "uncertain" is never treated as safe. Review vendor advisories before selecting patches.')
 
 def ecosystem(os_release,inventory=None):
     values={}
@@ -46,5 +58,56 @@ def scan(inventory,names):
             if item.get('next_page_token'):queries[index]['page_token']=item['next_page_token'];again.append(index)
         pending=again
     if pending:raise ValueError('Advisory pagination limit exceeded; no complete result stored')
-    return {'checked':time.time(),'ecosystem':eco,'source':'https://osv.dev','results':[{**item,'vulnerabilities':v} for item,v in zip(mapped,results)],
-            'coverage':'Matching advisory IDs, not proof that unlisted packages are safe. Review vendor advisories before selecting patches.'}
+    records=_fetch_records({v.get('id') for vulns in results for v in vulns if isinstance(v,dict)})
+    summary=dict.fromkeys(STATUSES,0);items=[]
+    for item,vulns in zip(mapped,results):
+        applicability=[_applicability(v,records,eco,item['package']['name'],item['version']) for v in vulns]
+        for row in applicability:summary[row['status']]+=1
+        items.append({**item,'vulnerabilities':vulns,'applicability':applicability})
+    return {'checked':time.time(),'ecosystem':eco,'source':'https://osv.dev','results':items,'summary':summary,'coverage':COVERAGE}
+
+def _fetch_records(ids):
+    """Fetch full OSV records by ID; a missing entry or reason string means uncertain."""
+    records={};valid=sorted(i for i in ids if isinstance(i,str) and _ADVISORY_ID.fullmatch(i))
+    deadline=time.monotonic()+DETAIL_FETCH_DEADLINE
+    for index,advisory_id in enumerate(valid):
+        if index>=MAX_DETAIL_FETCHES:
+            records[advisory_id]='Advisory detail limit of '+str(MAX_DETAIL_FETCHES)+' records per scan was reached';continue
+        remaining=deadline-time.monotonic()
+        if remaining<=0:
+            records[advisory_id]='Advisory detail time budget of '+str(DETAIL_FETCH_DEADLINE)+' seconds per scan was reached';continue
+        try:
+            response=httpx.get(OSV_VULN_URL+advisory_id,timeout=min(30,remaining),follow_redirects=False)
+            response.raise_for_status();record=response.json()
+        except Exception:  # noqa: BLE001 - any retrieval failure is uncertainty, never safety
+            records[advisory_id]='Advisory detail could not be retrieved';continue
+        if not isinstance(record,dict) or record.get('id')!=advisory_id:
+            records[advisory_id]='Advisory detail did not match the requested record';continue
+        records[advisory_id]=record
+    return records
+
+def _applicability(vuln,records,eco,package,version):
+    advisory_id=vuln.get('id') if isinstance(vuln,dict) else None
+    record=records.get(advisory_id) if isinstance(advisory_id,str) else None
+    if isinstance(record,dict):
+        try:return cve_exposure.classify(record,eco,package,version)
+        except Exception:  # noqa: BLE001 - classify is total, but never let a defect read as safe
+            reason='Applicability could not be established'
+    else:reason=record or 'Advisory ID is missing or invalid'
+    return {'advisory_id':advisory_id if isinstance(advisory_id,str) and _ADVISORY_ID.fullmatch(advisory_id) else None,
+            'cve_ids':[],'status':cve_exposure.UNCERTAIN,'reason':reason,'fixed_version':None,'fix_available':False}
+
+def retained(result):
+    """Return a stored scan result with uncertainty reasons reduced to fixed text.
+
+    Results stored before #798 may contain raw comparator exception text; this
+    read-side pass keeps those records uncertain while never returning that text.
+    """
+    if not isinstance(result,dict) or not isinstance(result.get('results'),list):return result
+    items=[]
+    for item in result['results']:
+        if isinstance(item,dict) and isinstance(item.get('applicability'),list):
+            item={**item,'applicability':[{**row,'reason':cve_exposure.sanitize_reason(row.get('reason'))}
+                if isinstance(row,dict) and 'reason' in row else row for row in item['applicability']]}
+        items.append(item)
+    return {**result,'results':items}

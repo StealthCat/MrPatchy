@@ -31,6 +31,18 @@ record apply the same drop-in set. For one file name within one search
 directory, a canonical-name directory outranks an alias-name directory of the
 same specificity. An alias whose target is not the canonical name's own winning
 fragment is reported as an ``alias_target_shadowed`` gap rather than guessed.
+
+Each non-template record carries an ``expanded`` view of ``EXPAND_KEYS`` with
+systemd specifiers expanded only where their value is fixed: unit-name
+specifiers (with unescaping) and manager specifiers documented for the scope.
+Host, boot and environment-dependent specifiers are never guessed; a value
+containing one stays raw and the unit gets an ``unexpanded_specifier`` gap.
+``$VAR`` environment substitution is not performed.
+
+``resolve_user`` applies the same rules to one account's ``systemd --user``
+manager using the user search table (``user_search_paths``). Units from the
+account's own configuration/data directories have origin ``user`` and are never
+package defaults; the account owning the manager is the effective identity.
 """
 from __future__ import annotations
 
@@ -40,7 +52,7 @@ import posixpath
 import re
 from typing import Any, Iterable
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 MAX_OBSERVATIONS = 4096
 MAX_TEXT = 65536
 MAX_VALUE = 4096
@@ -85,11 +97,32 @@ SCALAR_KEYS = frozenset({
 })
 LIMITATIONS = (
     'Runtime active/inactive/failed state is not collected by this contract.',
-    'Per-user (systemd --user) search paths are not resolved by this contract.',
+    'Per-user (systemd --user) units are resolved separately by resolve_user().',
     'Package ownership and vendor-default authenticity are not verified here.',
-    'Specifier expansion (%i, %n, ...) and environment substitution are not performed.',
+    'Specifiers are expanded only in EXPAND_KEYS and only where their value is fixed; '
+    'host/boot/environment specifiers stay raw as gaps. $VAR environment substitution is not performed.',
+    'System %u/%U/%h/%s follow current systemd.unit(5) (the manager user, not User=); older '
+    'systemd releases resolved them from User=, and the collector does not record the systemd version.',
     'Only the settings named in LIST_KEYS/SCALAR_KEYS are resolved into config.',
 )
+USER_LIMITATIONS = (
+    'Runtime active/inactive/failed state and lingering are not collected by this contract.',
+    'Non-default XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CONFIG_DIRS/XDG_DATA_DIRS are not applied.',
+    'Package ownership and vendor-default authenticity are not verified here.',
+    'Specifiers are expanded only in EXPAND_KEYS and only where their value is fixed; %U, %G, %g, %s '
+    'and host/boot/environment specifiers stay raw as gaps. $VAR environment substitution is not performed.',
+    'Only the settings named in LIST_KEYS/SCALAR_KEYS are resolved into config.',
+)
+# Settings whose values get an ``expanded`` view. Raw ``config`` is never rewritten.
+EXPAND_KEYS = frozenset({
+    'ExecStart', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecStopPost', 'ExecReload',
+    'ExecCondition', 'User', 'Group', 'WorkingDirectory', 'RootDirectory', 'EnvironmentFile',
+})
+# Manager specifiers whose value systemd.unit(5) fixes for the system manager.
+SYSTEM_MANAGER_SPECIFIERS = {
+    'u': 'root', 'U': '0', 'g': 'root', 'G': '0', 'h': '/root', 's': '/bin/sh',
+    't': '/run', 'S': '/var/lib', 'C': '/var/cache', 'L': '/var/log', 'E': '/etc',
+}
 
 
 def _gap(code: str, path: str = '', detail: str = '') -> dict[str, str]:
@@ -112,8 +145,8 @@ def parse_name(name: Any) -> dict[str, Any] | None:
     }
 
 
-def _locate(path: str) -> tuple[str, str] | None:
-    for root in _ROOTS_BY_LEN:
+def _locate(path: str, roots_by_len: Iterable[str] = _ROOTS_BY_LEN) -> tuple[str, str] | None:
+    for root in roots_by_len:
         if path.startswith(root + '/'):
             return root, path[len(root) + 1:]
     return None
@@ -195,7 +228,104 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
     the search directories the collector actually enumerated; every other
     search directory is reported as an uncollected coverage gap.
     """
+    return _resolve(observations, collected_roots, SEARCH_PATHS, _ENABLEMENT_ORIGINS, [],
+                    manager_specifiers=SYSTEM_MANAGER_SPECIFIERS)
+
+
+def _valid_dir(value: Any) -> bool:
+    return (isinstance(value, str) and value.startswith('/') and value != '/' and '\x00' not in value
+            and '\n' not in value and len(value) <= 1024 and posixpath.normpath(value) == value)
+
+
+def user_search_paths(home: Any, runtime_dir: Any) -> tuple[tuple[tuple[str, str], ...], list[dict[str, str]]]:
+    """Return the user-manager search table for one account, highest first.
+
+    Follows the ``systemd --user`` table of ``systemd.unit(5)`` with default
+    ``XDG_CONFIG_HOME``/``XDG_DATA_HOME`` under ``home``, default
+    ``XDG_CONFIG_DIRS``/``XDG_DATA_DIRS`` and ``$XDG_RUNTIME_DIR`` set to
+    ``runtime_dir``. An invalid home or runtime directory omits its directories
+    and returns a gap. A directory that would coincide with another one in the
+    table is omitted and reported, never merged or guessed.
+    """
     gaps: list[dict[str, str]] = []
+    h = home if _valid_dir(home) else None
+    r = runtime_dir if _valid_dir(runtime_dir) else None
+    if h is None:
+        gaps.append(_gap('user_home_invalid', home[:512] if isinstance(home, str) else ''))
+    if r is None:
+        gaps.append(_gap('user_runtime_dir_invalid', runtime_dir[:512] if isinstance(runtime_dir, str) else ''))
+    table: list[tuple[str | None, str]] = [
+        (h and f'{h}/.config/systemd/user.control', 'user'),
+        (r and f'{r}/systemd/user.control', 'runtime'),
+        (r and f'{r}/systemd/transient', 'transient'),
+        (r and f'{r}/systemd/generator.early', 'generated'),
+        (h and f'{h}/.config/systemd/user', 'user'),
+        ('/etc/xdg/systemd/user', 'administrator'),
+        ('/etc/systemd/user', 'administrator'),
+        (r and f'{r}/systemd/user', 'runtime'),
+        ('/run/systemd/user', 'runtime'),
+        (r and f'{r}/systemd/generator', 'generated'),
+        (h and f'{h}/.local/share/systemd/user', 'user'),
+        ('/usr/local/share/systemd/user', 'local'),
+        ('/usr/share/systemd/user', 'vendor'),
+        ('/usr/local/lib/systemd/user', 'local'),
+        ('/usr/lib/systemd/user', 'vendor'),
+        ('/lib/systemd/user', 'vendor'),
+        (r and f'{r}/systemd/generator.late', 'generated'),
+    ]
+    roots = [root for root, _ in table if root]
+    duplicate = {root for root in roots if roots.count(root) > 1}
+    result = []
+    for root, origin in table:
+        if not root:
+            continue
+        if root in duplicate:
+            gaps.append(_gap('user_search_path_conflict', root))
+            continue
+        result.append((root, origin))
+    return tuple(result), gaps
+
+
+def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
+                 collected_roots: Any = None) -> dict[str, Any]:
+    """Resolve one account's effective ``systemd --user`` units.
+
+    ``home`` and ``runtime_dir`` (``$XDG_RUNTIME_DIR``, normally
+    ``/run/user/<uid>``) locate the per-user directories; ``account`` is the
+    login that owns the user manager. A user manager runs every service as
+    that account, so ``User=`` never selects another identity: it is kept as
+    ``declared_user`` and a different value is reported as a gap. Exec
+    prefixes ``+``/``!`` relax sandboxing within the account and do not gain
+    root, so ``privileged_exec`` is always false here. Enablement links in the
+    account's own configuration directory count as enabled.
+    """
+    table, gaps = user_search_paths(home, runtime_dir)
+    valid_account = isinstance(account, str) and 0 < len(account) <= 255 and account.isprintable() \
+        and '/' not in account and ':' not in account
+    if not valid_account:
+        gaps.append(_gap('user_account_invalid'))
+    manager: dict[str, str] = {}
+    if valid_account:
+        manager['u'] = account
+    if _valid_dir(home):
+        # Default XDG_CONFIG_HOME/XDG_CACHE_HOME; %S/%L moved between systemd
+        # releases, so they stay unexpanded rather than guessed.
+        manager.update(h=home, E=f'{home}/.config', C=f'{home}/.cache')
+    if _valid_dir(runtime_dir):
+        manager['t'] = runtime_dir
+    result = _resolve(observations, collected_roots, table, _ENABLEMENT_ORIGINS | {'user'}, gaps,
+                      scope='user', account=account if valid_account else None,
+                      manager_specifiers=manager)
+    return result
+
+
+def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_origins,
+             initial_gaps, scope: str = 'system', account: Any = None,
+             manager_specifiers: dict[str, str] | None = None) -> dict[str, Any]:
+    rank = {root: i for i, (root, _) in enumerate(search_paths)}
+    origins = dict(search_paths)
+    roots_by_len = sorted(rank, key=len, reverse=True)
+    gaps: list[dict[str, str]] = list(initial_gaps)
     obs = observations if isinstance(observations, list) else []
     if not isinstance(observations, list):
         gaps.append(_gap('invalid_observations'))
@@ -203,7 +333,7 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
         gaps.append(_gap('observation_cap', detail=f'{len(obs)} > {MAX_OBSERVATIONS}'))
         obs = obs[:MAX_OBSERVATIONS]
     collected = set(collected_roots) if isinstance(collected_roots, (list, tuple, set, frozenset)) else set()
-    for root, _ in SEARCH_PATHS:
+    for root, _ in search_paths:
         if root not in collected:
             gaps.append(_gap('search_path_not_collected', root))
 
@@ -222,11 +352,11 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
                 or posixpath.normpath(path) != path or len(path) > 4096):
             gaps.append(_gap('invalid_path', str(path)[:512] if isinstance(path, str) else ''))
             continue
-        loc = _locate(path)
+        loc = _locate(path, roots_by_len)
         if not loc:
             # Possible target of a linked unit (``systemctl link``); kept only as link content.
             if o.get('kind') == 'file' and isinstance(o.get('text'), str):
-                external[path] = {'path': path, 'origin': 'linked', 'rank': len(SEARCH_PATHS), 'kind': 'file',
+                external[path] = {'path': path, 'origin': 'linked', 'rank': len(search_paths), 'kind': 'file',
                                   'text': '' if (o.get('truncated') or len(o['text']) > MAX_TEXT) else o['text'],
                                   'incomplete': bool(o.get('truncated') or len(o['text']) > MAX_TEXT)}
             else:
@@ -242,7 +372,7 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
         if kind not in ('file', 'symlink'):
             gaps.append(_gap('unsupported_entry_kind', path, str(kind)[:32]))
             continue
-        rec = {'path': path, 'root': root, 'origin': _ORIGIN[root], 'rank': _RANK[root], 'kind': kind}
+        rec = {'path': path, 'root': root, 'origin': origins[root], 'rank': rank[root], 'kind': kind}
         if kind == 'symlink':
             target = o.get('target')
             if not isinstance(target, str) or not target or '\x00' in target:
@@ -306,7 +436,16 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
         parts = parse_name(name)
         if parts is None:
             continue
-        unit = _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps, alias_target, aliases)
+        unit = _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps, alias_target, aliases,
+                             enablement_origins)
+        if scope == 'user' and unit['account'] is not None:
+            declared = unit['account']['user']
+            unit['account'] = {'user': account, 'group': unit['account']['group'],
+                               'manager': 'user', 'declared_user': declared}
+            if declared is not None and declared != account:
+                gaps.append(_gap('user_unit_declared_user', unit['fragment'] or name, str(declared)[:256]))
+            unit['privileged_exec'] = False
+        _expand_unit(unit, alias_target.get(name, name), manager_specifiers or {}, gaps)
         referenced.add(unit['fragment'])
         units.append(unit)
         unit_index[name] = unit
@@ -356,14 +495,141 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
 
     gaps.sort(key=lambda g: (g['code'], g['path'], g['detail']))
     body = {'contract_version': CONTRACT_VERSION, 'units': units, 'triggers': triggers, 'gaps': gaps}
+    if scope == 'user':
+        body = {**body, 'scope': 'user', 'account': account,
+                'search_paths': [{'path': root, 'origin': origin} for root, origin in search_paths]}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     return {
         **body,
         'complete': not gaps,
         'runtime_state': 'not_collected',
-        'limitations': list(LIMITATIONS),
+        'limitations': list(USER_LIMITATIONS if scope == 'user' else LIMITATIONS),
         'digest': digest,
     }
+
+
+_HEX = frozenset('0123456789abcdefABCDEF')
+
+
+def _unescape(value: str) -> str | None:
+    """Undo systemd unit-name escaping (``-`` is ``/``, ``\\xNN`` is a byte); None if invalid."""
+    out: list[str] = []
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if c == '-':
+            out.append('/')
+            i += 1
+        elif c == '\\':
+            hx = value[i + 2:i + 4]
+            if value[i + 1:i + 2] != 'x' or len(hx) != 2 or not set(hx) <= _HEX:
+                return None
+            code = int(hx, 16)
+            if code == 0:
+                return None
+            out.append(chr(code))
+            i += 4
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def name_specifiers(name: Any) -> dict[str, str] | None:
+    """Return the unit-name specifiers of ``systemd.unit(5)`` for one unit name.
+
+    Covers ``%n %N %p %P %i %I %j %J %f``. A specifier whose escaped text cannot
+    be unescaped exactly is omitted, so callers report it rather than guess.
+    Returns None for an invalid or template (instance-less) name.
+    """
+    parts = parse_name(name)
+    if parts is None or parts['template']:
+        return None
+    full = parts['name']
+    stem = full[:-(len(parts['type']) + 1)]
+    prefix = parts['prefix']
+    instance = parts['instance'] or ''
+    last = prefix.rsplit('-', 1)[-1] if '-' in prefix else prefix
+    spec = {'n': full, 'N': stem, 'p': prefix, 'i': instance, 'j': last}
+    for upper, raw in (('P', prefix), ('I', instance), ('J', last)):
+        un = _unescape(raw)
+        if un is not None:
+            spec[upper] = un
+    path_source = instance if parts['instance'] else prefix
+    if path_source == '-':
+        spec['f'] = '/'
+    else:
+        un = _unescape(path_source)
+        if un is not None:
+            spec['f'] = un if un.startswith('/') else '/' + un
+    return spec
+
+
+def expand_specifiers(value: str, table: dict[str, str]) -> tuple[str, list[str]]:
+    """Expand ``%X`` specifiers from ``table``; ``%%`` is a literal percent.
+
+    Returns ``(expanded, missing)``. When any specifier is not in ``table`` (or a
+    trailing ``%`` has no letter), ``missing`` lists them and the raw value is
+    returned unchanged: a partially expanded command is never presented.
+    """
+    out: list[str] = []
+    missing: list[str] = []
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if c != '%':
+            out.append(c)
+            i += 1
+            continue
+        letter = value[i + 1:i + 2]
+        if letter == '%':
+            out.append('%')
+        elif letter and letter in table:
+            out.append(table[letter])
+        else:
+            missing.append(letter or '%')
+        i += 2
+    if missing:
+        return value, sorted(set(missing))
+    return ''.join(out), []
+
+
+def _expand_unit(unit: dict[str, Any], id_name: str, manager: dict[str, str],
+                 gaps: list[dict[str, str]]) -> None:
+    """Attach ``expanded`` and ``specifiers`` to one resolved unit record."""
+    names = name_specifiers(id_name) if not unit['template'] else None
+    if names is None:
+        unit['expanded'] = None
+        unit['specifiers'] = 'not_applicable'
+        return
+    table = {**manager, **names}
+    expanded: dict[str, dict[str, Any]] = {}
+    missing: set[str] = set()
+    used = False
+    for section in sorted(unit['config']):
+        for key in sorted(unit['config'][section]):
+            if key not in EXPAND_KEYS:
+                continue
+            raw = unit['config'][section][key]
+            values = raw if isinstance(raw, list) else [raw]
+            new = []
+            for v in values:
+                if not isinstance(v, str):
+                    new.append(v)
+                    continue
+                used = used or '%' in v
+                e, m = expand_specifiers(v, table)
+                missing.update(m)
+                new.append(e)
+            expanded.setdefault(section, {})[key] = new if isinstance(raw, list) else new[0]
+    unit['expanded'] = expanded
+    if missing:
+        unit['specifiers'] = 'partial'
+        unit['incomplete'] = True
+        gaps.append(_gap('unexpanded_specifier', unit['fragment'] or unit['name'],
+                         ','.join('%' + m for m in sorted(missing))))
+    else:
+        unit['specifiers'] = 'expanded' if used else 'none'
 
 
 def _effective_path(rec: dict[str, Any] | None) -> str | None:
@@ -400,7 +666,7 @@ def _alias_map(fragments, by_path) -> tuple[dict[str, str], dict[str, set[str]]]
 
 
 def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps,
-                  alias_target=None, aliases=None) -> dict[str, Any]:
+                  alias_target=None, aliases=None, enablement_origins=_ENABLEMENT_ORIGINS) -> dict[str, Any]:
     alias_target = alias_target or {}
     aliases = aliases or {}
     canonical = alias_target.get(name, name)
@@ -511,7 +777,7 @@ def _resolve_unit(name, parts, fragments, dropins, by_path, links, gaps,
         elif tbase not in (name, parts['template_name'], canonical):
             entry['problem'] = 'foreign_target'
             gaps.append(_gap('foreign_link_target', link['path'], link['target']))
-        (enabled_by if link['origin'] in _ENABLEMENT_ORIGINS else static_deps).append(entry)
+        (enabled_by if link['origin'] in enablement_origins else static_deps).append(entry)
     if len(enabled_by) > MAX_LINKS_PER_UNIT:
         gaps.append(_gap('link_cap', name, str(len(enabled_by))))
         enabled_by = enabled_by[:MAX_LINKS_PER_UNIT]

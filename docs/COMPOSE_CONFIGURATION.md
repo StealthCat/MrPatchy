@@ -138,10 +138,12 @@ validated deployment scope; see the outstanding cluster roadmap (#446–#454).
 
 Worker IDs default to unique persistent generated identities even if `.env` contains
 a single `MRPATCHY_WORKER_ID`, preventing accidentally duplicated IDs. An optional prefix
-assigns `<prefix>-1`, `<prefix>-2`, etc., and configures the generated apps' expected
+assigns `<prefix>-1`, `<prefix>-2`, etc., and configures the generated apps' and workers' expected
 worker inventory. Prefixes must be unique across every stack using the same state.
-When workers are in a separate stack, configure the controller's
-`MRPATCHY_EXPECTED_WORKER_IDS` in its environment as appropriate. Drain workers
+When workers are in a separate stack, set the same `MRPATCHY_EXPECTED_WORKER_IDS` and
+`MRPATCHY_EXPECTED_CONTROLLER_IDS` for the controller and for every worker stack. The
+controller shows them on the Workers page, but the attention notifications are raised by
+the coordinator tick, which runs in a worker because the app sets `DISABLE_SCHEDULER`. Drain workers
 through the existing UI and verify their state before planned maintenance.
 
 ## Worker identity persistence

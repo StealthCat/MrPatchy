@@ -134,7 +134,7 @@ def cancel_pending(s,host_id,actor):
     return count
 
 
-def set_enabled(s,host,enabled,expected,actor,reason):
+def set_enabled(s,host,enabled,expected,actor,reason,deleting=False):
     if host.deleted_at:raise ValueError('Deleted servers cannot be re-enabled; enroll a new server')
     if host.lifecycle_revision!=expected:raise ValueError('Server lifecycle changed; refresh before saving')
     if s.scalar(select(Job.id).where(Job.host_id==host.id,Job.state=='running').limit(1)):raise Busy('A running operation must finish or be reconciled before changing management')
@@ -145,6 +145,11 @@ def set_enabled(s,host,enabled,expected,actor,reason):
     host.enabled=enabled;host.lifecycle_revision=str(uuid.uuid4())
     host.state=('offline' if host.fingerprint and host.baseline else 'enrolling') if enabled else 'disabled'
     if enabled:host.last_repo=0
+    elif not deleting:
+        # A disabled server is never polled, so its spool episode could not resolve;
+        # deletion publishes its own resolution instead.
+        from . import agent_spool_health
+        agent_spool_health.resolve_host_notification(s,host.id,'server-disabled')
     audit(s,'enable server' if enabled else 'disable server',host.id+' '+actor+' '+reason+'; cancelled='+str(cancelled))
     return cancelled
 
@@ -186,14 +191,23 @@ def remove(s,host,expected,confirmation,actor,reason):
     # Commit inactivity before removing files. A crash/failure leaves a disabled
     # server that can be reviewed and retried; it can never keep contacting a key
     # while credential removal is incomplete.
-    set_enabled(s,host,False,expected,actor,reason);s.commit()
+    set_enabled(s,host,False,expected,actor,reason,deleting=True);s.commit()
     try:remove_credentials(host.id)
-    except (OSError,ValueError):raise ValueError('Server disabled, but local credential cleanup failed. Refresh and retry deletion after reviewing controller storage') from None
+    except (OSError,ValueError):
+        # The server stays committed as disabled until deletion is retried, so close
+        # its spool episode as disabled rather than leaving it active indefinitely.
+        from . import agent_spool_health
+        if agent_spool_health.resolve_host_notification(s,host.id,'server-disabled'):s.commit()
+        raise ValueError('Server disabled, but local credential cleanup failed. Refresh and retry deletion after reviewing controller storage') from None
     from . import persistence
     persistence.resolve_host_notifications(s,host.id)
+    from . import agent_spool_health
+    agent_spool_health.resolve_host_notification(s,host.id)
     s.execute(delete(Setting).where(Setting.key.in_(['connection:'+host.id,'repository-access:'+host.id])))
     host.deleted_at=time.time();host.enabled=False;host.state='deleted';host.lifecycle_revision=str(uuid.uuid4())
     from . import incidents
     incidents.resolve_host_notifications(s,host.id)
+    from . import triage_notifications
+    triage_notifications.resolve_host_notifications(s,host.id)
     audit(s,'delete server',host.id+' '+actor+' '+reason.strip()+'; local credentials removed; history retained')
     s.commit()

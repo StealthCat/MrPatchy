@@ -61,7 +61,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.72"
+APP_VERSION = "1.59.90"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1163,6 +1163,15 @@ class WorkerControlInput(BaseModel):
     action:str=Field(pattern=r'^(drain|resume)$')
     reason:str=Field(min_length=10,max_length=1000)
 
+class WorkerRemovalInput(BaseModel):
+    worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
+    boot_id:str=Field(pattern=r'^([0-9a-f]{32})?$')
+
+@app.post('/api/operations/workers/remove')
+def remove_worker_registration(body:WorkerRemovalInput,user=Depends(admin_user)):
+    from .worker_registry import remove_registration
+    return remove_registration(body.worker_id,body.boot_id,user['username'])
+
 @app.post('/api/operations/workers/control')
 def control_worker(body:WorkerControlInput,user=Depends(admin_user)):
     from .worker_registry import request_control
@@ -1900,7 +1909,8 @@ def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(admin_user)):
 def get_advisories(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
-        return row.value if row else {'results':[],'coverage':'Not checked'}
+        from .advisories import retained
+        return retained(row.value) if row else {'results':[],'coverage':'Not checked'}
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)

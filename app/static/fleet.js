@@ -230,13 +230,24 @@ function bindTriageTimingSummary(root,revision){
  };
 }
 
+function avoidedEstimate(value){
+ const keys=['reuse_with_priced_source','reuse_with_unpriced_source','reuse_with_unavailable_source','estimated_calls'];
+ if(!value||typeof value!=='object'||keys.some(key=>!Number.isSafeInteger(value[key])||value[key]<0))return 'Avoided provider work estimate is unavailable.';
+ const usd=value.estimated_usd;
+ if(usd!==null&&!(typeof usd==='string'&&/^\d{1,12}(\.\d{1,12})?$/.test(usd))||value.currency!=='USD')return 'Avoided provider work estimate is unavailable.';
+ const priced=value.reuse_with_priced_source,unpriced=value.reuse_with_unpriced_source,missing=value.reuse_with_unavailable_source,n=v=>v.toLocaleString();
+ if(!priced&&!unpriced&&!missing)return 'Estimated avoided provider work: none yet. No retained reuse assessments.';
+ const spend=usd===null?'no priced spend estimate':'about '+(Number(usd)>0&&Number(usd)<0.0001?'less than $0.0001':'$'+Number(usd).toFixed(4))+' USD from '+n(priced)+' reuse(s) of fully priced investigations';
+ const gaps=[unpriced&&n(unpriced)+' reuse(s) have unpriced or partly priced source receipts',missing&&n(missing)+' have no retained source receipts (pruned, unlinked or still running)'].filter(Boolean);
+ return 'Estimated avoided provider work: about '+n(value.estimated_calls)+' provider call(s) and '+spend+'.'+(gaps.length?' '+gaps.join('; ')+', so these figures are lower bounds.':'')+' Estimated from originating investigation receipts, not a provider invoice.';
+}
 function bindKnownGoodSummary(root,revision){
  const panel=document.createElement('section');
  panel.className='card';
  panel.setAttribute('aria-labelledby','ai-known-good-title');
- panel.innerHTML='<h2 id="ai-known-good-title">Fleet known-good cache</h2><p class="help">Counts of retained exact-match safe candidates and the assessments that reused them. These are record counts only. They do not verify current context, count cache misses or estimate saved provider calls or cost. Reuse grants no approval and authorizes no response.</p><button type="button">Load cache summary</button><p class="help" role="status"></p><div class="status-facts" hidden></div><p class="help known-good-review" hidden></p>';
+ panel.innerHTML='<h2 id="ai-known-good-title">Fleet known-good cache</h2><p class="help">Counts of retained exact-match safe candidates and the assessments that reused them. Counts describe retained records only. They do not verify current context or count cache misses. Avoided provider work is estimated from each candidate’s originating investigation receipts; it is not a provider invoice. Reuse grants no approval and authorizes no response.</p><button type="button">Load cache summary</button><p class="help" role="status"></p><div class="status-facts" hidden></div><p class="help known-good-estimate" hidden></p><p class="help known-good-review" hidden></p>';
  root.querySelector('.toolbar').before(panel);
- const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),facts=panel.querySelector('.status-facts'),review=panel.querySelector('.known-good-review');
+ const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),facts=panel.querySelector('.status-facts'),review=panel.querySelector('.known-good-review'),estimate=panel.querySelector('.known-good-estimate');
  const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
  const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unavailable';
  button.onclick=async()=>{
@@ -248,14 +259,15 @@ function bindKnownGoodSummary(root,revision){
    const value=data&&typeof data==='object'?data:{};
    facts.innerHTML=[['active_entries','active safe candidates'],['revoked_entries','revoked candidates'],['retained_reuse_assessments','retained reuse assessments'],['reuse_assessments_on_revoked_entries','reuse assessments on revoked candidates']].map(([key,label])=>`<span><strong>${esc(count(value[key]))}</strong> ${label}</span>`).join('');
    facts.hidden=false;
+   estimate.textContent=avoidedEstimate(value.avoided_estimate);estimate.hidden=false;
    const flagged=value.reuse_assessments_on_revoked_entries;
    review.hidden=!(Number.isSafeInteger(flagged)&&flagged>0);
    review.textContent=review.hidden?'':`${count(flagged)} retained reuse assessment(s) are linked to revoked candidates and need review. Their original results are unchanged. Open an assessment's history to review it or request Re-triage.`;
-   status.textContent='Summary of retained records. Cache misses and provider calls avoided are not measured.';
+   status.textContent='Summary of retained records. Cache misses are not measured.';
    button.textContent='Refresh cache summary';
   }catch{
    if(!active())return;
-   facts.hidden=true;facts.innerHTML='';review.hidden=true;review.textContent='';
+   facts.hidden=true;facts.innerHTML='';review.hidden=true;review.textContent='';estimate.hidden=true;estimate.textContent='';
    status.textContent='Cache summary is unavailable. You can still inspect individual AI runs.';
    button.textContent='Retry cache summary';
   }finally{if(active())button.disabled=false;}
@@ -268,7 +280,7 @@ async function packageHistory(revision=renderRevision,context=null){
  const load=async()=>{const turn=++ticket;try{const data=await api('/package-history?host_id='+encodeURIComponent(context?.hostId||$('#history-host').value)+'&q='+encodeURIComponent($('#history-search').value)+'&offset='+offset);if(turn!==ticket||!currentView(revision,context?'servers':'history')||!table.isConnected)return;
  table.innerHTML=data.items.length?`<div class="table-wrap"><table><thead><tr><th>Observed</th><th>Server / package</th><th>Change</th><th>Before → after</th><th>Origin</th><th>Historical AI importance</th></tr></thead><tbody>${data.items.map(r=>`<tr><td>${date(r.observed)}<small>Recorded ${date(r.recorded)}</small></td><td>${esc(r.name)}<small>${esc(hostName(r.host_id))}</small></td><td>${badge(r.action)}</td><td>${esc(r.before.join(', ')||'—')} → ${esc(r.after.join(', ')||'—')}${r.state_before!==r.state_after?`<small>${esc(r.state_before||'—')} → ${esc(r.state_after||'—')}</small>`:''}</td><td>${esc(r.source)}<small>${esc(r.actor||'Observed; actor unknown')}</small>${r.job_id?`<button data-history-job="${r.job_id}">View operation</button>`:''}</td><td>${r.assessment?assessmentCell(r.assessment):'No saved assessment'}</td></tr>`).join('')}</tbody></table></div>`:empty('No package changes recorded','History begins with the next inventory collected after this version is deployed.');
  $('#package-history-prev').disabled=offset===0;$('#package-history-next').disabled=!data.more;
- table.querySelectorAll('[data-history-job]').forEach(button=>button.onclick=async()=>{const rev=modalRevision;try{const j=await api('/jobs/'+button.dataset.historyJob);if(rev!==modalRevision||!table.isConnected)return;modal('Package operation',`<p>${esc(j.action)} · ${badge(j.state)} · ${date(j.created)}</p><pre>${esc(j.output||'Awaiting execution')}</pre>`);}catch(e){toast(e.message);}});
+ table.querySelectorAll('[data-history-job]').forEach(button=>button.onclick=async()=>{const rev=modalRevision;try{const j=await api('/jobs/'+button.dataset.historyJob);if(rev!==modalRevision||!table.isConnected)return;modal('Package operation',`<p>${esc(j.action)} · ${badge(j.state)} · ${date(j.created)}</p>${PatchyUI.commandOutput(j.output,'Package operation output','Awaiting execution')}`);}catch(e){toast(e.message);}});
  }catch(e){if(table.isConnected)toast(e.message);}};
  if(!context)$('#history-host').onchange=()=>{offset=0;load();};$('#history-search').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{if(table.isConnected){offset=0;load();}},250);};$('#package-history-prev').onclick=()=>{offset=Math.max(0,offset-100);load();};$('#package-history-next').onclick=()=>{offset+=100;load();};await load();
 }

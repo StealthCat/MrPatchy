@@ -1,3 +1,88 @@
+## 1.59.90 — 2026-11-13
+
+1. [PR #795](https://github.com/StealthCat/MrPatchy/pull/795): Adds one admin-only in-app notification when a server with fresh telemetry has an overdue or future-dated file-integrity hash sweep. Fixed controller-classified text and resolution on recovery make the existing patching hold visible without echoing endpoint data; stale telemetry remains owned by the telemetry-loss alert. No schema, route, role, authorization or patching-gate changes. A missing sweep is not a clean-host or compromise verdict; detection is limited to active, non-enrolling servers with telemetry received within 120 seconds, and disable/delete resolution occurs on the next coordinator tick.
+
+## 1.59.89 — 2026-11-13
+
+1. [PR #791](https://github.com/StealthCat/MrPatchy/pull/791): Update scoring now stops hourly retries after any non-transient, non-policy AI failure, including rejected credentials, quota/model failures and invalid or incomplete structured results. Affected scores are blocked under the current model/key signature and become eligible immediately after that configuration changes; one admin-only in-app notification is published while blocks remain and resolved when none remain. Startup adds one `update_scores.configuration` column to existing databases. Existing API fields and retry behavior for transient failures, policy waits and non-AI errors are unchanged. No route, role, response-authorization or UI change; no manual per-score retry, blocked advisory-plan coverage, or blocked-score count on the Investigations status card. This source update does not publish a Docker image.
+
+## 1.59.88 — 2026-11-13
+
+1. [PR #799](https://github.com/StealthCat/MrPatchy/pull/799): Advisory applicability results no longer expose internal version-comparator exception text (CodeQL `py/stack-trace-exposure`, alert #14). Comparison failures remain `uncertain` with a fixed reason, and legacy stored results are sanitized when read. Existing statuses, counts and fixed versions are unchanged; no schema, route, role, UI or response-authorization change. Previously stored text remains in the database until a new scan replaces the record. This source update does not publish a Docker image.
+
+## 1.59.87 — 2026-11-13
+
+1. [PR #788](https://github.com/StealthCat/MrPatchy/pull/788): Resolved in-app notification history older than the configured `history_days` retention is now pruned during hourly leader cleanup in batches of 500. Only events whose current revision is resolved before the cutoff are removed; active histories and recently resolved events are retained. The event identity row remains so a recurring event gets the next unread revision number. Each batch rechecks event state under a row lock, preserving prior history if an event is reopened while pruning. No schema, route, UI, role or response-authorization change. Already-open tabs may show a pruned resolved event until their next refresh, and the identity row remains for each distinct event. This source update does not publish a Docker image.
+
+## 1.59.86 — 2026-11-13
+
+1. [PR #789](https://github.com/StealthCat/MrPatchy/pull/789): The pure systemd unit contract now provides a bounded expanded view for fixed unit-name and manager specifiers in commands, accounts and paths. Host, boot and environment-dependent specifiers remain raw as coverage gaps; raw configuration is unchanged. Contract version 2 changes the record digest. No collection, UI, schema or response-authorization behavior changes. The systemd version is not collected, so legacy specifier semantics may differ; collection wiring and UI remain open under #702.
+
+## 1.59.85 — 2026-11-13
+
+1. [PR #784](https://github.com/StealthCat/MrPatchy/pull/784): Operations advisory matches now show per-server applicability as Affected, Fixed, Not affected or Uncertain using the server's distribution, source package and installed version. The dialog shows escaped status details and counts while retaining raw results; failures and lookups beyond the bounds remain Uncertain, not safe. Closes #783.
+2. Compatibility and limits: no schema, route, setting or role change; RPM keeps its updateinfo path. Existing stored scans gain applicability and summary only after a new scan. Each scan makes sequential OSV detail requests (up to 200 records or a shared 60-second budget); the per-host lock can be held for that duration, deferring queued jobs and making configuration changes return 409. If the fetch bound is reached, alphabetically earlier IDs are classified and the rest remain Uncertain. Classification is not exploitation evidence and authorizes no patching or response. Broader distribution ingestion, persisted exposure windows, scheduled scans/notifications and containment wiring remain incomplete. This source update does not publish a Docker image.
+
+## 1.59.84 — 2026-11-13
+
+1. [PR #786](https://github.com/StealthCat/MrPatchy/pull/786): Disabling a server now resolves its active agent-spool notification with a fixed explanation because polling has stopped. If critical pressure or new loss persists after re-enabling, the same event reopens as unread. Deletion retains its own resolution; if credential cleanup fails after the server is disabled, the disabled resolution is retained and retrying deletion adds no duplicate revision. Closes #785.
+2. Compatibility and limits: no schema, API or configuration change; the notification remains advisory and authorizes no remediation. Stale-telemetry and warning-level notifications and configurable thresholds remain out of scope. This source update does not publish a Docker image.
+
+## 1.59.83 — 2026-11-13
+
+1. [PR #764](https://github.com/StealthCat/MrPatchy/pull/764): When process triage misses the fleet known-good cache, the AI run timeline now explains why, before any paid provider call. The possible reasons are an administrator re-triage bypass, a changed-artifact bypass, incomplete exact verified context (with up to three fixed contract labels), no candidate, a revoked candidate, or a candidate that was not reusable at lookup time. Messages are fixed text with no evidence values or identifiers. The diagnostic is read-only and fails open, so lookup, reuse, billing, verdicts, approvals and response boundaries are unchanged. Closes #763.
+2. Compatibility and limits: no schema, API or configuration change. Each cache miss adds one pruned AI-run timeline event. The candidate state is read after lookup, so it reflects the current state rather than the state at lookup time. This source update does not publish a Docker image.
+
+## 1.59.82 — 2026-11-13
+
+1. [PR #762](https://github.com/StealthCat/MrPatchy/pull/762): Expected controllers (`MRPATCHY_EXPECTED_CONTROLLER_IDS`) in an attention state now raise one administrator-only in-app notification each, linking to **Activity → Workers**, matching expected workers. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium. Text is fixed and copies no reported values. The revision is the state, so unchanged passes publish nothing. Recovery or removal from configuration resolves the event. An invalid configuration raises one separate event and leaves existing events unchanged, and a freshness window of startup grace suppresses new attention. Failures are logged without stopping the coordinator tick. Closes #761.
+2. Compatibility and limits: an additive notification producer, with no schema or API change. It carries no readiness, failover, serving or response authority. Nothing is published when no controllers are configured. This source update does not publish a Docker image.
+
+## 1.59.81 — 2026-11-13
+
+1. [PR #758](https://github.com/StealthCat/MrPatchy/pull/758): Operation output on the operation detail page, the Operations list and package-operation history now renders as plain-text monospace. It preserves whitespace and column alignment, treats markup in command output as literal text, and scrolls long lines in place on desktop and mobile without stretching the page. A Copy output control copies the exact original text. On plain-HTTP deployments the copy fallback also works inside the package-operation dialog. Fixes #753.
+2. Compatibility and limits: frontend only, with no API, schema, authorization, role or audit change. Mascot and theme colours are unchanged. Other preformatted blocks that show JSON evidence or receipts keep their existing style. This source update does not publish a Docker image.
+
+## 1.59.80 — 2026-11-13
+
+1. [PR #756](https://github.com/StealthCat/MrPatchy/pull/756): When `MRPATCHY_EXPECTED_WORKER_IDS` is unset, the Workers page now infers its expected workers from up to 500 retained worker registrations, counting each identity once, including stale, stopped and unknown ones. With none, it shows zero expected. The page shows the expected count and labels its source. A configured list remains authoritative, and expected-worker notifications still come only from that configuration. Administrators can remove an obsolete registration after confirming, through the admin-only `POST /api/operations/workers/remove`. Removal is bound to the registration's boot. It is allowed only for stale, stopped or heartbeat-less entries, and refused with 409 while a process still holds that worker identity. A pending drain request is kept unless the registration reported a graceful stop, so a delayed worker that recovers stays drained. Removal is audited and does not edit configuration or stop any process. Fixes #755.
+2. Compatibility and limits: `/api/operations/workers` adds `expected_count`, `expectation_source` and `inferred_limit`, with no schema change. An ID that remains in a configured list shows as missing after removal. With more than 500 retained registrations, inference reports an error instead of a partial count. This source update does not publish a Docker image.
+
+## 1.59.79 — 2026-11-13
+
+1. [PR #774](https://github.com/StealthCat/MrPatchy/pull/774): Fixed: expected-worker and expected-controller attention notifications never fired in Docker deployments. The coordinator tick that raises them runs in the worker containers, because the app sets `DISABLE_SCHEDULER`, but only the app received the expected inventory. `compose.yaml` and `compose.worker.yaml` now pass `MRPATCHY_EXPECTED_WORKER_IDS` and `MRPATCHY_EXPECTED_CONTROLLER_IDS` to workers, and `MRPATCHY_EXPECTED_CONTROLLER_IDS` also reaches the app. Prefix-generated stacks with apps give their workers the same generated inventory, while worker-only stacks keep the `.env` pass-through. `.env.example`, `docs/COMPOSE_CONFIGURATION.md` and README now say to set the same values for every worker stack. Fixes #773.
+2. Compatibility and limits: recreate the worker containers (`docker compose up -d`) after upgrading. Once `MRPATCHY_EXPECTED_WORKER_IDS` is set, administrators may start receiving notifications they never saw before. Workers from `compose.worker.yaml` still use generated IDs, so leave the variable empty with those files unless the IDs are known. No application code, schema or authorization change. This source update does not publish a Docker image.
+
+## 1.59.78 — 2026-11-13
+
+1. [PR #752](https://github.com/StealthCat/MrPatchy/pull/752): Administrators now get an in-app notification when a server's agent event spool reaches critical pressure (at least 90% full; medium severity) or reports newly lost observation batches (high severity). One episode stays open without flooding and escalates at most once. It resolves automatically once spool use is below 70% with no new loss, reopens as a fresh unread revision if pressure or loss returns, and resolves when the server is deleted. Reason text is fixed and the event is administrator-only. Refs #108, which stays open.
+2. Compatibility and limits: additive, with no new settings, routes or schema change. A server that already reports critical pressure or new loss is notified on its first poll after upgrade. A disabled server's open episode stays active until the server is re-enabled and polled, or deleted. Stale telemetry raises no spool event. Warning-level pressure appears only on the summary card, and thresholds are fixed. This source update does not publish a Docker image.
+
+## 1.59.77 — 2026-11-13
+
+1. [PR #746](https://github.com/StealthCat/MrPatchy/pull/746): When a complete medium, high or unknown AI result contradicts an exact fleet known-good candidate and the candidate is automatically revoked, administrators now get an in-app notification. The fleet-scoped event is high severity for a high-risk result and medium otherwise, with fixed text containing only the risk and the linked-assessment count. It links to the original assessment's history, which shows that the candidate was revoked and links to the contradicting assessment. Closes #744.
+2. Compatibility and limits: an additive notification in the existing revocation path, with no change to revocation, reuse policy or schema. Integrated after #760: a racing contradiction that finds the candidate already revoked publishes no second notice. It carries no paths, host names, model output or evidence. This source update does not publish a Docker image.
+
+## 1.59.76 — 2026-11-13
+
+1. [PR #751](https://github.com/StealthCat/MrPatchy/pull/751): Startup awareness: the pure systemd unit contract now resolves per-user (`systemd --user`) units for an account. It applies the documented user search-path precedence, including Debian's pre-usrmerge `/lib/systemd/user`, labels origins as `user`, and binds each unit to the owning account. Invalid homes, system paths passed as user paths, and search-path collisions with the runtime directory are reported as coverage gaps with `complete: false`. There is no collection or UI change yet. Part of #702, which stays open.
+2. Compatibility and limits: additive only, and the existing `resolve()` signature and output are unchanged. Not yet supported: non-default XDG variables, lingering and runtime active state, specifier expansion, account enumeration, and wiring collection into the startup inventory, UI and AI classification. This source update does not publish a Docker image.
+
+## 1.59.75 — 2026-11-13
+
+1. [PR #750](https://github.com/StealthCat/MrPatchy/pull/750): The Fleet known-good cache panel shows an estimate of the provider calls and USD spend avoided by retained cache reuse. Each reuse is attributed to its candidate's originating assessment run: calls from the run's recorded count, and spend only when every call has a priced receipt. Reuse with unpriced, partly priced or unavailable sources is counted separately, never as free. `GET /api/ai/known-good/summary` adds an `avoided_estimate` object, leaving the existing counts unchanged. The panel labels the figures as lower bounds when coverage is incomplete and as not a provider invoice. Fixes #749.
+2. Compatibility and limits: an additive response field and panel line, with no schema change. Reads are batched and load no evidence. Estimates use retained local records and public prices. This source update does not publish a Docker image.
+
+## 1.59.74 — 2026-11-13
+
+1. [PR #748](https://github.com/StealthCat/MrPatchy/pull/748): Fixed: deleting a server now resolves its still-active AI process-triage notifications. Before this fix, a medium or high verdict on a deleted server stayed active and unread on every viewer's badge, linking to the deleted server's Investigations page. Deletion now adds exactly one resolved info revision with fixed text for each still-active triage event on that server. The revision is added inside the deletion transaction, next to the existing startup-change and incident resolvers. Already-resolved events and other servers' events are untouched, and behaviors, verdicts, approvals and history are unchanged. Fixes #747.
+2. Compatibility and limits: no schema, route, UI or authorization change. Disabling a server without deleting it still leaves its triage events active, the same as the startup and incident producers. This source update does not publish a Docker image.
+
+## 1.59.73 — 2026-11-13
+
+1. [PR #760](https://github.com/StealthCat/MrPatchy/pull/760): Fixed: on MySQL/MariaDB with parallel triage workers, a second AI contradiction of the same fleet known-good candidate no longer discards its completed medium/high verdict and re-bills the provider. The contradiction path now re-reads the candidate under its row lock. A candidate that is already revoked or missing is left untouched, so the first contradiction or revocation remains the single record and audit event, and the verdict is saved. A still-active candidate is revoked whatever its version. The administrator revoke path keeps its strict version and already-revoked checks. Fixes #759.
+2. Compatibility and limits: no API, schema or configuration change. A racing contradiction now succeeds quietly instead of erroring and being retried. The regression tests interleave deterministically and do not run real parallel threads. This source update does not publish a Docker image.
+
 ## 1.59.72 — 2026-11-13
 
 1. [PR #745](https://github.com/StealthCat/MrPatchy/pull/745): Administrators get a medium-severity in-app notification, linking to the server's Maintenance tab, when a distribution-upgrade release plan is ready for its GO/no-go decision. A plan qualifies when it is ready, has no blockers, its sealed expiry has not passed, and its server is enabled and not deleted. Revisions are bound to the frozen plan digest, so a regenerated plan resurfaces as unread. GO, no-go, expiry, regeneration and server removal each publish exactly one resolved revision with a fixed reason. AI review text, configuration content and paths are never copied. Fixes #743.
