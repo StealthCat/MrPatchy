@@ -177,8 +177,21 @@ def test_review_without_notification_publishes_nothing(admin):
     published, _, reused_id = seed_reuse()
     revoke(admin, published)
     revoked_at = status(admin, 'behavior-two', reused_id)['revoked_at']
+    revision = notifications.NotificationRevision
+
+    def counts():
+        with Session() as s:
+            return {lifecycle: s.scalar(select(func.count()).select_from(revision).where(
+                revision.lifecycle == lifecycle)) for lifecycle in ('active', 'resolved')}
+
+    # Revocation itself may publish an administrator notification (#779/#780);
+    # recording the review must never publish a new active one, and may only
+    # resolve whatever revocation notification already exists.
+    before = counts()
     response = admin.post(review_path(published), json={
         'expected_version': published['version'], 'expected_revoked_at': revoked_at, 'note': NOTE})
-    assert response.status_code == 200 and response.json()['resolved_notifications'] == 0
-    with Session() as s:
-        assert s.scalar(select(func.count()).select_from(notifications.NotificationRevision)) == 0
+    assert response.status_code == 200
+    after = counts()
+    assert after['active'] == before['active']
+    assert response.json()['resolved_notifications'] == after['resolved'] - before['resolved']
+    assert response.json()['resolved_notifications'] == before['active']
