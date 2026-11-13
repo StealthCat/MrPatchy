@@ -624,3 +624,54 @@ def prune_arrivals(cutoff, *, factory=Session, batch=ARRIVAL_PRUNE_BATCH):
             deleted += result.rowcount or 0
             if upper >= limit:
                 return deleted
+
+
+RESOLVED_PRUNE_BATCH = 500
+
+
+def prune_resolved(cutoff, *, factory=Session, batch=RESOLVED_PRUNE_BATCH):
+    """Delete retained history of events resolved before ``cutoff``.
+
+    Only events whose *current* revision is ``resolved`` and whose last update
+    precedes ``cutoff`` qualify; active events keep every revision at any age.
+    Their revisions and per-user read/dismiss rows are deleted, which hides the
+    event from lists, counts and arrivals.  The identity row stays so a recurring
+    subject continues the revision sequence: the new active revision is unread
+    and never reuses a pruned revision number, keeping replay cursors, exact-
+    revision read/dismiss and cross-tab toast keys collision-free.  Rows written
+    at or after ``cutoff`` (a racing publish, read or dismiss) are never deleted.
+    Each batch commits separately.  Returns ``(events, revisions)`` pruned.
+    """
+    if type(batch) is not int or batch < 1:
+        raise ValueError('Notification resolved prune batch must be positive')
+    events = revisions = 0
+    after = ''
+    while True:
+        with factory() as session:
+            ids = session.scalars(
+                select(NotificationEvent.id)
+                .join(NotificationRevision, and_(
+                    NotificationRevision.event_id == NotificationEvent.id,
+                    NotificationRevision.revision == NotificationEvent.revision))
+                .where(NotificationRevision.lifecycle == 'resolved',
+                       NotificationEvent.updated < cutoff,
+                       NotificationEvent.id > after)
+                .order_by(NotificationEvent.id).limit(batch)).all()
+            if not ids:
+                return events, revisions
+            result = session.execute(
+                delete(NotificationRevision)
+                .where(NotificationRevision.event_id.in_(ids),
+                       NotificationRevision.created < cutoff)
+                .execution_options(synchronize_session=False))
+            session.execute(
+                delete(NotificationUserState)
+                .where(NotificationUserState.event_id.in_(ids),
+                       NotificationUserState.updated < cutoff)
+                .execution_options(synchronize_session=False))
+            session.commit()
+            events += len(ids)
+            revisions += result.rowcount or 0
+            after = ids[-1]
+            if len(ids) < batch:
+                return events, revisions
