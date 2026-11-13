@@ -711,6 +711,8 @@ def execute_locked(job_id):
                 h.error=str(e)[:4000]
                 if job.action=='refresh': h.repo_error=str(e)[:16000]
             audit(s,('uncertain ' if uncertain else 'failed ')+job.action,(job.id+' ' if uncertain else '')+str(e)[:4000])
+        from . import job_notifications
+        job_notifications.publish_outcome_safely(s,job)
         s.commit()
 
 def mutation_outcome_uncertain(stage,error):
@@ -878,7 +880,8 @@ def periodic_ticks(now,state):
     callbacks=(('patch schedules','scheduling','tick'),('scanner schedules','incidents','schedule_tick'),
                ('startup schedules','persistence','schedule_tick'),('incident AI plans','incidents','auto_plan_tick'),
                ('response monitoring','response_monitor','schedule_tick'),('service monitoring','service_monitor','schedule_tick'),
-               ('execution scans','execution_scans','schedule_tick'))
+               ('execution scans','execution_scans','schedule_tick'),
+               ('plan review notifications','plan_notifications','tick'))
     for name,module,attribute in callbacks:
         due,failures=state.get(name,(0,0))
         if now<due:continue

@@ -1,3 +1,114 @@
+## 1.59.68 — 2026-11-12
+
+1. [PR #757](https://github.com/StealthCat/MrPatchy/pull/757): Fix workers and the embedded scheduler without `MRPATCHY_WORKER_ID` registering under a new random ID on every start, which produced duplicate registrations and false missing or stale entries after restarts and upgrades. Each runtime now generates an identity once and keeps it in a per-role slot under `DATA_DIR/worker-identities/`. The existing cross-process identity lock decides slot ownership, so replicas sharing a data volume get distinct identities and a restarted process reclaims a free slot. An explicit `MRPATCHY_WORKER_ID` still takes precedence. Unreadable, invalid or exhausted slots, and unavailable storage, fall back to a boot-only identity with a warning. Fixes #754.
+2. Compatibility and limits: no schema, API or UI change. On its first post-upgrade start, each unconfigured runtime registers once more under its new persistent ID. Earlier random-ID registrations, and those from scaled-down slots, remain as stale history and are not removed automatically (#755). Workers on other machines with their own data directories get their own identities. This source update does not publish a Docker image.
+
+## 1.59.67 — 2026-11-12
+
+1. [PR #734](https://github.com/StealthCat/MrPatchy/pull/734): Administrators get one in-app notification, linking to Investigations, while process investigations are blocked by a non-transient AI provider failure under the current model and key. Examples are a rejected key, unavailable quota and an unsupported model. Alert collection uses the same blocked predicate as the AI status, so items blocked under an earlier configuration are not counted. Revisions are bound to a re-hashed configuration digest, not counts, so a newly rejected configuration resurfaces as unread. The payload is fixed text with no provider message, key or evidence. The event resolves when nothing remains blocked and reopens on recurrence. Closes #733.
+2. Compatibility and limits: a read-only producer that never retries, unblocks, reserves spend or changes authorization, and adds no SMTP/webhook alert or schema change. This source update does not publish a Docker image.
+
+## 1.59.66 — 2026-11-12
+
+1. [PR #732](https://github.com/StealthCat/MrPatchy/pull/732): A failed operator-initiated patch, repository change, signing-key change, package repair, OS release upgrade or agent update now raises an operator-visible, medium-severity in-app notification linking to the job in Activity. Previously it appeared only in Activity. There is one event per server and action. A repeat failure adds an unread revision linking the newest job, and a later successful run of the same action resolves it. Scheduled patch runs and `recovery_required` jobs, which existing alerts already cover, publish nothing, and neither do cancelled jobs, read-only actions or jobs for deleted servers. Reasons use fixed wording, so job output never enters the payload. Publishing runs in the transaction that records the final job state, and a notification error is contained in a savepoint without changing the outcome. Closes #731.
+2. Compatibility and limits: an additive notification producer with no schema, API or role change. It retries, acknowledges and authorizes nothing. This source update does not publish a Docker image.
+
+## 1.59.65 — 2026-11-12
+
+1. [PR #730](https://github.com/StealthCat/MrPatchy/pull/730): When one account has several Mr Patchy tabs open, each new high or critical notification revision shows its toast in only one tab.
+   - Tabs claim admitted revisions in `localStorage`, bound to the signed-in user. The check-and-claim is atomic across tabs where the Web Locks API is available and best-effort otherwise.
+   - A tab fails open and shows its own toasts if storage or locks fail.
+   - Claims are bounded to 500 entries kept for 24 hours, hold no notification text, source or link, and are removed at logout.
+   - A higher revision can still toast once, and burst summaries count only the tab's own claims.
+   - Closes #729.
+2. Compatibility and limits: a client-only change to toast admission, with no API or schema change. Without Web Locks, simultaneous claims across tabs are best-effort. This source update does not publish a Docker image.
+
+## 1.59.64 — 2026-11-12
+
+1. [PR #728](https://github.com/StealthCat/MrPatchy/pull/728): The administrator Investigations page shows a **Shared AI start gates** card below the AI worker status, read from the existing `GET /api/settings/ai-control-status`.
+   - When the gates are open, it says so with the snapshot's limitations and never promises that a particular call will start.
+   - When blocked, it lists each blocker with its next eligible time, a reset recheck boundary marked as not a promised start, or a statement that an administrator must act. It also shows the overall next eligible start, or that there is none while an indefinite hold applies.
+   - An unavailable snapshot shows a retryable notice and is never shown as permission to start.
+   - Closes #727.
+2. Compatibility and limits: a client-only, administrator-only card using an existing API, with no API, schema or admission change. This source update does not publish a Docker image.
+
+## 1.59.63 — 2026-11-12
+
+1. [PR #726](https://github.com/StealthCat/MrPatchy/pull/726): Add a pure CVE-exploitation containment eligibility contract (`app/cve_containment.py`). It decides whether one exploitation detection may automatically quarantine the artifact and/or terminate the process under a per-CVE policy, with modes `disabled`, `monitor_only` and `enforce`, bounded thresholds and exclusions.
+   - `confirmed_exploitation` requires all of:
+     - an authenticated, fresh rule that names the CVE and matched the exact artifact hash at sufficient confidence;
+     - a fresh, server-bound applicability assessment of `affected` (or `uncertain` only with opt-in);
+     - distinct supporting evidence kinds bound to the same server, evidence revision and artifact.
+   - A vulnerable version, advisory or CVSS score is never exploitation evidence on its own. AI enrichment is ignored, and AI availability cannot affect the decision.
+   - Quarantine and termination reuse the malware-containment identity checks from #683.
+   - Malformed input fails closed.
+   - Closes #725.
+2. Compatibility and limits: an unwired contract only. No detector, policy storage, executor, API, UI or schema change, and no response action is authorized at runtime. This source update does not publish a Docker image.
+
+## 1.59.62 — 2026-11-12
+
+1. [PR #724](https://github.com/StealthCat/MrPatchy/pull/724): Add a pure startup mechanism catalog and coverage contract (`app/startup_catalog.py`). It catalogs 26 mechanisms, each with a stable ID, label, trigger, scope, parse level and per-family locations:
+   - cron, anacron and at;
+   - systemd system, generated, transient and user units, generators and hooks;
+   - SysV and rc.local;
+   - shell startup files, XDG autostart, SSH rc hooks and `authorized_keys` commands;
+   - PAM, MOTD and X session hooks;
+   - network, logrotate and package-manager hooks;
+   - udev, ld.so preload and search paths, and module loading.
+
+   Only the cron mechanisms claim entry-level parsing, matching the parsers on main. Every result carries a `catalog_not_exhaustive` gap, and an administrator-configurable additional scope is supported. Closes #723.
+2. Compatibility and limits: an unwired contract for a later collection and view slice. No collection, schema, API or UI change. This source update does not publish a Docker image.
+
+## 1.59.61 — 2026-11-12
+
+1. [PR #742](https://github.com/StealthCat/MrPatchy/pull/742): Fix capped-AI tests depending on the wall clock being inside the bundled price catalog's validity window. CI on main and on every PR would otherwise have started failing at 2026-11-26 00:00 UTC, when the catalog expires. An autouse test fixture now pins a catalog window that covers both the bundled reviewed window and the current clock. Tests marked `bundled_pricing_catalog` opt out. A regression guard confirms that the source constants are unchanged and that a genuinely expired catalog still refuses capped admission without a ledger row. Fixes #741.
+2. Compatibility and limits: test-suite change only. Runtime behaviour is unchanged, and the bundled catalog's expiry still fails closed in production. This source update does not publish a Docker image.
+
+## 1.59.60 — 2026-11-12
+
+1. [PR #722](https://github.com/StealthCat/MrPatchy/pull/722): Add a pure startup-entry provenance contract (`app/startup_provenance.py`). It classifies one startup file and its entries (crontab, anacrontab, systemd unit, drop-in or override, SysV script or `rc.local`) as `verified_default`, `modified`, `unverifiable`, `custom` or `unknown`. Each result carries its basis, verification strength, explicit gaps, a separate baseline field and `safety: not_assessed`. Package ownership or a match against the target's own package database alone is never `verified_default`. Evidence for another package or version is recorded as a gap. Entries in a modified file are classified individually, and default entries whose execution context is unverified or changed are reported as modified. Closes #720.
+2. Compatibility and limits: an unwired contract only. It feeds later wiring of the startup parsers, which still report provenance as `not_assessed`. No collection, schema, API or UI change, and provenance is not a safety verdict. This source update does not publish a Docker image.
+
+## 1.59.59 — 2026-11-12
+
+1. [PR #718](https://github.com/StealthCat/MrPatchy/pull/718): Add a pure, I/O-free SysV contract (`app/sysv_init.py`) that turns captured SysV boot material into typed, bounded records.
+   - `parse_init_script()` reports the interpreter, execute bit, full-text SHA-256 and size, and the LSB `INIT INFO` fields, never the script body.
+   - `parse_rc_links()` resolves start and stop links, with their order numbers, from captured runlevel directories.
+   - `effective_services()` reports enabled runlevels, start orders, orphan links, and observations (not verdicts) such as start and stop links in one runlevel, links that differ from LSB defaults, and start links to non-executable scripts.
+   - `parse_rc_local()` returns bounded logical commands with digests, background flags, and the top-level `exit` with the commands after it flagged. An `exit` inside a conditional, loop or function is not treated as top-level, and invalid text becomes a gap instead of an error.
+   - Closes #717.
+2. Compatibility and limits: an unwired contract only. No collection, schema, API or UI change. Native collection, inventory wiring and provenance remain open in roadmap F. This source update does not publish a Docker image.
+
+## 1.59.58 — 2026-11-12
+
+1. [PR #721](https://github.com/StealthCat/MrPatchy/pull/721): The notification bell panel shows a live-update status line and the last synchronization time.
+   - The live-update state is connecting, live, reconnecting, unavailable (polling only after a refused stream), polling only, or delayed after a failed refresh.
+   - A refused stream is retried only after a successful refresh, with a doubling backoff from 30 seconds to 10 minutes.
+   - The sync time advances only on successful list and count refreshes, with the ISO time in a tooltip. Before the first success it shows "Not yet synchronized".
+   - The line states that it reflects notification delivery only, not collector, agent or AI health.
+   - Closes #719.
+2. Compatibility and limits: a client-only change, with no API or schema change. This source update does not publish a Docker image.
+
+## 1.59.57 — 2026-11-12
+
+1. [PR #716](https://github.com/StealthCat/MrPatchy/pull/716): A **Mark shown read** button in the bell panel and notification center marks every notification currently shown as read in one action. It is backed by `POST /api/notifications/read-batch`, which accepts 1–100 displayed `{id, revision}` pairs. Each pair follows the single-item revision rule, so an event that escalated or reopened after the page loaded stays unread at its newer revision. Missing or role-hidden events are skipped without a write or disclosure. Malformed, duplicate, empty, oversized or future-revision batches are rejected before any write. One `read notifications` audit row is written per changing batch, and dismiss state is untouched. Closes #715.
+2. Compatibility and limits: an additive per-user endpoint and UI action, with no schema change. Read state remains per-user UI state and never acknowledges an alert, resolves an incident or authorizes a response. This source update does not publish a Docker image.
+
+## 1.59.56 — 2026-11-12
+
+1. [PR #712](https://github.com/StealthCat/MrPatchy/pull/712): Add a pure, I/O-free anacrontab and at-queue parsing contract (`app/scheduled_jobs.py`). `parse_anacrontab()` turns captured anacrontab text into typed, bounded job records: period, delay, identifier, a bounded command with a full-text SHA-256, and any directories named by `run-parts`. Only ASCII digits are accepted in numeric fields, so other numeric characters such as superscripts become coverage gaps instead of errors. Duplicate identifiers are flagged. Environment values are withheld (only names are returned), while `START_HOURS_RANGE` and `RANDOM_DELAY` are validated and disclosed. At spool job files are parsed into bounded records in the same way, and malformed or over-limit data is reported as coverage gaps. Closes #711.
+2. Compatibility and limits: an unwired contract only. No schema, API, UI, agent or response change. Native collection, inventory wiring, provenance and classification remain open in roadmap F, along with two documented non-ASCII parser fidelity edges. This source update does not publish a Docker image.
+
+## 1.59.55 — 2026-11-12
+
+1. [PR #714](https://github.com/StealthCat/MrPatchy/pull/714): Fleet AI logs gain an administrator-only **Fleet known-good cache** panel, loaded on demand from the existing `GET /api/ai/known-good/summary`. It shows active and revoked candidates, retained reuse assessments and reuse assessments on revoked candidates. When reuse is linked to revoked candidates, a review note explains that the original results are unchanged and how to request Re-triage. The panel states that these are record counts only: they do not verify context, count misses or estimate savings, and reuse grants no approval. Malformed counts render as "Unavailable", a failed request shows a fixed retryable message, and stale responses after navigation are discarded. Closes #713.
+2. Compatibility and limits: a client-only addition using an existing administrator API, with no API or schema change. Viewers never request the endpoint. This source update does not publish a Docker image.
+
+## 1.59.54 — 2026-11-12
+
+1. [PR #707](https://github.com/StealthCat/MrPatchy/pull/707): Administrators are notified when an AI-proposed security-incident or startup-change response plan awaits review. A leader-only periodic reconciler publishes one administrator-only, medium-severity notification per reviewable draft (younger than 24 hours, on an active server). It links to the server tab where the plan is reviewed: Security for incident plans and File integrity for startup-change plans. Approval, supersession, the 24-hour expiry, plan deletion and server deletion or deactivation each resolve the notification exactly once. The plan's own severity and text never reach the payload, and unchanged passes add no revisions. Closes #706.
+2. Compatibility and limits: an additive notification producer that writes only notification rows. It changes no plan, incident, approval or response-authorization state. Each pass reads at most 500 rows per query, and a still-reviewable draft beyond that bound stays active rather than being falsely resolved. This source update does not publish a Docker image.
+
 ## 1.59.53 — 2026-11-12
 
 1. [PR #705](https://github.com/StealthCat/MrPatchy/pull/705): Startup-change (persistence) incidents now publish administrator-only in-app notifications that link to the server's File integrity tab, so they appear in the bell, notification center, SSE stream and arrivals cursor. A new incident publishes one medium-severity active event. Repeat detections of an open incident add nothing, while a repeat detection of a closed incident reopens it. Administrator closure resolves the event, reopening a closed incident re-activates it, and deleting a server resolves its active events while keeping the incidents. Reasons are fixed text stating that a change is not a malware verdict; no endpoint paths, hashes or link targets reach the payload. Publishing shares the incident transaction. Closes #704.

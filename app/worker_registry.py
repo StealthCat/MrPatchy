@@ -12,7 +12,7 @@ from functools import lru_cache
 from fastapi import HTTPException
 from sqlalchemy import select
 from .coordination import Lock
-from .db import Session,Setting,audit
+from .db import DATA,Session,Setting,audit
 from . import ai_transport
 
 log=logging.getLogger(__name__)
@@ -20,6 +20,9 @@ PREFIX='worker-registry:'
 FRESH_SECONDS=120
 POOL_CAPACITY={'jobs':2,'polls':8,'ai':4}
 CONTROL_PREFIX='worker-control:'
+ID_PATTERN=r'[A-Za-z0-9_.:-]{1,48}'
+# Generated identities persist in numbered slots on the data volume; replicas sharing it take distinct free slots.
+IDENTITY_SLOTS=64
 GAPS=[
     'Self-reported scheduler-loop liveness; storage, secrets, target access and operational readiness are not independently assessed.',
     'Expected worker identities come from controller configuration; unconfigured nodes, endpoint agents and GCP integration nodes are not inventoried here. Controller web instances are listed separately below.',
@@ -80,17 +83,61 @@ def record_key(identity):
 
 class IdentityLost(RuntimeError):pass
 
+def _slot_identity(path):
+    """Read a slot's identity, creating it atomically when absent; None when unreadable or invalid."""
+    try:
+        if not path.exists():
+            temporary=path.with_name('.'+path.name+'.'+uuid.uuid4().hex)
+            temporary.write_text(uuid.uuid4().hex+'\n')
+            try:os.link(temporary,path)  # atomic create-if-absent: a concurrent creator's identity wins
+            except FileExistsError:pass
+            finally:temporary.unlink()
+        identity=path.read_text(encoding='ascii').strip()
+    except (OSError,UnicodeError) as error:
+        log.warning('Persistent worker identity slot %s is unreadable (%s); skipping it',path.name,type(error).__name__)
+        return None
+    if not re.fullmatch(ID_PATTERN,identity):
+        # Keep the file for inspection instead of silently replacing an identity.
+        log.warning('Persistent worker identity slot %s is invalid; skipping it',path.name)
+        return None
+    return identity
+
+def claim_generated_identity(role):
+    """Claim a stable generated identity so restarts, container recreation and upgrades keep one registration.
+
+    Slots live on the data volume (DATA_DIR) per role. The existing cross-process identity lock
+    decides ownership: each running process holds a distinct slot, and a restarted process
+    reclaims the lowest free one. Without usable persistent storage, fall back to a boot-only ID.
+    """
+    directory=DATA/'worker-identities'/role
+    try:directory.mkdir(parents=True,exist_ok=True)
+    except OSError as error:
+        log.warning('Persistent worker identity storage is unavailable (%s); using a boot-only identity',type(error).__name__)
+    else:
+        for slot in range(1,IDENTITY_SLOTS+1):
+            identity=_slot_identity(directory/('slot-'+str(slot).zfill(2)))
+            if identity is None:continue
+            lock=Lock('worker-identity:'+identity)
+            if lock.acquire(False):return identity,lock
+        log.warning('All %d persistent worker identity slots are in use; using a boot-only identity',IDENTITY_SLOTS)
+    identity=uuid.uuid4().hex;lock=Lock('worker-identity:'+identity)
+    if not lock.acquire(False):raise ValueError('Worker identity is already in use')
+    return identity,lock
+
 class Registration:
     def __init__(self,role='worker'):
-        self.id=os.getenv('MRPATCHY_WORKER_ID') or uuid.uuid4().hex
-        if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,48}',self.id):raise ValueError('MRPATCHY_WORKER_ID must use 1-48 letters, numbers, dot, underscore, colon or hyphen')
+        configured=os.getenv('MRPATCHY_WORKER_ID')
+        if configured and not re.fullmatch(ID_PATTERN,configured):raise ValueError('MRPATCHY_WORKER_ID must use 1-48 letters, numbers, dot, underscore, colon or hyphen')
         if role not in ('worker','embedded'):raise ValueError('Unsupported worker role')
+        # Without a configured ID, the identity (and its lock) is claimed from a persistent slot on entry.
+        self.id=configured or None
         self.role=role;self.boot=uuid.uuid4().hex;self.started=time.time();self.monotonic=time.monotonic();self.last=0
         self.deployment=os.getenv('MRPATCHY_DEPLOYMENT_TYPE','process')
         if self.deployment not in ('docker','process'):raise ValueError('Unsupported reported deployment type')
-        self.version=source_version();self.capacity=capacities();self.ai_http_capacity=ai_transport.connection_limit();self.draining=False;self.control_revision=0;self.last_state=None;self.lock=Lock('worker-identity:'+self.id)
+        self.version=source_version();self.capacity=capacities();self.ai_http_capacity=ai_transport.connection_limit();self.draining=False;self.control_revision=0;self.last_state=None;self.lock=Lock('worker-identity:'+self.id) if self.id else None
     def __enter__(self):
-        if not self.lock.acquire(False):raise ValueError('Worker identity is already in use; choose a unique MRPATCHY_WORKER_ID')
+        if self.lock is None:self.id,self.lock=claim_generated_identity(self.role)
+        elif not self.lock.acquire(False):raise ValueError('Worker identity is already in use; choose a unique MRPATCHY_WORKER_ID')
         try:self.write('reporting',False,[],0,False,True)
         except Exception:self.lock.release();raise
         return self
