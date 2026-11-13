@@ -27,7 +27,10 @@ incomplete.
 Limitations: only plain decimal login.defs values are accepted (shadow-utils
 also reads octal and hexadecimal, which are reported as gaps); a vendor
 ``/usr/etc/login.defs`` is not merged; ``default_runtime_dir`` is the logind
-``/run/user/<uid>`` convention, not an observed runtime directory.
+``/run/user/<uid>`` convention, not an observed runtime directory; ``getent
+passwd`` does not enumerate every NSS backend (for example sssd/LDAP with
+``enumerate = false``), so directory accounts that only open logind sessions
+can be missing from an otherwise complete result.
 """
 from __future__ import annotations
 
@@ -215,6 +218,16 @@ def candidate_accounts(passwd: Any, login_defs: Any, linger: Any) -> dict[str, A
     by_name = {a['name']: a for a in passwd['accounts'] if isinstance(a, dict) and _valid_account(a.get('name'))}
     for name in sorted(lingering - by_name.keys()):
         gaps.append(_gap('linger_account_unknown', name))
+    # A user manager runs per UID (user@<uid>.service, /run/user/<uid>), so
+    # several names sharing one UID would attribute one manager to more than
+    # one account (possibly with different homes). That is ambiguous: like a
+    # duplicate name, every candidate on that UID is dropped and reported.
+    names_by_uid: dict[int, list[str]] = {}
+    for name in sorted(by_name):
+        uid = by_name[name].get('uid')
+        if isinstance(uid, int):
+            names_by_uid.setdefault(uid, []).append(name)
+    reported_uids: set[int] = set()
     accounts: list[dict[str, Any]] = []
     for name in sorted(by_name):
         entry = by_name[name]
@@ -229,6 +242,11 @@ def candidate_accounts(passwd: Any, login_defs: Any, linger: Any) -> dict[str, A
         if name in lingering:
             reasons.append('lingering')
         if not reasons:
+            continue
+        if len(names_by_uid[uid]) > 1:
+            if uid not in reported_uids:
+                reported_uids.add(uid)
+                gaps.append(_gap('passwd_duplicate_uid', f"{uid}: {','.join(names_by_uid[uid])}"))
             continue
         home = entry.get('home')
         if home is None or home == '/':

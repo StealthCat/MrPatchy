@@ -3258,8 +3258,12 @@ lingering account. Each one has a `default_runtime_dir` of `/run/user/<uid>` (th
 logind convention, not an observation) and an `interactive_shell` flag.
 Non-interactive accounts are kept, because lingering or `su -s` sessions still
 start their manager. Lingering names missing from passwd, unusable homes, and
-incomplete or uncollected upstream observations are reported as gaps. A vendor
-`/usr/etc/login.defs` is not merged. Running the collection commands, observed
+incomplete or uncollected upstream observations are reported as gaps. Because a
+user manager runs per UID, candidates whose UID is shared by more than one passwd
+name are dropped and reported as `passwd_duplicate_uid`. A vendor
+`/usr/etc/login.defs` is not merged, and `getent passwd` does not enumerate every
+NSS backend (for example sssd/LDAP with `enumerate = false`), so such directory
+accounts can be missing from a complete result. Running the collection commands, observed
 runtime directories, runtime unit state, UI and AI classification remain open.
 
 Worker checkpoint (issue #702, per-user units): the same contract adds

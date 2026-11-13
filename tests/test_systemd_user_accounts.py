@@ -104,6 +104,26 @@ def test_candidates_report_upstream_gaps_and_unknown_lingering_accounts():
     assert _codes(partial) == ['passwd_incomplete']
 
 
+def test_candidates_drop_and_report_names_sharing_one_uid():
+    passwd = parse_passwd('root:x:0:0:r:/root:/bin/bash\ntoor:x:0:0:r:/root:/bin/sh\n'
+                          'alice:x:1000:1000::/home/alice:/bin/bash\n'
+                          'alias:x:1000:1000::/srv/alias:/bin/bash\n'
+                          'carol:x:1002:1002::/home/carol:/bin/bash\n'
+                          'svc:x:998:998::/var/lib/svc:/usr/sbin/nologin\n'
+                          'svc2:x:998:998::/var/lib/svc2:/usr/sbin/nologin\n')
+    assert passwd['complete']
+    result = candidate_accounts(passwd, parse_login_defs(''), {'accounts': [], 'complete': True})
+    assert [a['account'] for a in result['accounts']] == ['carol']
+    assert result['gaps'] == [{'code': 'passwd_duplicate_uid', 'detail': '1000: alias,alice'},
+                              {'code': 'passwd_duplicate_uid', 'detail': '0: root,toor'}]
+    assert not result['complete']
+    # svc/svc2 share UID 998 but neither is a candidate (not root, outside the range, not lingering),
+    # so the exact gap list above holds no 998 entry; once one of them lingers the UID is ambiguous.
+    lingering = candidate_accounts(passwd, parse_login_defs(''), {'accounts': ['svc'], 'complete': True})
+    assert {'code': 'passwd_duplicate_uid', 'detail': '998: svc,svc2'} in lingering['gaps']
+    assert 'svc' not in [a['account'] for a in lingering['accounts']]
+
+
 def test_candidates_compose_with_resolve_user():
     result = candidate_accounts(parse_passwd(PASSWD), parse_login_defs(''), {'accounts': [], 'complete': True})
     alice = next(a for a in result['accounts'] if a['account'] == 'alice')
