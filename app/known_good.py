@@ -513,12 +513,17 @@ def summary(s):
     return dict(s.execute(statement).mappings().one())
 
 
-def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action):
+def _invalidate(s, fingerprint, version, actor, reason, revoked_at, action, strict=True):
     saved = s.scalar(select(Entry).where(
         Entry.fingerprint == fingerprint).with_for_update())
+    if not strict and (saved is None or not saved.active):
+        # A concurrent contradiction (or an administrator) already revoked
+        # this exact candidate after our unlocked lookup. The goal state holds,
+        # so the caller's verdict save must proceed rather than roll back.
+        return None
     if saved is None:
         raise LookupError('Known-good candidate not found')
-    if saved.version != version:
+    if strict and saved.version != version:
         raise ValueError('Known-good candidate version changed; reopen the assessment before submitting')
     if not saved.active:
         raise ValueError('Known-good candidate is already revoked; reopen the assessment to review its current state')
@@ -563,9 +568,12 @@ def invalidate_contradiction(s, row, revoked_at=None):
         return None
     reason = (f'Retained AI assessment {row.id} classified the same exact '
         f'verified context as {risk}; every linked assessment requires review.')
+    # Idempotent under the row lock: the exact fingerprint is contradicted
+    # whatever version is current, and an already revoked candidate is left
+    # untouched (its first contradiction or revocation remains the record).
     return _invalidate(s, hit['fingerprint'], hit['version'],
         'assessment:'+row.id, reason, revoked_at,
-        'invalidate contradicted known-good candidate')
+        'invalidate contradicted known-good candidate', strict=False)
 
 
 def _contradiction(s, saved):
