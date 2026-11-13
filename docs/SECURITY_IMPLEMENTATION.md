@@ -2330,6 +2330,22 @@ no lookup, publication, revocation, approval or response semantics. Recording
 review completion, notifying administrator-initiated revocations, hit/miss
 reasons and saved-call estimates remain open.
 
+Worker checkpoint #781 records administrator review completion for a revoked
+candidate. The admin-only, CSRF-protected `POST /api/ai/known-good/{fingerprint}/review`
+takes the expected version, the expected revocation time and a review note. It
+runs under the same `ai-triage` lock as revocation and is audited. The new
+`ai_known_good_reviews` table, created without altering existing tables, binds
+the review to the fingerprint, version, revocation time and reviewed linked
+count. Assessment history reports `review_required: false` with reviewer, time and
+note only while all four still match, so a new revocation or another linked
+assessment requires review again. The summary adds
+`reuse_assessments_pending_review` and the fleet panel's review notice uses it.
+Recording review resolves any active fleet known-good bell event for the
+candidate, whichever kind produced it, with fixed text. Review never reactivates the candidate, approves a
+behavior, rewrites an assessment or authorizes a response; active, unknown,
+changed or already-reviewed revocations are refused. Per-assessment review
+remains out of scope.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -2356,22 +2372,6 @@ snapshots. It is not a provider invoice, does not measure misses and does not
 predict what a fresh investigation would cost today. Lookup, publication,
 revocation, pause, budget, role, approval and response boundaries are
 unchanged. Hit/miss reasons and matched production acceptance remain open.
-
-Worker checkpoint #781 records administrator review completion for a revoked
-candidate. The admin-only, CSRF-protected `POST /api/ai/known-good/{fingerprint}/review`
-takes the expected version, the expected revocation time and a review note. It
-runs under the same `ai-triage` lock as revocation and is audited. The new
-`ai_known_good_reviews` table, created without altering existing tables, binds
-the review to the fingerprint, version, revocation time and reviewed linked
-count. Assessment history reports `review_required: false` with reviewer, time and
-note only while all four still match, so a new revocation or another linked
-assessment requires review again. The summary adds
-`reuse_assessments_pending_review` and the fleet panel's review notice uses it.
-Recording review resolves any active fleet known-good bell event for the
-candidate with fixed text. Review never reactivates the candidate, approves a
-behavior, rewrites an assessment or authorizes a response; active, unknown,
-changed or already-reviewed revocations are refused. Per-assessment review
-remains out of scope.
 
 ### Throttling, daily cap and unthrottled operation
 
