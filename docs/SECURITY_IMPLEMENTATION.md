@@ -2904,6 +2904,22 @@ exploitation detectors, typed automatic containment, server/fleet views,
 notifications and real-target acceptance remain planned. A vulnerable version, an
 advisory match or AI output still authorizes no containment.
 
+### Per-server advisory applicability — worker checkpoint #783
+
+The opt-in Operations advisory check now applies `cve_exposure.classify()` to the real OSV results it stores for a server.
+- **Full records.** `querybatch` returns advisory IDs only. For each distinct matched ID, the scan fetches the full record from `https://api.osv.dev/v1/vulns/{id}` without following redirects. It fetches at most 200 records per scan.
+- **Exact match.** Each record is classified against the server's exact ecosystem, source package and installed source version.
+- **Stored fields.** Each stored result item gains an `applicability` list (`affected`, `fixed`, `unaffected` or `uncertain`, with the reason, the CVE aliases and the lowest complete fixed version). The scan gains a `summary` of counts. The existing `vulnerabilities` and `coverage` fields remain.
+- **Fail closed.** A retrieval failure, a record whose ID does not match, an invalid advisory ID or the detail bound yields `uncertain`. None of them ever yields `unaffected`.
+- **UI.** The Reviewed fleet workflows dialog shows the counts and an escaped per-advisory status list. The raw result is kept in a collapsible section.
+- **No authority.** Classification selects no patches, triggers no response or containment and calls no AI provider. The coverage text states that `affected` is version applicability, not exploitation evidence.
+- **Unchanged.** No schema change. RPM keeps its updateinfo path.
+
+Remaining for requirement D:
+- persisted per-endpoint exposure windows from publication through verified patch activation;
+- scheduled scans and notifications;
+- exploitation monitoring and containment wiring.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**

@@ -302,6 +302,7 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .score { display:inline-flex; gap:2px; align-items:baseline; font-size:22px; color:var(--mint); font-weight:700; font-variant-numeric:tabular-nums; }.score small { display:inline; font-size:10px; }.score.important { color:var(--amber); }.score.urgent { color:var(--red); }
 .installation-cell { min-width:180px; max-width:260px; }.installation-cell strong { font-size:12px; }.installation-cell summary { font-size:11px; margin-top:10px; }.installation-cell p { margin-top:10px; }
 .status-facts { display:flex; flex-wrap:wrap; gap:22px; margin-bottom:16px; color:var(--muted); font-size:12px; }.status-facts strong { font-size:19px; color:var(--mint); margin-right:4px; }
+.advisory-applicability { list-style:none; padding:0; margin:0 0 14px; display:grid; gap:10px; } .advisory-applicability .help { margin:2px 0 0; overflow-wrap:anywhere; }
 .log-message { max-width:450px; overflow-wrap:anywhere; }.role-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:24px; }
 #ai-log-table td { vertical-align:top; }#package-history-table td { vertical-align:top; overflow-wrap:anywhere; }
 @media(max-width:760px) { .role-grid { grid-template-columns:1fr; gap:10px; }.selection-bar { align-items:flex-start; }.selection-bar .actions { width:100%; }.status-facts { gap:12px; } }
