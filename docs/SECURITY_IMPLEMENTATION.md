@@ -3718,6 +3718,35 @@ No runtime code, role, authorization or complete-installation behavior changes.
 - Give workers a role-specific startup path that does not initialize web/TLS configuration, require a local Caddy/app container or inherit a local-app Compose dependency. Keep web administration and TLS configuration in the controller role.
 - Support independent app/worker deployment and same-host worker scaling without fixed container-name conflicts. Use compatible versioned application images and explicit schema/protocol compatibility checks so mismatched workers fail clearly before claiming jobs.
 
+### Worker-role environment example — worker checkpoint #852
+
+`.env.worker.example` is the role-specific environment template for
+`compose.worker.yaml` and the GCP worker overlay. It documents every variable those
+files read: the required `MRPATCHY_CONTROLLER_DATA_VOLUME`, `DATABASE_URL`, the pool
+limits, the drain window, the memory limit, the expected controller inventory and
+`GCP_PROJECT`/`GCP_ZONE`. Its values equal the file defaults. It carries no
+administrator password, domain, ports, OIDC, control-network or fixed worker-ID
+settings and no credentials. `.env.worker` is git- and docker-ignored.
+
+Tests fail when a worker file gains an undocumented variable or the example gains a
+controller-only key. They also check that rendering with the example equals the
+default worker render. CI renders the example.
+
+This is a template only. Remote-machine secret provisioning and installer modes
+remain open.
+
+#### Controller-role environment example — worker checkpoint #854
+
+`.env.controller.example` is the role-specific environment template for
+`compose.controller.yaml` and the GCP controller overlay. It documents the
+variables the extended app and Caddy services and the role files read; its values
+match `.env.example` or the Compose defaults. It has no worker pools, worker ID,
+drain window, worker memory limit or controller data-volume setting, and leaves
+`MRPATCHY_EXPECTED_WORKER_IDS` empty for role-file replicas. Tests check the
+variable set, values and rendered configuration, and CI renders the example.
+This is a template only; remote-machine secret provisioning and installer modes
+remain open.
+
 ### Database, secrets and persistent state
 
 - Use MySQL 8+ for supported multi-machine deployments. Retain SQLite for the local/shared-local-filesystem deployment; do not present a network-mounted SQLite database as the remote-worker solution.

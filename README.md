@@ -425,6 +425,10 @@ docker compose up -d --build --scale worker=3
 
 For a controller with separately scaled workers on the same Docker host, use the fixed `compose.controller.yaml` (app and Caddy) and `compose.worker.yaml` (workers on the controller's existing data volume) files. See *Fixed controller and worker files* in [Compose configuration](docs/COMPOSE_CONFIGURATION.md).
 
+For the worker project, copy `.env.worker.example` to `.env.worker`, review it, and pass it with `--env-file` when starting `compose.worker.yaml`. The template contains only worker-role settings and is ignored by Git and Docker builds; it also prevents a controller `.env` in the same checkout from supplying variables to the worker project. It does not provision remote-host secrets or shared state, or add controller-only/join-worker installer modes.
+
+For a controller-only project, copy `.env.controller.example` to `.env`, review it, and set the administrator password, domain and public URL before starting `compose.controller.yaml`. It contains controller and Caddy settings without worker pools, IDs, drain settings or the worker data-volume name; `MRPATCHY_EXPECTED_WORKER_IDS` stays empty for role-file replicas. `.env.example` remains the template for the complete installation.
+
 For GCP deployments using the split role files, pair `compose.controller.yaml` with `compose.controller.gcp.yaml` and `compose.worker.yaml` with `compose.worker.gcp.yaml`. Do not layer `compose.gcp.yaml` onto a role file because it adds a partial service for the other role. Build and upgrade both roles from the same checkout because they share the `mrpatchy:gcp` image tag. This supports attached service accounts; WIF installs stay on the complete `compose.yaml` path with `./gcp-compose.sh`. See [Compose configuration](docs/COMPOSE_CONFIGURATION.md#google-cloud-iap-runtime-with-the-role-files).
 
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
@@ -686,6 +690,8 @@ incident-plan hourly allowances. Settings shows the conservative suggested share
 rate (the lower existing automatic allowance); an administrator must review and save
 the migration, which is audited. Fresh installations use shared rate mode. The legacy
 incident/startup-plan queue allowance is disabled only after that explicit migration.
+
+Administrators using legacy mode can inspect process-triage, update-scoring and automatic incident/startup-plan hourly allowances in Investigations → Shared AI start gates, including prior-hour usage and the next eligibility time when an allowance is exhausted. These per-purpose holds are displayed separately and do not change the shared global gates or admission behavior.
 
 **Unthrottled by Mr Patchy** removes this application pacing only. Finite AI worker
 concurrency, provider limits, global/per-server pause, lifecycle checks, roles and
