@@ -953,9 +953,7 @@ is set, each listed controller that is missing, stale, stopped, has an invalid o
 unrecognized report, or runs a different version raises one administrator-only
 in-app notification, which resolves
 when it reports again. An invalid setting raises its own notification. These
-notifications grant no readiness, failover or response authority. Endpoint-agent
-resource metrics and readiness, GCP-node inventory and remote deployment acceptance
-remain planned. Rebuild the controller and keep worker versions matched.
+notifications grant no readiness, failover or response authority. Activity → Workers → Endpoint agents now shows root filesystem space and inodes, available memory, and CPU/memory pressure from retained telemetry. Missing or invalid values stay unknown; low-resource flags are advisory and do not change health, alerts, repairs or authorization. Endpoint-agent readiness, low-resource notifications, history/hysteresis, time sync, certificate expiry, GCP-node inventory and remote deployment acceptance remain planned. Rebuild the controller and keep worker versions matched.
 
 
 ### Worker controller/key startup gate (v0.13.0)
