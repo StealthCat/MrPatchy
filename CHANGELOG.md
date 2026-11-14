@@ -1,3 +1,7 @@
+## 1.61.5 — 2026-11-14
+
+1. [PR #886](https://github.com/StealthCat/MrPatchy/pull/886): Made the startup-change notification redaction regression test deterministic: it checks the complete fixture hash, so random event or subject IDs containing a short repeated substring no longer cause false failures. A separate leak-injection regression keeps the full-hash redaction check. Test-only change; no runtime or compatibility impact. Fixes #885.
+
 ## 1.61.4 — 2026-11-14
 
 1. [PR #880](https://github.com/StealthCat/MrPatchy/pull/880): Settings → AI now proposes a shared rate no higher than any enabled legacy per-purpose hourly allowance, including the fixed 10/hour automatic incident/startup-plan ceiling. Administrators can apply the suggestion to the form; the existing preview, confirmation, revision check and audit flow controls saving. Compatibility: additive fields in the admin-only settings response; no schema, admission, reservation, pause, lifecycle, role or response-authorization change. Saving the conservative proposal can lower throughput for purposes with higher legacy limits; raising the shared rate remains subject to the existing expansion preview and confirmation. Migration remains explicit; no unattended migration is added. Fixes #878 and completes #879.
