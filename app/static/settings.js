@@ -115,6 +115,39 @@ function renderAISettings(data,revision,container){
  const markChanged=()=>{saveResult.textContent='Unsaved changes.';testResult.textContent='';toggleManual();};
  form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();
  const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
+ // Effects of this change (#871): read-only preview of admission/spend ceilings before save.
+ $('#ai-test-result').insertAdjacentHTML('afterend','<div class="notice ai-control-effects" id="ai-control-effects" role="status" aria-live="polite" hidden></div>');
+ const effectsPanel=$('#ai-control-effects'),CONTROL_KEYS=['ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone','ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled'];
+ const controlBody=()=>{const f=new FormData(form);return {ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:String(f.get('ai_budget_timezone')||'').trim(),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled')};};
+ const controlsValid=()=>CONTROL_KEYS.every(name=>{const field=form.elements[name];return !field||field.checkValidity();});
+ const effectsHtml=result=>result.changed?`<strong>Effects of this change</strong><ul class="ai-control-effects-list">${result.effects.map(item=>`<li${item.expands?' class="expands"':''}>${item.expands?'<strong>Expands:</strong> ':''}${esc(item.text)}</li>`).join('')}</ul><small>${esc(result.limitation)}</small>`:'<strong>Effects of this change</strong><br>No change to Mr Patchy admission or spend ceilings.';
+ let effectsGeneration=0,effectsTimer=0;
+ const refreshEffects=()=>{
+  clearTimeout(effectsTimer);const ticket=++effectsGeneration;
+  if(!controlsValid()){effectsPanel.hidden=false;effectsPanel.textContent='Effects of this change: correct the highlighted control values to preview them.';return;}
+  effectsTimer=setTimeout(async()=>{
+   try{const result=await api('/settings/ai/preview','POST',controlBody());if(!alive()||ticket!==effectsGeneration)return;effectsPanel.hidden=false;effectsPanel.innerHTML=effectsHtml(result);}
+   catch(error){if(alive()&&ticket===effectsGeneration){effectsPanel.hidden=false;effectsPanel.textContent='Effects could not be previewed. '+error.message;}}
+  },250);
+ };
+ const onControlEdit=event=>{if(CONTROL_KEYS.includes(event.target?.name))refreshEffects();};
+ form.addEventListener('input',onControlEdit);form.addEventListener('change',onControlEdit);
+ const confirmExpansion=async body=>{
+  const controls=Object.fromEntries(CONTROL_KEYS.map(key=>[key,body[key]]));
+  let result;
+  try{result=await api('/settings/ai/preview','POST',controls);}
+  catch(error){if(alive())saveResult.textContent='AI settings were not saved. Effects could not be previewed: '+error.message;return false;}
+  if(!alive())return false;
+  if(!result.expands)return true;
+  return new Promise(resolve=>{
+   modal('Confirm expanded AI admission or spend',`<p>Saving these AI settings lets Mr Patchy start more AI work or spend more than the saved controls allow:</p><ul id="ai-expansion-list">${result.expansions.map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p class="help">${esc(result.limitation)}</p><div class="actions"><button type="button" class="primary" id="ai-expansion-confirm">Save with these expansions</button><button type="button" id="ai-expansion-cancel">Cancel</button></div>`);
+   const dialog=$('#modal'),dialogRevision=modalRevision;let settled=false;
+   const finish=value=>{if(settled)return;settled=true;dialog.removeEventListener('close',onClose);if(dialog.open&&dialogRevision===modalRevision)dialog.close();resolve(value);};
+   const onClose=()=>finish(false);dialog.addEventListener('close',onClose);
+   $('#ai-expansion-confirm').onclick=()=>finish(true);$('#ai-expansion-cancel').onclick=()=>finish(false);
+   $('#ai-expansion-cancel').focus();
+  });
+ };
  const load=async()=>{
   if(busy)return;const ticket=++listGeneration,version=keyRevision;
   refresh.disabled=true;status.textContent='Loading models using the saved API key…';
@@ -149,10 +182,12 @@ function renderAISettings(data,revision,container){
   if(test&&!model){saveResult.textContent='Select or enter a model to test.';return;}
   const body={ai_model:model,ai_enabled:f.has('ai_enabled'),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:f.get('ai_budget_timezone').trim()};
   if(controlsRevision)body.expected_ai_controls_revision=controlsRevision;
+  if(!await confirmExpansion(body)){if(alive()&&!saveResult.textContent.startsWith('AI settings were not saved'))saveResult.textContent='Save cancelled. Nothing was saved; your entries are still in the form.';return;}
   ++listGeneration;refresh.disabled=false;setBusy(true);saveResult.textContent='Saving AI settings…';testResult.textContent='';
   try{
    const response=await api('/settings/ai','PUT',body);if(!alive())return;
    keyRevision=response.api_key_revision;if(response.ai_controls_revision)controlsRevision=response.ai_controls_revision;
+   effectsPanel.hidden=true;effectsPanel.textContent='';
    $('#ai-saved-model').textContent='Saved model: '+(response.ai_model||'None');
    saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';
    if(test){
