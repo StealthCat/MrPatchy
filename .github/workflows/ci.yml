@@ -72,6 +72,8 @@ jobs:
           docker compose --env-file .env.example -f compose.controller.yaml config --quiet
           docker compose -p mrpatchy-workers --env-file .env.worker.example -f compose.worker.yaml config --quiet
           MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data docker compose -p mrpatchy-workers -f compose.worker.yaml config --quiet
+          GCP_PROJECT=ci-project GCP_ZONE=us-central1-a docker compose --env-file .env.example -f compose.controller.yaml -f compose.controller.gcp.yaml config --quiet
+          GCP_PROJECT=ci-project GCP_ZONE=us-central1-a MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data docker compose -p mrpatchy-workers -f compose.worker.yaml -f compose.worker.gcp.yaml config --quiet
 
   # Development PRs may retain main's version. This separate merge gate stays red
   # until the coordinator adds a newer version and this PR's changelog entry.
