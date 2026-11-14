@@ -598,8 +598,14 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
         def meta(value,kind,default):
             if kind is None:return default
             return None if str(kind).lower()=='null' else value
+        # Per-server AI policy is administrator-only (see server_ai_policy), so other roles get no field.
+        paused=None
+        if user['role']=='admin':
+            from . import ai_policy
+            paused=ai_policy.paused_host_ids(s)
         return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
+            |({} if paused is None else {'ai_paused':h.id in paused})
             for h,a,ak,o,ok,m,mk,saved in rows]
 
 def saved_query_or_404(s,query_id):

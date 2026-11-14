@@ -2119,6 +2119,22 @@ checks carry no server data and remain available. No target helper or schema upg
 is required; rebuild the controller. Broader correlation, retention and other major
 work above remain unfinished.
 
+Worker checkpoint #864 shows the per-server pause fleet-wide in **Servers**.
+- **API:** for administrators only, `GET /api/hosts` adds `ai_paused` to each row.
+  It comes from one bounded read of the per-server policy rows
+  (`ai_policy.paused_host_ids`) and uses the provider gate's own rule. A missing
+  policy is resumed. A non-dict value, or a `paused` field that is not exactly
+  `False`, is paused, so corrupt policy is displayed fail-closed.
+- **Roles:** viewers and operators get no field, matching the admin-only
+  per-server policy endpoint.
+- **Directory:** each paused card shows an **AI paused** badge. An administrator
+  **Server AI** filter offers All, AI paused and AI not paused; Reset and logout
+  clear it.
+- **Meaning:** the help text says the badge is the stored setting only. A server
+  that is not paused still needs global AI to be enabled and configured.
+- **Unchanged:** pause/resume semantics, admission, schema, audit and response
+  authorization.
+
 
 ## Planned: faster parallel AI triage and configurable spending controls
 

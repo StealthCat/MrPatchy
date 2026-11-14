@@ -6,7 +6,7 @@ const startupViewContext=new Map();
 const historyViewContext=new Map();
 const activityViewContext=new Map();const investigationViewContext=new Map();
 const fleetReviewContext={q:'',filter:'attention',offset:0};
-const serverListContext={q:"",state:"all",offset:0};
+const serverListContext={q:"",state:"all",ai:"all",offset:0};
 let csrf='',hosts=[],selected='',page='overview',toastTimer,modalRevision=0,releaseRequest=0,renderRevision=0,sessionRevision=0,currentUser=null;
 const date=t=>t?new Date(t*1000).toLocaleString():'Not yet';
 const badge=s=>`<span class="badge ${esc(s)}">${esc(s)}</span>`;
@@ -40,7 +40,7 @@ function loginError(message){$('#login-error').textContent=message;$('#login-err
 function showLogin(reason=''){
  NotificationShell.reset();
  pendingNavToast=null;sessionRevision++;renderRevision++;modalRevision++;releaseRequest++;
- packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',offset:0});csrf='';hosts=[];selected='';currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
+ packageViewContext.clear();aiListContext.clear();assessmentOffsets.clear();startupViewContext.clear();historyViewContext.clear();activityViewContext.clear();investigationViewContext.clear();Object.assign(fleetReviewContext,{q:'',filter:'attention',offset:0});Object.assign(serverListContext,{q:'',state:'all',ai:'all',offset:0});csrf='';hosts=[];selected='';currentUser=null;document.body.dataset.role='viewer';document.title='Sign in · Mr Patchy';
  $('#modal').close();$('#modal-body').replaceChildren();$('#content').replaceChildren();
  $('#toast').style.display='none';clearTimeout(toastTimer);
  loginError(reason);
@@ -221,23 +221,26 @@ async function servers(revision=renderRevision){
  if(location.hash.startsWith('#servers/'))return serverWorkspace(revision);
  const root=$('#content'),state=serverListContext;
  root.innerHTML=heading('Your Linux fleet.','Find a server, review its signals, and open a focused workspace.','<button class="primary" data-admin data-action="add">+ Add server</button>'+(isAdmin()?'<a class="button" href="#servers/deleted">Deleted servers</a>':''))+`
- <section class="card server-directory" aria-label="Managed servers"><div class="toolbar" id="server-list-controls"><label>Find a server<input id="server-list-search" type="search" placeholder="Name, address or architecture" value="${esc(state.q)}"></label><label>Management<select id="server-list-state"><option value="all">All servers</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label><button id="server-list-clear">Reset filters</button></div><p class="help" id="server-list-count" role="status"></p><div id="server-list-cards"></div><div class="actions server-list-pagination"><button id="server-list-prev">Previous</button><span id="server-list-page" class="help"></span><button id="server-list-next">Next</button></div></section>`;
- const search=$('#server-list-search'),filter=$('#server-list-state');filter.value=state.state;
+ <section class="card server-directory" aria-label="Managed servers"><div class="toolbar" id="server-list-controls"><label>Find a server<input id="server-list-search" type="search" placeholder="Name, address or architecture" value="${esc(state.q)}"></label><label>Management<select id="server-list-state"><option value="all">All servers</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>${isAdmin()?'<label>Server AI<select id="server-list-ai"><option value="all">All servers</option><option value="paused">AI paused</option><option value="active">AI not paused</option></select></label>':''}<button id="server-list-clear">Reset filters</button></div>${isAdmin()?'<p class="help">Server AI shows each server\'s stored pause setting. A server that is not paused still needs global AI to be enabled and configured.</p>':''}<p class="help" id="server-list-count" role="status"></p><div id="server-list-cards"></div><div class="actions server-list-pagination"><button id="server-list-prev">Previous</button><span id="server-list-page" class="help"></span><button id="server-list-next">Next</button></div></section>`;
+ const search=$('#server-list-search'),filter=$('#server-list-state'),aiFilter=$('#server-list-ai');filter.value=state.state;
+ // Only administrators receive ai_paused; never let a stale AI filter hide servers from other roles.
+ if(!aiFilter)state.ai='all';else aiFilter.value=state.ai;
  const draw=()=>{
-  const q=state.q.toLocaleLowerCase(),rows=hosts.filter(h=>(state.state==='all'||(state.state==='enabled'?h.enabled!==false:h.enabled===false))&&[h.name,h.address,h.architecture,h.package_manager].some(value=>String(value||'').toLocaleLowerCase().includes(q)));
+  const q=state.q.toLocaleLowerCase(),rows=hosts.filter(h=>(state.state==='all'||(state.state==='enabled'?h.enabled!==false:h.enabled===false))&&(state.ai==='all'||(state.ai==='paused')===(h.ai_paused===true))&&[h.name,h.address,h.architecture,h.package_manager].some(value=>String(value||'').toLocaleLowerCase().includes(q)));
   const visible=pagedRows(state,rows,24,'#server-list');
   $('#server-list-count').textContent=rows.length+' matching of '+hosts.length+' managed servers. Status is the latest stored observation.';
   $('#server-list-cards').innerHTML=rows.length?`<div class="server-directory-grid">${visible.map(serverDirectoryCard).join('')}</div>`:empty(hosts.length?'No matching servers':'No servers enrolled yet',hosts.length?'Change or reset the filters to see your fleet.':'Add a server, prepare its target and verify installation before monitoring begins.');
-  $('#server-list-clear').disabled=!state.q&&state.state==='all'&&state.offset===0;
+  $('#server-list-clear').disabled=!state.q&&state.state==='all'&&state.ai==='all'&&state.offset===0;
  };
  search.oninput=()=>{state.q=search.value;state.offset=0;draw();};filter.onchange=()=>{state.state=filter.value;state.offset=0;draw();};
- $('#server-list-clear').onclick=()=>{Object.assign(state,{q:'',state:'all',offset:0});search.value='';filter.value='all';draw();search.focus();};
+ if(aiFilter)aiFilter.onchange=()=>{state.ai=aiFilter.value;state.offset=0;draw();};
+ $('#server-list-clear').onclick=()=>{Object.assign(state,{q:'',state:'all',ai:'all',offset:0});search.value='';filter.value='all';if(aiFilter)aiFilter.value='all';draw();search.focus();};
  bindPager(state,24,'#server-list',draw);
  draw();
 }
 function serverDirectoryCard(h){
  const link=serverLink(h.id),id=esc(h.id);
- return `<article class="server-directory-card"><div class="server-card-title">${PatchyUI.icon('servers')}<div><a class="server-name" href="${link}"><strong>${esc(h.name)}</strong>${PatchyUI.upgradeBadge(h)}</a><small>${esc(PatchyUI.endpoint(h.address,h.port))}</small></div>${badge(h.enabled===false?'disabled':h.state)}</div><dl class="server-card-facts"><div><dt>Architecture</dt><dd>${esc(h.architecture||'Awaiting enrollment')}</dd></div><div><dt>Last contact</dt><dd>${date(h.last_seen)}</dd></div></dl>${h.error?`<p class="notice server-card-error">${esc(h.error)}</p>`:''}<div class="actions"><a class="button primary" href="${link}">Open server →</a><button data-action="inspect" data-id="${id}" ${h.enabled===false?'disabled':''}>${isAdmin()?'Manage':'Inspect'} ↗</button></div>${isAdmin()?`<div class="actions server-card-management"><button class="quiet" data-host-lifecycle="${id}">${h.enabled===false?'Enable':'Disable'} server</button><button class="quiet" data-host-delete="${id}">Delete server</button></div>`:''}</article>`;
+ return `<article class="server-directory-card"><div class="server-card-title">${PatchyUI.icon('servers')}<div><a class="server-name" href="${link}"><strong>${esc(h.name)}</strong>${PatchyUI.upgradeBadge(h)}</a><small>${esc(PatchyUI.endpoint(h.address,h.port))}</small></div>${badge(h.enabled===false?'disabled':h.state)}</div>${h.ai_paused===true?'<p class="server-card-ai" data-server-ai="paused"><span class="badge warning">AI paused</span> <span class="help">No new provider calls for this server.</span></p>':''}<dl class="server-card-facts"><div><dt>Architecture</dt><dd>${esc(h.architecture||'Awaiting enrollment')}</dd></div><div><dt>Last contact</dt><dd>${date(h.last_seen)}</dd></div></dl>${h.error?`<p class="notice server-card-error">${esc(h.error)}</p>`:''}<div class="actions"><a class="button primary" href="${link}">Open server →</a><button data-action="inspect" data-id="${id}" ${h.enabled===false?'disabled':''}>${isAdmin()?'Manage':'Inspect'} ↗</button></div>${isAdmin()?`<div class="actions server-card-management"><button class="quiet" data-host-lifecycle="${id}">${h.enabled===false?'Enable':'Disable'} server</button><button class="quiet" data-host-delete="${id}">Delete server</button></div>`:''}</article>`;
 }
 async function addServer(){
  modal('Enroll server · Step 1 of 3',`${PatchyUI.enrollment(1)}<p class="help">Enter the endpoint Mr Patchy will reach over SSH.</p><form id="host-form"><div class="form-grid"><label>Display name<input name="name" placeholder="Living-room Pi" required maxlength="120"></label><label>IP address or hostname<input name="address" placeholder="192.168.1.50" required pattern="[A-Za-z0-9:.\\-]+" title="Letters, digits, dots, hyphens and colons only (no underscores or spaces)"></label><label>SSH port<input type="number" name="port" value="22" min="1" max="65535"></label></div><button class="primary">Continue to preparation →</button></form>`);
