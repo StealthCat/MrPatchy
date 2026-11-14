@@ -3474,6 +3474,39 @@ comparable.
 - Referenced scripts are not inspected.
 - No AI classification is made.
 
+Worker checkpoint #848 adds `app/run_parts.py`, a pure, I/O-free contract that
+says whether `run-parts` would execute a stored entry under `/etc/cron.hourly`,
+`/etc/cron.daily`, `/etc/cron.weekly` or `/etc/cron.monthly`. It uses only
+receipt metadata the agent already collects (path, kind, uid and mode) plus the
+host's package family, and returns `eligible`, `skipped` or `unknown` with stable
+reason codes.
+- **Debian family (`debianutils` run-parts, default namespace):** names outside
+  `[A-Za-z0-9_-]+` are skipped, so `backup.sh` or `job.dpkg-old` never runs.
+  The module's results match `run-parts --test` on Ubuntu 24.04 for the same
+  names and modes.
+- **RPM family (cronie run-parts script):** hidden names and names ending in
+  `~`, `,`, `.rpmsave`, `.rpmorig`, `.rpmnew`, `.swp`, `.cfsaved` or `,v` are
+  skipped. The script expands file names unquoted. A name containing a space is
+  word-split and never runs as itself, so it is `skipped` (`rpm_word_split`). A
+  name containing `*`, `?` or `[` is re-expanded, and whether it runs depends on
+  sibling names, so it is `unknown` (`rpm_glob_expansion`). Both cases were
+  reproduced with cronie's loop in bash.
+- **Both:** run-parts runs as root, so any execute bit makes a regular file
+  executable. Nested entries are skipped. Symlinks are `unknown`, because their
+  targets' kind and mode are not recorded. An unknown family, or a missing or
+  malformed kind, uid, mode or path, fails closed to `unknown` or no assessment,
+  and nothing is guessed.
+- **Unchanged:** the agent, receipt, schema, API, UI, baselines, incident
+  evidence and AI payloads. The module is not yet wired into Startup → Files;
+  that follows #772 to avoid overlapping `startup_inventory.page` edits.
+- **Limits:**
+  - These are distribution default rules only.
+  - Invocation options such as `--lsbsysinit` are not evaluated.
+  - cronie `jobs.allow` and `jobs.deny` are not evaluated.
+  - Whether `/etc/crontab`, `0hourly` or anacron actually invokes the directory
+    is not evaluated, including Debian's anacron hand-off.
+  - Script contents are not evaluated.
+
 Remaining roadmap F work is tracked above.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
