@@ -1,3 +1,7 @@
+## 1.61.0 — 2026-11-14
+
+1. [PR #873](https://github.com/StealthCat/MrPatchy/pull/873): Settings → AI now previews the effects of rate, cap, timezone, admission-mode and update-scoring changes; expansion of admission or spend prompts for administrator confirmation in the UI and is recorded in the audit entry. Adds an admin-only, read-only `POST /api/settings/ai/preview`. Compatibility: the endpoint is additive and no schema changes; API saves that bypass the UI preview remain accepted but expansions are audited. The comparison covers Mr Patchy's configured ceilings, not provider limits, concurrency or data sharing; AI admission and response authorization are unchanged.
+
 ## 1.60.2 — 2026-11-14
 
 1. [PR #869](https://github.com/StealthCat/MrPatchy/pull/869): Administrators now receive an admin-only in-app notice while a server's AI integration is paused; resuming or deleting the server resolves it, and a later pause reopens it. The notice uses fixed text, adds no schema, and changes no AI policy or response authorization. Existing paused servers are notified on their next saved pause; there is no startup backfill or SMTP/webhook delivery. MySQL behavior is covered by hosted CI shards; focused local suite evidence uses SQLite.

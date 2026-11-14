@@ -91,6 +91,9 @@ module.exports=async(page,capture)=>{
  await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
  await page.locator('[name=ai_budget_timezone]').fill('America/New_York');
  await page.getByRole('button',{name:'Save AI settings',exact:true}).click();
+ // Raising the cap and moving its reset timezone expand spend, so the save asks first (#871).
+ assert.match(await page.locator('#ai-expansion-list').innerText(),/\$10\.00\/day to \$12\.50\/day[\s\S]*America\/New_York/);
+ await page.locator('#ai-expansion-confirm').click();
  await page.locator('#ai-save-result').filter({hasText:'AI settings saved'}).waitFor();
  const aiState=await (await page.request.get(new URL('/api/settings',page.url()).href)).json();
  assert.equal(aiState.ai_control_mode,'rate_and_daily');assert.equal(aiState.ai_daily_cap_usd,12.5);
