@@ -226,3 +226,52 @@ def test_scheduler_still_queues_scans_as_before(admin):
     with Session() as s:
         queued = s.scalars(select(Job).where(Job.host_id == HOST, Job.state == 'queued')).all()
         assert [job.action for job in queued] == ['security-scan']
+
+
+def test_stuck_pending_scan_past_interval_plus_grace_publishes_stalled(admin):
+    seed(interval=1)
+    scan('stuck', state='queued', age=HOUR + coverage.GRACE_SECONDS - 120)
+    collect()
+    assert items(admin) == []  # a young pending attempt still publishes nothing
+    collect(time.time() + 300)
+    [item] = items(admin)
+    assert item['reason'] == coverage.MESSAGES['stalled'] and item['lifecycle'] == 'active'
+    assert item['severity'] == 'medium' and item['deep_link'] == '#servers/' + HOST + '/security'
+    for word in ('/srv', 'stuck', 'queued since'):
+        assert word not in item['reason']
+    collect(time.time() + 600)
+    [item] = items(admin)
+    assert item['revision'] == 1  # unchanged stalled state adds no revision
+    with Session() as s:
+        job = s.get(Job, 'stuck')
+        assert job.state == 'queued'  # the producer never cancels, retries or recovers the job
+        job.state = 'complete'
+        s.add(Scan(id='stuck', host_id=HOST, created=time.time(), report=report()))
+        s.commit()
+    collect()
+    [item] = items(admin)
+    assert item['revision'] == 2 and item['lifecycle'] == 'resolved' and item['reason'] == coverage.RESOLVED
+
+
+def test_stuck_running_scan_replaces_overdue_with_one_revision(admin):
+    seed()
+    scan('old', age=72 * HOUR)
+    collect()
+    [item] = items(admin)
+    assert item['reason'] == coverage.MESSAGES['overdue'] and item['revision'] == 1
+    scan('hung', state='running', age=24 * HOUR + coverage.GRACE_SECONDS + 60)
+    collect()
+    [item] = items(admin)
+    assert item['reason'] == coverage.MESSAGES['stalled'] and item['revision'] == 2
+    with Session() as s:
+        assert s.scalar(select(func.count()).select_from(Job).where(Job.host_id == HOST)) == 2  # nothing enqueued
+
+
+def test_classify_stalled_boundary_uses_attempt_age():
+    now = time.time()
+    limit = 24 * HOUR + coverage.GRACE_SECONDS
+    for state in ('queued', 'running'):
+        young = type('Job', (), {'id': 'p', 'state': state, 'created': now - limit})()
+        old = type('Job', (), {'id': 'p', 'state': state, 'created': now - limit - 1})()
+        assert coverage.classify(None, young, {'interval_hours': 24}, now) == 'pending'
+        assert coverage.classify(None, old, {'interval_hours': 24}, now) == 'stalled'
