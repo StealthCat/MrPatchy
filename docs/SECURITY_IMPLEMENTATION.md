@@ -3231,6 +3231,34 @@ classify entries or authorize any response. Agent collection, inventory/UI
 wiring, provenance, AI classification and native acceptance remain open, so
 roadmap F is still incomplete.
 
+Worker checkpoint (issue #844): a pure, I/O-free contract (`app/udev_rules.py`)
+parses one captured udev `*.rules` file and a captured listing of the rules
+directories. Rules follow udev(7) and systemd's token validation: comments and
+blank lines are skipped, backslash continuations are joined, and each rule's
+comma-separated `KEY[{attr}]OP"value"` pairs become match and assignment records
+with `LABEL`/`GOTO`, its file and starting line. Plain strings honour `\"` and
+`\\`; `e"..."` strings use C escapes. `RUN` (default `{program}`), `PROGRAM`
+and `IMPORT{program}` become execution records with a bounded command, the
+full-command SHA-256, the program token, the `/usr/lib/udev` and `/lib/udev`
+paths udev searches for a relative name and a flag for `$`/`%` substitutions.
+`RUN{builtin}` and `IMPORT{builtin}` are builtins with no external program, and
+`IMPORT{file|db|cmdline|parent}` are not executions. `PROGRAM`, `IMPORT` and
+`TEST` written with `=`/`+=`/`:=` are recorded as the `==` match udev runs, with
+the written operator kept. Unknown keys, missing or unexpected attributes,
+unknown `RUN`/`IMPORT` types, operators a key does not accept (such as `RUN==`
+or `MODE-=`), quoting and escape errors are line-numbered gaps and the rule is
+skipped, as udev skips it. A `GOTO` with no matching `LABEL` is a gap.
+Effective files apply `/etc/udev/rules.d` > `/run/udev/rules.d` >
+`/usr/local/lib/udev/rules.d` > `/usr/lib/udev/rules.d` > `/lib/udev/rules.d`
+precedence in lexical name order, list shadowed copies as overridden, report a
+`/dev/null` symlink as masking and list non-`.rules` names as ignored. Unknown
+directories and malformed, duplicate or unreadable entries are gaps.
+Over-limit, non-UTF-8 or NUL input yields no partial records, every record
+keeps `origin: not_assessed`, and no rule or command is ever executed. Agent
+collection, catalog `parse`-level wiring, persistence, UI, provenance, AI
+classification and native acceptance remain open, so roadmap F is still
+incomplete.
+
 Worker checkpoint (issue #711): a pure, I/O-free contract
 (`app/scheduled_jobs.py`) parses captured anacrontab text and individual at
 spool jobs into typed records. For anacrontab it returns jobs with numeric or
