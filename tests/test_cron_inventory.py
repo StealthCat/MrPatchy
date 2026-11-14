@@ -149,7 +149,8 @@ def test_view_returns_jobs_search_and_older_agent_state(seeded,monkeypatch):
     rows={r['path']:r for r in data['items']}
     assert rows['/etc/cron.d/backup']['jobs_state']=='parsed' and rows['/etc/cron.d/backup']['cron']['jobs'][0]['command']=='/usr/bin/nightly-backup'
     assert rows['/etc/cron.d/legacy']['jobs_state']=='not_reported' and 'cron' not in rows['/etc/cron.d/legacy']
-    assert data['cron']=={'files':1,'jobs':1,'unparsed':0,'truncated':False,'not_reported':1}
+    assert {k:data['cron'][k] for k in ('files','jobs','unparsed','truncated','not_reported')}=={'files':1,'jobs':1,'unparsed':0,'truncated':False,'not_reported':1}
+    assert data['cron']['loading_family'] is None and data['cron']['skipped_files']==0
     assert [r['path'] for r in seeded.get(url,params={'q':'nightly-backup'}).json()['items']]==['/etc/cron.d/backup']
     assert any('crontab-format' in gap for gap in data['gaps'])
     for role in ('operator','viewer'):
