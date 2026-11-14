@@ -3444,6 +3444,38 @@ exactly one class with its basis, verification strength (`authenticated`,
 vendor artifacts from targets; persistence; UI; AI classification; response actions.
 No schema, API, auth or response-authorization change.
 
+### Individual queued at jobs — worker checkpoint #831
+
+The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
+`/var/spool/cron` root, so its job files were hashed but opaque. When the controller
+asks for parsed jobs (`cron_jobs`), the agent now decodes each job file name. The name has the form
+`<queue><5-hex job><8-hex minutes since the epoch>` and gives the queue, job
+number and scheduled run time. atd renames a job it is executing into the reserved `=`
+queue, so only `=` is reported as running. An uppercase letter is a batch-style queue
+(at(1)), not a running job, and its letter is kept as is.
+The agent then parses the hashed bytes as data. Nothing is executed or sourced.
+
+- The `# atrun uid= gid=` and `# mail` headers give the owner.
+- Exported environment assignments are counted. Their values are never stored.
+- The `umask` and working-directory `cd … || { … }` boilerplate is skipped.
+- Commands come from the `marcinDELIMITER` heredoc (at ≥ 3.1.14) or the plain lines that follow (older at). They are capped at 32 lines of 512 characters, use the cron redaction patterns, and have control characters escaped.
+- Any other layout is reported as unparsed with no commands. Nothing is guessed.
+
+The controller validates the optional `at` record strictly, including agreement with
+the spool file name. Startup comparisons and incident evidence stay metadata-only.
+Startup → Files shows queue, scheduled time, owner and commands, and search finds at
+commands and accounts. The Coverage catalog has a Debian-family at queue row with
+parsed and older-agent counts. Scope is unchanged, so existing baselines remain
+comparable.
+
+**Limits:**
+- Whether atd runs is not evaluated.
+- The RHEL-family `/var/spool/at` spool is outside built-in scope.
+- Referenced scripts are not inspected.
+- No AI classification is made.
+
+Remaining roadmap F work is tracked above.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -8304,6 +8336,16 @@ This adds a roadmap J coverage producer, `app/scan_coverage_notifications.py`. `
   - YARA scans have no schedule, so they are not covered.
   - The grace period is fixed.
   - Execution-triggered scan coverage keeps its existing `execution scan coverage` operational alert.
+
+### Stuck scheduled scans in coverage notifications — worker checkpoint #839
+
+The #816 producer kept its event unchanged, or silent, whenever the latest `security-scan` job was queued or running. `incidents.schedule_tick` does not enqueue another scan while one is pending. So a job that workers never claim, or a running job that never finishes, suppressed the coverage notice indefinitely.
+
+- **Change:** a queued or running latest attempt holds the event only while its age is within the configured interval plus the one-hour grace period. After that, `classify` returns a new `stalled` category.
+- **Payload:** `medium` severity, fixed text, admin-only, and a link to `#servers/<host>/security`. Moving from `overdue`, `failed` or `incomplete` to `stalled` appends one revision. An unchanged `stalled` adds none. When the job completes with a recorded scan, the event resolves.
+- **Unchanged:** the producer still never cancels, retries, recovers or enqueues jobs. `security_coverage.assessment`, the scheduler, the schema, roles and response authorization are untouched. The unused `ENGINE` constant was removed.
+- **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `480100d` and pass after the change, and the existing 10 tests still pass.
+- **Remaining:** an enabled policy that never gets a first scan attempt is still silent, because the policy has no durable "enabled since" marker. YARA schedules and a configurable grace period remain out of scope.
 
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 

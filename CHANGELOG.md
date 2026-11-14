@@ -1,3 +1,11 @@
+## 1.59.104 — 2026-11-14
+
+1. [PR #840](https://github.com/StealthCat/MrPatchy/pull/840): Scheduled malware-scan coverage notifications now flag a queued or running scan that remains pending longer than its configured interval plus one hour, instead of leaving the coverage notice silent. Existing stuck episodes can receive one `stalled` revision; this adds no schema, API, role or authorization change. It does not cancel, retry or recover jobs. A policy with no first scan attempt remains silent; YARA schedules and configurable grace periods are out of scope.
+
+## 1.59.103 — 2026-11-14
+
+1. [PR #832](https://github.com/StealthCat/MrPatchy/pull/832): Adds individual Debian-family `at` job details to Startup → Files and Coverage, parsed only from already-hashed `/var/spool/cron/atjobs` bytes when parsed-job collection is requested. Shows queue, scheduled time, owner and bounded commands with the existing best-effort redaction; counts exported environment assignments without storing values, and reports unrecognized layouts as unparsed. Only atd’s reserved `=` queue is marked running; uppercase batch queues retain their letter. Older agents show “not reported.” No schema, auth, scope-root, baseline or response-authorization change. Material limits: atd status is not evaluated, the RHEL-family `/var/spool/at` spool and referenced scripts are outside scope, and no AI classification is made.
+
 ## 1.59.102 — 2026-11-14
 
 1. [PR #818](https://github.com/StealthCat/MrPatchy/pull/818): Adds a fixed-text, admin-only in-app notification for failed or incomplete scheduled malware scans and scans overdue by more than the configured interval plus one hour. Notices resolve when coverage is recorded, the schedule is disabled or the server leaves scope. This adds no schema, role, API, SMTP/webhook, scan scheduling or response-authorization change. Material limits: queued/running attempts and enabled policies with no first scan remain suppressed, so stuck or never-started schedules may still be silent; [issue #816](https://github.com/StealthCat/MrPatchy/issues/816) remains open for this follow-up.
