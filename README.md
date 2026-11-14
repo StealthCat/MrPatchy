@@ -691,6 +691,8 @@ rate (the lower existing automatic allowance); an administrator must review and 
 the migration, which is audited. Fresh installations use shared rate mode. The legacy
 incident/startup-plan queue allowance is disabled only after that explicit migration.
 
+Administrators using legacy mode can inspect process-triage, update-scoring and automatic incident/startup-plan hourly allowances in Investigations → Shared AI start gates, including prior-hour usage and the next eligibility time when an allowance is exhausted. These per-purpose holds are displayed separately and do not change the shared global gates or admission behavior.
+
 **Unthrottled by Mr Patchy** removes this application pacing only. Finite AI worker
 concurrency, provider limits, global/per-server pause, lifecycle checks, roles and
 data-sharing controls still apply. Invalid local model/key configuration is rejected

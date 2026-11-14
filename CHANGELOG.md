@@ -1,3 +1,7 @@
+## 1.59.109 — 2026-11-14
+
+1. [PR #861](https://github.com/StealthCat/MrPatchy/pull/861): Shows legacy per-purpose hourly allowances for process triage, update scoring and automatic incident/startup plans in the shared AI start-gates status and Investigations card, including prior-hour usage and next eligibility when exhausted. This adds a response field and UI only; admission behavior, shared gates, schema and response authorization are unchanged. The displayed plan allowance mirrors the existing fixed scheduler limit, and legacy-mode migration remains an operator decision.
+
 ## 1.59.108 — 2026-11-14
 
 1. [PR #855](https://github.com/StealthCat/MrPatchy/pull/855): Adds `.env.controller.example` for the split controller role, listing app, Caddy and GCP controller settings while leaving out worker-only pools, IDs, drain settings and data-volume configuration. The example renders the same controller configuration as the complete `.env.example`; `MRPATCHY_EXPECTED_WORKER_IDS` is empty for role-file replicas. This is additive and leaves existing complete-installation settings unchanged. It is a template only: remote-machine secret provisioning, controller-only/join-worker installer modes and multi-host acceptance remain open. No schema, API, role or response-authorization changes.
