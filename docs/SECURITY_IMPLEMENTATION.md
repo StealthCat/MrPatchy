@@ -3013,13 +3013,29 @@ Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-sc
 
 #### Advisory publication dates — worker checkpoint #862
 
-Before this checkpoint advisory scan results had no record of when an advisory was published. So nothing could anchor an exposure to publication, as requirement D asks.
+Before this checkpoint advisory scan results had no record of when an advisory was published. The recorded date is now available, but requirement D's exposure-window model has not yet been implemented.
 
 - **Recorded:** each applicability row now carries `published_at` and `modified_at` in epoch seconds. Both come from the full OSV record that the scan already fetches for range data, so the scan makes no additional requests.
 - **Fail closed:** only timezone-qualified RFC 3339 values are accepted, with fractions truncated to microseconds. A value that is missing, malformed, non-string, before 1990 or more than a day past the scan clock becomes `null`, never a guessed date. Unfetched records also carry `null` dates. Dates never change the applicability status.
 - **Shown:** the advisory-matching panel adds "Published YYYY-MM-DD" (UTC) beside the fixed version, and shows nothing when the date is unknown. The scan coverage text states that these are advisory-record dates, not the vendor fix date or the time exposure began.
 - **Compatibility:** results stored before this change read unchanged, without the keys. No schema, route, role, notification, patch-selection or response-authorization change.
-- **Remaining in requirement D:** feeding `published_at` into `exposure_window()` and the exposure history, verified restart and activation, scheduled scans, fleet views, RPM updateinfo, and exploitation monitoring and containment.
+- **Remaining in requirement D:** feeding `published_at` into `exposure_window()`, verified restart and activation, scheduled scans, fleet views, RPM updateinfo, and exploitation monitoring and containment. The durable history and latest-scan publication fields are now implemented in #859 and #863.
+
+#### Durable per-server exposure history — worker checkpoint #858
+
+Each advisory scan still stores the latest result in `advisories:<host>`. The additive `cve_exposure_history` table (`advisories.ExposureHistory`) separately keeps one row per server, advisory ID and source package for every pair a scan has classified as `affected`.
+
+- **Opening:** the first `affected` observation records the first-affected time and installed version. Later `affected` scans update the last-affected time and version and the vendor fixed version. The first-seen values are never moved.
+- **Resolving:** a later scan of the same source package resolves an open exposure, recording the resolving time, version and reason. It resolves when the result is `fixed` or `unaffected`, or when the advisory is no longer listed for the installed version (`not-listed`).
+- **Never resolved:** an `uncertain` result never resolves an exposure and never opens one. A package that a scan did not include is never resolved by it. When binaries of one source disagree on version, absence of the advisory resolves nothing. When binaries of one source differ in classification, the most exposed one wins.
+- **Reopening:** an `affected` observation after resolution reopens the row, increments `reopened` and keeps the original first-affected time.
+- **Read API:** `GET /api/operations/{host}/advisories` adds `exposure_history`, with items, an open count, `truncated` (limit 500) and a coverage statement. Open exposures are listed before resolved ones, and the open count is a total over all of the server's rows rather than only the returned page. It remains admin-only. The coverage statement discloses three limits:
+  - times between manual scans are telemetry gaps;
+  - the ledger does not show publication time (the latest-scan applicability rows carry valid OSV published/modified dates as documented in #862);
+  - version resolution does not verify the required restart or reboot.
+- **Unchanged:** the latest-scan setting, applicability classification, notifications, roles, patch selection and response authorization. The ledger authorizes nothing. The table is created by `create_all` on SQLite and MySQL, and the standalone migration copies it automatically. History is retained when a server is soft-deleted, like the latest-scan setting.
+- **Remaining in requirement D:** advisory feeding publication dates into `exposure_window()`, verified restart and activation, scheduled scans, UI rendering of the history, fleet views, RPM updateinfo, and exploitation monitoring and containment wiring.
+
 
 #### Affected-advisory in-app notifications — worker checkpoint #822
 
