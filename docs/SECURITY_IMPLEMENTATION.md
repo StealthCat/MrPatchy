@@ -4433,7 +4433,10 @@ address in place instead of reloading. Reloading or closing the tab triggers the
 browser's native `beforeunload` prompt. Reverting an edit or saving it clears the
 warning. The Settings search box and the spend-history filter are view filters
 and never prompt. Sign-out and session expiry are not held. The change is UI-only,
-with no API, schema, authorization or response changes. Remaining #513 items:
+with no API, schema, authorization or response changes. The shell's Overview
+load and non-admin redirect no longer rewrite an address that changed while they
+were loading, so a reload straight after a hash navigation keeps the requested
+page instead of landing on Overview. Remaining #513 items:
 section navigation restructuring, splitting the AI page, consistent save
 feedback, role-aware destinations and screenshots. The UI rework remains
 incomplete.

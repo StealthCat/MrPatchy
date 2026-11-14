@@ -65,6 +65,7 @@ let quietRender=false;
 async function render(){
  const quiet=quietRender;quietRender=false;
  const revision=++renderRevision;
+ const startHash=location.hash;
  let requested=location.hash.slice(1)||'overview';
  requested=requested.split('?')[0];
  if(requested.startsWith('overview/'))requested='overview';
@@ -80,7 +81,7 @@ async function render(){
   currentUser=me;document.body.dataset.role=me.role;hosts=list;
   $('#application-version').textContent=me.version?'v'+me.version:'SELF-HOSTED';
   if(!isAdmin()&&['files','security','settings','repositories','schedules','users','ai-logs'].includes(requested)){
-   requested='overview';history.replaceState(null,'','#overview');
+   requested='overview';if(location.hash===startHash)history.replaceState(null,'','#overview');
   }
   page=requested;
   document.querySelectorAll('[data-nav]').forEach(a=>{a.classList.toggle('active',a.dataset.nav===page);if(a.dataset.nav===page)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
@@ -126,12 +127,14 @@ function fleetObservation(host,now){
  return {kind:'recent',label:'Recent contact',reason:'Contact within two minutes and no stored integrity findings. Individual collectors may still be stale.'};
 }
 async function overview(revision=renderRevision){
- const snapshot=[...hosts],[d,spool]=await Promise.all([api('/dashboard'),api('/spool-health').catch(()=>null)]);if(!currentView(revision,'overview'))return;
- const root=$('#content'),now=Date.now()/1000,observations=snapshot.map(host=>({host,...fleetObservation(host,now)}));
  const requested=location.hash.slice(1)||'overview';
+ const snapshot=[...hosts],[d,spool]=await Promise.all([api('/dashboard'),api('/spool-health').catch(()=>null)]);if(!currentView(revision,'overview'))return;
+ // A navigation that landed while the dashboard loaded owns the address; never rewrite it to #overview.
+ const addressUnchanged=(location.hash.slice(1)||'overview')===requested;
+ const root=$('#content'),now=Date.now()/1000,observations=snapshot.map(host=>({host,...fleetObservation(host,now)}));
  if(requested==='overview/files'&&isAdmin()){await fleetFileStatus(revision,$('#content'),'overview');return;}
  const section=requested==='overview/attention'?'attention':requested==='overview/monitoring'?'monitoring':'summary';
- if(!['overview','overview/attention','overview/monitoring'].includes(requested))history.replaceState(null,'','#overview');
+ if(addressUnchanged&&!['overview','overview/attention','overview/monitoring'].includes(requested))history.replaceState(null,'','#overview');
  const entries=[['summary','Summary'],['attention','Server attention'],['monitoring','Monitoring'],...(isAdmin()?[['files','File status']]:[])];
  const labels=Object.fromEntries(entries),link=key=>key==='summary'?'#overview':'#overview/'+key;
  $('#breadcrumb').textContent='Workspace / Overview / '+labels[section];document.title=labels[section]+' · Fleet Overview · Mr Patchy';
