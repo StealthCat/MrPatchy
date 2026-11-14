@@ -12,7 +12,11 @@ anything. The rules are the distribution defaults:
   runs; non-executable entries are skipped.
 * RPM family (cronie ``crontabs`` run-parts script): hidden names and names
   ending in ``~``, ``,``, ``.rpmsave``, ``.rpmorig``, ``.rpmnew``, ``.swp``,
-  ``.cfsaved`` or ``,v`` are skipped; non-executable entries are skipped.
+  ``.cfsaved`` or ``,v`` are skipped; non-executable entries are skipped. The
+  script expands its file list and each ``$i`` unquoted, so a name containing a
+  space is word-split and never runs as itself (skipped), and a name containing
+  a glob character (``*``, ``?``, ``[``) is re-expanded with an outcome that
+  depends on sibling names (unknown).
 
 Both run-parts implementations run as root, where ``access(X_OK)``/``test -x``
 succeeds for a regular file when any execute bit is set. Neither descends into
@@ -31,6 +35,7 @@ from typing import Any
 DIRECTORIES = ('/etc/cron.hourly', '/etc/cron.daily', '/etc/cron.weekly', '/etc/cron.monthly')
 _DEBIAN_NAME = re.compile(r'[A-Za-z0-9_-]+')
 _RPM_SUFFIXES = ('~', ',', '.rpmsave', '.rpmorig', '.rpmnew', '.swp', '.cfsaved', ',v')
+_RPM_GLOB = frozenset('*?[')
 _MAX_PATH = 4096
 
 REASONS = {
@@ -40,6 +45,8 @@ REASONS = {
     'nested_entry': 'run-parts does not descend into subdirectories, so this entry is never run directly.',
     'debian_name': 'Debian run-parts skips names containing characters other than ASCII letters, digits, _ and - (including dots).',
     'rpm_name': 'cronie run-parts skips hidden names and names ending in "~", ",", ".rpmsave", ".rpmorig", ".rpmnew", ".swp", ".cfsaved" or ",v".',
+    'rpm_word_split': 'cronie run-parts expands file names unquoted, so a name containing a space is split into separate words and never runs as itself.',
+    'rpm_glob_expansion': 'cronie run-parts expands file names unquoted, so a name containing *, ? or [ is re-expanded as a pattern and whether it runs depends on other file names.',
     'not_executable': 'run-parts skips entries that have no execute permission bit.',
 }
 LIMITATION = ('Distribution default run-parts rules only: invocation options such as --lsbsysinit, cronie '
@@ -96,12 +103,16 @@ def assess(entry: Any, family: Any) -> dict[str, Any] | None:
     uid, mode = entry.get('uid'), entry.get('mode')
     if kind != 'regular' or type(uid) is not int or type(mode) is not int or uid < 0 or not 0 <= mode <= 0o7777:
         return _result('unknown', ['not_regular_file'], family)
+    if family == 'rpm' and _RPM_GLOB.intersection(remainder):
+        return _result('unknown', ['rpm_glob_expansion'], family)
     reasons = []
     if family == 'debian':
         if not _DEBIAN_NAME.fullmatch(remainder):
             reasons.append('debian_name')
     elif remainder.startswith('.') or remainder.endswith(_RPM_SUFFIXES):
         reasons.append('rpm_name')
+    if family == 'rpm' and ' ' in remainder:
+        reasons.append('rpm_word_split')
     if not mode & 0o111:
         reasons.append('not_executable')
     return _result('skipped' if reasons else 'eligible', reasons, family)

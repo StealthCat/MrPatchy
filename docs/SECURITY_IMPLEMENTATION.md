@@ -3486,7 +3486,11 @@ reason codes.
   names and modes.
 - **RPM family (cronie run-parts script):** hidden names and names ending in
   `~`, `,`, `.rpmsave`, `.rpmorig`, `.rpmnew`, `.swp`, `.cfsaved` or `,v` are
-  skipped.
+  skipped. The script expands file names unquoted. A name containing a space is
+  word-split and never runs as itself, so it is `skipped` (`rpm_word_split`). A
+  name containing `*`, `?` or `[` is re-expanded, and whether it runs depends on
+  sibling names, so it is `unknown` (`rpm_glob_expansion`). Both cases were
+  reproduced with cronie's loop in bash.
 - **Both:** run-parts runs as root, so any execute bit makes a regular file
   executable. Nested entries are skipped. Symlinks are `unknown`, because their
   targets' kind and mode are not recorded. An unknown family, or a missing or

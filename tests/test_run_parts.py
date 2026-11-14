@@ -39,6 +39,28 @@ def test_rpm_runs_dotted_names_that_debian_would_skip(name):
     assert rp.assess(entry('/etc/cron.weekly/' + name), 'debian')['state'] == 'skipped'
 
 
+@pytest.mark.parametrize('name', ['my job', 'a b c', ' lead', 'trail '])
+def test_rpm_skips_names_word_split_by_cronie(name):
+    # cronie expands `for i in $(echo dir/*)` and `[ -x $i ]` unquoted, so the
+    # file is split into words and never runs as itself (peer review on #849).
+    result = rp.assess(entry('/etc/cron.daily/' + name), 'rpm')
+    assert result['state'] == 'skipped' and codes(result) == ['rpm_word_split']
+    assert rp.assess(entry('/etc/cron.daily/' + name), 'debian')['state'] == 'skipped'
+
+
+@pytest.mark.parametrize('name', ['a*b', 'job?', '[x]', 'a* b', 'x[1].rpmnew'])
+def test_rpm_glob_names_are_unknown(name):
+    # Unquoted re-expansion makes the outcome depend on sibling names.
+    for mode in (0o755, 0o644):
+        result = rp.assess(entry('/etc/cron.daily/' + name, mode=mode), 'rpm')
+        assert result['state'] == 'unknown' and codes(result) == ['rpm_glob_expansion']
+
+
+def test_rpm_word_split_combines_with_other_reasons():
+    assert codes(rp.assess(entry('/etc/cron.daily/my job~', mode=0o644), 'rpm')) == [
+        'rpm_name', 'rpm_word_split', 'not_executable']
+
+
 @pytest.mark.parametrize('mode,state', [(0o644, 'skipped'), (0o600, 'skipped'), (0o000, 'skipped'),
                                         (0o4644, 'skipped'), (0o700, 'eligible'), (0o610, 'eligible'),
                                         (0o601, 'eligible'), (0o001, 'eligible')])
