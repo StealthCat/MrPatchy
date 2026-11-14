@@ -182,7 +182,7 @@ async function aiDiagnostics(revision=renderRevision,context=null){
  const key=context?.hostId||'fleet',saved=aiListContext.get(key)||{purpose:'',state:'',offset:0};
  const status=context?null:await api('/investigation-status');if(!currentView(revision,context?'servers':'ai-logs')||!root.isConnected)return;
  root.innerHTML=(context?'<p class="help">AI activity linked to this server. Shared scoring batches show the whole batch cost, not a per-server charge. Older runs without a server association remain in fleet AI logs.</p>':heading('Know what Mr Patchy is thinking.','Persistent run stages, provider errors, retries, and worker health.')+triageStatus(status))+`<div class="toolbar"><label>Purpose<select id="ai-log-purpose"><option value="">All logged AI activity</option><option value="triage">Process triage</option><option value="update_scoring">Update importance</option><option value="connection_test">Connection tests</option><option value="release_configuration">Release configuration</option><option value="security_plan">Security response plans</option><option value="worker">Worker failures</option></select></label><label>State<select id="ai-log-state"><option value="">All run states</option><option value="running">Running</option><option value="complete">Complete</option><option value="error">Failed</option><option value="deferred">Deferred</option><option value="interrupted">Interrupted</option></select></label><p class="help">API keys, raw prompts and provider bodies are excluded.</p></div><p class="help">Costs are estimated in USD from returned token usage and saved public rates. Older activity and calls without usage or known pricing show Unavailable.</p><div class="card" id="ai-log-table"></div><div class="actions"><button id="ai-log-prev">Previous</button><button id="ai-log-next">Next</button></div>`;
- if(!context&&isAdmin()){bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);}
+ if(!context&&isAdmin()){bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);bindKnownGoodLookups(root,revision);}
  let offset=saved.offset,ticket=0;
  const table=$('#ai-log-table'),purposeFilter=$('#ai-log-purpose'),stateFilter=$('#ai-log-state');
  purposeFilter.value=saved.purpose;stateFilter.value=saved.state;
@@ -245,7 +245,7 @@ function bindKnownGoodSummary(root,revision){
  const panel=document.createElement('section');
  panel.className='card';
  panel.setAttribute('aria-labelledby','ai-known-good-title');
- panel.innerHTML='<h2 id="ai-known-good-title">Fleet known-good cache</h2><p class="help">Counts of retained exact-match safe candidates and the assessments that reused them. Counts describe retained records only. They do not verify current context or count cache misses. Avoided provider work is estimated from each candidate’s originating investigation receipts; it is not a provider invoice. Reuse grants no approval and authorizes no response.</p><button type="button">Load cache summary</button><p class="help" role="status"></p><div class="status-facts" hidden></div><p class="help known-good-estimate" hidden></p><p class="help known-good-review" hidden></p>';
+ panel.innerHTML='<h2 id="ai-known-good-title">Fleet known-good cache</h2><p class="help">Counts of retained exact-match safe candidates and the assessments that reused them. Counts describe retained records only. They do not verify current context; cache misses are counted separately under Cache lookup outcomes. Avoided provider work is estimated from each candidate’s originating investigation receipts; it is not a provider invoice. Reuse grants no approval and authorizes no response.</p><button type="button">Load cache summary</button><p class="help" role="status"></p><div class="status-facts" hidden></div><p class="help known-good-estimate" hidden></p><p class="help known-good-review" hidden></p>';
  root.querySelector('.toolbar').before(panel);
  const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),facts=panel.querySelector('.status-facts'),review=panel.querySelector('.known-good-review'),estimate=panel.querySelector('.known-good-estimate');
  const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
@@ -270,6 +270,41 @@ function bindKnownGoodSummary(root,revision){
    facts.hidden=true;facts.innerHTML='';review.hidden=true;review.textContent='';estimate.hidden=true;estimate.textContent='';
    status.textContent='Cache summary is unavailable. You can still inspect individual AI runs.';
    button.textContent='Retry cache summary';
+  }finally{if(active())button.disabled=false;}
+ };
+}
+const KNOWN_GOOD_MISS_LABELS=[['no_candidate','no candidate for the exact fingerprint'],['context_ineligible','exact verified context incomplete'],['candidate_revoked','matching candidate revoked'],['candidate_unverified','candidate not reusable at lookup time'],['bypassed_refresh','bypassed by administrator Re-triage'],['bypassed_changed','bypassed by an authenticated artifact change'],['miss_unclassified','reason unavailable']];
+function bindKnownGoodLookups(root,revision){
+ const panel=document.createElement('section');
+ panel.className='card';
+ panel.setAttribute('aria-labelledby','ai-known-good-lookups-title');
+ panel.innerHTML='<h2 id="ai-known-good-lookups-title">Cache lookup outcomes</h2><p class="help">Durable daily counts of process-triage lookups in the fleet known-good cache, by fixed outcome. Counting starts when this version is installed and is kept separately from pruned AI run logs. A miss means a provider investigation was needed; a hit grants no approval and authorizes no response.</p><button type="button">Load lookup outcomes</button><p class="help" role="status"></p><div class="status-facts" hidden></div><ul class="help known-good-misses" hidden></ul>';
+ root.querySelector('.toolbar').before(panel);
+ const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),facts=panel.querySelector('.status-facts'),misses=panel.querySelector('.known-good-misses');
+ const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const valid=value=>Number.isSafeInteger(value)&&value>=0;
+ const count=value=>valid(value)?value.toLocaleString():'Unavailable';
+ button.onclick=async()=>{
+  if(!active()||button.disabled)return;
+  button.disabled=true;status.textContent='Loading lookup outcomes…';
+  try{
+   const data=await api('/ai/known-good/lookups');
+   if(!active())return;
+   const value=data&&typeof data==='object'?data:{},reasons=value.misses&&typeof value.misses==='object'?value.misses:{};
+   const days=valid(value.window_days)?value.window_days:30;
+   facts.innerHTML=[[value.hits,'cache hits'],[value.total_misses,'cache misses']].map(([n,label])=>`<span><strong>${esc(count(n))}</strong> ${label}</span>`).join('');
+   facts.hidden=false;
+   const rows=KNOWN_GOOD_MISS_LABELS.filter(([key])=>valid(reasons[key])&&reasons[key]>0);
+   misses.innerHTML=rows.map(([key,label])=>`<li><strong>${esc(count(reasons[key]))}</strong> ${label}</li>`).join('');
+   misses.hidden=!rows.length;
+   const since=typeof value.counted_since_day==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value.counted_since_day)?value.counted_since_day:'';
+   status.textContent=`Last ${days} UTC days of process triage. `+(since?`Counted since ${since} (UTC).`:'No lookups have been counted yet.');
+   button.textContent='Refresh lookup outcomes';
+  }catch{
+   if(!active())return;
+   facts.hidden=true;facts.innerHTML='';misses.hidden=true;misses.innerHTML='';
+   status.textContent='Lookup outcomes are unavailable. You can still inspect individual AI runs.';
+   button.textContent='Retry lookup outcomes';
   }finally{if(active())button.disabled=false;}
  };
 }

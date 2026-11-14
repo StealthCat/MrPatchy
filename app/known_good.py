@@ -798,3 +798,7 @@ def bind_vendor_provenance(s, host_id, evidence, collected):
         'followup':followup,
         'coverage':{'version':CONTEXT_VERSION,'complete':False,'gaps':remaining},'observation':observation}
     return value
+
+
+# Register the durable lookup-outcome counters with the shared metadata.
+from . import known_good_lookups as _lookup_counts  # noqa: E402,F401
