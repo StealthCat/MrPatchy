@@ -174,6 +174,7 @@ EXPECTED_ROLES = {
     ('GET','/api/notifications/unread-count'):'self-service',
     ('POST','/api/notifications/{event_id}/dismiss'):'self-service',
     ('POST','/api/notifications/{event_id}/read'):'self-service',
+    ('POST','/api/notifications/{event_id}/restore'):'self-service',
     ('POST','/api/notifications/read-batch'):'self-service',
     ('GET','/api/operations/alerts'):'admin',
     ('POST','/api/operations/alerts/{alert_id}/ack'):'admin',

@@ -8216,6 +8216,17 @@ also still required before delivery.
 
 The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
 
+### Restore a dismissed notification — worker checkpoint #833
+
+Dismissing a notification can now be undone for the same account. In the notification center, **Include dismissed** marks each dismissed item as *dismissed* and offers **Restore** in place of Dismiss.
+- **API:** the client sends `POST /api/notifications/{id}/restore` with the revision it displayed. When that revision is the event's current revision and this account dismissed it, the account's dismissal is cleared and the item returns to the default history.
+- **Read state is kept**, so restoring never inflates the unread badge.
+- **Idempotent:** a stale revision, an undismissed event or a repeated restore changes nothing, and an event this account never touched gets no state row.
+- **Same checks as read/dismiss:** session, CSRF and current-role checks apply. A hidden or malformed event returns 404 and an above-current revision returns 400.
+- **Audit and sync:** each effective restore writes one `restore notification` audit row. Restore changes the account's stream cursor, so the account's other tabs refresh.
+- **Focus:** keyboard focus stays on the same card after Dismiss or Restore, even though the clicked button is briefly disabled.
+- **Unchanged:** restore is per-account only. It never acknowledges an alert, resolves an incident, approves AI output, runs remediation or changes another user's state, and there are no schema changes.
+
 ### Shared AI start gates in the worker status card — worker checkpoint #727
 
 The administrator Investigations page now reads the #546 snapshot and shows a
