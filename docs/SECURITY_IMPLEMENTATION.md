@@ -8537,3 +8537,15 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
   - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+
+### Never-scanned legacy scan policies in coverage notifications — worker checkpoint #883
+
+The first #841 limitation: a policy saved before `enabled_since` existed stayed silent forever while its server had never had a `security-scan` attempt, unless an administrator happened to re-save it.
+
+- **Change:** for an enabled policy without a valid `enabled_since` on an active, non-enrolling server with no `security-scan` attempt, the coverage producer records the first tick that saw that state under its own server-managed key, `security-scan-legacy-since:<host>` (`{"first_seen": <epoch>}`, whole microseconds). Classification treats that time as `enabled_since`, so the server becomes `overdue` after the interval plus the one-hour grace period, with the #816 payload, revisions and resolution.
+- **Conservative:** the marker is never earlier than the first observation, so a legacy policy notifies no sooner than a freshly saved one would. An invalid or future marker restarts at the current tick.
+- **No policy rewrite:** the administrator's `security-policy:<host>` row is never written by the producer, so a concurrent policy save cannot be lost. The marker prefix does not start with `security-policy:`, which the scheduler and the coverage page enumerate.
+- **Cleanup:** the marker is deleted once the policy carries its own `enabled_since`, is disabled or removed, the server gets a scan attempt, or the server is disabled, deleted or re-enrolling.
+- **Unchanged:** policies with `enabled_since`, the scheduler, `security_coverage.assessment`, the schema, roles and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `dff91c4` and pass after the change; a behavior-only check (legacy never-scanned policy publishes `overdue` after the interval plus grace) publishes nothing on main. The related SQLite coverage, notification, security, incident, operations and scheduling selection passes (580 passed, 2 skipped).
+- **Remaining:** the window before a legacy policy notifies starts at the upgrade's first coordinator tick, not at its true enablement time, which is unknown. YARA schedules and a configurable grace period remain out of scope.
