@@ -43,20 +43,37 @@ def test_admin_listing_reports_gate_equivalent_pause_state(admin):
         assert refused is row['ai_paused'], key
 
 
-def test_pause_state_is_one_bounded_read(admin):
+def capture_statements(client, path):
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', record)
+    try:
+        response = client.get(path)
+    finally:
+        event.remove(engine, 'before_cursor_execute', record)
+    assert response.status_code == 200
+    return statements
+
+
+def test_pause_state_adds_no_statement_to_the_listing(admin):
+    """The policy read joins the bounded host query (#147 budget), never a separate scan."""
     seed()
-    with Session() as s:
-        statements = []
+    statements = capture_statements(admin, '/api/hosts')
+    assert len(statements) <= 3
+    host_queries = [q for q in statements if 'FROM hosts' in q]
+    assert len(host_queries) == 1
+    assert not any('LIKE' in q and 'settings' in q for q in statements)
 
-        def record(conn, cursor, statement, parameters, context, executemany):
-            statements.append(statement)
 
-        event.listen(engine, 'before_cursor_execute', record)
-        try:
-            assert ai_policy.paused_host_ids(s) == {'paused', 'corrupt', 'truthy', 'nondict', 'ghost'}
-        finally:
-            event.remove(engine, 'before_cursor_execute', record)
-    assert len(statements) == 1
+def test_stored_paused_matches_gate_rule():
+    assert ai_policy.stored_paused(None, present=False) is False
+    assert ai_policy.stored_paused({'paused': False}) is False
+    assert ai_policy.stored_paused({}) is False
+    for value in ({'paused': True}, {'paused': 'no'}, {'paused': None}, ['x'], None, 'paused'):
+        assert ai_policy.stored_paused(value) is True, value
 
 
 def test_pause_and_resume_through_policy_route_update_listing(admin):

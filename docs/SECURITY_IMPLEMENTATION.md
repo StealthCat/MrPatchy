@@ -2121,8 +2121,9 @@ work above remain unfinished.
 
 Worker checkpoint #864 shows the per-server pause fleet-wide in **Servers**.
 - **API:** for administrators only, `GET /api/hosts` adds `ai_paused` to each row.
-  It comes from one bounded read of the per-server policy rows
-  (`ai_policy.paused_host_ids`) and uses the provider gate's own rule. A missing
+  The policy row is outer-joined into the existing bounded host query, so the
+  listing keeps its #147 statement budget, and `ai_policy.stored_paused` applies
+  the provider gate's own rule. A missing
   policy is resumed. A non-dict value, or a `paused` field that is not exactly
   `False`, is paused, so corrupt policy is displayed fail-closed.
 - **Roles:** viewers and operators get no field, matching the admin-only
