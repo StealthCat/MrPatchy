@@ -3122,7 +3122,9 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
             since=previous.get('enabled_since')
             if value['enabled']:
                 kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
-                value['enabled_since']=since if kept else time.time()
+                # Whole microseconds keep the decimal form at <=16 significant digits (an exact double below 2**53),
+                # so MySQL's JSON parser stores the same double the API returns instead of one bit off.
+                value['enabled_since']=since if kept else math.floor(time.time()*1_000_000)/1_000_000
             s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
     return value
