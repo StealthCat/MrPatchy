@@ -2467,6 +2467,28 @@ links to `#investigations`.
   yet. Neither is a missing or undecryptable saved key that never reaches a
   provider call.
 
+Worker checkpoint #769 covers the saved-key gap. While AI is enabled and the
+saved API key row is missing, malformed or cannot be decrypted with the current
+controller encryption key (for example after a database restore without its
+matching `secret.key`), `operations.collect_alerts()` publishes one admin-only
+`ai-credential`/`unreadable-key` notification (severity high, `#settings/ai`).
+`ai_control_status.snapshot()` adds a `credential` blocker with fixed text.
+- **Revision binding:** the revision is `missing`, `unreadable:malformed`, or a
+  re-hashed digest of the stored ciphertext, never the ciphertext itself.
+  Repeated collection adds no revision. A newly saved key that also fails
+  resurfaces as unread.
+- **Resolution:** one `resolved` revision is published once the key decrypts
+  again or AI is disabled.
+- **Unchanged:** the producer only reads, decrypting locally to test the key. It
+  never calls a provider, retries, unblocks, reserves spend or changes
+  authorization, and it adds no SMTP/webhook alert. The text holds no
+  ciphertext, plaintext, exception text or path.
+- **Limitation:** triage items that fail while the key is unreadable still
+  become `blocked`. The existing `configuration-blocked` notification still
+  describes possible provider-side causes alongside this one. Saving the key
+  again changes the retry signature, which makes them eligible again. Blocked
+  update-scoring and advisory-plan work remains uncovered.
+
 Worker checkpoint #739 adds an advance warning to the daily-cap producer. While
 counted spend in an enabled cap mode is at least a fixed 80% of the cap but
 below it, one admin-only `ai-budget`/`daily-cap-warning` notification (severity

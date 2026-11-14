@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from app import ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff
 from app.db import Session, Setting
+from app.security import seal
 
 
 def configure(*, enabled=True, model='fixture-model', mode='unthrottled', rate=20, cap=10):
@@ -15,7 +16,7 @@ def configure(*, enabled=True, model='fixture-model', mode='unthrottled', rate=2
             'ai_daily_cap_usd': cap,
             'ai_budget_timezone': 'UTC',
         }))
-        session.merge(Setting(key='openai_key', value={'encrypted': 'fixture'}))
+        session.merge(Setting(key='openai_key', value={'encrypted': seal('fixture')}))
         session.commit()
 
 
