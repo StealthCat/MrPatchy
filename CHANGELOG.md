@@ -1,3 +1,7 @@
+## 1.59.98 — 2026-11-14
+
+1. [PR #797](https://github.com/StealthCat/MrPatchy/pull/797): Fetches OSV advisory details concurrently over one pooled client (up to 8 workers), shortening the scan and its per-server lock time. The 200-record cap, shared 60-second scan budget, request timeouts, no-redirect policy and fail-closed uncertain results are unchanged. No schema, API, role, UI or response-authorization change. A slow scan can still hold the per-server lock for the remaining scan budget; notifications and scheduled scans remain out of scope.
+
 ## 1.59.97 — 2026-11-13
 
 1. [PR #814](https://github.com/StealthCat/MrPatchy/pull/814): Adds browser-side username-pattern and password-length constraints matching the existing sign-in API contract, rejecting invalid usernames before a request is sent. Frontend-only; the server-side validation and sanitized error handling are unchanged. No account or authentication behavior changes for valid credentials.
