@@ -1244,6 +1244,8 @@ class ConfigInput(BaseModel):
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
+    # Notification-only advance warning for the daily cap; 0 turns it off (#810).
+    ai_daily_cap_warning_percent:int=Field(default=80,ge=0,le=99,strict=True)
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
@@ -1268,7 +1270,11 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
             if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
+            if previous['ai_daily_cap_warning_percent']!=merged['ai_daily_cap_warning_percent']:detail+='; daily AI cap warning changed from '+_warning_text(previous['ai_daily_cap_warning_percent'])+' to '+_warning_text(merged['ai_daily_cap_warning_percent'])
             audit(s,'update settings',detail); s.commit(); return {'ok':True,'ai_controls_revision':ai_controls_revision(merged)}
+
+def _warning_text(percent):
+    return 'off' if not percent else str(percent)+'%'
 
 AI_CONTROL_FIELDS=('ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone',
     'ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled')
@@ -1297,6 +1303,8 @@ class AISettingsInput(BaseModel):
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
+    # Notification-only advance warning for the daily cap; 0 turns it off (#810).
+    ai_daily_cap_warning_percent:int=Field(default=80,ge=0,le=99,strict=True)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 
 class AIKeyInput(BaseModel):
@@ -1331,6 +1339,8 @@ def save_settings_section(values,section,expected_ai_controls_revision=None):
                 detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
+            if section=='ai' and previous['ai_daily_cap_warning_percent']!=values['ai_daily_cap_warning_percent']:
+                detail+='; daily AI cap warning changed from '+_warning_text(previous['ai_daily_cap_warning_percent'])+' to '+_warning_text(values['ai_daily_cap_warning_percent'])
             audit(s,'update '+section+' settings',detail)
             s.commit()
             result={'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}

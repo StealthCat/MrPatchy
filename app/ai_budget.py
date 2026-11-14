@@ -216,8 +216,22 @@ def status(session,now=None):
 
 DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 DAILY_CAP_WARNING_NOTIFICATION=dict(source='ai-budget',kind='daily-cap-warning',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
-# Fixed advance-warning fraction of the cap; configurable thresholds are not yet offered.
-DAILY_CAP_WARNING_FRACTION=Decimal('0.8')
+# Default advance-warning percent of the cap. Administrators can change it with
+# `ai_daily_cap_warning_percent` (0 turns the warning off, #810).
+DAILY_CAP_WARNING_DEFAULT_PERCENT=80
+DAILY_CAP_WARNING_FRACTION=Decimal(DAILY_CAP_WARNING_DEFAULT_PERCENT)/100
+
+
+def warning_percent(cfg):
+    """Return the configured advance-warning percent, or 0 when it is off.
+
+    A stored value outside 0-99 or of the wrong type (for example a hand-edited
+    row) falls back to the documented default rather than silencing the warning.
+    """
+    value=cfg.get('ai_daily_cap_warning_percent',DAILY_CAP_WARNING_DEFAULT_PERCENT)
+    if isinstance(value,bool) or not isinstance(value,int) or not 0<=value<=99:
+        return DAILY_CAP_WARNING_DEFAULT_PERCENT
+    return value
 
 
 def _resolve_notification(session,spec,reason,now):
@@ -235,9 +249,10 @@ def _resolve_notification(session,spec,reason,now):
 def publish_cap_notification(session,cfg,now):
     """Publish admin attention while the current capped window has no remaining spend.
 
-    A separate advance warning is active while counted spend is at least
-    DAILY_CAP_WARNING_FRACTION of the cap but below it, and resolves once the
-    cap is reached so only the exhausted notification remains active.
+    A separate advance warning is active while counted spend is at least the
+    configured warning percent of the cap (default 80, 0 turns it off) but below
+    it, and resolves once the cap is reached so only the exhausted notification
+    remains active.
 
     The revision is bound to the budget window (timezone and reset) and cap. The
     warning records counted and remaining amounts when it is raised and is not
@@ -254,10 +269,14 @@ def publish_cap_notification(session,cfg,now):
     if capped:
         _enabled,name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,cfg,now)
         reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
-        if counted<cap and counted>=cap*DAILY_CAP_WARNING_FRACTION:
+        percent=warning_percent(cfg)
+        if percent and counted<cap and counted>=cap*Decimal(percent)/100:
             # Advance warning only: admission is unchanged and still decides each call.
             warning=True
             subject_revision='nearing:'+name+':'+repr(float(reset))+':'+_money(cap)
+            # The default keeps the pre-#810 fingerprint so upgrading does not
+            # republish an active warning; another threshold is a new observation.
+            if percent!=DAILY_CAP_WARNING_DEFAULT_PERCENT:subject_revision+=':threshold:'+str(percent)
             event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
                 for key,value in DAILY_CAP_WARNING_NOTIFICATION.items())))
             current=session.get(NotificationRevision,(event.id,event.revision)) if event is not None else None
@@ -268,7 +287,7 @@ def publish_cap_notification(session,cfg,now):
             if current is None or current.lifecycle!='active' or current.subject_revision!=subject_revision:
                 remaining=max(cap-counted,Decimal(0))
                 message=('Counted AI spend reached $'+_money(counted)+' of the shared daily cap of $'+_money(cap)+
-                    ' ('+name+' day), at least '+str(int(DAILY_CAP_WARNING_FRACTION*100))+'% of the cap, leaving $'+
+                    ' ('+name+' day), at least '+str(percent)+'% of the cap, leaving $'+
                     _money(remaining)+' before the reset at '+reset_text+'. These amounts were recorded when the '
                     'warning was raised; Settings shows current totals. When a call\'s conservative reservation no longer fits, new paid AI work, including triage, scoring '
                     'and plans, is deferred, not discarded. Review the cap or mode in Settings if that is not intended. Counted spend '
@@ -278,8 +297,8 @@ def publish_cap_notification(session,cfg,now):
                     severity='low',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
     if not warning:
         _resolve_notification(session,DAILY_CAP_WARNING_NOTIFICATION,
-            'Shared daily AI spend is no longer approaching the cap: the window reset, the cap or mode changed, AI was '
-            'disabled, or the cap was reached and its own notification applies.',now)
+            'Shared daily AI spend is no longer approaching the cap: the window reset, the cap, mode or warning threshold '
+            'changed, AI was disabled, or the cap was reached and its own notification applies.',now)
     if capped:
         if counted>=cap:
             message=('The shared daily AI spend cap of $'+_money(cap)+' ('+name+' day) has no remaining safe reservation. '

@@ -2485,6 +2485,26 @@ plus the counted and remaining amounts recorded when the warning was raised.
   headroom smaller than the next call's quote but above 20% of the cap still
   defers without notice.
 
+Worker checkpoint #810 makes the #739 advance-warning threshold configurable.
+`ai_daily_cap_warning_percent` (integer 0-99, default 80) is saved through
+`PUT /api/settings/ai` and `PUT /api/settings` and shown in Settings → AI next
+to the cap. `0` turns the advance warning off and resolves an active one; the
+exhausted-cap notification is unaffected.
+- **Predicate and text:** the warning is active while counted spend is at least
+  the configured percent of the cap and below it, and the text names that
+  percent. A stored value outside 0-99 or of the wrong type falls back to 80.
+- **Revision binding:** the default keeps the pre-#810 fingerprint, so an
+  upgrade does not republish an active warning as unread. Another threshold is
+  appended to the fingerprint, so a changed threshold that current spend still
+  meets publishes one new revision with the amounts at that time; a raised
+  threshold above current spend resolves the warning on the next collection.
+- **Unchanged:** admission, reservations, spend accounting, SMTP/webhook
+  alerts, roles and response authorization. The threshold is notification-only
+  and is not part of the AI-controls revision token; changes are recorded in the
+  settings audit detail.
+- **Limitation:** headroom smaller than the next call's quote but below the
+  threshold still defers without a notice.
+
 Worker checkpoint #790 extends configuration blocking to update-importance
 scoring. Before this checkpoint a non-transient provider rejection (rejected key,
 denied access, unavailable quota or an unsupported model) marked the batch
