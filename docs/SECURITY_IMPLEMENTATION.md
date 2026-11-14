@@ -3613,6 +3613,18 @@ provenance/AI classifications, CVE monitoring, automatic containment and retenti
 remain unfinished as tracked above.
 
 
+### Cron job SHELL and PATH — worker checkpoint #837
+
+Newer agents report, for each parsed cron job, the `SHELL` and `PATH` that the same
+crontab file assigned above that job line (`null` when the file sets none, meaning
+the daemon default applies and is not evaluated). Values follow cron's quote and
+blank trimming, are bounded to 512 characters with a truncation flag, have control
+characters escaped and pass through the existing command redaction. Every other
+environment value is still only counted. The controller accepts jobs from older
+agents unchanged and rejects malformed new fields; comparisons and incident evidence
+remain metadata-only. Still open for this slice: showing the values on Startup
+Files (sequenced after #772 and #832) and updating the coverage-gap text.
+
 ## Planned: separate controller and remote-worker deployments
 
 Requested roadmap addition (2026-10-29); not yet implemented as a supported

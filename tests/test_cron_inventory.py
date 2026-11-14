@@ -25,7 +25,8 @@ def test_system_crontab_jobs_accounts_specials_and_counts():
     result=agent.parse_cron(SYSTEM,'system')
     jobs=result['jobs']
     assert [j['line'] for j in jobs]==[5,6,7,8]
-    assert jobs[0]=={'line':5,'schedule':'17 * * * *','account':'root','command':'cd / && run-parts --report /etc/cron.hourly','redacted':False,'command_truncated':False,'stdin':False}
+    assert jobs[0]=={'line':5,'schedule':'17 * * * *','account':'root','command':'cd / && run-parts --report /etc/cron.hourly','redacted':False,'command_truncated':False,'stdin':False,
+                     'shell':'/bin/sh','shell_truncated':False,'path':'/usr/local/sbin:/usr/sbin','path_truncated':False}
     assert jobs[1]['schedule']=='@reboot' and jobs[1]['account']=='root'
     assert [j['account'] for j in jobs]==['root','root','www-data','backup']
     assert result['environment']==3 and result['unparsed']==3 and result['truncated'] is False
@@ -33,7 +34,9 @@ def test_system_crontab_jobs_accounts_specials_and_counts():
 
 def test_commands_and_environment_never_export_credentials():
     text=json.dumps(agent.parse_cron(SYSTEM,'system'))
-    for secret in ('hunter2','s3cr3t','abc123','eyJabc','TopSecret','ops@example.invalid','/usr/local/sbin'):assert secret not in text
+    for secret in ('hunter2','s3cr3t','abc123','eyJabc','TopSecret','ops@example.invalid'):assert secret not in text
+    # SHELL and PATH are disclosed per job (#837); no other environment value is.
+    assert text.count('/usr/local/sbin')==len(json.loads(text)['jobs'])
     jobs=agent.parse_cron(SYSTEM,'system')['jobs']
     assert all(j['redacted'] for j in jobs[1:]) and '[REDACTED]' in jobs[2]['command']
     assert agent.parse_cron(b'* * * * * find / -perm -4000 -print\n','user','alice')['jobs'][0]['command']=='find / -perm -4000 -print'
