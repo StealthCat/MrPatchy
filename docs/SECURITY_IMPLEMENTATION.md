@@ -8314,3 +8314,19 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Unchanged:** the producer still never cancels, retries, recovers or enqueues jobs. `security_coverage.assessment`, the scheduler, the schema, roles and response authorization are untouched. The unused `ENGINE` constant was removed.
 - **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `480100d` and pass after the change, and the existing 10 tests still pass.
 - **Remaining:** an enabled policy that never gets a first scan attempt is still silent, because the policy has no durable "enabled since" marker. YARA schedules and a configurable grace period remain out of scope.
+
+### Never-started scheduled scans in coverage notifications — worker checkpoint #841
+
+`incidents.schedule_tick` skips enqueueing while a host is quarantined, a YARA or execution scan is pending, a job needs recovery or the queue is full. If one of those holds from the moment scheduled scanning is enabled, the server has no `security-scan` job or scan. The #816 producer treated that `never_scanned` state as "the scheduler has not started yet" and stayed silent forever.
+
+- **Change:** saving a security scan policy with `enabled: true` records a server-managed `enabled_since` epoch in the existing `security-policy:<host>` JSON.
+  - It is kept on later saves while scanning stays enabled.
+  - It is reset on a disabled-to-enabled transition, or when a legacy enabled policy without it is re-saved.
+  - It is removed when scanning is disabled.
+  - Clients cannot set it.
+- **Classification:** `classify` returns the existing `overdue` category for `never_scanned` once `enabled_since` is older than the interval plus the one-hour grace period. Revisions, resolution, payload and roles behave as in #816.
+- **Unchanged:** the producer is still read-only, and the scheduler, `security_coverage.assessment`, schema, roles and response authorization are untouched.
+- **Validation:** three focused tests fail on the #840 head `3bbcf07` (main `480100d` plus #839) and pass after the change. The related incident, coverage, notification, route-role and lifecycle suites pass on SQLite.
+- **Remaining:**
+  - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
+  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.

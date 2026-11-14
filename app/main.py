@@ -10,6 +10,7 @@ import re
 import secrets
 import shlex
 import threading
+import math
 import time
 import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
@@ -3113,9 +3114,18 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
     validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
-            host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
+            host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
+            value=body.model_dump()
+            # Server-managed enablement time (#841) lets coverage notifications tell a newly enabled policy
+            # from one whose first scheduled scan has never been enqueued. Clients cannot set it.
+            previous=row.value if row and isinstance(row.value,dict) else {}
+            since=previous.get('enabled_since')
+            if value['enabled']:
+                kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
+                value['enabled_since']=since if kept else time.time()
+            s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
-    return body.model_dump()
+    return value
 
 
 class IncidentReview(BaseModel):
