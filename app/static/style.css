@@ -451,7 +451,9 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .badge.stopped { color:var(--muted);background:#a7bdc714; }
 .badge.healthy { color:var(--mint);background:#9ee8d114; }
 .badge.degraded { color:var(--amber);background:#f7cf8a14; }
-.endpoint-agent-table { min-width:700px; }
+.endpoint-agent-table { min-width:860px; }
+.agent-resource-flags { display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px; }
+.agent-resource-attention { display:inline-block;padding:1px 8px;border-radius:999px;font-size:.78rem;font-weight:600;background:#f7cf8a14;color:var(--amber);border:1px solid #f7cf8a55; }
 .endpoint-agent-table td { max-width:260px;overflow-wrap:anywhere; }
 .endpoint-agent-table td small { display:block;white-space:normal; }
 /* Long configuration identifiers (e.g. MRPATCHY_EXPECTED_CONTROLLER_IDS) must wrap on phones. */
