@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update, case, or_, not_, text, String, LargeBinary, cast
-from sqlalchemy.orm import defer, load_only
+from sqlalchemy.orm import aliased, defer, load_only
 from sqlalchemy.exc import IntegrityError, OperationalError
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
@@ -592,7 +592,14 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             path='$."%s"'%key
             kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
             cols+=[Host.inventory[key].as_string(),kind]
-        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        # Per-server AI policy is administrator-only (see server_ai_policy), so other roles get no field.
+        # It joins the same bounded host query instead of adding a statement (#147 query budget).
+        admin=user['role']=='admin';ai=aliased(Setting)
+        from . import ai_policy
+        extra=(ai.key,ai.value) if admin else ()
+        query=select(Host,*cols,Setting.value,*extra).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        if admin:query=query.outerjoin(ai,ai.key==ai_policy.PREFIX+Host.id)
+        rows=s.execute(query
             .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
             .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
         def meta(value,kind,default):
@@ -600,7 +607,8 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             return None if str(kind).lower()=='null' else value
         return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
-            for h,a,ak,o,ok,m,mk,saved in rows]
+            |({'ai_paused':ai_policy.stored_paused(policy[1],policy[0] is not None)} if admin else {})
+            for h,a,ak,o,ok,m,mk,saved,*policy in rows]
 
 def saved_query_or_404(s,query_id):
     row=s.get(fleet_queries.SavedFleetQuery,query_id)

@@ -543,6 +543,7 @@ button.danger { border-color: var(--red); color: var(--red); }
 .badge.ok,.badge.warning{background:#274a40;color:#a8efd3}
 .badge.warning{background:#4c402a;color:var(--amber)}
 .badge.unavailable{color:var(--muted);background:#a7bdc714}
+.server-card-ai { margin:8px 0 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center; }
 
 /* Shared error artwork retains its proportions on narrow screens. */
 .error-state .empty-mascot { width: 150px; height: auto; max-height: none; object-fit: contain; }

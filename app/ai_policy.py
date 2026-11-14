@@ -32,6 +32,17 @@ def paused_ids():
     return select(Host.id).join(Setting,Setting.key==PREFIX+Host.id).where(Setting.value['paused'].as_boolean()==True)
 
 
+def stored_paused(value,present=True):
+    """Return whether a stored policy value would make the provider gate refuse.
+
+    Mirrors `require`: a missing policy is resumed, while a non-dict value or a
+    `paused` field that is not exactly False is treated as paused (fail closed).
+    Display only, never admission.
+    """
+    if not present:return False
+    return not isinstance(value,dict) or value.get('paused',False) is not False
+
+
 def status(s,host_id):
     row=s.get(Setting,PREFIX+host_id);value=row.value if row else {}
     paused=value.get('paused',False) is not False
