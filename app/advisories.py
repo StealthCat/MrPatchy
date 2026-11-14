@@ -1,9 +1,13 @@
 """Opt-in OSV queries using distro-specific source package versions."""
 import concurrent.futures
+import hashlib
 import re
 import time
 import httpx
+from sqlalchemy import Double, Integer, String, Text, select
+from sqlalchemy.orm import Mapped, mapped_column
 from .apt import paragraphs
+from .db import Base
 from . import cve_exposure
 
 # Full OSV records are needed for range data: querybatch returns IDs only.
@@ -131,3 +135,126 @@ def retained(result):
                 if isinstance(row,dict) and 'reason' in row else row for row in item['applicability']]}
         items.append(item)
     return {**result,'results':items}
+
+
+# Durable per-server exposure history (roadmap D, #858). The ``advisories:<host>``
+# setting holds only the latest scan; this ledger keeps every advisory/source
+# package pair a scan ever classified as affected, so patching never erases the
+# fact or the window of exposure.
+OPEN='open'
+RESOLVED_STATUSES=(cve_exposure.FIXED,cve_exposure.UNAFFECTED)
+NOT_LISTED='not-listed'  # the advisory service no longer matched the installed version
+HISTORY_LIMIT=500
+HISTORY_COVERAGE=('Exposure history records when a manual advisory scan first and last classified each advisory as '
+    'affecting the installed source version, and when a later scan of the same package first observed a fixed or '
+    'unaffected version, or the advisory was no longer listed for the installed version. Times between scans are '
+    'telemetry gaps: exposure may have started before the first affected scan (advisory publication is not shown here) '
+    'and ended at any point before the resolving scan. Version resolution is not verified effective installation: '
+    'required service restarts or reboots are not confirmed. "uncertain" never resolves an exposure, and packages not '
+    'included in a scan are never resolved by it. This is version applicability, not evidence of exploitation.')
+
+
+class ExposureHistory(Base):
+    __tablename__='cve_exposure_history'
+    id: Mapped[str]=mapped_column(String(64),primary_key=True)
+    host_id: Mapped[str]=mapped_column(String(36),index=True)
+    advisory_id: Mapped[str]=mapped_column(String(128))
+    package: Mapped[str]=mapped_column(String(255))
+    ecosystem: Mapped[str]=mapped_column(String(64),default='')
+    cve_ids: Mapped[str]=mapped_column(Text,default='')
+    first_affected_at: Mapped[float]=mapped_column(Double,default=0)
+    first_affected_version: Mapped[str]=mapped_column(Text,default='')
+    last_affected_at: Mapped[float]=mapped_column(Double,default=0)
+    last_affected_version: Mapped[str]=mapped_column(Text,default='')
+    fixed_version: Mapped[str]=mapped_column(Text,default='')
+    last_observed_at: Mapped[float]=mapped_column(Double,default=0)
+    last_status: Mapped[str]=mapped_column(String(20),default='')
+    resolved_at: Mapped[float]=mapped_column(Double,default=0)
+    resolved_version: Mapped[str]=mapped_column(Text,default='')
+    resolved_status: Mapped[str]=mapped_column(String(20),default='')
+    reopened: Mapped[int]=mapped_column(Integer,default=0)
+
+
+def _history_id(host_id,advisory_id,package):
+    return hashlib.sha256('\0'.join((host_id,advisory_id,package)).encode()).hexdigest()
+
+
+# Within one scan several binaries can share a source package; the most
+# exposed classification wins so an affected binary is never hidden.
+_RANK={cve_exposure.AFFECTED:3,cve_exposure.UNCERTAIN:2,cve_exposure.FIXED:1,cve_exposure.UNAFFECTED:1}
+
+
+def _observations(result):
+    """Return ``(scanned, seen)`` from one complete scan result.
+
+    ``scanned`` maps each checked source package to its installed version.
+    ``seen`` maps (advisory, package) to the strongest row for that pair.
+    """
+    scanned={};seen={}
+    for item in result.get('results') or ():
+        package=(item.get('package') or {}).get('name') if isinstance(item,dict) else None
+        version=item.get('version') if isinstance(item,dict) else None
+        if not isinstance(package,str) or not isinstance(version,str):continue
+        previous=scanned.get(package)
+        scanned[package]=version if previous in (None,version) else None  # conflicting versions cannot resolve
+        for row in item.get('applicability') or ():
+            if not isinstance(row,dict) or row.get('status') not in _RANK:continue
+            advisory_id=row.get('advisory_id')
+            if not isinstance(advisory_id,str) or not _ADVISORY_ID.fullmatch(advisory_id):continue
+            key=(advisory_id,package);current=seen.get(key)
+            if current is None or _RANK[row['status']]>_RANK[current[0]['status']]:seen[key]=(row,version)
+    return scanned,seen
+
+
+def record_history(session,host_id,result,now=None):
+    """Fold one complete scan into the durable ledger; the caller commits.
+
+    Only packages in this scan are considered. Affected opens (or reopens) an
+    exposure; fixed/unaffected, or the advisory no longer being listed for a
+    scanned package, resolves an open one; uncertain changes nothing but the
+    last observation.
+    """
+    now=time.time() if now is None else now
+    scanned,seen=_observations(result)
+    if not scanned:return
+    eco=result.get('ecosystem') if isinstance(result.get('ecosystem'),str) else ''
+    rows={(row.advisory_id,row.package):row for row in session.scalars(select(ExposureHistory).where(
+        ExposureHistory.host_id==host_id,ExposureHistory.package.in_(sorted(scanned))))}
+    for (advisory_id,package),(observed,version) in seen.items():
+        status=observed['status'];entry=rows.get((advisory_id,package))
+        if status!=cve_exposure.AFFECTED and entry is None:continue  # only ever-affected pairs are tracked
+        if entry is None:
+            entry=ExposureHistory(id=_history_id(host_id,advisory_id,package),host_id=host_id,advisory_id=advisory_id,
+                package=package,first_affected_at=now,first_affected_version=version,resolved_at=0,reopened=0)
+            session.add(entry);rows[(advisory_id,package)]=entry
+        entry.ecosystem=eco[:64];entry.last_observed_at=now;entry.last_status=status
+        cves=[c for c in observed.get('cve_ids') or () if isinstance(c,str)]
+        if cves:entry.cve_ids=','.join(sorted(set(cves)))[:2000]
+        if status==cve_exposure.AFFECTED:
+            if entry.resolved_at:
+                entry.reopened=(entry.reopened or 0)+1
+                entry.resolved_at=0;entry.resolved_version='';entry.resolved_status=''
+            entry.last_affected_at=now;entry.last_affected_version=version
+            entry.fixed_version=observed.get('fixed_version') if isinstance(observed.get('fixed_version'),str) else ''
+        elif status in RESOLVED_STATUSES and not entry.resolved_at:
+            entry.resolved_at=now;entry.resolved_version=version;entry.resolved_status=status
+    for (advisory_id,package),entry in rows.items():
+        if (advisory_id,package) in seen or entry.resolved_at:continue
+        version=scanned.get(package)
+        if version is None:continue  # binaries of one source disagreed; do not resolve
+        entry.last_observed_at=now;entry.last_status=NOT_LISTED
+        entry.resolved_at=now;entry.resolved_version=version;entry.resolved_status=NOT_LISTED
+
+
+def history(session,host_id,limit=HISTORY_LIMIT):
+    rows=session.scalars(select(ExposureHistory).where(ExposureHistory.host_id==host_id).order_by(
+        ExposureHistory.first_affected_at.desc(),ExposureHistory.id).limit(limit+1)).all()
+    items=[{'advisory_id':row.advisory_id,'package':row.package,'ecosystem':row.ecosystem,
+            'cve_ids':[c for c in (row.cve_ids or '').split(',') if c],'state':'resolved' if row.resolved_at else OPEN,
+            'first_affected_at':row.first_affected_at,'first_affected_version':row.first_affected_version,
+            'last_affected_at':row.last_affected_at,'last_affected_version':row.last_affected_version,
+            'fixed_version':row.fixed_version or None,'last_observed_at':row.last_observed_at,'last_status':row.last_status,
+            'resolved_at':row.resolved_at or None,'resolved_version':row.resolved_version or None,
+            'resolved_status':row.resolved_status or None,'reopened':row.reopened or 0} for row in rows[:limit]]
+    return {'items':items,'truncated':len(rows)>limit,'open':sum(1 for i in items if i['state']==OPEN),
+            'coverage':HISTORY_COVERAGE}

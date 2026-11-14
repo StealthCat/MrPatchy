@@ -1933,19 +1933,20 @@ def rollout(body:RolloutInput,user=Depends(admin_user)):
 class AdvisoryInput(BaseModel): packages:list[str]=Field(min_length=1,max_length=100)
 @app.post('/api/operations/{host_id}/advisories')
 def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(admin_user)):
-    from .advisories import scan
+    from .advisories import scan,record_history
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
         result=scan(h.inventory,body.packages)
         if len(json.dumps(result).encode())>2000000:raise HTTPException(413,'Advisory result too large')
-        s.merge(Setting(key='advisories:'+host_id,value=result));s.commit()
+        s.merge(Setting(key='advisories:'+host_id,value=result));record_history(s,host_id,result);s.commit()
         return result
 @app.get('/api/operations/{host_id}/advisories')
 def get_advisories(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
-        from .advisories import retained
-        return retained(row.value) if row else {'results':[],'coverage':'Not checked'}
+        from .advisories import retained,history
+        result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
+        return {**result,'exposure_history':history(s,host_id)}
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)

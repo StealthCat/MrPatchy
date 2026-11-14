@@ -3006,6 +3006,21 @@ Before this checkpoint an `affected` result from an administrator-run advisory s
 - **Unchanged:** the producer only reads. It runs no scan, contacts no advisory service or AI provider, selects no patches and authorizes no containment or response. No SMTP/webhook alert, schema, route or role change.
 - **Limitations:** results are only as fresh as the last administrator-run scan; scheduled scans, per-CVE incidents, fleet views and RPM updateinfo remain open in requirement D.
 
+#### Durable per-server exposure history — worker checkpoint #858
+
+Before this checkpoint each advisory scan overwrote `advisories:<host>`, so a later clean scan erased the fact that a server had ever been exposed. The new `cve_exposure_history` table (`advisories.ExposureHistory`) keeps one row per server, advisory ID and source package for every pair a scan has classified as `affected`.
+
+- **Opening:** the first `affected` observation records the first-affected time and installed version. Later `affected` scans update the last-affected time and version and the vendor fixed version. The first-seen values are never moved.
+- **Resolving:** a later scan of the same source package resolves an open exposure, recording the resolving time, version and reason. It resolves when the result is `fixed` or `unaffected`, or when the advisory is no longer listed for the installed version (`not-listed`).
+- **Never resolved:** an `uncertain` result never resolves an exposure and never opens one. A package that a scan did not include is never resolved by it. When binaries of one source disagree on version, absence of the advisory resolves nothing. When binaries of one source differ in classification, the most exposed one wins.
+- **Reopening:** an `affected` observation after resolution reopens the row, increments `reopened` and keeps the original first-affected time.
+- **Read API:** `GET /api/operations/{host}/advisories` adds `exposure_history`, with items, an open count, `truncated` (limit 500) and a coverage statement. It remains admin-only. The coverage statement discloses three limits:
+  - times between manual scans are telemetry gaps;
+  - publication time is not shown;
+  - version resolution does not verify the required restart or reboot.
+- **Unchanged:** the latest-scan setting, applicability classification, notifications, roles, patch selection and response authorization. The ledger authorizes nothing. The table is created by `create_all` on SQLite and MySQL, and the standalone migration copies it automatically. History is retained when a server is soft-deleted, like the latest-scan setting.
+- **Remaining in requirement D:** advisory publication dates and exposure windows from `exposure_window()`, verified restart and activation, scheduled scans, UI rendering of the history, fleet views, RPM updateinfo, and exploitation monitoring and containment wiring.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
