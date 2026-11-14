@@ -74,11 +74,11 @@ async function serverOverview(revision,{root,hostId}){
  if(section!==requested)history.replaceState(null,'',serverLink(hostId));
  const [data,spool]=await Promise.all([api('/hosts/'+hostId+'/summary'),section==='summary'?api('/hosts/'+hostId+'/spool-health').catch(()=>null):null]);if(!currentView(revision,'servers')||!root.isConnected)return;
  const {host:h,system,collector,counts,jobs,last_patch,lifecycle}=data;
+ const fact=(label,value)=>`<div><dt>${label}</dt><dd>${esc(value??'Not reported')}</dd></div>`;
  const reboot=data.reboot&&typeof data.reboot==='object'?data.reboot:{state:'not_reported',packages:[]};
  const rebootLabel={required:'Reboot required',not_required:'No reboot pending',not_reported:'Not reported'}[reboot.state]||'Not reported';
  const rebootPackages=reboot.state==='required'&&Array.isArray(reboot.packages)&&reboot.packages.length?`<p>Requested by: ${reboot.packages.map(name=>`<code>${esc(name)}</code>`).join(', ')}${reboot.packages_truncated?' and more':''}</p>`:'';
  const rebootCard=`<section class="card" data-reboot-state="${esc(reboot.state)}"><h3>Pending reboot</h3><p>${badge(reboot.state==='required'?'reboot required':reboot.state==='not_required'?'current':'unknown')} <strong>${esc(rebootLabel)}</strong></p><p>${esc(reboot.state==='required'?'Installed updates are not in effect until this server reboots. Mr Patchy does not reboot it from this view; schedule a reviewed reboot with patching policy.':reboot.state==='not_required'?'The last inventory reported no pending reboot.':'This server\'s agent has not reported pending-reboot state. Refresh after the agent is updated.')}</p>${rebootPackages}<dl class="server-facts">${fact('Reported',reboot.observed?date(reboot.observed):null)}</dl><p class="help">${esc(reboot.gap||'')}</p></section>`;
- const fact=(label,value)=>`<div><dt>${label}</dt><dd>${esc(value??'Not reported')}</dd></div>`;
  const os=typeof system.os==='string'?system.os:JSON.stringify(system.os||{});
  const fresh=h.last_seen&&Date.now()/1000-h.last_seen>=0&&Date.now()/1000-h.last_seen<120;
  const sections=[['summary','Summary'],['system','System & collector'],['patching','Patching status']];
