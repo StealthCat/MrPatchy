@@ -1,3 +1,7 @@
+## 1.59.102 — 2026-11-14
+
+1. [PR #818](https://github.com/StealthCat/MrPatchy/pull/818): Adds a fixed-text, admin-only in-app notification for failed or incomplete scheduled malware scans and scans overdue by more than the configured interval plus one hour. Notices resolve when coverage is recorded, the schedule is disabled or the server leaves scope. This adds no schema, role, API, SMTP/webhook, scan scheduling or response-authorization change. Material limits: queued/running attempts and enabled policies with no first scan remain suppressed, so stuck or never-started schedules may still be silent; [issue #816](https://github.com/StealthCat/MrPatchy/issues/816) remains open for this follow-up.
+
 ## 1.59.101 — 2026-11-14
 
 1. [PR #821](https://github.com/StealthCat/MrPatchy/pull/821): Adds a fixed-text, admin-only in-app notice when verified Debian or Ubuntu releases are past standard support, including ended support, Ubuntu Pro entitlement not observed, or Debian LTS eligibility unverified. It uses the reviewed catalog and inventory freshness; stale inventory holds the state, and the event resolves when coverage returns or the host/release leaves scope. Already-affected servers receive a notice on the next coordinator tick. This is additive notification behavior with no schema, route, role, SMTP/webhook, patching, upgrade or response-authorization change. #341 remains open for advance warning, entitlement discovery, RPM/vendor catalogs, catalog refresh/signing, migration planning, fleet reporting and real-target acceptance.

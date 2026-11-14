@@ -12,7 +12,7 @@ window.NotificationShell=(()=>{
  let liveState='',lastSync=0,syncDelayed=false,streamRetryAt=0,streamRetryDelay=0;
  const STREAM_RETRY_MIN_MS=POLL_MS,STREAM_RETRY_MAX_MS=600000;
  const liveLabels={connecting:'Connecting',live:'Live',reconnecting:'Reconnecting',unavailable:'Unavailable, polling only',polling:'Polling only'};
- const centerContext={offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:''};
+ const centerContext={offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:'',lifecycle:''};
  const node=id=>document.getElementById(id);
  const button=()=>node('notification-button'),panel=()=>node('notification-panel');
  const status=message=>{const target=node('notification-status');if(target.textContent!==message)target.textContent=message;};
