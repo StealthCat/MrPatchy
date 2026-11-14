@@ -3390,36 +3390,6 @@ hashes, and it never executes or sources anything.
 Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
 
 
-### Individual queued at jobs — worker checkpoint #831
-
-The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
-`/var/spool/cron` root, so its job files were hashed but opaque. When the controller
-asks for parsed jobs (`cron_jobs`), the agent now decodes each job file name. The name has the form
-`<queue><5-hex job><8-hex minutes since the epoch>` and gives the queue, job
-number and scheduled run time. An uppercase queue means atd is executing the job.
-The agent then parses the hashed bytes as data. Nothing is executed or sourced.
-
-- The `# atrun uid= gid=` and `# mail` headers give the owner.
-- Exported environment assignments are counted. Their values are never stored.
-- The `umask` and working-directory `cd … || { … }` boilerplate is skipped.
-- Commands come from the `marcinDELIMITER` heredoc (at ≥ 3.1.14) or the plain lines that follow (older at). They are capped at 32 lines of 512 characters, use the cron redaction patterns, and have control characters escaped.
-- Any other layout is reported as unparsed with no commands. Nothing is guessed.
-
-The controller validates the optional `at` record strictly, including agreement with
-the spool file name. Startup comparisons and incident evidence stay metadata-only.
-Startup → Files shows queue, scheduled time, owner and commands, and search finds at
-commands and accounts. The Coverage catalog has a Debian-family at queue row with
-parsed and older-agent counts. Scope is unchanged, so existing baselines remain
-comparable.
-
-**Limits:**
-- Whether atd runs is not evaluated.
-- The RHEL-family `/var/spool/at` spool is outside built-in scope.
-- Referenced scripts are not inspected.
-- No AI classification is made.
-
-Remaining roadmap F work is tracked above.
-
 ### Startup-entry provenance classification contract — worker checkpoint #720
 
 Contract increment only; the startup-awareness requirement and its provenance
@@ -3473,6 +3443,36 @@ exactly one class with its basis, verification strength (`authenticated`,
 **Not covered:** collecting ownership, package-database digests or authenticated
 vendor artifacts from targets; persistence; UI; AI classification; response actions.
 No schema, API, auth or response-authorization change.
+
+### Individual queued at jobs — worker checkpoint #831
+
+The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
+`/var/spool/cron` root, so its job files were hashed but opaque. When the controller
+asks for parsed jobs (`cron_jobs`), the agent now decodes each job file name. The name has the form
+`<queue><5-hex job><8-hex minutes since the epoch>` and gives the queue, job
+number and scheduled run time. An uppercase queue means atd is executing the job.
+The agent then parses the hashed bytes as data. Nothing is executed or sourced.
+
+- The `# atrun uid= gid=` and `# mail` headers give the owner.
+- Exported environment assignments are counted. Their values are never stored.
+- The `umask` and working-directory `cd … || { … }` boilerplate is skipped.
+- Commands come from the `marcinDELIMITER` heredoc (at ≥ 3.1.14) or the plain lines that follow (older at). They are capped at 32 lines of 512 characters, use the cron redaction patterns, and have control characters escaped.
+- Any other layout is reported as unparsed with no commands. Nothing is guessed.
+
+The controller validates the optional `at` record strictly, including agreement with
+the spool file name. Startup comparisons and incident evidence stay metadata-only.
+Startup → Files shows queue, scheduled time, owner and commands, and search finds at
+commands and accounts. The Coverage catalog has a Debian-family at queue row with
+parsed and older-agent counts. Scope is unchanged, so existing baselines remain
+comparable.
+
+**Limits:**
+- Whether atd runs is not evaluated.
+- The RHEL-family `/var/spool/at` spool is outside built-in scope.
+- Referenced scripts are not inspected.
+- No AI classification is made.
+
+Remaining roadmap F work is tracked above.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
