@@ -1203,14 +1203,13 @@ def audit_detail(entry_id:int,user=Depends(admin_user)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(admin_user)):
-    from . import ai_budget,ai_provider_backoff,scoring_block_notifications
+    from . import ai_budget,ai_control_preview,ai_provider_backoff,scoring_block_notifications
     with Session() as s:
-        cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
+        cfg=config(s)
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
-            'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
-                'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+            'ai_control_migration':ai_control_preview.legacy_migration(cfg)}
 
 @app.get('/api/settings/ai-connections')
 def ai_connection_inventory(user=Depends(admin_user)):
