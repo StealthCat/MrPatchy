@@ -1,3 +1,7 @@
+## 1.59.99 — 2026-11-14
+
+1. [PR #823](https://github.com/StealthCat/MrPatchy/pull/823): Adds a counts-only admin notification when the latest stored advisory scan still shows affected rows for currently matching installed package versions. Existing affected scans publish one notification after upgrade; unreadable inventory keeps the exposure active until data can be refreshed. Results reflect the last administrator-run scan and version applicability is not evidence of exploitation; scheduled scans remain out of scope. No schema, route, role or response-authorization change.
+
 ## 1.59.98 — 2026-11-14
 
 1. [PR #797](https://github.com/StealthCat/MrPatchy/pull/797): Fetches OSV advisory details concurrently over one pooled client (up to 8 workers), shortening the scan and its per-server lock time. The 200-record cap, shared 60-second scan budget, request timeouts, no-redirect policy and fail-closed uncertain results are unchanged. No schema, API, role, UI or response-authorization change. A slow scan can still hold the per-server lock for the remaining scan budget; notifications and scheduled scans remain out of scope.
