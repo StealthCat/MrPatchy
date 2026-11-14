@@ -1146,6 +1146,80 @@ def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
     return result
 
 
+# Debian-family at spool (inside the built-in /var/spool/cron root). Job file names are
+# <queue letter><5 hex job number><8 hex minutes since the epoch>; an uppercase queue
+# letter marks a job atd is currently executing. RHEL-family /var/spool/at is not in scope.
+AT_SPOOL_DIR = '/var/spool/cron/atjobs'
+AT_JOB_NAME = re.compile(r'([a-zA-Z=])([0-9a-f]{5})([0-9a-f]{8})')
+AT_COMMAND_LINES = 32
+_AT_HEADER = re.compile(r'# atrun uid=(\d{1,10}) gid=(\d{1,10})')
+_AT_MAIL = re.compile(r'# mail +(\S{1,64}) +\d+')
+_AT_EXPORT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=.*; export [A-Za-z_][A-Za-z0-9_]*')
+_AT_HEREDOC = re.compile(r"\$\{SHELL:-/bin/sh\} << '(marcinDELIMITER[0-9a-f]{1,16})'")
+
+
+def at_job_name(path):
+    """Decoded (queue, job, scheduled epoch seconds) for a job file name in the at spool, else None."""
+    value=str(path)
+    if str(Path(value).parent)!=AT_SPOOL_DIR:return None
+    match=AT_JOB_NAME.fullmatch(Path(value).name)
+    if not match:return None
+    queue,job,minutes=match.groups()
+    return queue,int(job,16),int(minutes,16)*60
+
+
+def parse_at_job(data,name):
+    """Parse an at job script as data. Nothing is executed or sourced; exported environment
+    values are counted but never stored, and an unrecognized layout is reported, not guessed."""
+    queue,job,scheduled=name
+    result={'queue':queue.lower(),'job':job,'scheduled_at':scheduled,'running':queue.isupper(),'uid':None,'gid':None,
+            'account':None,'commands':[],'environment':0,'parsed':False,'truncated':False,'redacted':False}
+    lines=data.decode('utf-8','replace').split('\n')
+    header=_AT_HEADER.fullmatch(lines[1].rstrip('\r')) if len(lines)>1 and lines[0].rstrip('\r')=='#!/bin/sh' else None
+    if not header:return result
+    result['uid'],result['gid']=int(header.group(1)),int(header.group(2))
+    index=2
+    if index<len(lines):
+        mail=_AT_MAIL.fullmatch(lines[index].rstrip('\r'))
+        if mail:
+            if re.fullmatch(CRON_ACCOUNT,mail.group(1)):result['account']=mail.group(1)
+            index+=1
+    # preamble (umask, exports) -> working-directory block -> commands (heredoc or plain)
+    body=[];state='preamble';delimiter=None
+    for line in lines[index:]:
+        text=line.rstrip('\r');stripped=text.strip()
+        if state=='preamble':
+            if not stripped or re.fullmatch(r'umask [0-7]{1,4}',stripped):continue
+            if _AT_EXPORT.fullmatch(stripped):result['environment']+=1;continue
+            if stripped.startswith('cd ') and stripped.endswith('|| {'):state='directory';continue
+            return result
+        if state=='directory':
+            if stripped=='}':state='after'
+            continue
+        if state=='after':
+            if not stripped:continue
+            heredoc=_AT_HEREDOC.fullmatch(stripped)
+            if heredoc:delimiter=heredoc.group(1);state='heredoc';continue
+            state='plain'
+        if state=='heredoc' and text==delimiter:state='done';continue
+        if state=='done':
+            if stripped:return result
+            continue
+        body.append(text)
+    if state in ('preamble','directory','heredoc'):return result
+    commands=[]
+    for text in body:
+        if not text.strip() or text.lstrip().startswith('#'):continue
+        if len(commands)>=AT_COMMAND_LINES:result['truncated']=True;break
+        command=_CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),text.strip(' \t'))
+        command,redacted=redact_cron_command(command)
+        result['redacted']=result['redacted'] or redacted
+        if len(command)>CRON_COMMAND_LIMIT:result['truncated']=True
+        commands.append(command[:CRON_COMMAND_LIMIT])
+    result.update(commands=commands,parsed=True)
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -1156,7 +1230,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;content=bytearray() if form else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;content=bytearray() if form or at_name else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1189,11 +1263,13 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
             with scan_root(directory) as current:
                 now=os.fstat(current);old=os.fstat(directory_fd)
                 if (now.st_dev,now.st_ino)!=(old.st_dev,old.st_ino):raise ValueError('Directory changed')
-            if content is not None and row['kind']=='regular':
+            if form and content is not None and row['kind']=='regular':
                 # Parsed from exactly the bytes that were hashed above.
                 account=name if form=='user' and re.fullmatch(CRON_ACCOUNT,name) else None
                 row['cron']=parse_cron(bytes(content),form,account,CRON_TOTAL_JOBS-cron_total[0])
                 cron_total[0]+=len(row['cron']['jobs'])
+            if at_name is not None and row['kind']=='regular':
+                row['at']=parse_at_job(bytes(content),at_name)
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
