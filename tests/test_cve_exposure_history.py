@@ -116,6 +116,9 @@ def test_history_is_per_server_and_ignores_invalid_rows(session):
         _row('USN-1', 'affected'), _row(None, 'affected'), _row('bad id/../x', 'affected'),
         {'advisory_id': 'USN-3', 'status': 'bogus'}])), now=100)
     session.commit()
+    # An over-long source name is skipped rather than failing the scan's commit.
+    advisories.record_history(session, HOST, _result(('x:amd64', 'x' * 256, '1', [_row('USN-4', 'affected')])), now=100)
+    session.commit()
     assert list(_history(session)) == [('USN-1', 'foo')]
     assert advisories.history(session, 'other-host')['items'] == []
 

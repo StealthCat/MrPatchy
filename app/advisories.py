@@ -194,7 +194,7 @@ def _observations(result):
     for item in result.get('results') or ():
         package=(item.get('package') or {}).get('name') if isinstance(item,dict) else None
         version=item.get('version') if isinstance(item,dict) else None
-        if not isinstance(package,str) or not isinstance(version,str):continue
+        if not isinstance(package,str) or not isinstance(version,str) or not 0<len(package)<=255:continue
         previous=scanned.get(package)
         scanned[package]=version if previous in (None,version) else None  # conflicting versions cannot resolve
         for row in item.get('applicability') or ():
