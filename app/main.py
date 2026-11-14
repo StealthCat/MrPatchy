@@ -1156,6 +1156,11 @@ def endpoint_agent_health(offset:int=0,user=Depends(admin_user)):
     try:return page(offset)
     except ValueError as error:raise HTTPException(400,str(error))
 
+@app.get('/api/operations/deployment-health')
+def deployment_health_summary(user=Depends(admin_user)):
+    from .deployment_health import summary
+    return summary()
+
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
     boot_id:str=Field(pattern=r'^[0-9a-f]{32}$')

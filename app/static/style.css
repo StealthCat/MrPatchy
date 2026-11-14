@@ -457,6 +457,11 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 /* Long configuration identifiers (e.g. MRPATCHY_EXPECTED_CONTROLLER_IDS) must wrap on phones. */
 #controller-registrations, #endpoint-agent-health { overflow-wrap:anywhere; }
 .endpoint-agent-counts { display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center; }
+.deployment-health-overall { display:flex;flex-wrap:wrap;gap:8px;align-items:center; }
+.deployment-health-counts { display:flex;flex-wrap:wrap;gap:4px 12px; }
+.deployment-health-table th small,.deployment-health-table td small { display:block; }
+.badge.maintenance { color:var(--amber);background:#f7cf8a14; }
+@media(max-width:640px) { .deployment-health-table thead { display:none; }.deployment-health-table tr,.deployment-health-table th,.deployment-health-table td { display:block;width:auto; }.deployment-health-table td { border-top:0; } }
 .endpoint-agent-pager { align-items:center; }
 
 /* Keep cooperative worker controls beside identity, reachable before horizontal scrolling. */
