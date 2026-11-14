@@ -1,3 +1,7 @@
+## 1.61.3 — 2026-11-14
+
+1. [PR #865](https://github.com/StealthCat/MrPatchy/pull/865): The Servers directory now shows administrators a per-server **AI paused** badge and a Server AI filter. The admin-only `GET /api/hosts` response adds `ai_paused`, applying the provider gate's fail-closed stored-policy rule in the existing bounded query (no extra statement). Compatibility: additive admin-only response field; viewers/operators receive no field. No schema, migration, admission, pause/resume, audit or response-authorization changes; rebuild the controller. The badge reports only the stored per-server setting—not global AI enablement/configuration—and older controller replies without the field are treated as not paused.
+
 ## 1.61.2 — 2026-11-14
 
 1. [PR #875](https://github.com/StealthCat/MrPatchy/pull/875): Settings → AI → Retained spend history now offers administrators a CSV download of the same bounded aggregate windows for the selected period and applied timezone. Formula-leading text is neutralized and truncation is disclosed. Compatibility: an additive read-only endpoint and UI; no schema, budget-accounting, scheduling, settings or response-authorization changes. Amounts remain local public-price estimates, not provider invoices; provider reconciliation and reports beyond 90 days remain out of scope.
