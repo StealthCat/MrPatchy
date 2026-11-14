@@ -38,7 +38,10 @@ import json,os,re,secrets,sys
 from pathlib import Path
 from urllib.parse import urlsplit
 project,zone,url,credentials=sys.argv[1:]
-for name in ('.env','.env.gcp','compose.gcp-auth.json'):
+# Role-specific WIF overlays for compose.controller.yaml and compose.worker.yaml; the combined
+# compose.gcp-auth.json names both services and would add a partial service to a role file.
+ROLE_AUTH={'compose.controller.gcp-auth.json':'app','compose.worker.gcp-auth.json':'worker'}
+for name in ('.env','.env.gcp','compose.gcp-auth.json',*ROLE_AUTH):
     if Path(name).is_symlink():raise SystemExit('Refusing symlink: '+name)
 # Validate before writing any deployment settings.
 if not Path('.env').exists():
@@ -84,6 +87,8 @@ Path('.env.gcp').write_text('GCP_PROJECT='+project+'\nGCP_ZONE='+zone+'\n')
 os.chmod('.env.gcp',0o600)
 if override:
     Path('compose.gcp-auth.json').write_text(json.dumps(override));os.chmod('compose.gcp-auth.json',0o600)
+    for name,service in ROLE_AUTH.items():
+        Path(name).write_text(json.dumps({'services':{service:override['services'][service]}}));os.chmod(name,0o600)
 PY
 docker build -t mrpatchy:base .
 bash ./gcp-compose.sh build app worker

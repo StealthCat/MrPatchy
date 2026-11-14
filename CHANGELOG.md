@@ -1,3 +1,7 @@
+## 1.60.1 — 2026-11-14
+
+1. [PR #867](https://github.com/StealthCat/MrPatchy/pull/867): WIF installations using the split controller/worker Compose files can now generate role-specific credential overlays with the same validated read-only `/gcp` bind mount. The generated files are mode 0600 and excluded from Git and Docker builds; the complete install and sign-in/check flow are unchanged. This is additive and changes no runtime authorization. Existing installations receive the files when the installer is rerun with `--credential-dir`; role-specific overlays do not add standalone controller-only or join-worker installer modes, remote-host workers or a dedicated GCP integration node.
+
 ## 1.60.0 — 2026-11-14
 
 1. [PR #859](https://github.com/StealthCat/MrPatchy/pull/859): Advisory scans now retain durable per-server CVE exposure history, with first/last affected observations, resolution and reopening records. The admin advisory response adds up to 500 history items, open exposures first, an accurate total open count and coverage limits. This adds a database table and response key; existing records are not backfilled and history starts with the next scan. Scan intervals remain telemetry gaps, uncertain or unscanned packages do not resolve exposure, and a version-based resolution does not verify restart or reboot. This does not change response authorization or trigger any response action.

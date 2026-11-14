@@ -143,14 +143,31 @@ options take precedence over the `COMPOSE_FILE` line that `install-gcp.sh` write
 `docker compose`, once you move to the role files; otherwise a later command would
 start the complete installation again. The workers reuse the controller's gcloud
 configuration in `/data/gcloud` on the shared data volume, so an attached GCE
-service account works without separate worker sign-in. The overlays don't carry the
-Workload Identity Federation mount from `compose.gcp-auth.json`, which also names both
-services. Keep WIF installations on `compose.yaml` with `./gcp-compose.sh` for now.
+service account works without separate worker sign-in.
+
+For Workload Identity Federation, don't layer `compose.gcp-auth.json` onto a role
+file: it names both services and adds a partial service for the other role.
+`./install-gcp.sh --credential-dir DIRECTORY` also writes
+`compose.controller.gcp-auth.json` (app only) and `compose.worker.gcp-auth.json`
+(worker only). Each carries the same validated read-only `/gcp` bind mount, has mode
+0600, and is ignored by Git and Docker builds. Add the matching file last:
+
+```sh
+docker compose --env-file .env -p mrpatchy -f compose.controller.yaml \
+  -f compose.controller.gcp.yaml -f compose.controller.gcp-auth.json up -d --build --wait --remove-orphans
+MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data docker compose --env-file .env -p mrpatchy-workers \
+  -f compose.worker.yaml -f compose.worker.gcp.yaml -f compose.worker.gcp-auth.json up -d --build --scale worker=3
+```
+
+The installer still signs in and checks access through the complete installation
+(`./gcp-compose.sh`), which stores the gcloud configuration in `/data/gcloud` for
+both roles. The role overlays only mount the referenced credential files, so every
+role keeps reading them on the same host. Re-run the installer with
+`--credential-dir` to regenerate all three files.
 
 ### Unsupported in this increment
 
 - Workers on another machine: a Docker volume name doesn't share the encryption key, SSH identities, artifacts or locking state across hosts.
-- Role files with the WIF credential mount from `compose.gcp-auth.json`.
 - Network-mounted SQLite.
 
 Use `compose.yaml` (optionally with `compose.gcp.yaml` through `./gcp-compose.sh`) for those installations.
