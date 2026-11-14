@@ -46,12 +46,43 @@ registrations rather than adding new ones (see "Worker identity persistence" bel
 
 ```sh
 # Controller (project "mrpatchy", data volume "mrpatchy_app-data").
+cp .env.controller.example .env  # review settings; set password/domain/URL before first start
 docker compose -p mrpatchy -f compose.controller.yaml up -d --build --wait
 
 # Three workers on the same Docker host, as a separate project.
-MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data \
-  docker compose -p mrpatchy-workers -f compose.worker.yaml up -d --build --scale worker=3
+cp .env.worker.example .env.worker   # then review it; keep it private (it is git- and docker-ignored)
+docker compose -p mrpatchy-workers --env-file .env.worker -f compose.worker.yaml up -d --build --scale worker=3
 ```
+
+`.env.worker.example` lists exactly the variables the worker role files read:
+the required controller data volume, `DATABASE_URL`, the per-replica pool limits,
+the drain window, the memory limit, the expected controller inventory and the GCP
+project/zone for the GCP worker overlay. Its values equal the worker file defaults.
+It deliberately has no administrator password, domain, ports, OIDC, control-network
+or fixed worker-ID settings, which belong to the controller's `.env` (`.env.example`).
+Passing `--env-file .env.worker` keeps a controller `.env` in the same checkout from
+leaking those settings into the worker project. Exporting
+`MRPATCHY_CONTROLLER_DATA_VOLUME` inline, as earlier releases documented, still works.
+`tests/test_compose_roles.py` fails if a worker file gains a variable the example
+does not document.
+
+### Controller environment file
+
+Copy `.env.controller.example` to the controller's `.env` and set the
+administrator password, domain and public URL before the first start. The
+template lists the variables the app and Caddy services read, including web/TLS
+bind and port settings, database, OIDC, control-network addresses, the app's AI
+HTTP connection ceiling, memory limits, expected inventory and the GCP project
+and zone for `compose.controller.gcp.yaml`. Rendering it gives the same
+configuration as `.env.example`.
+
+It omits worker pool limits, worker ID, drain window, worker memory limit and
+controller data-volume name. It leaves `MRPATCHY_EXPECTED_WORKER_IDS` empty,
+because role-file worker replicas do not take fixed IDs. `.env.example` remains
+the template for the complete installation. Tests check its variables and values,
+ensure no worker-only keys or credentials appear, and compare rendered
+configuration. This is a template only; remote-machine provisioning and
+controller-only/join-worker installer modes remain open.
 
 The worker file requires `MRPATCHY_CONTROLLER_DATA_VOLUME`. Compose refuses to render
 without it and marks the volume external, so it never creates an empty replacement.
@@ -78,12 +109,51 @@ To scale, rerun the worker command with a new `--scale` value. Before planned
 maintenance, drain workers in the UI and verify their state; `docker compose stop`
 also drains active jobs within the worker's long stop grace period.
 
-The following remain unsupported in this increment:
+### Google Cloud IAP runtime with the role files
+
+Don't layer `compose.gcp.yaml` on a role file. It defines both `app` and `worker`,
+so on `compose.controller.yaml` it adds a partial worker service (and on
+`compose.worker.yaml` a partial app service) without the role's command, hardening,
+volumes or networks. Use the role-specific overlays instead. Each carries exactly the
+matching `compose.gcp.yaml` service block (the `mrpatchy:gcp` image built from
+`deploy/Dockerfile.gcp`, `CLOUDSDK_CONFIG=/data/gcloud` and the required
+`GCP_PROJECT`/`GCP_ZONE`), and a test keeps them in sync:
+
+| Role file | GCP overlay |
+|---|---|
+| `compose.controller.yaml` | `compose.controller.gcp.yaml` (app only) |
+| `compose.worker.yaml` | `compose.worker.gcp.yaml` (worker only) |
+
+```sh
+# Prerequisite: the GCP image derives from the base image (install-gcp.sh builds it too).
+docker build -t mrpatchy:base .
+
+# Controller with the gcloud runtime.
+docker compose --env-file .env -p mrpatchy \
+  -f compose.controller.yaml -f compose.controller.gcp.yaml up -d --build --wait --remove-orphans
+
+# Three GCP-enabled workers on the same Docker host.
+MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data docker compose --env-file .env -p mrpatchy-workers \
+  -f compose.worker.yaml -f compose.worker.gcp.yaml up -d --build --scale worker=3
+```
+
+Rendering fails closed when `GCP_PROJECT` or `GCP_ZONE` is unset. Explicit `-f`
+options take precedence over the `COMPOSE_FILE` line that `install-gcp.sh` writes to
+`.env`, so keep using these explicit commands, not `./gcp-compose.sh` or plain
+`docker compose`, once you move to the role files; otherwise a later command would
+start the complete installation again. The workers reuse the controller's gcloud
+configuration in `/data/gcloud` on the shared data volume, so an attached GCE
+service account works without separate worker sign-in. The overlays don't carry the
+Workload Identity Federation mount from `compose.gcp-auth.json`, which also names both
+services. Keep WIF installations on `compose.yaml` with `./gcp-compose.sh` for now.
+
+### Unsupported in this increment
+
 - Workers on another machine: a Docker volume name doesn't share the encryption key, SSH identities, artifacts or locking state across hosts.
-- Combining the role files with `compose.gcp.yaml`, which also defines a worker.
+- Role files with the WIF credential mount from `compose.gcp-auth.json`.
 - Network-mounted SQLite.
 
-Use `compose.yaml` (optionally with `compose.gcp.yaml`) for those installations.
+Use `compose.yaml` (optionally with `compose.gcp.yaml` through `./gcp-compose.sh`) for those installations.
 
 ## Use the generated YAML
 
@@ -145,26 +215,6 @@ When workers are in a separate stack, set the same `MRPATCHY_EXPECTED_WORKER_IDS
 controller shows them on the Workers page, but the attention notifications are raised by
 the coordinator tick, which runs in a worker because the app sets `DISABLE_SCHEDULER`. Drain workers
 through the existing UI and verify their state before planned maintenance.
-
-## Controller environment file
-
-`.env.controller.example` is the environment template for `compose.controller.yaml`.
-Copy it to the controller's `.env` (`cp .env.controller.example .env`) and set the
-administrator password, domain and public URL before the first start. It lists exactly
-the variables the app and Caddy services read: the web, TLS bind and port settings,
-`DATABASE_URL`, OIDC, the control-network addresses, the app's AI HTTP connection
-ceiling, the memory limits, the expected inventory and the GCP project/zone for
-`compose.controller.gcp.yaml`. Rendering the controller file with it gives the same
-configuration as rendering with `.env.example`.
-
-It leaves out worker settings: the pool limits, `MRPATCHY_WORKER_ID`, the drain window,
-the worker memory limit and the controller data-volume name. Those belong in
-`.env.worker`. It sets `MRPATCHY_EXPECTED_WORKER_IDS` empty, because
-`compose.worker.yaml` replicas never take a fixed worker ID and any IDs listed there
-are reported as missing workers. `.env.example` remains the template for the complete
-`compose.yaml` installation. `tests/test_controller_env_example.py` fails if the
-controller role gains a variable the example does not document, or if the example
-gains a worker-only key.
 
 ## Worker identity persistence
 
