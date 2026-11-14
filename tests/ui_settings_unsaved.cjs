@@ -8,6 +8,8 @@ module.exports=async page=>{
  };
  const noPrompt=async()=>assert.equal(await dialog.evaluate(d=>d.open),false,'unexpected unsaved-changes prompt');
  const hash=()=>page.evaluate(()=>location.hash);
+ // A held move is undone through session history, which settles asynchronously.
+ const expectHash=async(expected,message)=>{await page.waitForFunction(h=>location.hash===h,expected,{timeout:3000}).catch(()=>{});assert.equal(await hash(),expected,message);};
  const unloadBlocked=()=>page.evaluate(()=>{const e=new Event('beforeunload',{cancelable:true});dispatchEvent(e);return e.defaultPrevented;});
 
  await page.locator('[href="#settings/history"]').first().click();
@@ -20,17 +22,17 @@ module.exports=async page=>{
  assert.equal(await unloadBlocked(),true,'edited forms must request the native leave prompt');
  await page.locator('.settings-nav [href="#settings/patching"]').click();
  await prompt();
- assert.equal(await hash(),'#settings/history');
+ await expectHash('#settings/history');
  assert.equal(await history.inputValue(),String(+original+1));
  await page.locator('#unsaved-stay').click();
  await dialog.waitFor({state:'hidden'});
- assert.equal(await hash(),'#settings/history');
+ await expectHash('#settings/history');
  assert.equal(await history.inputValue(),String(+original+1));
 
  // Any shell link is held the same way; Discard changes continues to the requested page.
  await page.locator('[data-nav=overview]').click();
  await prompt();
- assert.equal(await hash(),'#settings/history');
+ await expectHash('#settings/history');
  await page.keyboard.press('Escape');
  await dialog.waitFor({state:'hidden'});
  assert.equal(await history.inputValue(),String(+original+1),'Escape must keep the edits');
@@ -38,19 +40,37 @@ module.exports=async page=>{
  await prompt();
  await page.locator('#unsaved-discard').click();
  const repo=page.locator('[name=repo_minutes]');await repo.waitFor();
- assert.equal(await hash(),'#settings/patching');
+ await expectHash('#settings/patching');
  assert.equal(await unloadBlocked(),false);
 
- // Browser Back with edits restores the current address and asks.
+ // Browser Back → Stay keeps the page without rewriting history: once the edit
+ // is reverted, Back reaches the original previous page and Forward returns.
  const minutes=await repo.inputValue();
  await repo.fill(String(+minutes+5));
  await page.goBack();
  await prompt();
- assert.equal(await hash(),'#settings/patching');
+ await page.locator('#unsaved-stay').click();
+ await dialog.waitFor({state:'hidden'});
+ await expectHash('#settings/patching');
+ assert.equal(await repo.inputValue(),String(+minutes+5),'Stay must keep the edits');
+ await repo.fill(minutes);
+ await page.goBack();
+ await history.waitFor();
+ await expectHash('#settings/history','Back after Stay must reach the previous page, not a rewritten copy');
+ await noPrompt();
+ await page.goForward();
+ await repo.waitFor();
+ await expectHash('#settings/patching');
+
+ // Browser Back with edits restores the current address and asks.
+ await repo.fill(String(+minutes+5));
+ await page.goBack();
+ await prompt();
+ await expectHash('#settings/patching');
  assert.equal(await repo.inputValue(),String(+minutes+5));
  await page.locator('#unsaved-discard').click();
  await history.waitFor();
- assert.equal(await hash(),'#settings/history');
+ await expectHash('#settings/history');
  assert.equal(await history.inputValue(),original,'discarded edits were not saved');
 
  // Reverting an edit, or saving it, clears the warning.

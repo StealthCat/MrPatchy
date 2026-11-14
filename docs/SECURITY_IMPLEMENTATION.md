@@ -4272,9 +4272,11 @@ the API key, AI settings, Patch policy, History retention and Database destinati
 Leaving with a value that differs from the snapshot asks first. This applies to a
 section tab, any shell link, Back/Forward or the page Refresh control. The user
 sees a "Leave without saving?" dialog with **Stay on this page** (also Escape)
-and **Discard changes**. A hashchange cannot be cancelled, so the previous
-address is restored with `history.replaceState` and the shell does not render
-until the user chooses Discard. Reloading or closing the tab triggers the
+and **Discard changes**. A hashchange cannot be cancelled, so the move is undone
+through session history (`history.go`, using a position index kept in
+`history.state`) without rewriting any entry, and the shell does not render
+until the user chooses Discard, which repeats the move. Back/Forward → Stay
+therefore leaves the history stack intact. Reloading or closing the tab triggers the
 browser's native `beforeunload` prompt. Reverting an edit or saving it clears the
 warning. The Settings search box and the spend-history filter are view filters
 and never prompt. Sign-out and session expiry are not held. The change is UI-only,

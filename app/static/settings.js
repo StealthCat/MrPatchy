@@ -37,9 +37,22 @@ function settingsHasUnsavedChanges(){
 function discardSettingsChanges(){trackedSettingsForms.clear();}
 // Leaving with unsaved edits asks first. settings.js loads before app.js, so these
 // listeners run before the shell's navigation and Refresh handlers and can hold
-// them. A hashchange cannot be cancelled: the previous address is restored
-// without rendering, and the requested one is applied only on Discard changes.
-let settledSettingsHash=location.hash;
+// them. A hashchange cannot be cancelled, so it is undone by moving back through
+// session history (never by rewriting an entry, which would drop the page the
+// user came from) and redone with the same move on Discard changes. Each entry
+// carries its position in history.state; replaceState keeps that position.
+const SETTINGS_HISTORY_KEY='mrpatchyHistoryIndex';
+const historyIndex=()=>{const s=history.state;return s&&typeof s==='object'&&Number.isInteger(s[SETTINGS_HISTORY_KEY])?s[SETTINGS_HISTORY_KEY]:null;};
+const nativeReplaceState=history.replaceState.bind(history);
+const stampHistory=(state,index)=>index===null||(state!==null&&typeof state!=='object')?state:{...(state||{}),[SETTINGS_HISTORY_KEY]:index};
+history.replaceState=function(state,...rest){const s=state&&typeof state==='object'&&SETTINGS_HISTORY_KEY in state?state:stampHistory(state,historyIndex());return nativeReplaceState(s,...rest);};
+if(historyIndex()===null)nativeReplaceState(stampHistory(history.state,0),'');
+let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex();
+function settleHistory(){
+ let index=historyIndex();
+ if(index===null){index=(settledHistoryIndex??-1)+1;nativeReplaceState(stampHistory(history.state,index),'');}
+ settledSettingsHash=location.hash;settledHistoryIndex=index;
+}
 function unsavedSettingsPending(){return !document.getElementById('shell').classList.contains('hidden')&&settingsHasUnsavedChanges();}
 function confirmLeaveUnsaved(proceed){
  modal('Leave without saving?','<p>You have unsaved Settings changes. Leaving this page discards them.</p><div class="actions"><button type="button" id="unsaved-stay">Stay on this page</button><button type="button" id="unsaved-discard" class="danger">Discard changes</button></div>');
@@ -49,11 +62,21 @@ function confirmLeaveUnsaved(proceed){
  document.getElementById('unsaved-stay').focus();
 }
 window.addEventListener('hashchange',event=>{
- if(!unsavedSettingsPending()){settledSettingsHash=location.hash;return;}
+ const index=historyIndex();
+ // Landing on the settled entry again is the undo of a held move: restore it without rendering.
+ if(index!==null&&index===settledHistoryIndex){event.stopImmediatePropagation();settledSettingsHash=location.hash;return;}
+ if(!unsavedSettingsPending()){settleHistory();return;}
  event.stopImmediatePropagation();
- const target=event.newURL;
- history.replaceState(history.state,'',settledSettingsHash||location.pathname+location.search);
- confirmLeaveUnsaved(()=>{location.href=target;});
+ if(settledHistoryIndex===null){
+  const target=event.newURL;
+  nativeReplaceState(history.state,'',settledSettingsHash||location.pathname+location.search);
+  confirmLeaveUnsaved(()=>{location.href=target;});
+  return;
+ }
+ // A new entry (link, typed address) sits right after the settled one; Back/Forward reports its own position.
+ const delta=index===null?1:index-settledHistoryIndex;
+ history.go(-delta);
+ confirmLeaveUnsaved(()=>history.go(delta));
 });
 document.addEventListener('click',event=>{
  if(!event.target.closest?.('#refresh-page')||!unsavedSettingsPending())return;
