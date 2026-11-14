@@ -103,11 +103,12 @@ def test_only_allowlisted_kinds_publish_and_viewers_cannot_see_them(admin):
     with Session() as s:
         kinds = {alert.kind for alert in s.query(operations.Alert)}
         assert {'stale', 'integrity', 'repository', 'recovery'} <= kinds
-        assert [event.kind for event in operational_events(s)] == ['recovery-required']
+        # Long telemetry silence is reported in-app with fixed text, never as the raw stale alert.
+        assert [event.kind for event in operational_events(s)] == ['recovery-required', 'telemetry-lost']
         reasons = ' '.join(row.reason for row in s.scalars(select(notifications.NotificationRevision)))
         assert 'secret' not in reasons and 'endpoint text' not in reasons
         assert notifications.unread_count(s, 'viewer') == 0
-        assert notifications.unread_count(s, 'admin') == 1
+        assert notifications.unread_count(s, 'admin') == 2
 
 
 def test_disabled_and_deleted_servers_resolve_their_notifications(admin):
@@ -261,3 +262,109 @@ def test_allowlisted_tabs_exist_and_baseline_review_lives_on_integrity():
     integrity = integrity[:integrity.index('\n}\n')]
     assert 'renderPersistenceBaseline(' in integrity
     assert operations.OPERATIONAL_NOTIFICATIONS['startup baseline'][2] == 'integrity'
+
+
+def telemetry_events(s):
+    return [event for event in operational_events(s) if event.kind == 'telemetry-lost']
+
+
+def test_telemetry_loss_notifies_once_resolves_and_reopens_without_outbox_alert(admin):
+    now = time.time()
+    add_host(last_seen=now - operations.TELEMETRY_LOST_SECONDS - 60)
+    with Session() as s:
+        s.add(User(username='viewer', password='x', role='viewer'))
+        s.commit()
+    operations.collect_alerts(now)
+    operations.collect_alerts(now + 300)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        revision = current(s, event)
+        assert (event.subject_type, event.subject_id, event.host_id, event.minimum_role) == (
+            'server', HOST, HOST, 'admin')
+        assert event.revision == 1 and revision.lifecycle == 'active' and revision.severity == 'high'
+        assert revision.deep_link == '#servers/' + HOST + '/agent'
+        assert revision.reason == operations.TELEMETRY_LOST_MESSAGE
+        assert notifications.unread_count(s, 'viewer') == 0
+        # The outbox keeps only the existing stale alert; no new SMTP/webhook kind is introduced.
+        kinds = {alert.kind for alert in s.query(operations.Alert)}
+        assert 'stale' in kinds and 'telemetry lost' not in kinds
+        s.get(Host, HOST).last_seen = now + 400
+        s.commit()
+
+    operations.collect_alerts(now + 400)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 2 and current(s, event).lifecycle == 'resolved'
+
+    operations.collect_alerts(now + 400 + operations.TELEMETRY_LOST_SECONDS + 60)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 3 and current(s, event).lifecycle == 'active'
+
+
+def test_short_stale_enrolling_and_disabled_servers_do_not_report_telemetry_loss(admin):
+    now = time.time()
+    add_host(last_seen=now - 300)  # stale for SMTP/webhook, below the in-app threshold
+    add_host(OTHER, last_seen=1)
+    with Session() as s:
+        s.get(Host, OTHER).state = 'enrolling'
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        assert telemetry_events(s) == []
+        assert s.query(operations.Alert).filter_by(kind='stale', host_id=HOST).count() == 1
+        s.get(Host, HOST).last_seen = 1
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert current(s, event).lifecycle == 'active'
+        s.get(Host, HOST).enabled = False
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert current(s, event).lifecycle == 'resolved'
+
+
+def test_coordinator_outage_does_not_flood_telemetry_loss_until_observed_for_threshold(admin):
+    # After a controller/coordinator outage every server's last_seen is old; the first leader
+    # tick runs before asynchronous polls land, so the silence is the coordinator's own gap.
+    now = time.time()
+    add_host(last_seen=now - 3600)
+    add_host(OTHER, last_seen=now - 3600)
+    operations.collect_alerts(now, observing_since=now)
+    operations.collect_alerts(now + operations.TELEMETRY_LOST_SECONDS, observing_since=now)
+    with Session() as s:
+        assert telemetry_events(s) == []
+        # Polls landed for one server; the other stays silent.
+        s.get(Host, OTHER).last_seen = now + operations.TELEMETRY_LOST_SECONDS + 30
+        s.commit()
+    operations.collect_alerts(now + operations.TELEMETRY_LOST_SECONDS + 60, observing_since=now)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.subject_id == HOST and current(s, event).lifecycle == 'active'
+        assert event.revision == 1
+
+
+def test_leader_change_keeps_existing_telemetry_loss_active_without_new_revision(admin):
+    now = time.time()
+    add_host(last_seen=now - 3600)
+    operations.collect_alerts(now)
+    # A new leader starts observing: the genuine outage stays active rather than resolving and reopening.
+    operations.collect_alerts(now + 30, observing_since=now + 30)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 1 and current(s, event).lifecycle == 'active'
+        s.get(Host, HOST).last_seen = now + 60
+        s.commit()
+    operations.collect_alerts(now + 60, observing_since=now + 30)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 2 and current(s, event).lifecycle == 'resolved'
+
+
+def test_worker_passes_leadership_start_to_alert_collection():
+    source = (Path(__file__).resolve().parents[1] / 'app' / 'worker.py').read_text()
+    assert 'if is_leader:leader_since=now' in source
+    assert 'operations.collect_alerts(observing_since=leader_since)' in source

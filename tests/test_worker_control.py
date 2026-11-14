@@ -112,7 +112,7 @@ def test_scheduler_drain_releases_coordinator_finishes_assigned_and_resumes(admi
     for module in (worker.scheduling,worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
         monkeypatch.setattr(module,'schedule_tick' if module is not worker.scheduling else 'tick',lambda *a:None)
     monkeypatch.setattr(worker.incidents,'auto_plan_tick',lambda *a:None)
-    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:None)
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda **_:None)
     monkeypatch.setattr(worker.operations,'deliver_one',lambda:None)
     monkeypatch.setattr(worker,'poll_host',lambda *a:None)
     with Session() as s:

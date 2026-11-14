@@ -178,7 +178,14 @@ OPERATIONAL_NOTIFICATIONS={
     'repository refresh':('repository-refresh','medium','repositories'),
     'agent health':('agent-health','medium','agent'),
     'startup baseline':('startup-baseline','medium','integrity'),
+    # Notification-only (no outbox Alert): the 120-second `stale` alert flaps, so the bell
+    # only reports telemetry silence that has persisted for TELEMETRY_LOST_SECONDS.
+    'telemetry lost':('telemetry-lost','high','agent'),
 }
+TELEMETRY_LOST_SECONDS=900
+TELEMETRY_LOST_MESSAGE=('No telemetry has arrived from this server for at least 15 minutes. It may be powered off, '
+    'unreachable, or its agent or SSH access may have failed. Review Agent health and Connection. Security '
+    'coverage is unavailable while telemetry is missing; this is not a clean-host verdict.')
 OPERATIONAL_NOTIFICATION_SOURCE='operations'
 OPERATIONAL_NOTIFICATION_SUBJECT='server'
 
@@ -210,7 +217,9 @@ def _resolve_operational_notifications(s,published,now):
             deep_link='#servers/'+host_id+'/'+tabs[notification_kind],
             minimum_role='admin',lifecycle='resolved',now=now)
 
-def collect_alerts(now=None):
+def collect_alerts(now=None,observing_since=None):
+    # observing_since: when this coordinator began polling. Silence older than that is the
+    # controller's own outage, so telemetry loss is only published after a full threshold of observation.
     with Session() as s:
         now=time.time() if now is None else now;cfg=config(s);active=set();published=set()
         # One fleet read fills the identity map, so per-alert publish lookups issue no queries.
@@ -298,6 +307,14 @@ def collect_alerts(now=None):
             if recovery:record(host,'recovery',str(len(recovery))+' operation(s) require console recovery/reconciliation. See Activity: '+', '.join(recovery[:10]))
             if host.state=='enrolling':continue
             if now-host.last_seen>120:record(host,'stale','Telemetry has not arrived within 120 seconds')
+            if now-host.last_seen>TELEMETRY_LOST_SECONDS:
+                # Keeping the key published holds an existing event active across a coordinator restart,
+                # while new events wait until polling has had a full threshold to refresh last_seen.
+                published.add((host.id,OPERATIONAL_NOTIFICATIONS['telemetry lost'][0]))
+                if observing_since is None or now-observing_since>TELEMETRY_LOST_SECONDS:
+                    # Fixed text keeps one stable revision per outage; resolution reuses the operational path.
+                    try:_operational_notification(s,host.id,'telemetry lost',TELEMETRY_LOST_MESSAGE,now)
+                    except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for telemetry loss on %s',host.id)
             if host.integrity:record(host,'integrity',json.dumps(host.integrity)[:8000])
             agent=settings.get('agent-status:'+host.id)
             if agent and agent.value.get('state') not in ('current','outdated'):
