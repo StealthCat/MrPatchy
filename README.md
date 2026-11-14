@@ -755,7 +755,7 @@ are excluded. The report contains bounded aggregate windows only, never provider
 model, credential, prompt, evidence or response details. At most four reset/timezone
 groups per requested day are returned, with an explicit truncation notice if heavier
 configuration churn exceeds that bound. These local public-price estimates are not
-provider invoices. Administrators can filter them by the exact IANA timezone recorded with each ledger window. Filtering occurs before grouping and the window limit; clearing restores the all-timezone report without changing current or unsaved budget settings.
+provider invoices. Administrators can filter them by the exact IANA timezone recorded with each ledger window. Filtering occurs before grouping and the window limit; clearing restores the all-timezone report without changing current or unsaved budget settings. Administrators can also download these same bounded totals as CSV using the applied period and timezone filter; formula-leading retained text is neutralized, and truncated exports are identified. The file remains a local public-price estimate, not a provider invoice.
 
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary

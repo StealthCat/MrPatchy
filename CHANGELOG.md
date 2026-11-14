@@ -1,3 +1,7 @@
+## 1.61.2 — 2026-11-14
+
+1. [PR #875](https://github.com/StealthCat/MrPatchy/pull/875): Settings → AI → Retained spend history now offers administrators a CSV download of the same bounded aggregate windows for the selected period and applied timezone. Formula-leading text is neutralized and truncation is disclosed. Compatibility: an additive read-only endpoint and UI; no schema, budget-accounting, scheduling, settings or response-authorization changes. Amounts remain local public-price estimates, not provider invoices; provider reconciliation and reports beyond 90 days remain out of scope.
+
 ## 1.61.1 — 2026-11-14
 
 1. [PR #872](https://github.com/StealthCat/MrPatchy/pull/872): Activity → Workers → Endpoint agents now shows validated root-filesystem space and inode use, available memory, and CPU/memory pressure from retained telemetry, with advisory low-resource flags. The existing agents API gains an additive `resources` object; no schema or agent change is required. Older or incomplete telemetry remains unknown, and stale data is labelled. The flags do not change health classification, alerts, repairs or authorization. Endpoint-agent readiness, low-resource notifications, history, time-sync and certificate-expiry signals remain outside this change.
