@@ -8298,9 +8298,18 @@ The reason text is fixed per channel (SMTP email or webhook). It never contains 
 The producer is read-only. It never sends, retries, changes backoff or acknowledges anything, and it adds no `Alert` row, so a broken channel cannot alert about itself. There are no schema, role or response-authorization changes.
 
 **Remaining:**
-- The event has no deep link, because the Operations panel is a modal with no route.
+- ~~The event has no deep link, because the Operations panel is a modal with no route.~~ Addressed by the #824 worker checkpoint below.
 - The threshold is fixed.
 - ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
+
+### Alert-delivery notification deep link — worker checkpoint #824
+
+The admin-only `alert-delivery`/`delivery-failing` event now links to a routable page, `#activity/delivery`, shown as an **Alert delivery** tab in the admin Activity navigation. Every revision carries this link: failing, unreadable configuration and resolved. The fixed reason text now points to Activity → Alert delivery instead of Account → Operations.
+
+- **Page:** it shows the delivery channel (SMTP email, webhook, disabled or unreadable configuration) and the open alerts that have not been delivered, with server, kind, raised time, attempts and the stored sanitized error class. All text is escaped. No URL, token, password or recipient is shown. **Open delivery settings** opens the existing Operations panel, where configuration changes and acknowledgement remain. The page only reads the existing admin-only `GET /api/operations/alerts` and `GET /api/operations/notifications` routes, so it never sends, retries or acknowledges anything. Non-admins see the administrator-required state and no data request is made.
+- **Upgrade impact:** the link is part of the notification payload fingerprint. An event that is already active therefore gains one unread revision on the first collection pass after upgrade. Later passes add none.
+- **Unchanged:** schema, roles, routes, delivery and backoff, admission and response authorization.
+- **Remaining:** the threshold is still fixed, and the page lists only the 200 most recent alerts that the existing route returns.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 

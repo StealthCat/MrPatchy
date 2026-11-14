@@ -78,7 +78,7 @@ def test_repeated_webhook_failures_publish_one_safe_admin_event(admin, monkeypat
         assert alert.notified == 0 and alert.attempts == 3 and alert.error.startswith('ConnectError')
     assert len(items) == 1
     item = items[0]
-    assert item['source'] == 'alert-delivery' and item['host_id'] == '' and item['deep_link'] == ''
+    assert item['source'] == 'alert-delivery' and item['host_id'] == '' and item['deep_link'] == '#activity/delivery'
     assert 'webhook' in item['reason']
     for leaked in (SECRET_URL, SECRET_TOKEN, 'ConnectError', 'refused', 'stale', '<b>', 'ops@example.test'):
         assert leaked not in item['reason']
@@ -192,3 +192,44 @@ def test_producer_is_read_only(admin, monkeypatch):
         after = [(a.id, a.state, a.attempts, a.attempted, a.notified, a.error) for a in s.scalars(select(operations.Alert))]
     assert before == after
     assert len(before) == 1  # no alert row of its own
+
+
+def deep_links():
+    with Session() as s:
+        return [(r.lifecycle, r.deep_link)
+                for r in s.scalars(select(notifications.NotificationRevision)
+                                   .join(notifications.NotificationEvent,
+                                         notifications.NotificationEvent.id == notifications.NotificationRevision.event_id)
+                                   .where(notifications.NotificationEvent.kind == 'delivery-failing')
+                                   .order_by(notifications.NotificationRevision.revision))]
+
+
+def test_every_revision_links_to_the_alert_delivery_page(admin, monkeypatch):
+    """#824: active, unreadable and resolved revisions open Activity → Alert delivery."""
+    configure()
+    stale_host()
+    now = time.time()
+    operations.collect_alerts(now)
+    attempt_delivery(monkeypatch, 3)
+    operations.collect_alerts(now + 60)
+    with Session() as s:
+        s.merge(Setting(key='notifications', value={'encrypted': 'not-a-fernet-token'}))
+        s.commit()
+    operations.collect_alerts(now + 120)
+    with Session() as s:
+        s.scalar(select(operations.Alert)).state = 'acknowledged'
+        s.commit()
+    operations.collect_alerts(now + 180)
+    assert deep_links() == [('active', '#activity/delivery'), ('active', '#activity/delivery'),
+                            ('resolved', '#activity/delivery')]
+    assert [r[2] for r in revisions()] == ['failing:webhook', 'unreadable', 'resolved']
+    for reason in (alert_delivery_notifications.MESSAGE, alert_delivery_notifications.UNREADABLE):
+        assert 'Activity → Alert delivery' in reason and 'Account → Operations' not in reason
+
+
+def test_alert_delivery_route_is_rendered_by_the_activity_workspace():
+    """The deep link must name a route the shell actually renders, not fall back to Overview."""
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / 'app' / 'static' / 'app.js').read_text()
+    assert "location.hash==='#activity/delivery'" in source
+    assert 'href="#activity/delivery"' in source
