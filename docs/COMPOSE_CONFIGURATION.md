@@ -146,6 +146,26 @@ controller shows them on the Workers page, but the attention notifications are r
 the coordinator tick, which runs in a worker because the app sets `DISABLE_SCHEDULER`. Drain workers
 through the existing UI and verify their state before planned maintenance.
 
+## Controller environment file
+
+`.env.controller.example` is the environment template for `compose.controller.yaml`.
+Copy it to the controller's `.env` (`cp .env.controller.example .env`) and set the
+administrator password, domain and public URL before the first start. It lists exactly
+the variables the app and Caddy services read: the web, TLS bind and port settings,
+`DATABASE_URL`, OIDC, the control-network addresses, the app's AI HTTP connection
+ceiling, the memory limits, the expected inventory and the GCP project/zone for
+`compose.controller.gcp.yaml`. Rendering the controller file with it gives the same
+configuration as rendering with `.env.example`.
+
+It leaves out worker settings: the pool limits, `MRPATCHY_WORKER_ID`, the drain window,
+the worker memory limit and the controller data-volume name. Those belong in
+`.env.worker`. It sets `MRPATCHY_EXPECTED_WORKER_IDS` empty, because
+`compose.worker.yaml` replicas never take a fixed worker ID and any IDs listed there
+are reported as missing workers. `.env.example` remains the template for the complete
+`compose.yaml` installation. `tests/test_controller_env_example.py` fails if the
+controller role gains a variable the example does not document, or if the example
+gains a worker-only key.
+
 ## Worker identity persistence
 
 A worker or embedded scheduler without `MRPATCHY_WORKER_ID` generates its identity
