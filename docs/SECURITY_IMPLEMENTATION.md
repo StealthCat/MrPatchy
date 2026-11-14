@@ -3233,11 +3233,15 @@ roadmap F is still incomplete.
 
 Worker checkpoint (issue #844): a pure, I/O-free contract (`app/udev_rules.py`)
 parses one captured udev `*.rules` file and a captured listing of the rules
-directories. Rules follow udev(7) and systemd's token validation: comments and
-blank lines are skipped, backslash continuations are joined, and each rule's
+directories. Rules follow udev(7) and systemd's token validation: leading
+whitespace is stripped from each physical line, `#` lines are ignored even
+inside a continuation, blank lines are skipped, backslash continuations are
+joined, and each rule's
 comma-separated `KEY[{attr}]OP"value"` pairs become match and assignment records
-with `LABEL`/`GOTO`, its file and starting line. Plain strings honour `\"` and
-`\\`; `e"..."` strings use C escapes. `RUN` (default `{program}`), `PROGRAM`
+with `LABEL`/`GOTO`, its file and starting line. Plain strings honour only
+`\"` (any other backslash, including `\\`, is literal); `e"..."` strings use C
+escapes. A physical line of 16384 bytes or more (`UDEV_LINE_SIZE`) stops the
+file as udev does, and a joined line of that size is ignored; both are gaps. `RUN` (default `{program}`), `PROGRAM`
 and `IMPORT{program}` become execution records with a bounded command, the
 full-command SHA-256, the program token, the `/usr/lib/udev` and `/lib/udev`
 paths udev searches for a relative name and a flag for `$`/`%` substitutions.
@@ -3251,7 +3255,8 @@ skipped, as udev skips it. A `GOTO` with no matching `LABEL` is a gap.
 Effective files apply `/etc/udev/rules.d` > `/run/udev/rules.d` >
 `/usr/local/lib/udev/rules.d` > `/usr/lib/udev/rules.d` > `/lib/udev/rules.d`
 precedence in lexical name order, list shadowed copies as overridden, report a
-`/dev/null` symlink as masking and list non-`.rules` names as ignored. Unknown
+`/dev/null` symlink as masking and list hidden (`.`-prefixed) and non-`.rules`
+names as ignored. Unknown
 directories and malformed, duplicate or unreadable entries are gaps.
 Over-limit, non-UTF-8 or NUL input yields no partial records, every record
 keeps `origin: not_assessed`, and no rule or command is ever executed. Agent

@@ -8,11 +8,15 @@ authorizes a response action.
 Syntax follows udev(7) and the token validation in systemd's
 ``udev-rules.c``:
 
-- Lines are ``KEY[{attr}]OP"value"`` pairs separated by commas. Comments
-  (``#``) and blank lines are skipped and a trailing backslash joins the next
-  physical line.
-- Values are double-quoted. In a plain string only ``\\"`` and ``\\\\`` are
-  escapes; an ``e"..."`` string uses C-style escapes.
+- Lines are ``KEY[{attr}]OP"value"`` pairs separated by commas. Leading
+  whitespace is stripped from every physical line. Lines starting with ``#``
+  are ignored even inside a line continuation, and a trailing backslash joins
+  the next physical line.
+- A physical line of ``UDEV_LINE_SIZE`` bytes or more stops udev reading the
+  file; a joined logical line of that size is ignored. Both are gaps here.
+- Values are double-quoted. In a plain string only ``\\"`` is an escape; any
+  other backslash, including ``\\\\``, is kept literally. An ``e"..."`` string
+  uses C-style escapes.
 - A rule with an unknown key, a missing attribute, an operator the key does
   not accept or a syntax error is skipped by udev. It is skipped here too and
   reported as a line-numbered gap, never guessed at.
@@ -50,6 +54,8 @@ MAX_ENTRIES = 2048
 MAX_COMMAND = 4096
 MAX_FIELD = 512
 MAX_GAPS = 64
+# systemd udev-rules.c UDEV_LINE_SIZE.
+UDEV_LINE_SIZE = 16384
 
 # Highest precedence first. A file name in an earlier directory overrides the
 # same name in every later one (udev(7) "Rules Files").
@@ -186,7 +192,7 @@ def _value(line: str, index: int) -> tuple[str, int]:
                 raw.append(char + following)
                 index += 2
                 continue
-            if following in ('"', '\\'):
+            if following == '"':
                 raw.append(following)
                 index += 2
                 continue
@@ -324,30 +330,45 @@ def parse_rules_file(path: str, text: str | bytes) -> dict[str, Any]:
     result['sha256'] = _sha(decoded)
     result['size'] = len(decoded.encode('utf-8'))
     rules: list[dict[str, Any]] = []
-    pending: list[str] = []
+    # Mirrors udev_rules_parse_file() in systemd's udev-rules.c.
+    pending: str | None = None
+    ignore = False
     start = 0
     for number, raw in enumerate(lines, 1):
-        line = raw.rstrip('\r')
-        if not pending:
-            stripped = line.strip()
-            if not stripped or stripped.startswith('#'):
-                continue
+        physical = raw.rstrip('\r')
+        if len(physical.encode('utf-8')) >= UDEV_LINE_SIZE:
+            _gap(gaps, 'line_too_long', number, f'A line of {UDEV_LINE_SIZE} bytes or more stops udev reading this '
+                 'file; later lines are not loaded.')
+            pending = None
+            break
+        line = physical.lstrip(' \t\r\n')
+        if line.startswith('#'):
+            continue
+        if pending is None:
             start = number
+        elif not ignore:
+            if len(pending.encode('utf-8')) + len(line.encode('utf-8')) >= UDEV_LINE_SIZE:
+                ignore = True
+            else:
+                pending += line
+                line = pending
         if line.endswith('\\'):
-            pending.append(line[:-1])
+            if not ignore:
+                pending = line[:-1]
             continue
-        pending.append(line)
-        logical = ''.join(pending).strip()
-        pending = []
-        rule = _rule(result['path'], start, logical, gaps)
-        if rule is None:
-            continue
-        if len(rules) >= MAX_RULES:
-            _gap(gaps, 'over_limit', start, f'More than {MAX_RULES} rules.')
-            result.update(state='unavailable', rules=[], labels=[])
-            return result
-        rules.append(rule)
-    if pending:
+        if ignore:
+            _gap(gaps, 'line_too_long', start, f'The joined line reaches {UDEV_LINE_SIZE} bytes; udev ignores it.')
+        elif line:
+            rule = _rule(result['path'], start, line.strip(), gaps)
+            if rule is not None:
+                if len(rules) >= MAX_RULES:
+                    _gap(gaps, 'over_limit', start, f'More than {MAX_RULES} rules.')
+                    result.update(state='unavailable', rules=[], labels=[])
+                    return result
+                rules.append(rule)
+        pending = None
+        ignore = False
+    if pending is not None:
         _gap(gaps, 'unterminated_continuation', start, 'The file ends inside a "\\" line continuation; '
              'the unfinished rule is skipped.')
     labels = [r['label'] for r in rules if r['label'] is not None]
@@ -400,7 +421,8 @@ def effective_files(entries: Iterable[dict[str, Any]]) -> dict[str, Any]:
             continue
         seen.add((directory, name))
         path = f'{directory}/{name}'
-        if not name.endswith('.rules'):
+        # udev's dirent_is_file_with_suffix() skips hidden names.
+        if name.startswith('.') or not name.endswith('.rules'):
             result['ignored'].append(path)
             continue
         by_name.setdefault(name, []).append({'dir': directory, 'path': path, 'target': target})

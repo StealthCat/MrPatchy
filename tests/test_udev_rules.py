@@ -65,7 +65,8 @@ def test_plain_string_escapes_and_bounded_long_command():
     text = 'RUN+="/bin/sh -c \\"echo \\\\x\\""\n' + 'RUN+="/opt/x ' + 'a' * 5000 + '"\n'
     r = ur.parse_rules_file(PATH, text)
     assert r['gaps'] == []
-    assert r['rules'][0]['executions'][0]['command'] == '/bin/sh -c "echo \\x"'
+    # udev only unescapes \" in a plain string; \\ stays two backslashes.
+    assert r['rules'][0]['executions'][0]['command'] == '/bin/sh -c "echo \\\\x"'
     assert r['rules'][0]['executions'][0]['uses_substitutions'] is False
     long_run = r['rules'][1]['executions'][0]
     full = '/opt/x ' + 'a' * 5000
@@ -73,6 +74,39 @@ def test_plain_string_escapes_and_bounded_long_command():
     assert long_run['command_sha256'] == hashlib.sha256(full.encode()).hexdigest()
     assert r['rules'][1]['assignments'][0]['value_truncated'] is True
 
+
+def test_double_backslash_before_quote_does_not_hide_an_executed_program():
+    # udev reads ENV{X} as a\"b and keeps the rule, so /tmp/evil runs.
+    r = ur.parse_rules_file(PATH, 'ENV{X}="a\\\\"b", RUN+="/tmp/evil"\n')
+    assert r['state'] == 'parsed' and r['gaps'] == []
+    rule = r['rules'][0]
+    assert rule['matches'] == [] and rule['assignments'][0]['value'] == 'a\\"b'
+    assert [e['command'] for e in rule['executions']] == ['/tmp/evil']
+
+
+def test_comment_lines_inside_a_continuation_are_dropped_and_lines_are_left_stripped():
+    text = 'ACTION=="add", \\\n# note\n   RUN+="/tmp/evil"\n\tKERNEL=="sd*", \\\n  \t# x\n\tRUN+="/bin/b"\n'
+    r = ur.parse_rules_file(PATH, text)
+    assert r['state'] == 'parsed' and r['gaps'] == []
+    assert [x['line'] for x in r['rules']] == [1, 4]
+    first = r['rules'][0]
+    assert [(m['key'], m['value']) for m in first['matches']] == [('ACTION', 'add')]
+    assert [e['command'] for e in first['executions']] == ['/tmp/evil']
+    assert [e['command'] for e in r['rules'][1]['executions']] == ['/bin/b']
+
+
+def test_udev_line_size_limits():
+    long_value = 'a' * (ur.UDEV_LINE_SIZE - 100)
+    joined = f'KERNEL=="{long_value}", \\\nRUN+="/bin/{"b" * 200}"\nKERNEL=="ok", RUN+="/bin/ok"\n'
+    r = ur.parse_rules_file(PATH, joined)
+    assert [(g['line'], g['code']) for g in r['gaps']] == [(1, 'line_too_long')]
+    assert [e['command'] for rule in r['rules'] for e in rule['executions']] == ['/bin/ok']
+    physical = 'KERNEL=="a", RUN+="/bin/a"\n' + 'KERNEL=="' + 'x' * ur.UDEV_LINE_SIZE + '"\nRUN+="/bin/later"\n'
+    r = ur.parse_rules_file(PATH, physical)
+    assert r['state'] == 'partial' and [(g['line'], g['code']) for g in r['gaps']] == [(2, 'line_too_long')]
+    assert [e['command'] for rule in r['rules'] for e in rule['executions']] == ['/bin/a']
+    fits = ur.parse_rules_file(PATH, 'RUN+="/bin/' + 'c' * (ur.UDEV_LINE_SIZE - 20) + '"\n')
+    assert fits['gaps'] == [] and len(fits['rules']) == 1
 
 def test_malformed_rules_are_line_numbered_gaps_and_skipped():
     text = '\n'.join([
@@ -155,6 +189,7 @@ def test_effective_files_precedence_masking_ignored_and_order():
         entry('/usr/lib/udev/rules.d', '99-systemd.rules', 'other/99-systemd.rules'),
         entry('/etc/udev/rules.d', 'README'),
         entry('/etc/udev/rules.d', '70-old.rules.dpkg-old'),
+        entry('/etc/udev/rules.d', '.99-hidden.rules'),
     ])
     assert r['state'] == 'parsed' and r['gaps'] == []
     assert [(f['name'], f['path'], f['overridden']) for f in r['files']] == [
@@ -166,7 +201,8 @@ def test_effective_files_precedence_masking_ignored_and_order():
     assert r['files'][2]['symlink'] is True
     assert [(m['path'], m['overridden']) for m in r['masked']] == [
         ('/run/udev/rules.d/80-net-setup-link.rules', ['/usr/lib/udev/rules.d/80-net-setup-link.rules'])]
-    assert r['ignored'] == ['/etc/udev/rules.d/70-old.rules.dpkg-old', '/etc/udev/rules.d/README']
+    assert r['ignored'] == ['/etc/udev/rules.d/.99-hidden.rules', '/etc/udev/rules.d/70-old.rules.dpkg-old',
+                            '/etc/udev/rules.d/README']
     assert all(f['origin'] == 'not_assessed' for f in r['files'] + r['masked'])
 
 
