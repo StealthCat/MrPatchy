@@ -37,11 +37,13 @@ module.exports=async(page,capture)=>{
   // Other roles never receive ai_paused; a stale admin filter must not hide their servers.
   await page.evaluate(()=>{window.__realIsAdmin=isAdmin;isAdmin=()=>false;});
   rows=rows.map(({ai_paused,...rest})=>rest);await page.locator('#refresh-page').click();
-  await page.locator('#server-list-ai').waitFor({state:'detached'});await page.locator('.server-directory-card').first().waitFor();assert.equal(await page.locator('[data-server-ai]').count(),0);
+  await page.locator('#server-list-ai').waitFor({state:'detached'});await page.waitForFunction(()=>document.querySelectorAll('.server-directory-card').length===4&&!document.querySelector('[data-server-ai]'));
   assert.equal(await page.locator('.server-directory-card').count(),4);
   assert.equal(writes,0,'Directory browsing must not change any AI policy');
  }finally{
   await page.evaluate(()=>{if(window.__realIsAdmin){isAdmin=window.__realIsAdmin;delete window.__realIsAdmin;}Object.assign(serverListContext,{q:'',state:'all',ai:'all',offset:0});});
+  // Leave no fixture servers in the shared host cache for later modules.
+  rows=[];await page.locator('#refresh-page').click();await page.getByRole('heading',{name:'No servers enrolled yet',exact:true}).waitFor();
   await page.unroute('**/api/hosts',handler);await page.setViewportSize({width:1440,height:1000});
  }
 };
