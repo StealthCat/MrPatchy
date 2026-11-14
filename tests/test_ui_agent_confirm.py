@@ -11,7 +11,7 @@ SERVER = (Path(__file__).resolve().parents[1] / 'app/static/server.js').read_tex
 
 
 def _function(source, name):
-    match = re.search(rf"async function {name}\([^)]*\)\{{", source)
+    match = re.search(rf"(?:async )?function {name}\([^)]*\)\{{", source)
     assert match, f'{name} not found'
     depth = 0
     for index in range(match.end() - 1, len(source)):
@@ -50,7 +50,7 @@ async function api(path,method,body){if(method==='POST'){posts.push(path);await 
  releases.forEach(r=>r());await new Promise(r=>setImmediate(r));
  console.log(JSON.stringify({before,afterClick,during,open:dialog.open,after:els['#agent-update'].disabled,toasts}));
 })();
-""" % _function(SERVER, 'serverAgent')
+""" % (_function(SERVER, 'serverAgent') + '\n' + _function(SERVER, 'agentPolicyCard'))
     out = json.loads(subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True).stdout)
     assert out['afterClick'] == {'posts': 0, 'titles': ['Review agent upgrade']}
     assert out['during'] == {'posts': 1, 'check': True, 'update': True}

@@ -12,12 +12,13 @@ SRC = Path(__file__).resolve().parents[1] / 'app/static/settings.js'
 def test_settings_index_search_finds_sections_by_familiar_terms():
     script = SRC.read_text().split('function settingsHubCards')[0]
     probe = script + '''
-const q=["API key","repository checks","certificate","MySQL","retention","","nonsense-term","  openai   KEY "];
+const q=["API key","repository checks","certificate","MySQL","retention","","nonsense-term","  openai   KEY ","agent repair","inherit default"];
 console.log(JSON.stringify(q.map(x=>settingsMatches(x))));'''
     out = subprocess.run(['node', '-e', probe], capture_output=True, text=True, check=True).stdout
     got = json.loads(out)
     assert got == [['ai'], ['patching'], ['https'], ['database'], ['history'],
-                   ['ai', 'patching', 'database', 'https', 'history'], [], ['ai']]
+                   ['ai', 'patching', 'database', 'https', 'history', 'agents'], [], ['ai'],
+                   ['agents'], ['agents']]
 
 
 def test_hub_search_is_labelled_and_announces_results():

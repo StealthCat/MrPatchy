@@ -4,7 +4,8 @@ const SETTINGS_SECTIONS={
  patching:['Patch policy','Repository checks and priority deadlines.','repository checks interval deadlines critical high normal low priority overdue'],
  database:['Database','MySQL connection details and offline migrations.','mysql sqlite connection migration host port password'],
  https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
- history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup']
+ history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup'],
+ agents:['Agent maintenance','Fleet defaults for automatic agent upgrade and repair.','agent health maintenance automatic upgrade repair helper collector drift default override inherit']
 };
 function settingsMatches(query,sections=SETTINGS_SECTIONS){
  const terms=String(query||'').toLowerCase().split(/\s+/).filter(Boolean);
@@ -32,6 +33,7 @@ async function settings(revision=renderRevision){
   input.oninput=draw;draw();return;
  }
  if(section==='ai'){renderAISettings(data,revision,container);return;}
+ if(section==='agents'){container.innerHTML='<div class="card" id="agent-defaults"><p class="help">Loading agent maintenance defaults…</p></div>';await agentMaintenanceDefaults(revision);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
  if(section==='https'){
   container.innerHTML=`<div class="card"><h2>HTTPS profiles</h2><p>Configure independent internal and external profiles with uploaded certificates, ACME, or the built-in local CA.</p><p>${Object.entries(data.tls.profiles||{}).filter(([,p])=>p.enabled).map(([name,p])=>esc(name+': '+p.domain+' · browser port '+p.effective_https_port)+' · '+badge(p.mode)).join('<br>')||'Initial HTTPS configured by deployment'}</p><button type="button" id="tls-button">Configure HTTPS →</button></div>`;
@@ -216,4 +218,31 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
    finally{if(button.isConnected)button.disabled=false;}
   };
  }catch(error){if(currentView(revision,'settings')&&container.isConnected)container.innerHTML=PatchyUI.error('Could not load database settings',esc(error.message));}
+}
+
+/* Fleet-wide defaults for the per-server Agent health options (#621). Servers
+ inherit each option unless they hold an explicit override; this form never
+ changes an override. */
+const AGENT_MAINTENANCE_OPTIONS=[
+ ['auto_upgrade','Automatically upgrade outdated enrolled helpers'],
+ ['auto_repair','Automatically repair collector/helper drift and inactive services']
+];
+async function agentMaintenanceDefaults(revision){
+ const box=$('#agent-defaults');if(!box)return;
+ const live=()=>currentView(revision,'settings')&&box.isConnected;
+ let saved;
+ try{saved=await api('/settings/agent-maintenance');}
+ catch(error){if(live()){box.innerHTML='<h2>Agent maintenance defaults</h2><p class="help" role="alert">Agent maintenance defaults are unavailable: '+esc(error.message)+'</p><button type="button" id="agent-defaults-retry">Retry</button>';$('#agent-defaults-retry').onclick=()=>agentMaintenanceDefaults(revision);}return;}
+ if(!live())return;
+ const value=key=>saved&&saved[key]===true;
+ box.innerHTML=`<form id="agent-defaults-form"><h2>Agent maintenance defaults</h2><p class="help">Servers use these defaults for each option unless the server has its own override. Changing a default updates every inheriting server and keeps every server override. Reset an override from the server's <strong>Agent health</strong> page with <strong>Use global default</strong>.</p><fieldset>${AGENT_MAINTENANCE_OPTIONS.map(([key,label])=>`<label class="check"><input name="${key}" type="checkbox" ${value(key)?'checked':''}>${esc(label)}</label>`).join('')}<p class="help">Off by default. Checks run about every five minutes while a server is idle. Automatic updates are limited to two attempts per day, at least one hour apart, and active patch or recovery work blocks them. Changes to SSH keys, sudo policy, bridge identity, unsafe directories or unexpected systemd overrides still need trusted-console recovery. No operating-system packages, cloud permissions or malware quarantine are changed.</p><button type="submit" class="primary">Save agent maintenance defaults</button></fieldset><p class="help" role="status" id="agent-defaults-result"></p></form>`;
+ const form=$('#agent-defaults-form'),result=$('#agent-defaults-result');
+ form.onsubmit=async event=>{
+  event.preventDefault();const fieldset=form.querySelector('fieldset');
+  const body={...Object.fromEntries(AGENT_MAINTENANCE_OPTIONS.map(([key])=>[key,form.elements[key].checked])),expected:saved};
+  fieldset.disabled=true;result.textContent='Saving…';
+  try{const value=await api('/settings/agent-maintenance','PUT',body);saved=value;if(live())result.textContent='Agent maintenance defaults saved. Inheriting servers now use them.';}
+  catch(error){if(live())result.textContent=error.message;}
+  finally{if(fieldset.isConnected)fieldset.disabled=false;}
+ };
 }

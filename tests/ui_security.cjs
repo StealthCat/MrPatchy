@@ -16,7 +16,7 @@ module.exports=async(page,capture)=>{
   if(!url.pathname.startsWith(prefix))return route.fallback();
   if(url.pathname.endsWith('/startup-inventory'))return route.fulfill({json:{state:'incomplete',items:[{path:'/etc/cron.d/example<script>bad()</script>',mechanism_label:'System cron definitions',change:'not_compared',kind:'regular',uid:0,gid:0,mode:420,sha256:'a'.repeat(64)}],more:false,total:1,digest:'a'.repeat(64),inspection_id:'startup-receipt',created:1,catalog:[{label:'System cron definitions',observed_files:1}],scope:['/etc/cron.d'],gaps:['Individual jobs not parsed'],baseline_state:'unavailable'}});
 
-  if(url.pathname.endsWith('/agent')&&request.method()==='GET')return route.fulfill({json:{policy:{auto_upgrade:false,auto_repair:false},status:{state:'drifted',checked:Date.now()/1000,stale:false,issues:[{path:'/usr/local/lib/mrpatchy/agent.py',kind:'unexpected_content_or_missing'}],report:{}},enrolled_outdated:false}});
+  if(url.pathname.endsWith('/agent')&&request.method()==='GET')return route.fulfill({json:{policy:{auto_upgrade:false,auto_repair:false},sources:{auto_upgrade:'inherited',auto_repair:'inherited'},global:{auto_upgrade:false,auto_repair:false},status:{state:'drifted',checked:Date.now()/1000,stale:false,issues:[{path:'/usr/local/lib/mrpatchy/agent.py',kind:'unexpected_content_or_missing'}],report:{}},enrolled_outdated:false}});
   if(url.pathname.endsWith('/agent')&&request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().auto_upgrade,true);return route.fulfill({json:{auto_upgrade:true,auto_repair:false}});}
   if(url.pathname.endsWith('/persistence-monitor')){if(request.method()==='PUT'){writes.push(url.pathname);assert.equal(request.postDataJSON().enabled,true);assert.deepEqual(request.postDataJSON().custom_paths,['/srv/myapp/config.json']);return route.fulfill({json:{...request.postDataJSON(),revision:'monitor-version'}});}return route.fulfill({json:{enabled:false,interval_hours:12,link_incidents:false,revision:''}});}
   if(url.pathname.endsWith('/persistence-incidents/startup-fixture/plans/startup-plan/approve')){writes.push(url.pathname);startupPlan.state='approved';return route.fulfill({json:{execution:'manual_only'}});}
@@ -417,7 +417,7 @@ module.exports=async(page,capture)=>{
   await page.locator('#modal').waitFor({state:'hidden'});assert.equal(writes.at(-1),prefix+'/repair-publications/publication-fixture/release');
   await page.goto(new URL('/#servers/'+host.id+'/agent',page.url()).href);
   await page.locator('#agent-policy').waitFor();
-  await page.locator('#agent-policy [name=auto_upgrade]').check();
+  await page.locator('#agent-policy [name=auto_upgrade]').selectOption('on');
   await page.getByRole('button',{name:'Save agent policy',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Agent policy saved'));
   assert.equal(writes.at(-1),prefix+'/agent');

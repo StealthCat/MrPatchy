@@ -23,8 +23,25 @@ one **Finish / verify installation** using trusted helpers, or a personalized
 installer rerun from a trusted console if their bridge cannot be trusted.
 The known enrolled release comparison remains visible even without live checks.
 
-Automatic upgrades and repairs are separate, administrator-only per-server
-options, off by default. Both must be enabled for a mixed outdated/drifted state.
+Automatic upgrades and repairs are separate, administrator-only options, off by
+default. Both must be enabled for a mixed outdated/drifted state.
+
+**Fleet defaults and per-server overrides.** Set fleet-wide defaults for both
+options in **Settings → Agent maintenance**. Each server's **Agent health** page
+shows, for each option, the effective value, whether it is **Inherited** or an
+**Override**, and the current global default. Choose **Use global default** to
+remove an override, or **On/Off for this server** to set one. An explicit Off
+override is kept distinct from inheriting a default that is Off. Changing a
+default changes every server that inherits that option and keeps every override.
+The same resolver is used by the API, the UI and automatic maintenance at queue
+and execution time.
+
+*Upgrade behavior:* the global default starts Off for both options. A server
+policy saved before defaults existed is kept as explicit overrides for the
+options it stored, so upgrading never changes a server's effective setting or
+silently enables automation. Choose **Use global default** on such a server to
+make it inherit. Before this UI, saving a server's form stored both options as
+overrides; such servers keep those values until reset.
 There is at most one pending maintenance operation per host, no scheduling ahead
 of other queued operations, at most two update attempts in a rolling 24 hours and
 at least one hour between attempts. Settings are checked again when a queued
