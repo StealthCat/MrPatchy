@@ -2623,6 +2623,33 @@ counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
 
+### Preview and confirm AI admission/spend changes before save — worker checkpoint #871
+
+`app/ai_control_preview.py` compares stored and proposed AI admission controls
+without side effects. It reports per-purpose hourly start ceilings (process
+triage, update scoring and automatic incident/startup plans), the combined start
+ceiling and the daily spend ceiling before and after the change. It also lists
+plain-language effects and flags each one that expands admission or spend:
+- a raised or removed rate or cap;
+- a switch to unthrottled;
+- enabling update scoring;
+- moving a capped reset timezone;
+- leaving legacy mode, where each hidden per-purpose allowance (including the
+  fixed 10/hour automatic-plan allowance) is compared with the new shared rate.
+
+The admin-only, CSRF-protected `POST /api/settings/ai/preview` returns that
+comparison and writes no settings, no audit entry and makes no provider call.
+Settings → AI shows a live "Effects of this change" panel as control fields
+change. When a save would expand admission or spend, it asks for explicit
+confirmation listing the expansions first. Cancel or Escape saves nothing and
+keeps the entries. Both settings save paths append
+`; expands AI admission or spend: …` to the existing audit detail.
+
+Admission, budget reservation, pause, lifecycle, role and response authorization
+behavior are unchanged. **Limitation:** API clients that save without
+previewing are still accepted; their expansions are audited but not refused.
+Automatic migration of legacy installations remains open.
+
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
 The administrator's Investigations queue notice now names the admission control

@@ -1266,6 +1266,7 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
             raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
             if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
             detail='Patch policy, cadence or AI configuration changed ('+(', '.join(sorted(k for k in sent if previous.get(k)!=sent[k])) or 'no stored values changed')+')'
+            from . import ai_control_preview;detail+=ai_control_preview.audit_suffix(previous,merged)
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
             if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
@@ -1326,6 +1327,7 @@ def save_settings_section(values,section,expected_ai_controls_revision=None):
                 raise HTTPException(400,'Save an API key and select a model before enabling AI. You can save a key independently above.')
             s.merge(Setting(key='config',value=previous|values))
             detail='Saved '+section+' configuration; no provider test was performed'
+            from . import ai_control_preview;detail+=ai_control_preview.audit_suffix(previous,values) if section=='ai' else ''
             if section=='ai' and previous['ai_control_mode']!=values['ai_control_mode']:
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
             if section=='ai' and previous['ai_daily_cap_usd']!=values['ai_daily_cap_usd']:
@@ -1359,6 +1361,16 @@ def ai_settings_save(body:AISettingsInput,user=Depends(admin_user)):
         raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision)
+
+@app.post('/api/settings/ai/preview')
+def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
+    # Read-only: compares the posted controls with stored values; no settings, audit or provider call.
+    from . import ai_budget,ai_control_preview
+    if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
+    proposed=body.model_dump(include=set(body.model_fields_set)&set(ai_control_preview.FIELDS))
+    with Session() as s:
+        previous=config(s)
+        return ai_control_preview.compare(previous,proposed)|{'ai_controls_revision':ai_controls_revision(previous)}
 
 @app.put('/api/settings/patching')
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
