@@ -2995,6 +2995,17 @@ Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-sc
 - **Retained results:** `GET /api/operations/{host}/advisories` passes stored scans through `advisories.retained()`. Inside an `Applicability could not be established:` reason, only known problems survive and anything else becomes `version comparison failed`. The status stays `uncertain`, and the stored row is not rewritten.
 - **Unchanged:** affected, fixed and unaffected results, their reasons and fixed versions; every fail-closed path; and the schema, routes, roles and response authorization.
 
+#### Affected-advisory in-app notifications — worker checkpoint #822
+
+Before this checkpoint an `affected` result from an administrator-run advisory scan was visible only while the scan dialog stayed open. `app/advisory_exposure_notifications.py` is a leader-side reconciler called from `operations.collect_alerts()`. It publishes one admin-only `cve-exposure`/`affected-advisories` notification (medium, `#servers/<host>/patching`) for each active, non-enrolling server whose stored `advisories:<host>` scan still has `affected` rows.
+
+- **Still current only:** a row counts only while the scanned binary package is installed at the scanned source name and version. Upgrading, downgrading or removing it stops the row counting. An unreadable or missing inventory keeps the stored rows, so a missing snapshot never resolves an exposure.
+- **Fixed text:** the reason carries controller-computed counts only: distinct advisory/package matches, packages, matches naming a vendor fix version and uncertain results. Advisory IDs, summaries, reasons, package names and other stored strings are never copied. The text says applicability is not exploitation evidence and that uncertain results still need review.
+- **Revision binding:** the revision is a digest of the current (advisory, package, source, version) set. An identical rescan publishes nothing; a new affected advisory resurfaces as unread.
+- **Resolution:** one `resolved` revision when no current affected rows remain (a clean rescan or package change) or the server is disabled, deleted or re-enrolling. The resolved text says it is not a clean-host verdict.
+- **Unchanged:** the producer only reads. It runs no scan, contacts no advisory service or AI provider, selects no patches and authorizes no containment or response. No SMTP/webhook alert, schema, route or role change.
+- **Limitations:** results are only as fresh as the last administrator-run scan; scheduled scans, per-CVE incidents, fleet views and RPM updateinfo remain open in requirement D.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
