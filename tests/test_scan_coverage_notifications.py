@@ -275,3 +275,70 @@ def test_classify_stalled_boundary_uses_attempt_age():
         old = type('Job', (), {'id': 'p', 'state': state, 'created': now - limit - 1})()
         assert coverage.classify(None, young, {'interval_hours': 24}, now) == 'pending'
         assert coverage.classify(None, old, {'interval_hours': 24}, now) == 'stalled'
+
+
+def policy_value():
+    with Session() as s:
+        return dict(s.get(Setting, 'security-policy:' + HOST).value)
+
+
+def put_policy(client, **changes):
+    body = {'enabled': True, 'interval_hours': 1, 'paths': ['/srv'], **changes}
+    response = client.put('/api/hosts/' + HOST + '/security/policy', json=body)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_policy_save_records_server_managed_enabled_since(admin):
+    seed(enabled=False)  # legacy-style stored policy without enabled_since
+    before = time.time()
+    saved = put_policy(admin, enabled_since=1.0)  # clients cannot choose the clock
+    since = saved['enabled_since']
+    assert before <= since <= time.time() and policy_value()['enabled_since'] == since
+    assert admin.get('/api/hosts/' + HOST + '/security/policy').json()['enabled_since'] == since
+    assert put_policy(admin, interval_hours=2)['enabled_since'] == since  # kept while scanning stays enabled
+    assert 'enabled_since' not in put_policy(admin, enabled=False)  # removed when disabled
+    assert 'enabled_since' not in policy_value()
+    assert put_policy(admin)['enabled_since'] > since  # a disabled-to-enabled transition restarts the clock
+    seed(enabled=True)  # legacy enabled policy without enabled_since
+    assert put_policy(admin)['enabled_since'] >= before  # re-saving starts the clock
+
+
+def test_never_enqueued_first_scan_publishes_overdue_after_interval_plus_grace(admin):
+    from app import incidents
+    seed(enabled=False)
+    put_policy(admin)  # enabled now, interval 1 hour
+    with Session() as s:
+        # A recovery-required operation blocks the scheduler from the moment scanning is enabled.
+        s.add(Job(id='stuck-op', host_id=HOST, action='install', state='recovery_required', created=time.time(),
+                  payload={}))
+        s.commit()
+    incidents.schedule_tick()
+    with Session() as s:
+        assert s.scalar(select(func.count()).select_from(Job).where(Job.action == 'security-scan')) == 0
+    collect()
+    collect(time.time() + HOUR + coverage.GRACE_SECONDS - 60)
+    assert items(admin) == []  # within the interval plus grace a new policy publishes nothing
+    collect(time.time() + HOUR + coverage.GRACE_SECONDS + 60)
+    [item] = items(admin)
+    assert item['reason'] == coverage.MESSAGES['overdue'] and item['lifecycle'] == 'active'
+    assert item['severity'] == 'medium' and item['deep_link'] == '#servers/' + HOST + '/security'
+    collect(time.time() + 3 * HOUR)
+    assert items(admin)[0]['revision'] == 1  # unchanged category adds no revision
+    with Session() as s:
+        assert s.scalar(select(func.count()).select_from(Job).where(Job.action == 'security-scan')) == 0
+        assert s.get(Job, 'stuck-op').state == 'recovery_required'  # read-only producer
+    scan('first')
+    collect()
+    [item] = items(admin)
+    assert item['lifecycle'] == 'resolved' and item['revision'] == 2
+
+
+def test_classify_never_scanned_uses_enabled_since_and_ignores_invalid_values():
+    now = time.time()
+    limit = 24 * HOUR + coverage.GRACE_SECONDS
+    assert coverage.classify(None, None, {'interval_hours': 24, 'enabled_since': now - limit}, now) is None
+    assert coverage.classify(None, None, {'interval_hours': 24, 'enabled_since': now - limit - 1}, now) == 'overdue'
+    for invalid in (None, 'old', True, float('nan'), float('-inf'), now + HOUR, [now - limit - 1]):
+        assert coverage.classify(None, None, {'interval_hours': 24, 'enabled_since': invalid}, now) is None
+    assert coverage.classify(None, None, {'interval_hours': 24}, now) is None  # legacy policy
