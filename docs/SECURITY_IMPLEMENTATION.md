@@ -2512,10 +2512,6 @@ indefinitely.
   disabled or deleted servers, or superseded package evidence.
 - **Unchanged:** routes, roles, admission, reservations, SMTP/webhook alerts and
   response authorization. Scores remain advisory.
-- **Limitation:** there is no administrator retry action for a blocked score;
-  changing the saved model or key is the unblock path. Blocked advisory-plan
-  work is still not covered.
-
 Worker checkpoint #815 adds the administrator retry for blocked update scores.
 The admin-only `GET /api/update-scores/blocked` and the `ai_scoring_blocked` field
 of admin `GET /api/settings` (shown in Settings → AI) report the count, using the
@@ -2533,6 +2529,7 @@ the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protec
   notification. Each non-empty retry is audited.
 - **Unchanged:** schema, roles, response authorization and SMTP/webhook alerts.
   Blocked advisory-plan work is still not covered.
+
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
@@ -2997,6 +2994,17 @@ Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-sc
 - **Fixed reasons only:** range validation now returns reasons from a closed, fixed set rather than raising. Any comparator exception is reported as `version comparison failed`, and exception text is never read. Native comparisons pre-check Debian syntax, so the actionable `version does not have valid Debian version syntax` reason is kept.
 - **Retained results:** `GET /api/operations/{host}/advisories` passes stored scans through `advisories.retained()`. Inside an `Applicability could not be established:` reason, only known problems survive and anything else becomes `version comparison failed`. The status stays `uncertain`, and the stored row is not rewritten.
 - **Unchanged:** affected, fixed and unaffected results, their reasons and fixed versions; every fail-closed path; and the schema, routes, roles and response authorization.
+
+#### Affected-advisory in-app notifications — worker checkpoint #822
+
+Before this checkpoint an `affected` result from an administrator-run advisory scan was visible only while the scan dialog stayed open. `app/advisory_exposure_notifications.py` is a leader-side reconciler called from `operations.collect_alerts()`. It publishes one admin-only `cve-exposure`/`affected-advisories` notification (medium, `#servers/<host>/patching`) for each active, non-enrolling server whose stored `advisories:<host>` scan still has `affected` rows.
+
+- **Still current only:** a row counts only while the scanned binary package is installed at the scanned source name and version. Upgrading, downgrading or removing it stops the row counting. An unreadable or missing inventory keeps the stored rows, so a missing snapshot never resolves an exposure.
+- **Fixed text:** the reason carries controller-computed counts only: distinct advisory/package matches, packages, matches naming a vendor fix version and uncertain results. Advisory IDs, summaries, reasons, package names and other stored strings are never copied. The text says applicability is not exploitation evidence and that uncertain results still need review.
+- **Revision binding:** the revision is a digest of the current (advisory, package, source, version) set. An identical rescan publishes nothing; a new affected advisory resurfaces as unread.
+- **Resolution:** one `resolved` revision when no current affected rows remain (a clean rescan or package change) or the server is disabled, deleted or re-enrolling. The resolved text says it is not a clean-host verdict.
+- **Unchanged:** the producer only reads. It runs no scan, contacts no advisory service or AI provider, selects no patches and authorizes no containment or response. No SMTP/webhook alert, schema, route or role change.
+- **Limitations:** results are only as fresh as the last administrator-run scan; scheduled scans, per-CVE incidents, fleet views and RPM updateinfo remain open in requirement D.
 
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
