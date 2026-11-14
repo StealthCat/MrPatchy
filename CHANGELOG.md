@@ -1,3 +1,7 @@
+## 1.59.101 — 2026-11-14
+
+1. [PR #821](https://github.com/StealthCat/MrPatchy/pull/821): Adds a fixed-text, admin-only in-app notice when verified Debian or Ubuntu releases are past standard support, including ended support, Ubuntu Pro entitlement not observed, or Debian LTS eligibility unverified. It uses the reviewed catalog and inventory freshness; stale inventory holds the state, and the event resolves when coverage returns or the host/release leaves scope. Already-affected servers receive a notice on the next coordinator tick. This is additive notification behavior with no schema, route, role, SMTP/webhook, patching, upgrade or response-authorization change. #341 remains open for advance warning, entitlement discovery, RPM/vendor catalogs, catalog refresh/signing, migration planning, fleet reporting and real-target acceptance.
+
 ## 1.59.100 — 2026-11-14
 
 1. [PR #817](https://github.com/StealthCat/MrPatchy/pull/817): Adds admin-only endpoints to count and retry update scores blocked by a non-transient AI provider failure, plus a Settings → AI notice and retry control. Retries only current-configuration blocked scores for current package pairs on active, unpaused servers; they send no provider request and remain subject to normal scheduler admission. The `/api/settings` response gains the additive `ai_scoring_blocked` field. No schema or response-authorization change. Retry is fleet-wide; earlier-signature rows and blocked advisory-plan work are out of scope.
