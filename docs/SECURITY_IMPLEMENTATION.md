@@ -307,6 +307,28 @@ blocked access-path changes, verification and retry limits. This maintains the
 Mr Patchy installation; it is not arbitrary malware remediation or independent
 attestation of a compromised root/kernel.
 
+### Global defaults with per-server overrides — worker checkpoint #621
+
+The backend slice (#622) stores a global default for `auto_upgrade` and
+`auto_repair` and resolves each option per server as an explicit override when
+present, otherwise the current default. Legacy per-server rows stay explicit
+overrides. The UI slice adds:
+
+- **Settings → Agent maintenance:** an administrator form for both defaults
+  using the existing compare-and-set `PUT /api/settings/agent-maintenance`; a
+  stale editor is refused with a refresh message.
+- **Server Agent health:** each option is a choice of **Use global default
+  (current value)**, **On for this server** or **Off for this server**. It shows
+  the effective value, an Inherited/Override badge and the current global
+  default. Saving sends `null` for inherited options, so an unchanged save no
+  longer turns inherited options into overrides, and then reloads the resolved
+  state.
+
+Milestones: (1) resolver, global API and override reset — delivered by #622;
+(2) Settings and server inheritance UI with responsive browser coverage —
+this checkpoint; (3) MySQL run of the existing resolver suite. No schema,
+route, role, audit, queueing or trust-path change.
+
 ## Startup inventory comparison
 
 **File integrity → Compare startup inventory** compares immutable observations on
