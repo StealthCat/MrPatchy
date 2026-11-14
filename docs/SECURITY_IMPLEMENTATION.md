@@ -8279,3 +8279,13 @@ This delivers the "lifecycle alerts" item of #341's remaining scope. The server 
 - **Freshness:** stale or missing inventory holds the current state. It neither opens a new event nor falsely resolves an existing one, because freshness gaps cannot prove an upgrade. The Overview card already discloses those gaps.
 - **Unchanged:** a rejected payload never blocks alert collection, and no SMTP/webhook `Alert` row is added. The producer changes no patching, upgrade, subscription, schema, role or response-authorization state, and it acknowledges or authorizes nothing.
 - **Remaining (#341):** a configurable advance-warning window before an end date, Ubuntu Pro entitlement discovery, RPM/vendor catalog coverage, catalog refresh and signing, the migration queue and plans, fleet filters and reports, and real-target acceptance.
+
+### Notification-center status filter — worker checkpoint #835 (roadmap J)
+
+The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
+- **API:** `GET /api/notifications` accepts an optional `lifecycle` value of `active` or `resolved`. The filter applies to the event's **current** revision, so an event that resolved and then reopened is listed as active only. Any other value returns 400 with the fixed text "Invalid notification status filter".
+- **Counts and paging:** `total` and `more` use the same filter. The bell's unread count, arrivals and the SSE stream cursor ignore the center filter and are unchanged.
+- **Same boundaries:** role visibility, per-account read/dismiss state and the include-dismissed and unread-only options combine with the status filter. The route keeps its self-service session check.
+- **UI:** Apply keeps the selection across re-renders, Clear resets it with the other filters, and Previous/Next keep it.
+- **Unchanged:** this filters display only. It never acknowledges, resolves or reopens an event, changes response authorization or alters schema.
+- **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
