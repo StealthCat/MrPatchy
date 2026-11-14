@@ -272,7 +272,7 @@ Package checks use `dpkg --verify-format=rpm --verify` or `rpm --verify --noscri
 
 This is not the independent trusted-vendor verification milestone. Dpkg's local checksum coverage is limited to metadata it has recorded; local databases, binaries and a compromised root/kernel are not independently trusted. A discrepancy may be a legitimate administrative change, and no reported differences is not a clean-host verdict. Exact installed-version artifacts authenticated through repository signatures, approved custom baselines, and broader RPM-native platform validation remain required.
 
-The optional startup inventory covers `/etc/systemd/system`, system cron directories and `/var/spool/cron`, `/etc/init.d`, `/etc/profile.d`, `/etc/crontab`, `/etc/rc.local` and `/etc/ld.so.preload`. It retains paths, ownership, permissions, modification time, symlink targets, and SHA-256 for regular files up to 1 MiB. It does not collect file contents, follow symlinks, or execute startup entries. It uses the descriptor-based traversal and identity checks from the scanner, with a 15-second budget and at most 256 recorded entries. Missing roots are explicit; inaccessible paths, special files, races and limits are gaps. This is an inventory, not a detector that declares startup entries malicious. User home startup files, transient units, kernel mechanisms, runtime injection and other persistence locations remain outside its scope. History permits manual comparison; automatic persistence-change alerts and incident linkage are not yet implemented.
+The optional startup inventory covers `/etc/systemd/system`, system cron directories and `/var/spool/cron`, `/etc/init.d`, `/etc/profile.d`, `/etc/crontab`, `/etc/rc.local`, `/etc/ld.so.preload` and `/etc/anacrontab`. It retains paths, ownership, permissions, modification time, symlink targets, and SHA-256 for regular files up to 1 MiB. It does not collect file contents, follow symlinks, or execute startup entries. It uses the descriptor-based traversal and identity checks from the scanner, with a 15-second budget and at most 256 recorded entries. Missing roots are explicit; inaccessible paths, special files, races and limits are gaps. This is an inventory, not a detector that declares startup entries malicious. User home startup files, transient units, kernel mechanisms, runtime injection and other persistence locations remain outside its scope. History permits manual comparison; automatic persistence-change alerts and incident linkage are not yet implemented.
 
 Redeploy the collector and bridge with **Finish / verify installation** before using this feature. Older helpers reject the new action rather than returning a fabricated successful report. Unit tests cover native output parsing, safe argument selection, RPM script suppression, deadlines/limits, symlink handling, report immutability, roles and host scoping. A native read-only dpkg check is exercised where available; RPM behavior also requires validation on a real RPM target.
 
@@ -3250,6 +3250,23 @@ response. Agent collection of `/etc/anacrontab` and the at spool
 (`/var/spool/cron/atjobs`, `/var/spool/at`), inventory/UI wiring, provenance, AI
 classification and native acceptance remain open, so roadmap F is still
 incomplete.
+
+Worker checkpoint (issue #826): the agent's built-in startup scope now includes
+`/etc/anacrontab`. Inventories hash it like the other built-in files, or list it
+as a missing root. `persistence.compare` accepts an additive built-in scope
+change only when the later scope equals the earlier scope plus paths from the
+fixed, reviewed `ADDITIVE_BUILTIN_SCOPE` list. In that case it compares within
+the earlier scope and lists the newly covered paths in `newly_in_scope`, rather
+than reporting their files as added. Existing administrator-reviewed baselines
+therefore keep comparing after the agent upgrade. Removals, unknown or custom
+additions and agent downgrades still return "scope changed". The Startup
+inventory labels such files `not_in_baseline` until a new baseline is collected.
+A stored custom path equal to a promoted built-in path stays valid and is covered
+once by built-in scope, so saved monitoring policies do not start failing. The
+file's jobs are not parsed yet, and `/var/spool/anacron` timestamps are excluded
+because they change daily. Agent anacron job parsing using the #711 contract,
+the at spool, provenance, AI classification and native acceptance remain open,
+so roadmap F is still incomplete.
 
 Worker checkpoint (issue #702): a pure, I/O-free contract
 (`app/systemd_units.py`) resolves captured read-only observations of the system
