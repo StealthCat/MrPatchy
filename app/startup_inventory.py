@@ -1,10 +1,12 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
 from . import persistence
 from .incidents import digest
+import re
 
 CATALOG=(
     ('systemd_local','Local systemd definitions','/etc/systemd/system'),
     ('cron','System cron definitions','/etc/cron'),
+    ('at','Debian-family at job queue',persistence.AT_SPOOL_DIR),
     ('cron_spool','User/root cron spool files','/var/spool/cron'),
     ('sysv','SysV init scripts','/etc/init.d'),
     ('shell','System profile snippets','/etc/profile.d'),
@@ -18,6 +20,7 @@ GAPS=[
     'Anacron/at queues, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
+    'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
 ]
 
 
@@ -39,6 +42,46 @@ def jobs_state(entry):
     return 'not_reported' if entry['kind']=='regular' and (path in CRON_FILES or parent in CRON_DIRS) else 'not_crontab'
 
 
+def at_state(entry):
+    """Whether a parsed at job exists, was not reported (older agent) or does not apply."""
+    if 'at' in entry:return 'parsed'
+    path=entry['path'];name=path.rsplit('/',1)
+    return 'not_reported' if entry['kind']=='regular' and name[0]==persistence.AT_SPOOL_DIR and re.fullmatch(r'[a-zA-Z=][0-9a-f]{13}',name[1]) else None
+
+
+def with_at_jobs(rows,inventory,q,changes):
+    """Attach parsed at jobs to matching rows and add entries found only by an at account or command."""
+    by_path={r['path']:r for r in rows}
+    for entry in inventory['entries']:
+        state=at_state(entry)
+        if state is None:continue
+        row=by_path.get(entry['path'])
+        if row is None:
+            at=entry.get('at') or {}
+            text=' '.join([at.get('account') or '']+list(at.get('commands',())))
+            if not q or q.casefold() not in text.casefold():continue
+            key,label=mechanism(entry['path'])
+            row={k:entry[k] for k in ('path','kind','uid','gid','mode','size','sha256','target') if k in entry}
+            row.update(mechanism=key,mechanism_label=label,change=changes.get(entry['path'],'unchanged') if changes is not None else 'not_compared',origin='not_assessed',jobs_state=jobs_state(entry))
+            rows.append(row)
+        row['at_state']=state
+        if 'at' in entry:row['at']=entry['at']
+    rows.sort(key=lambda r:r['path'])
+    return rows
+
+
+def catalog_rows(inventory):
+    """Mechanism counts; the at row also reports parsed and older-agent job files."""
+    result=[]
+    for key,label,_ in CATALOG:
+        if key=='at':
+            states=[at_state(e) for e in inventory['entries']]
+            parsed=states.count('parsed');missing=states.count('not_reported')
+            label+=f' · {parsed} parsed job{"" if parsed==1 else "s"}'+(f' · {missing} not reported by this agent version' if missing else '')
+        result.append({'id':key,'label':label,'observed_files':sum(mechanism(e['path'])[0]==key for e in inventory['entries'])})
+    return result
+
+
 def page(s,host_id,offset=0,q='',expected_digest=''):
     assessment=persistence.status(s,host_id);latest=assessment['latest']
     if latest is None and expected_digest:raise ValueError('Startup inventory changed; reopen the browser')
@@ -56,7 +99,8 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         if q.casefold() in (entry['path']+' '+label+' '+jobs).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
-    catalog=[{'id':key,'label':label,'observed_files':sum(mechanism(e['path'])[0]==key for e in inventory['entries'])} for key,label,_ in CATALOG]
+    rows=with_at_jobs(rows,inventory,q,changes)
+    catalog=catalog_rows(inventory)
     parsed=[e for e in inventory['entries'] if 'cron' in e]
     cron={'files':len(parsed),'jobs':sum(len(e['cron']['jobs']) for e in parsed),'unparsed':sum(e['cron']['unparsed'] for e in parsed),
           'truncated':any(e['cron']['truncated'] for e in parsed),'not_reported':sum(jobs_state(e)=='not_reported' for e in inventory['entries'])}
