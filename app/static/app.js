@@ -369,6 +369,7 @@ function saveSource(path,content,hostId){modal('Review repository change',`<p cl
 async function investigations(revision=renderRevision,context=null,offset=null){const key=context?.hostId||'fleet';offset=offset??investigationViewContext.get(key)??0;const root=context?.root||$('#content');const base=context?serverLink(context.hostId,'investigations'):'#investigations';const canChange=!context||(context.host.enabled!==false&&!context.host.deleted_at);if(location.hash.startsWith(base+'/item/'))return investigationAssessmentPage(revision,context,base);const [rows,status]=await Promise.all([api('/investigations?'+(context?'host_id='+encodeURIComponent(context.hostId)+'&':'')+'offset='+offset+'&limit=50'),context?Promise.resolve(null):api('/investigation-status')]);if(!currentView(revision,context?'servers':'investigations')||!root.isConnected)return;investigationViewContext.set(key,offset);root.innerHTML=(context?'<p class="help">Investigations for this server only. Approvals apply to the exact executable identity and behavior; AI assessments remain advisory.</p>':heading('A second look at the unfamiliar.','Host-specific executable hashes, identities, and connection patterns.')+(isAdmin()?triageStatus(status)+'<section class="card" id="ai-control-gates" aria-labelledby="ai-control-gates-title" aria-live="polite"><div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2></div><p class="help" role="status">Loading shared AI start gates…</p></section>':'')+`<div class="notice">Queue: ${status.pending} pending${isAdmin()?' · '+esc(aiAdmissionControl(status)):''} · ${status.enabled?'enabled':'disabled'}. Oldest pending: ${date(status.oldest)}. AI assessments are advisory. A known-good approval applies only to this exact executable hash, user, and connection pattern on this host. Changed behavior creates a new investigation.</div>`)+(rows.length?rows.map(r=>`<div class="card investigation"><div><div class="eyebrow">${esc(hostName(r.host_id))}</div><h3><code>${esc(r.evidence.executable)}</code></h3><p class="help">UID ${esc(r.evidence.uid)} · Last seen ${date(r.last_seen)}</p>${badge(r.approved?'approved':r.verdict)}</div>${canChange?`<button data-admin data-action="trust" data-id="${r.id}" data-approved="${r.approved}" data-revision="${esc(r.revision)}">${r.approved?'Revoke approval':'Review & approve'}</button>`:''}<div class="description">${esc(r.analysis)}</div><div class="actions" data-admin><a class="button" href="${base}/item/${encodeURIComponent(r.id)}/history">Assessment history</a>${canChange&&['low','medium','high','unknown'].includes(r.verdict)?`<button data-action="retriage-investigation" data-id="${esc(r.id)}">Re-triage</button>`:''}</div>${r.retry?`<p class="help">Retry: ${esc(r.retry.state.replaceAll('_',' '))} · ${r.retry.attempts} attempt${r.retry.attempts===1?'':'s'}${r.retry.next_at?' · Eligibility: '+date(r.retry.next_at):''}${r.retry.reason?'<br>'+esc(r.retry.reason):''}</p>`:''}${canChange&&!r.approved&&['error','pending'].includes(r.verdict)?`<button data-admin data-action="retry-investigation" data-id="${r.id}">Retry investigation</button>`:''}<details><summary>Evidence &amp; SHA-256</summary><pre>${esc(JSON.stringify(r.evidence,null,2))}</pre></details></div>`).join(''):empty('Nothing to investigate yet','New executable hashes and connection patterns appear here after a server starts reporting.'));serverPagination(root,offset,rows.length===50,n=>investigations(revision,context,n),50);if(!context&&isAdmin())loadAiControlGates(root,revision);}
 async function activity(revision=renderRevision,context=null,offset=null){
  if(!context&&location.hash==='#activity/workers')return workerRegistrations(revision);
+ if(!context&&location.hash==='#activity/delivery')return alertDelivery(revision);
  if(!context&&location.hash.startsWith('#activity/audit'))return auditWorkspace(revision);
  if(!context&&location.hash.startsWith('#activity/jobs/'))return operationDetail(revision,null,location.hash.slice('#activity/jobs/'.length));
  const key=context?.hostId||'fleet';offset=offset??activityViewContext.get(key)??0;
@@ -411,7 +412,7 @@ async function auditWorkspace(revision){
  await load(activityViewContext.get('audit')||0);
 }
 function activityNavigation(current){
- return isAdmin()?`<nav class="overview-sections" aria-label="Activity pages"><a href="#activity" ${current==='operations'?'class="active" aria-current="page"':''}>Operations</a><a href="#activity/audit" ${current==='audit'?'class="active" aria-current="page"':''}>Audit trail</a><a href="#activity/workers" ${current==='workers'?'class="active" aria-current="page"':''}>Workers</a></nav>`:'';
+ return isAdmin()?`<nav class="overview-sections" aria-label="Activity pages"><a href="#activity" ${current==='operations'?'class="active" aria-current="page"':''}>Operations</a><a href="#activity/audit" ${current==='audit'?'class="active" aria-current="page"':''}>Audit trail</a><a href="#activity/workers" ${current==='workers'?'class="active" aria-current="page"':''}>Workers</a><a href="#activity/delivery" ${current==='delivery'?'class="active" aria-current="page"':''}>Alert delivery</a></nav>`:'';
 }
 function controllerRegistrations(data){
  const field=value=>esc(value===null||value===undefined?'Not reported':value);
@@ -435,6 +436,27 @@ async function loadEndpointAgentHealth(revision,offset=0){
  if(!currentView(revision,'activity')||!section||!section.isConnected)return;
  section.outerHTML=endpointAgentHealth(data);
  $('#endpoint-agent-health').querySelectorAll('[data-agent-offset]').forEach(button=>button.onclick=()=>loadEndpointAgentHealth(revision,Number(button.dataset.agentOffset)));
+}
+// Alert delivery (#824): routable target for the alert-delivery in-app notification. Read-only;
+// settings changes stay in the existing Operations panel. Never shows URLs, tokens or recipients.
+async function alertDelivery(revision){
+ const root=$('#content');
+ if(!isAdmin()){root.innerHTML=heading('Alert delivery.','Delivery status requires administrator access.')+PatchyUI.error('Administrator access required','Return to operations to review work available to your role.','<a class="button" href="#activity">Operations</a>');return;}
+ const [alerts,config]=await Promise.all([api('/operations/alerts'),api('/operations/notifications')]);
+ if(!currentView(revision,'activity')||!root.isConnected||location.hash!=='#activity/delivery')return;
+ $('#breadcrumb').textContent='Workspace / Activity / Alert delivery';document.title='Alert delivery · Mr Patchy';
+ const channel=config.unreadable?'Unreadable configuration':!config.enabled?'Disabled':config.channel==='smtp'?'SMTP email':'Webhook';
+ const pending=alerts.filter(a=>a.state==='open'&&!a.notified);
+ const failing=pending.filter(a=>a.attempts>=3&&a.error);
+ const status=config.unreadable?'<p class="help warning" role="alert">The saved delivery configuration cannot be read, for example after the encryption key changed. No SMTP or webhook alerts are being sent until it is saved again.</p>'
+  :!config.enabled?'<p class="help">External delivery is off. Alerts stay visible in Mr Patchy only.</p>'
+  :failing.length?'<p class="help warning" role="status">'+failing.length+' open alert'+(failing.length===1?' has':'s have')+' failed three or more delivery attempts. Mr Patchy keeps retrying with backoff.</p>'
+  :'<p class="help" role="status">No open alert has repeatedly failed delivery.</p>';
+ const row=a=>`<tr><td>${esc(hostName(a.host_id))}</td><td>${esc(a.kind)}</td><td>${date(a.created)}</td><td>${esc(String(a.attempts||0))}</td><td>${a.error?esc(a.error):'—'}</td></tr>`;
+ root.innerHTML=heading('Alert delivery.','External SMTP/webhook delivery of server alerts, and what has not arrived yet.')+activityNavigation('delivery')
+  +`<section class="card"><h2>Delivery channel</h2><p><strong>${esc(channel)}</strong></p>${status}<div class="actions"><button class="primary" id="open-delivery-settings">Open delivery settings</button></div><p class="help">Settings open in the Operations panel. This page only reads state; it never sends, retries or acknowledges alerts.</p></section>`
+  +`<section class="card"><h2>Undelivered open alerts</h2>${pending.length?`<div class="table-wrap"><table><thead><tr><th scope="col">Server</th><th scope="col">Kind</th><th scope="col">Raised</th><th scope="col">Attempts</th><th scope="col">Last error</th></tr></thead><tbody>${pending.map(row).join('')}</tbody></table></div><p class="help">Shows the 200 most recent alerts. Acknowledge alerts from the Operations panel.</p>`:empty('Nothing waiting','Every open alert has been delivered, or none are open.')}</section>`;
+ $('#open-delivery-settings').onclick=operationsPanel;
 }
 async function workerRegistrations(revision,offset=0){
  const root=$('#content');
