@@ -6,7 +6,7 @@ module.exports=async(page,capture)=>{
  const at=(job,extra)=>({queue:'a',job,scheduled_at:scheduled,running:false,uid:1000,gid:1000,account:'alice',commands:['/usr/local/bin/sync --password [REDACTED] /srv','<img src=x onerror=window.__atInjected=true>','x'.repeat(500)],environment:3,parsed:true,truncated:false,redacted:true,...extra});
  const row=(name,extra)=>({path:'/var/spool/cron/atjobs/'+name,mechanism:'at',mechanism_label:'Debian-family at job queue',kind:'regular',uid:1000,gid:1,mode:448,sha256:'b'.repeat(64),change:'not_compared',jobs_state:'not_crontab',...extra});
  const handler=route=>route.fulfill({json:{inspection_id:'at-receipt',created:Date.now()/1000,state:'collected',baseline_state:'not_compared',digest:'at-digest',
-  items:[row('a0000301a2b3c4',{at_state:'parsed',at:at(3)}),row('B0000401a2b3c4',{at_state:'parsed',at:at(4,{queue:'b',running:true,parsed:false,commands:[],account:null,environment:0,redacted:false})}),row('a0000501a2b3c4',{at_state:'not_reported'})],
+  items:[row('a0000301a2b3c4',{at_state:'parsed',at:at(3)}),row('=0000401a2b3c4',{at_state:'parsed',at:at(4,{queue:'=',running:true,parsed:false,commands:[],account:null,environment:0,redacted:false})}),row('a0000501a2b3c4',{at_state:'not_reported'})],
   total:3,more:false,cron:{files:0,jobs:0,unparsed:0,truncated:false,not_reported:0},scope:['/var/spool/cron'],catalog:[{id:'at',label:'Debian-family at job queue · 1 parsed job · 1 not reported by this agent version',observed_files:3}],missing_roots:[],skipped:0,gaps:['at gap'],note:'Bounded stored metadata.'}});
  await page.route('**/api/hosts/*/security/startup-inventory?*',handler);
  try{

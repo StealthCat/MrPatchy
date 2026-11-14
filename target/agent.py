@@ -1147,8 +1147,9 @@ def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
 
 
 # Debian-family at spool (inside the built-in /var/spool/cron root). Job file names are
-# <queue letter><5 hex job number><8 hex minutes since the epoch>; an uppercase queue
-# letter marks a job atd is currently executing. RHEL-family /var/spool/at is not in scope.
+# <queue letter><5 hex job number><8 hex minutes since the epoch>. atd renames a job it is
+# executing to the reserved '=' queue; an uppercase letter is a batch-style queue, not a
+# running job (at(1)). RHEL-family /var/spool/at is not in scope.
 AT_SPOOL_DIR = '/var/spool/cron/atjobs'
 AT_JOB_NAME = re.compile(r'([a-zA-Z=])([0-9a-f]{5})([0-9a-f]{8})')
 AT_COMMAND_LINES = 32
@@ -1172,7 +1173,7 @@ def parse_at_job(data,name):
     """Parse an at job script as data. Nothing is executed or sourced; exported environment
     values are counted but never stored, and an unrecognized layout is reported, not guessed."""
     queue,job,scheduled=name
-    result={'queue':queue.lower(),'job':job,'scheduled_at':scheduled,'running':queue.isupper(),'uid':None,'gid':None,
+    result={'queue':queue,'job':job,'scheduled_at':scheduled,'running':queue=='=','uid':None,'gid':None,
             'account':None,'commands':[],'environment':0,'parsed':False,'truncated':False,'redacted':False}
     lines=data.decode('utf-8','replace').split('\n')
     header=_AT_HEADER.fullmatch(lines[1].rstrip('\r')) if len(lines)>1 and lines[0].rstrip('\r')=='#!/bin/sh' else None

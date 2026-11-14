@@ -44,7 +44,7 @@ def validate_at(at,path):
     if len(name)!=2 or name[0]!=AT_SPOOL_DIR or not re.fullmatch(r'[a-zA-Z=][0-9a-f]{5}[0-9a-f]{8}',name[1]):raise ValueError('At job outside the at spool')
     if not isinstance(at,dict) or set(at)!=AT_KEYS:raise ValueError('Invalid at job')
     letter=name[1][0]
-    if at['queue']!=letter.lower() or at['running'] is not letter.isupper() or at['job']!=int(name[1][1:6],16) or at['scheduled_at']!=int(name[1][6:],16)*60:
+    if at['queue']!=letter or at['running'] is not (letter=='=') or at['job']!=int(name[1][1:6],16) or at['scheduled_at']!=int(name[1][6:],16)*60:
         raise ValueError('At job does not match its spool file name')
     if any(type(at[k]) is not bool for k in ('running','parsed','truncated','redacted')) or type(at['environment']) is not int or not 0<=at['environment']<=1000000:
         raise ValueError('Invalid at job')

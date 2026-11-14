@@ -61,9 +61,21 @@ def test_heredoc_job_commands_owner_and_redaction():
 
 
 def test_plain_layout_and_running_queue():
-    result=agent.parse_at_job(PLAIN,('B',7,SCHEDULED))
+    result=agent.parse_at_job(PLAIN,('=',7,SCHEDULED))
     assert result['parsed'] and result['commands']==['/sbin/reboot'] and result['account']=='root' and result['uid']==0
-    assert result['queue']=='b' and result['running'] is True and result['environment']==1
+    assert result['queue']=='=' and result['running'] is True and result['environment']==1
+
+
+def test_uppercase_batch_queue_is_not_running():
+    # at(1): an uppercase queue letter is a batch-style queue; only the reserved '=' queue marks a running job.
+    result=agent.parse_at_job(PLAIN,('B',7,SCHEDULED))
+    assert result['queue']=='B' and result['running'] is False
+    persistence.validate(inventory(result,path='/var/spool/cron/atjobs/B0000701a2b3c4'))
+    for bad in ({**result,'queue':'b'},{**result,'running':True}):
+        with pytest.raises(ValueError):persistence.validate(inventory(bad,path='/var/spool/cron/atjobs/B0000701a2b3c4'))
+    running=agent.parse_at_job(PLAIN,('=',7,SCHEDULED))
+    persistence.validate(inventory(running,path='/var/spool/cron/atjobs/=0000701a2b3c4'))
+    with pytest.raises(ValueError):persistence.validate(inventory({**running,'running':False},path='/var/spool/cron/atjobs/=0000701a2b3c4'))
 
 
 @pytest.mark.parametrize('data',[

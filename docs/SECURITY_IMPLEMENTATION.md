@@ -3450,7 +3450,9 @@ The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the bu
 `/var/spool/cron` root, so its job files were hashed but opaque. When the controller
 asks for parsed jobs (`cron_jobs`), the agent now decodes each job file name. The name has the form
 `<queue><5-hex job><8-hex minutes since the epoch>` and gives the queue, job
-number and scheduled run time. An uppercase queue means atd is executing the job.
+number and scheduled run time. atd renames a job it is executing into the reserved `=`
+queue, so only `=` is reported as running. An uppercase letter is a batch-style queue
+(at(1)), not a running job, and its letter is kept as is.
 The agent then parses the hashed bytes as data. Nothing is executed or sourced.
 
 - The `# atrun uid= gid=` and `# mail` headers give the owner.
