@@ -3719,6 +3719,18 @@ default worker render. CI renders the example.
 This is a template only. Remote-machine secret provisioning and installer modes
 remain open.
 
+#### Controller-role environment example — worker checkpoint #854
+
+`.env.controller.example` is the role-specific environment template for
+`compose.controller.yaml` and the GCP controller overlay. It documents the
+variables the extended app and Caddy services and the role files read; its values
+match `.env.example` or the Compose defaults. It has no worker pools, worker ID,
+drain window, worker memory limit or controller data-volume setting, and leaves
+`MRPATCHY_EXPECTED_WORKER_IDS` empty for role-file replicas. Tests check the
+variable set, values and rendered configuration, and CI renders the example.
+This is a template only; remote-machine secret provisioning and installer modes
+remain open.
+
 ### Database, secrets and persistent state
 
 - Use MySQL 8+ for supported multi-machine deployments. Retain SQLite for the local/shared-local-filesystem deployment; do not present a network-mounted SQLite database as the remote-worker solution.

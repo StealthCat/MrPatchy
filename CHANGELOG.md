@@ -1,3 +1,7 @@
+## 1.59.108 — 2026-11-14
+
+1. [PR #855](https://github.com/StealthCat/MrPatchy/pull/855): Adds `.env.controller.example` for the split controller role, listing app, Caddy and GCP controller settings while leaving out worker-only pools, IDs, drain settings and data-volume configuration. The example renders the same controller configuration as the complete `.env.example`; `MRPATCHY_EXPECTED_WORKER_IDS` is empty for role-file replicas. This is additive and leaves existing complete-installation settings unchanged. It is a template only: remote-machine secret provisioning, controller-only/join-worker installer modes and multi-host acceptance remain open. No schema, API, role or response-authorization changes.
+
 ## 1.59.107 — 2026-11-14
 
 1. [PR #853](https://github.com/StealthCat/MrPatchy/pull/853): Adds `.env.worker.example` and worker-only Compose startup instructions. The template lists worker-role settings, is ignored by Git and Docker builds, and CI renders it; tests check the template against the worker Compose variables. Additive only: Compose files, installers and application behavior are unchanged, the existing inline volume override continues to work, and an explicit `--env-file` prevents a controller `.env` in the same checkout from leaking into the worker project. This template does not provision remote-machine secrets or shared state, add controller-only/join-worker installer modes, or validate multi-host deployment. No schema, API, role or response-authorization change.
