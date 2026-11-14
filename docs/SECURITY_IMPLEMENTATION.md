@@ -2960,7 +2960,15 @@ The opt-in Operations advisory check now applies the pure `cve_exposure.classify
 - **UI:** the Reviewed fleet workflows dialog shows status counts and an escaped per-advisory list, with raw JSON retained in a collapsible section.
 - **No authority:** classification selects no patches, triggers no response or containment and calls no AI provider. `affected` means version applicability, not exploitation evidence; `uncertain` is never treated as safe.
 - **Compatibility:** no schema, route, setting or role change. RPM keeps its updateinfo path. Previously stored scans lack applicability and summary until a new scan; read-back returns stored data unchanged.
-- **Operational limit:** detail fetches are sequential and run during the advisory scan's per-host lock. A scan can hold that lock for up to 60 seconds, deferring queued work and causing per-host configuration changes to return 409 while it runs.
+- **Operational limit (narrowed by #796 below):** detail fetches are sequential and run during the advisory scan's per-host lock. A scan can hold that lock for up to 60 seconds, deferring queued work and causing per-host configuration changes to return 409 while it runs.
+
+#### Concurrent advisory detail fetches — worker checkpoint #796
+
+- **Concurrency:** detail records are fetched by a bounded pool of 8 workers sharing one pooled `httpx.Client` per scan. Redirects stay disabled, connection limits match the pool size, and the client is closed when the scan ends. Eight 0.2-second fixture fetches finish in about 0.2 seconds instead of 1.6.
+- **Unchanged bounds:** 200 records, chosen alphabetically, and one shared 60-second wall-clock budget. Each request's timeout is `min(30, remaining)`. A worker rechecks the deadline before sending, so a fetch that would start after the budget is never sent and is reported `uncertain` with the time-budget reason.
+- **Unchanged results:** every fail-closed reason stays the same, and per-package result order follows the batch query.
+- **Remaining limit:** the scan still runs inside the per-host lock. A scan with many slow records can still hold it for up to the 60-second budget, but a typical scan now holds it for about one-eighth of the serial time.
+- **No other change:** no schema, route, role, setting, UI, AI or response change.
 
 Requirement D remains incomplete: broad ingestion across supported distributions, persisted exposure windows and producers, scheduled scans and notifications, and exploitation monitoring/containment wiring remain outstanding.
 
@@ -2971,6 +2979,17 @@ Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-sc
 - **Fixed reasons only:** range validation now returns reasons from a closed, fixed set rather than raising. Any comparator exception is reported as `version comparison failed`, and exception text is never read. Native comparisons pre-check Debian syntax, so the actionable `version does not have valid Debian version syntax` reason is kept.
 - **Retained results:** `GET /api/operations/{host}/advisories` passes stored scans through `advisories.retained()`. Inside an `Applicability could not be established:` reason, only known problems survive and anything else becomes `version comparison failed`. The status stays `uncertain`, and the stored row is not rewritten.
 - **Unchanged:** affected, fixed and unaffected results, their reasons and fixed versions; every fail-closed path; and the schema, routes, roles and response authorization.
+
+#### Affected-advisory in-app notifications — worker checkpoint #822
+
+Before this checkpoint an `affected` result from an administrator-run advisory scan was visible only while the scan dialog stayed open. `app/advisory_exposure_notifications.py` is a leader-side reconciler called from `operations.collect_alerts()`. It publishes one admin-only `cve-exposure`/`affected-advisories` notification (medium, `#servers/<host>/patching`) for each active, non-enrolling server whose stored `advisories:<host>` scan still has `affected` rows.
+
+- **Still current only:** a row counts only while the scanned binary package is installed at the scanned source name and version. Upgrading, downgrading or removing it stops the row counting. An unreadable or missing inventory keeps the stored rows, so a missing snapshot never resolves an exposure.
+- **Fixed text:** the reason carries controller-computed counts only: distinct advisory/package matches, packages, matches naming a vendor fix version and uncertain results. Advisory IDs, summaries, reasons, package names and other stored strings are never copied. The text says applicability is not exploitation evidence and that uncertain results still need review.
+- **Revision binding:** the revision is a digest of the current (advisory, package, source, version) set. An identical rescan publishes nothing; a new affected advisory resurfaces as unread.
+- **Resolution:** one `resolved` revision when no current affected rows remain (a clean rescan or package change) or the server is disabled, deleted or re-enrolling. The resolved text says it is not a clean-host verdict.
+- **Unchanged:** the producer only reads. It runs no scan, contacts no advisory service or AI provider, selects no patches and authorizes no containment or response. No SMTP/webhook alert, schema, route or role change.
+- **Limitations:** results are only as fresh as the last administrator-run scan; scheduled scans, per-CVE incidents, fleet views and RPM updateinfo remain open in requirement D.
 
 ### Exploitation containment eligibility contract — worker checkpoint #725
 

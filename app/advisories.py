@@ -1,4 +1,5 @@
 """Opt-in OSV queries using distro-specific source package versions."""
+import concurrent.futures
 import re
 import time
 import httpx
@@ -9,6 +10,8 @@ from . import cve_exposure
 MAX_DETAIL_FETCHES=200
 # Wall-clock budget for all detail fetches in one synchronous scan; later records become uncertain.
 DETAIL_FETCH_DEADLINE=60
+# Concurrent detail fetches sharing one pooled client; bounds and fail-closed results are unchanged.
+DETAIL_FETCH_WORKERS=8
 OSV_VULN_URL='https://api.osv.dev/v1/vulns/'
 _ADVISORY_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}')
 STATUSES=(cve_exposure.AFFECTED,cve_exposure.FIXED,cve_exposure.UNAFFECTED,cve_exposure.UNCERTAIN)
@@ -66,24 +69,41 @@ def scan(inventory,names):
         items.append({**item,'vulnerabilities':vulns,'applicability':applicability})
     return {'checked':time.time(),'ecosystem':eco,'source':'https://osv.dev','results':items,'summary':summary,'coverage':COVERAGE}
 
+def _detail_client():
+    """One pooled client per scan; connection limits match the worker pool."""
+    limits=httpx.Limits(max_connections=DETAIL_FETCH_WORKERS,max_keepalive_connections=DETAIL_FETCH_WORKERS)
+    return httpx.Client(follow_redirects=False,limits=limits)
+
+def _fetch_one(client,advisory_id,deadline):
+    remaining=deadline-time.monotonic()
+    if remaining<=0:
+        return 'Advisory detail time budget of '+str(DETAIL_FETCH_DEADLINE)+' seconds per scan was reached'
+    try:
+        response=client.get(OSV_VULN_URL+advisory_id,timeout=min(30,remaining),follow_redirects=False)
+        response.raise_for_status();record=response.json()
+    except Exception:  # noqa: BLE001 - any retrieval failure is uncertainty, never safety
+        return 'Advisory detail could not be retrieved'
+    if not isinstance(record,dict) or record.get('id')!=advisory_id:
+        return 'Advisory detail did not match the requested record'
+    return record
+
 def _fetch_records(ids):
-    """Fetch full OSV records by ID; a missing entry or reason string means uncertain."""
+    """Fetch full OSV records by ID concurrently; a missing entry or reason string means uncertain."""
     records={};valid=sorted(i for i in ids if isinstance(i,str) and _ADVISORY_ID.fullmatch(i))
+    for advisory_id in valid[MAX_DETAIL_FETCHES:]:
+        records[advisory_id]='Advisory detail limit of '+str(MAX_DETAIL_FETCHES)+' records per scan was reached'
+    selected=valid[:MAX_DETAIL_FETCHES]
+    if not selected:return records
     deadline=time.monotonic()+DETAIL_FETCH_DEADLINE
-    for index,advisory_id in enumerate(valid):
-        if index>=MAX_DETAIL_FETCHES:
-            records[advisory_id]='Advisory detail limit of '+str(MAX_DETAIL_FETCHES)+' records per scan was reached';continue
-        remaining=deadline-time.monotonic()
-        if remaining<=0:
-            records[advisory_id]='Advisory detail time budget of '+str(DETAIL_FETCH_DEADLINE)+' seconds per scan was reached';continue
-        try:
-            response=httpx.get(OSV_VULN_URL+advisory_id,timeout=min(30,remaining),follow_redirects=False)
-            response.raise_for_status();record=response.json()
-        except Exception:  # noqa: BLE001 - any retrieval failure is uncertainty, never safety
-            records[advisory_id]='Advisory detail could not be retrieved';continue
-        if not isinstance(record,dict) or record.get('id')!=advisory_id:
-            records[advisory_id]='Advisory detail did not match the requested record';continue
-        records[advisory_id]=record
+    client=_detail_client()
+    try:
+        # Each task rechecks the shared deadline when it starts, so queued fetches past the
+        # budget are never sent; per-request timeouts keep in-flight work inside it.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(DETAIL_FETCH_WORKERS,len(selected)),
+                                                   thread_name_prefix='osv-detail') as pool:
+            futures={advisory_id:pool.submit(_fetch_one,client,advisory_id,deadline) for advisory_id in selected}
+            for advisory_id,future in futures.items():records[advisory_id]=future.result()
+    finally:client.close()
     return records
 
 def _applicability(vuln,records,eco,package,version):
