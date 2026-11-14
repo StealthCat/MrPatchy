@@ -8581,3 +8581,24 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
   - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+
+### XDG autostart contract — worker checkpoint #889 (roadmap F)
+
+The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as metadata only. Nothing said which `.desktop` entry is effective for a name, whether it starts at login, or what it runs.
+
+- **Change:** a new pure module, `app/xdg_autostart.py`, follows the freedesktop Autostart and Desktop Entry specifications.
+  - **Precedence:** it resolves effective entries by file name across directories in precedence order. A user file shadows a system file and is reported as `overrides`/`overridden_by`.
+  - **Statuses:** each entry is classified `enabled`, `hidden`, `disabled`, `conditional`, `invalid` or `unknown`.
+    - `hidden`: `Hidden=true`, which also suppresses the shadowed system file.
+    - `disabled`: `X-GNOME-Autostart-enabled=false`.
+    - `conditional`: `OnlyShowIn`/`NotShowIn`/`TryExec`. These depend on the session and are never guessed.
+  - **Exec:** the value is tokenized with the spec's quoting rules and expanded with autostart field codes into `argv`/`program`.
+- **Gaps, never reported as covered:**
+  - an uncollected higher-precedence directory (`precedence_uncertain`);
+  - unreadable or oversized files;
+  - malformed lines and duplicate keys;
+  - unbalanced `Exec` quoting (no argv is guessed) and unknown or embedded field codes;
+  - invalid names, and the 512-entry, 64 KiB and 4096-character caps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
+- **Validation:** `tests/test_xdg_autostart.py` has 12 tests. They cannot run on main, where the module does not exist, and they pass on the branch.
+- **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.
