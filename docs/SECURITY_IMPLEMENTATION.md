@@ -3669,6 +3669,26 @@ Still open for this requirement: remote-machine provisioning of keys, SSH identi
 artifacts and locking state; installer modes; split files combined with the GCP
 override; and multi-host MySQL, drain, failure and recovery acceptance.
 
+### GCP overlays for the role files — worker checkpoint #850
+
+`compose.gcp.yaml` names both `app` and `worker`, so layering it on a role file adds
+the other role's partial service. `compose.controller.gcp.yaml` (app only) and
+`compose.worker.gcp.yaml` (worker only) carry exactly the matching `compose.gcp.yaml`
+service blocks. `tests/test_compose_roles.py` keeps them byte-for-byte in sync and
+renders both combinations through `docker compose config`:
+- The controller pair yields exactly app and Caddy, with the hardening, networks,
+  ports, volumes, image and build of `compose.yaml` plus `compose.gcp.yaml`.
+- The worker pair yields exactly the worker, with the full GCP worker's hardening,
+  image and command, the external controller volume and an empty `MRPATCHY_WORKER_ID`.
+- Both fail closed without `GCP_PROJECT` or `GCP_ZONE`. A test also records the
+  stray service the combined overlay would add.
+
+CI renders both pairs. Workers reuse the controller's `/data/gcloud` configuration on
+the shared volume, so an attached service account needs no worker sign-in. Still open:
+role files with the WIF `compose.gcp-auth.json` mount, installer controller-only and
+join-worker modes, remote-machine workers and the dedicated gcp-integration node.
+No runtime code, role, authorization or complete-installation behavior changes.
+
 ### Deployment files and runtime roles
 
 | File | Supported deployment |

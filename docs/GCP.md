@@ -119,6 +119,14 @@ makes plain `docker compose` omit the GCP override. `.env.gcp` and generated cre
 definitions are ignored by Git. The installer does not grant the Mr Patchy guest
 account OS Login or replace pinned SSH identities.
 
+To run the controller and separately scaled workers on the same Docker host, use the
+role-specific GCP overlays `compose.controller.gcp.yaml` and `compose.worker.gcp.yaml`
+with `compose.controller.yaml` and `compose.worker.yaml`, not `compose.gcp.yaml`.
+See "Google Cloud IAP runtime with the role files" in
+[COMPOSE_CONFIGURATION.md](COMPOSE_CONFIGURATION.md). That arrangement currently
+supports an attached service account only; WIF credential mounts stay on the
+complete installation.
+
 If an older installer fails at `mrpatchy-app-run-...` with
 `failed to set up container networking: Address already in use`, update to the
 fixed installer and rerun it with the same arguments. For an older release, run
