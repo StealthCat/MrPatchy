@@ -3117,12 +3117,13 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
             host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
             value=body.model_dump()
             # Server-managed enablement time (#841) lets coverage notifications tell a newly enabled policy
-            # from one whose first scheduled scan has never been enqueued. Clients cannot set it.
+            # from one whose first scheduled scan has never been enqueued. Clients cannot set it. Whole-millisecond
+            # precision keeps the returned value identical to what MySQL JSON stores and reads back (#856).
             previous=row.value if row and isinstance(row.value,dict) else {}
             since=previous.get('enabled_since')
             if value['enabled']:
                 kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
-                value['enabled_since']=since if kept else time.time()
+                value['enabled_since']=since if kept else math.floor(time.time()*1000)/1000
             s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
     return value

@@ -8362,3 +8362,10 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
   - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+
+### Scan-policy `enabled_since` MySQL JSON round-trip — worker checkpoint #856
+
+MySQL 8.4 JSON does not render every full-precision `time.time()` double back unchanged. In a local probe, 246 of 2000 values came back different, for example `1794652862.0047343` read back as `1794652862.0047345`. As a result, the #841 `enabled_since` value an API save returned could differ from the stored value by one ulp. The mismatch failed MySQL shard 1 intermittently on the integrated head of #851.
+
+- **Change:** a newly started `enabled_since` is floored to whole milliseconds. Such values round-trip exactly; 0 of 2000 differed in the same probe. Because the value is floored, it never lies after the save time. Kept, removed and reset semantics, client immutability and coverage classification are unchanged. Stored legacy full-precision values are kept as read.
+- **Validation:** on MySQL 8.4, the new regression test uses the CI failure's timestamp and fails before the fix. The original test failed 2 of 15 repeated runs before the fix and 0 of 15 after. The module passes on SQLite and MySQL.

@@ -1,4 +1,5 @@
 """In-app notifications when scheduled malware scanning has no current conclusion (#816)."""
+import math
 import time
 
 from sqlalchemy import func, select
@@ -291,7 +292,7 @@ def put_policy(client, **changes):
 
 def test_policy_save_records_server_managed_enabled_since(admin):
     seed(enabled=False)  # legacy-style stored policy without enabled_since
-    before = time.time()
+    before = math.floor(time.time() * 1000) / 1000  # enabled_since is floored to whole milliseconds (#856)
     saved = put_policy(admin, enabled_since=1.0)  # clients cannot choose the clock
     since = saved['enabled_since']
     assert before <= since <= time.time() and policy_value()['enabled_since'] == since
@@ -299,9 +300,22 @@ def test_policy_save_records_server_managed_enabled_since(admin):
     assert put_policy(admin, interval_hours=2)['enabled_since'] == since  # kept while scanning stays enabled
     assert 'enabled_since' not in put_policy(admin, enabled=False)  # removed when disabled
     assert 'enabled_since' not in policy_value()
+    time.sleep(0.01)  # move past the stored millisecond
     assert put_policy(admin)['enabled_since'] > since  # a disabled-to-enabled transition restarts the clock
     seed(enabled=True)  # legacy enabled policy without enabled_since
     assert put_policy(admin)['enabled_since'] >= before  # re-saving starts the clock
+
+
+def test_policy_enabled_since_round_trips_through_database_json(admin, monkeypatch):
+    # MySQL 8.4 JSON renders 1794652862.0047343 back as 1794652862.0047345 (#856, MySQL shard 1 on #851).
+    # The saved timestamp must be one every supported database returns unchanged.
+    seed(enabled=False)
+    monkeypatch.setattr(time, 'time', lambda: 1794652862.0047343)
+    saved = put_policy(admin)['enabled_since']
+    monkeypatch.undo()
+    assert policy_value()['enabled_since'] == saved and saved == round(saved, 3)
+    assert admin.get('/api/hosts/' + HOST + '/security/policy').json()['enabled_since'] == saved
+    assert put_policy(admin, interval_hours=2)['enabled_since'] == saved
 
 
 def test_never_enqueued_first_scan_publishes_overdue_after_interval_plus_grace(admin):
