@@ -3748,6 +3748,33 @@ response authority, and read/dismiss stays separate from acknowledgement. Still
 planned for this requirement: endpoint-agent resource metrics and readiness,
 GCP-node inventory, HTTPS/Caddy checks and unified dashboard acceptance.
 
+### Unified deployment-health summary — worker checkpoint #843
+
+Activity → Workers now opens with an admin-only **Deployment health** card, backed by
+`GET /api/operations/deployment-health` (`app/deployment_health.py`). The card combines
+controllers, workers and endpoint agents into one shared state vocabulary.
+
+- **States:** offline, degraded, unknown, maintenance and healthy. The overall state is
+  the worst state present, in that order. A deployment with nothing counted is
+  `unknown`, never healthy.
+- **Workers:** these reuse expected workers, whether configured or inferred.
+  - missing, stale or stopped → offline
+  - version mismatch → degraded
+  - unknown → unknown
+  - draining or drained → maintenance
+  - reporting → healthy
+  - An invalid expectation makes the component unknown.
+- **Controllers:** with `MRPATCHY_EXPECTED_CONTROLLER_IDS` configured, the same
+  mapping applies to the expected list. Without it, only currently reporting
+  controllers are counted. A gap states that a missing controller cannot be
+  detected, and retained stopped or stale history is never shown as offline.
+- **Endpoint agents:** these reuse the existing `agent_fleet_health` counts.
+- **Unchanged:** responses carry counts, sources and fixed-text reasons and gaps only.
+  The summary runs no checks and changes no state. Notifications, roles and failover,
+  drain, repair and response authority are unchanged.
+- **Limitations:** HTTP/TLS readiness, resource metrics and GCP-node inventory remain
+  planned for this requirement, as does the unified dashboard's full acceptance.
+
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
 Requested workflow addition (2026-10-29); implemented by the v0.5.0 checkpoint below.

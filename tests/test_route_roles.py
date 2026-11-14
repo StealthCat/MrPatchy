@@ -189,6 +189,7 @@ EXPECTED_ROLES = {
     ('GET','/api/operations/workers'):'admin',
     ('GET','/api/operations/controllers'):'admin',
     ('GET','/api/operations/agents'):'admin',
+    ('GET','/api/operations/deployment-health'):'admin',
     ('POST','/api/operations/workers/control'):'admin',
     ('POST','/api/operations/workers/remove'):'admin',
     ('GET','/api/operations/{host_id}/advisories'):'admin',
