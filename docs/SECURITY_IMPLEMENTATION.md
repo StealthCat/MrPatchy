@@ -3354,6 +3354,31 @@ environment. It can carry `config_home`, `data_home` and `cache_home`, plus
 - **Still open:** manager-environment collection, lingering/runtime state,
   account enumeration, collection wiring, UI and AI classification.
 
+### systemd version-gated specifiers — worker checkpoint #702
+
+Contract-only; roadmap F remains incomplete. This settles the earlier
+limitation that system `%u`/`%U`/`%h`/`%s` were assumed to follow current
+`systemd.unit(5)` because the systemd version was unknown.
+
+- **Parser:** `parse_systemd_version(text)` reads the first line of
+  `systemctl --version` (`systemd N` with an optional `(package-version)`).
+  Missing, oversized, NUL, leading-zero, out-of-range or trailing-text input
+  returns no version and a `systemd_version_*` gap; nothing is guessed.
+- **Gating:** `resolve()` and `resolve_user()` take an optional
+  `systemd_version`. From upstream NEWS, `SPECIFIER_MIN_VERSION` records the
+  first release that gave each specifier its current meaning: 228 for
+  `%u %U %h %s` (earlier releases resolved them from `User=`), 236 for
+  `%S %C %L`, 239 for `%E %j %J` and 240 for `%g %G`. An older release leaves
+  those specifiers raw with the existing `unexpanded_specifier` gap. For
+  example, EL7's systemd 219 never gets `%h`=/root.
+- **Invalid version:** a supplied value that is not an integer in 1–9999
+  withholds every version-dependent specifier and adds `systemd_version_invalid`.
+- **Compatibility:** omitting the version keeps the earlier output, limitation
+  text and digest exactly. When a version is supplied, results carry
+  `systemd_version`, and the limitations name whether it was applied.
+- **Still open:** running `systemctl --version` in the collector, collection
+  wiring, runtime state, UI and AI classification.
+
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
 Discovery increment only; the startup-awareness requirement remains incomplete.
