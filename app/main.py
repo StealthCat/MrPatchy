@@ -1111,6 +1111,8 @@ def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(adm
             try:result=known_good.revoke(s,fingerprint,body.expected_version,user['username'],reason)
             except LookupError as error:raise HTTPException(404,str(error)) from None
             except ValueError as error:raise HTTPException(409,str(error)) from None
+            from . import known_good_notifications
+            known_good_notifications.publish_revocation(s,result,user['username'])
             s.commit()
             return {**result,'detail':f'Candidate revoked across the fleet. {result["linked_assessments"]} linked assessment(s) require review.'}
     finally:lock.release()

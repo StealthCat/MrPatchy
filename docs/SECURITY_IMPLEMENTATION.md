@@ -2371,6 +2371,21 @@ predict what a fresh investigation would cost today. Lookup, publication,
 revocation, pause, budget, role, approval and response boundaries are
 unchanged. Hit/miss reasons and matched production acceptance remain open.
 
+Worker checkpoint #779 notifies the other administrators when an
+administrator revokes a fleet known-good candidate through
+`POST /api/ai/known-good/{fingerprint}/revoke`. Before the revocation commits,
+the endpoint publishes one fleet-scoped, admin-only
+`ai-known-good`/`candidate-revoked` event keyed by the candidate fingerprint,
+with `medium` severity. The reason is fixed text containing only the acting
+account name and the linked-assessment count. The free-form revocation reason
+stays in the audit log and on the assessment history, which the deep link opens
+(falling back to the Investigations workspace when the original assessment is
+unavailable). Not-found, version-changed and already-revoked requests publish
+nothing, and a later AI contradiction of an already revoked candidate adds no
+second event. The producer adds no SMTP/webhook alert and changes no lookup,
+publication, revocation, role, approval or response semantics. Recording review
+completion, hit/miss reasons and matched production acceptance remain open.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
