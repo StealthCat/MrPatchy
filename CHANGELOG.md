@@ -1,6 +1,6 @@
-## 1.59.98 — 2026-11-13
+## 1.59.98 — 2026-11-14
 
-1. [PR #817](https://github.com/StealthCat/MrPatchy/pull/817): Adds an administrator-only, CSRF-protected action to re-queue update scores blocked under the current AI configuration. The retry sends no provider request; the normal scheduler, lifecycle, pause, enablement, rate and daily-cap checks still apply. Adds the blocked-score count to the existing settings response. No schema or response-authorization change. Retry is fleet-wide and does not cover blocked advisory-plan work.
+1. [PR #797](https://github.com/StealthCat/MrPatchy/pull/797): Fetches OSV advisory details concurrently over one pooled client (up to 8 workers), shortening the scan and its per-server lock time. The 200-record cap, shared 60-second scan budget, request timeouts, no-redirect policy and fail-closed uncertain results are unchanged. No schema, API, role, UI or response-authorization change. A slow scan can still hold the per-server lock for the remaining scan budget; notifications and scheduled scans remain out of scope.
 
 ## 1.59.97 — 2026-11-13
 
