@@ -111,4 +111,17 @@ module.exports=async page=>{
  await page.locator('#ai-spend-history-days').selectOption('7');
  await page.locator('.settings-nav [href="#settings/patching"]').click();
  await repo.waitFor();await noPrompt();
+
+ // A clean Back onto an entry that shares the settled position still renders. Other
+ // scripts' pushState and coalesced hash changes can leave two entries with one index;
+ // only the guard's own undo may be swallowed.
+ await page.evaluate(()=>history.pushState(history.state,'','#settings/history'));
+ await page.evaluate(()=>{location.hash='#settings/database';});
+ await page.locator('#database-form').waitFor();
+ await page.evaluate(()=>history.back());await history.waitFor();
+ await page.evaluate(()=>history.back());
+ await expectHash('#settings/patching','clean Back must reach the earlier entry');
+ await repo.waitFor({timeout:5000});
+ assert.equal(await history.count(),0,'clean Back onto a shared position must render the page it reaches');
+ await noPrompt();
 };

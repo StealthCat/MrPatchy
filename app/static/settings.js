@@ -48,6 +48,10 @@ const stampHistory=(state,index)=>index===null||(state!==null&&typeof state!=='o
 history.replaceState=function(state,...rest){const s=state&&typeof state==='object'&&SETTINGS_HISTORY_KEY in state?state:stampHistory(state,historyIndex());return nativeReplaceState(s,...rest);};
 if(historyIndex()===null)nativeReplaceState(stampHistory(history.state,0),'');
 let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex();
+// Set only while the guard's own history.go undo is in flight. Entries can share
+// an index (rapid back-to-back hash changes settle the newer entry first), so
+// arriving on the settled index is not by itself evidence of an undo.
+let pendingHistoryUndo=null;
 function settleHistory(){
  let index=historyIndex();
  if(index===null){index=(settledHistoryIndex??-1)+1;nativeReplaceState(stampHistory(history.state,index),'');}
@@ -62,12 +66,14 @@ function confirmLeaveUnsaved(proceed){
  document.getElementById('unsaved-stay').focus();
 }
 window.addEventListener('hashchange',event=>{
- const index=historyIndex();
- // Landing on the settled entry again is the undo of a held move: restore it without rendering.
- if(index!==null&&index===settledHistoryIndex){event.stopImmediatePropagation();settledSettingsHash=location.hash;return;}
+ const index=historyIndex(),undo=pendingHistoryUndo;pendingHistoryUndo=null;
+ // Landing back on the settled entry after the guard's own undo: restore it without rendering.
+ if(undo!==null&&index===undo&&location.hash===settledSettingsHash){event.stopImmediatePropagation();return;}
  if(!unsavedSettingsPending()){settleHistory();return;}
  event.stopImmediatePropagation();
- if(settledHistoryIndex===null){
+ // Without a measurable move (no index, or an entry sharing the settled index) the
+ // address is restored in place; history.go(0) would reload and drop the edits.
+ if(settledHistoryIndex===null||index===settledHistoryIndex){
   const target=event.newURL;
   nativeReplaceState(history.state,'',settledSettingsHash||location.pathname+location.search);
   confirmLeaveUnsaved(()=>{location.href=target;});
@@ -75,7 +81,7 @@ window.addEventListener('hashchange',event=>{
  }
  // A new entry (link, typed address) sits right after the settled one; Back/Forward reports its own position.
  const delta=index===null?1:index-settledHistoryIndex;
- history.go(-delta);
+ pendingHistoryUndo=settledHistoryIndex;history.go(-delta);
  confirmLeaveUnsaved(()=>history.go(delta));
 });
 document.addEventListener('click',event=>{
