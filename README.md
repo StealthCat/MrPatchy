@@ -352,7 +352,7 @@ The target's durable spool partitions normal and eBPF observations into serializ
 
 ## Reviewed file replacement
 
-**Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
+**Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host. Fixed-text notifications also flag enabled schedules whose first scan never starts, and queued or running scans that exceed the configured interval plus one-hour grace. Existing enabled policies without an `enabled_since` marker remain silent until saved again.
 
 For manual ClamAV and YARA scans and recurring or execution-triggered scan policies, enter canonical absolute directories such as `/usr/local/bin`. The controller rejects paths with redundant slashes, dot segments, control characters, or excluded filesystem roots such as `/proc` and `/sys` before queuing a scan or saving a policy. Execution-triggered policies also disallow `/` and overlapping directories. The target still checks that each directory can be scanned.
 
@@ -424,6 +424,8 @@ docker compose up -d --build --scale worker=3
 ```
 
 For a controller with separately scaled workers on the same Docker host, use the fixed `compose.controller.yaml` (app and Caddy) and `compose.worker.yaml` (workers on the controller's existing data volume) files. See *Fixed controller and worker files* in [Compose configuration](docs/COMPOSE_CONFIGURATION.md).
+
+For GCP deployments using the split role files, pair `compose.controller.yaml` with `compose.controller.gcp.yaml` and `compose.worker.yaml` with `compose.worker.gcp.yaml`. Do not layer `compose.gcp.yaml` onto a role file because it adds a partial service for the other role. Build and upgrade both roles from the same checkout because they share the `mrpatchy:gcp` image tag. This supports attached service accounts; WIF installs stay on the complete `compose.yaml` path with `./gcp-compose.sh`. See [Compose configuration](docs/COMPOSE_CONFIGURATION.md#google-cloud-iap-runtime-with-the-role-files).
 
 Workers claim durable SQL jobs and coordinate with per-host locks; one elected coordinator polls and schedules. SQLite workers must share the same local app volume. Separate worker hosts require MySQL plus consistent shared identity/encryption storage; unrelated disks or SQLite over NFS are unsupported.
 
