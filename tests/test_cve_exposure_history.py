@@ -169,3 +169,18 @@ def test_route_history_survives_later_scans(admin, monkeypatch):
     [item] = body['exposure_history']['items']
     assert item['state'] == 'resolved' and item['resolved_status'] == 'not-listed'
     assert item['first_affected_version'] == '1.2-3ubuntu1' and item['resolved_version'] == '1.2-4'
+
+
+def test_open_count_and_items_include_open_exposures_beyond_the_page_cap(session):
+    # Regression for the coordinator blocker on #859: an older unresolved exposure
+    # followed by more resolved pairs than the cap must still be counted and listed.
+    advisories.record_history(session, HOST, _result(('libold:amd64', 'old', '1.0', [_row('USN-OLD', 'affected')])), now=1)
+    newer = [(f'lib{n}:amd64', f'pkg{n}', '1.0', [_row(f'USN-{n}', 'affected')]) for n in range(6)]
+    advisories.record_history(session, HOST, _result(*newer), now=2)
+    fixed = [(b, s, '1.1', [_row(f'USN-{n}', 'fixed', '1.1')]) for n, (b, s, _v, _r) in enumerate(newer)]
+    advisories.record_history(session, HOST, _result(*fixed), now=3)
+    session.commit()
+    result = advisories.history(session, HOST, limit=5)
+    assert result['truncated'] is True and result['open'] == 1
+    assert result['items'][0]['advisory_id'] == 'USN-OLD' and result['items'][0]['state'] == 'open'
+    assert all(i['state'] == 'resolved' for i in result['items'][1:])

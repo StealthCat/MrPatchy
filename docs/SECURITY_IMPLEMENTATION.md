@@ -3014,7 +3014,7 @@ Before this checkpoint each advisory scan overwrote `advisories:<host>`, so a la
 - **Resolving:** a later scan of the same source package resolves an open exposure, recording the resolving time, version and reason. It resolves when the result is `fixed` or `unaffected`, or when the advisory is no longer listed for the installed version (`not-listed`).
 - **Never resolved:** an `uncertain` result never resolves an exposure and never opens one. A package that a scan did not include is never resolved by it. When binaries of one source disagree on version, absence of the advisory resolves nothing. When binaries of one source differ in classification, the most exposed one wins.
 - **Reopening:** an `affected` observation after resolution reopens the row, increments `reopened` and keeps the original first-affected time.
-- **Read API:** `GET /api/operations/{host}/advisories` adds `exposure_history`, with items, an open count, `truncated` (limit 500) and a coverage statement. It remains admin-only. The coverage statement discloses three limits:
+- **Read API:** `GET /api/operations/{host}/advisories` adds `exposure_history`, with items, an open count, `truncated` (limit 500) and a coverage statement. Open exposures are listed before resolved ones, and the open count is a total over all of the server's rows rather than only the returned page. It remains admin-only. The coverage statement discloses three limits:
   - times between manual scans are telemetry gaps;
   - publication time is not shown;
   - version resolution does not verify the required restart or reboot.

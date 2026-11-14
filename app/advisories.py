@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 import httpx
-from sqlalchemy import Double, Integer, String, Text, select
+from sqlalchemy import Double, Integer, String, Text, case, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 from .apt import paragraphs
 from .db import Base
@@ -247,8 +247,13 @@ def record_history(session,host_id,result,now=None):
 
 
 def history(session,host_id,limit=HISTORY_LIMIT):
+    # Open exposures sort first so the page cap never hides one behind newer
+    # resolved pairs, and the open total is counted independently of the cap.
     rows=session.scalars(select(ExposureHistory).where(ExposureHistory.host_id==host_id).order_by(
-        ExposureHistory.first_affected_at.desc(),ExposureHistory.id).limit(limit+1)).all()
+        case((ExposureHistory.resolved_at==0,0),else_=1),ExposureHistory.first_affected_at.desc(),
+        ExposureHistory.id).limit(limit+1)).all()
+    open_count=session.scalar(select(func.count()).select_from(ExposureHistory).where(
+        ExposureHistory.host_id==host_id,ExposureHistory.resolved_at==0)) or 0
     items=[{'advisory_id':row.advisory_id,'package':row.package,'ecosystem':row.ecosystem,
             'cve_ids':[c for c in (row.cve_ids or '').split(',') if c],'state':'resolved' if row.resolved_at else OPEN,
             'first_affected_at':row.first_affected_at,'first_affected_version':row.first_affected_version,
@@ -256,5 +261,5 @@ def history(session,host_id,limit=HISTORY_LIMIT):
             'fixed_version':row.fixed_version or None,'last_observed_at':row.last_observed_at,'last_status':row.last_status,
             'resolved_at':row.resolved_at or None,'resolved_version':row.resolved_version or None,
             'resolved_status':row.resolved_status or None,'reopened':row.reopened or 0} for row in rows[:limit]]
-    return {'items':items,'truncated':len(rows)>limit,'open':sum(1 for i in items if i['state']==OPEN),
+    return {'items':items,'truncated':len(rows)>limit,'open':int(open_count),
             'coverage':HISTORY_COVERAGE}
