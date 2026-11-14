@@ -582,6 +582,11 @@ def notification_read_batch(body:NotificationReadBatchInput,user=Depends(self_us
 def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
     return _notification_state(event_id,body,user,notification_events.dismiss)
 
+@app.post('/api/notifications/{event_id}/restore')
+def notification_restore(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    """Undo this account's dismissal; never acknowledges or resolves anything."""
+    return _notification_state(event_id,body,user,notification_events.restore)
+
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')

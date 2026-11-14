@@ -335,7 +335,7 @@ def count_for_user(session, username, *, unread_only=False, include_dismissed=Fa
     return session.scalar(select(func.count()).select_from(query.subquery()))
 
 
-def _state(session, username, event_id, revision):
+def _state(session, username, event_id, revision, *, create=True):
     user = _user(session, username)
     event = session.get(NotificationEvent, event_id)
     if not user or not event or event.minimum_role not in _allowed_roles(user.role):
@@ -343,6 +343,8 @@ def _state(session, username, event_id, revision):
     if type(revision) is not int or not 1 <= revision <= event.revision:
         raise ValueError('Invalid notification revision')
     state = session.get(NotificationUserState, (event_id, username))
+    if not state and not create:
+        return event, None
     if not state:
         state = NotificationUserState(
             event_id=event_id, username=username, read_revision=0,
@@ -433,6 +435,27 @@ def dismiss(session, username, event_id, revision, *, now=None):
     state.read_revision = max(state.read_revision, revision)
     state.updated = time.time() if now is None else now
     audit(session, 'dismiss notification', f'{username} {event_id} revision {revision}')
+    return state
+
+
+def restore(session, username, event_id, revision, *, now=None):
+    """Clear this account's dismissal of the current revision.
+
+    Restore is the per-account inverse of ``dismiss``: it only returns the
+    event to this user's default history.  Read state is kept so a restored
+    item does not inflate the unread badge, and nothing is acknowledged,
+    resolved, approved or remediated.  A stale revision or an event that is not
+    dismissed changes nothing, so retries and replays are harmless.
+    """
+    event, state = _state(session, username, event_id, revision, create=False)
+    if state is None:
+        return NotificationUserState(event_id=event_id, username=username,
+                                     read_revision=0, dismissed_revision=0)
+    if revision != event.revision or state.dismissed_revision < event.revision:
+        return state
+    state.dismissed_revision = 0
+    state.updated = time.time() if now is None else now
+    audit(session, 'restore notification', f'{username} {event_id} revision {revision}')
     return state
 
 

@@ -105,6 +105,7 @@ main { margin-left: calc(var(--sidebar) + 32px); padding: 0 32px; max-width: 190
 .notification-meta time { margin-left:auto;text-transform:none;white-space:nowrap; }
 .notification-severity { padding:2px 7px;border-radius:8px;background:#a7bdc714;color:var(--muted);font-weight:750; }
 .notification-resolved { color:var(--mint); }
+.notification-dismissed { color:var(--muted); font-style:italic; }
 .notification-item[data-severity="critical"] .notification-severity,.notification-item[data-severity="high"] .notification-severity { color:var(--red);background:#ffb1a814; }
 .notification-item[data-severity="medium"] .notification-severity { color:var(--amber);background:#f7cf8a14; }
 .notification-reason { margin:9px 0 11px;overflow-wrap:anywhere;color:var(--text);font-size:13px;line-height:1.5; }
