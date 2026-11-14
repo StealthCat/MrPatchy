@@ -1,3 +1,7 @@
+## 1.59.105 — 2026-11-14
+
+1. [PR #842](https://github.com/StealthCat/MrPatchy/pull/842): Scheduled-scan coverage notifications now flag an enabled policy whose first scan has not been enqueued after the interval plus one-hour grace. The timestamp is server-managed in the existing policy JSON; no schema, route, role or response-authorization change. Existing enabled policies without the timestamp remain silent until saved, and re-enabling may notify before the next scheduler tick queues a scan.
+
 ## 1.59.104 — 2026-11-14
 
 1. [PR #840](https://github.com/StealthCat/MrPatchy/pull/840): Scheduled malware-scan coverage notifications now flag a queued or running scan that remains pending longer than its configured interval plus one hour, instead of leaving the coverage notice silent. Existing stuck episodes can receive one `stalled` revision; this adds no schema, API, role or authorization change. It does not cancel, retry or recover jobs. A policy with no first scan attempt remains silent; YARA schedules and configurable grace periods are out of scope.
