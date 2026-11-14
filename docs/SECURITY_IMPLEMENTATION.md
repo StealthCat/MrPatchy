@@ -2390,6 +2390,22 @@ predict what a fresh investigation would cost today. Lookup, publication,
 revocation, pause, budget, role, approval and response boundaries are
 unchanged. Hit/miss reasons and matched production acceptance remain open.
 
+### Selected-investigation Re-triage — worker checkpoint #887
+
+Administrators can select several completed investigations on the fleet or
+per-server Investigations page and queue fresh triage for all of them with one
+reason (`POST /api/investigations/retriage`, 1–50 items with expected
+revisions). The request is all-or-nothing under the existing `ai-triage`
+admission lock and ordered per-host `queue` activity locks. Every item gets the
+same checks as single Re-triage: exact revision, completed verdict, no existing
+request, no running claim, active server, and explicit withdrawal of any
+approval. One refusal queues nothing and names each refused item. Queued items
+keep single-item semantics: retained prior result, per-item audit, cache bypass
+and no provider call at queue time. AI pause, data sharing, model and shared
+admission/spend controls still apply when they run. This delivers the
+"selected" part of explicit Re-triage only. Fleet-wide selection across pages
+and cache-hit filters remain open.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
