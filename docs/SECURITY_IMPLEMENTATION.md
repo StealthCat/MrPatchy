@@ -2597,6 +2597,22 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Retained spend history CSV download — worker checkpoint #874
+
+Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
+`GET /api/settings/ai-spend-history.csv` takes the same `days` (1–90) and optional
+IANA `timezone` filter as the JSON history and serializes the same bounded SQL
+aggregation without loading ledger rows. Columns are UTC window start/reset, the
+recorded timezone, call count and settled/reserved/sent/uncertain/other/counted
+USD. No model names, pricing sources, run/call identifiers or evidence are
+exported. Retained text cells starting with `=`, `+`, `-`, `@`, tab or CR are
+prefixed with `'` against spreadsheet formula injection. Truncation to the newest
+windows is disclosed in `X-MrPatchy-Spend-History-Truncated`/`-Max-Windows` headers
+and in the panel. The download uses the applied filter, not unapplied typed text.
+Amounts remain local public-price estimates for comparison with provider billing
+records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
+and the wider roadmap A acceptance remain planned.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
