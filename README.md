@@ -352,7 +352,7 @@ The target's durable spool partitions normal and eBPF observations into serializ
 
 ## Reviewed file replacement
 
-**Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host.
+**Security coverage** provides an administrator-only fleet overview of independent ClamAV/YARA receipts, scan freshness, signature age, failed attempts and open scanner incidents. Search by server name and open the relevant server Security tab. Results describe stored, bounded coverage; they do not certify a clean host. Fixed-text notifications also flag enabled schedules whose first scan never starts, and queued or running scans that exceed the configured interval plus one-hour grace. Existing enabled policies without an `enabled_since` marker remain silent until saved again.
 
 For manual ClamAV and YARA scans and recurring or execution-triggered scan policies, enter canonical absolute directories such as `/usr/local/bin`. The controller rejects paths with redundant slashes, dot segments, control characters, or excluded filesystem roots such as `/proc` and `/sys` before queuing a scan or saving a policy. Execution-triggered policies also disallow `/` and overlapping directories. The target still checks that each directory can be scanned.
 

@@ -22,6 +22,12 @@ coverage page uses:
   the configured interval plus the grace period (#839). The scheduler does not
   enqueue another scan while one is pending, so a stuck job would otherwise
   hold the event silent indefinitely.
+- A server that has never been scanned is ``overdue`` once scheduled scanning has
+  been enabled (``enabled_since``, recorded when the policy is saved) for longer
+  than the interval plus the grace period (#841). Otherwise a scheduler blocker
+  present from enablement onward, such as a quarantine, a recovery-required job
+  or a full queue, would leave the server silent. Legacy policies saved before
+  ``enabled_since`` existed stay silent until the policy is saved again.
 
 A younger pending scan leaves an existing event unchanged. Recorded scans resolve it,
 and so do scans with findings, because the ``malware-detection`` incident
@@ -33,6 +39,8 @@ rule names, engine output, errors or timestamps. It never enqueues, retries or
 cancels scans, changes patching state, or acknowledges, remediates or
 authorizes anything.
 """
+import math
+
 from sqlalchemy import func, select
 
 from . import host_lifecycle, notifications
@@ -85,8 +93,18 @@ def classify(scan, attempt, policy, now):
         return CATEGORIES[state]
     if state == 'overdue' and result['age_seconds'] is not None and result['age_seconds'] > limit:
         return 'overdue'
-    # never_scanned (the scheduler has not started yet), recorded and findings need no coverage event.
+    if state == 'never_scanned' and _enabled_age(policy, now) > limit:
+        return 'overdue'
+    # A recently enabled never_scanned policy (the scheduler has not started yet), legacy policies without
+    # ``enabled_since``, recorded scans and findings need no coverage event.
     return None
+
+
+def _enabled_age(policy, now):
+    since = policy.get('enabled_since')
+    if type(since) not in (int, float) or not math.isfinite(since) or since > now:
+        return -1
+    return now - since
 
 
 def _enabled_policies(session, hosts):
