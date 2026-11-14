@@ -1,3 +1,7 @@
+## 1.60.2 — 2026-11-14
+
+1. [PR #869](https://github.com/StealthCat/MrPatchy/pull/869): Administrators now receive an admin-only in-app notice while a server's AI integration is paused; resuming or deleting the server resolves it, and a later pause reopens it. The notice uses fixed text, adds no schema, and changes no AI policy or response authorization. Existing paused servers are notified on their next saved pause; there is no startup backfill or SMTP/webhook delivery. MySQL behavior is covered by hosted CI shards; focused local suite evidence uses SQLite.
+
 ## 1.60.1 — 2026-11-14
 
 1. [PR #867](https://github.com/StealthCat/MrPatchy/pull/867): WIF installations using the split controller/worker Compose files can now generate role-specific credential overlays with the same validated read-only `/gcp` bind mount. The generated files are mode 0600 and excluded from Git and Docker builds; the complete install and sign-in/check flow are unchanged. This is additive and changes no runtime authorization. Existing installations receive the files when the installer is rerun with `--credential-dir`; role-specific overlays do not add standalone controller-only or join-worker installer modes, remote-host workers or a dedicated GCP integration node.
