@@ -1,3 +1,7 @@
+## 1.59.110 — 2026-11-14
+
+1. [PR #863](https://github.com/StealthCat/MrPatchy/pull/863): Advisory scans now retain matching OSV records' published and modified dates, and the applicability panel shows a valid publication date in UTC. Missing, invalid or unfetched dates remain null and do not change applicability status. This adds response metadata and display only, with no schema, route, role, patch-selection or response-authorization change. Dates describe the advisory record, not the vendor fix time or exposure start. Using publication dates in exposure windows/history, verified restart, scheduled scans, fleet views, RPM updateinfo and exploitation monitoring remain incomplete.
+
 ## 1.59.109 — 2026-11-14
 
 1. [PR #861](https://github.com/StealthCat/MrPatchy/pull/861): Shows legacy per-purpose hourly allowances for process triage, update scoring and automatic incident/startup plans in the shared AI start-gates status and Investigations card, including prior-hour usage and next eligibility when exhausted. This adds a response field and UI only; admission behavior, shared gates, schema and response authorization are unchanged. The displayed plan allowance mirrors the existing fixed scheduler limit, and legacy-mode migration remains an operator decision.

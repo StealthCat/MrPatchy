@@ -569,9 +569,11 @@ document.addEventListener('click',async event=>{
 });
 (async()=>{try{if((await api('/sso')).enabled){const link=document.createElement('a');link.href='/auth/sso';link.textContent='Sign in with your organization';$('#login-form').append(link);}}catch{}})();
 // Version applicability only: "affected" is not exploitation evidence and "uncertain" is never shown as safe.
+// Advisory record dates are UTC calendar days; an unknown or invalid date renders nothing rather than a guess.
+function advisoryDate(value){return typeof value==='number'&&Number.isFinite(value)&&value>0?new Date(value*1000).toISOString().slice(0,10):'';}
 function advisoryApplicability(result){const labels={affected:'Affected',fixed:'Fixed',unaffected:'Not affected',uncertain:'Uncertain'},tone={affected:'high',fixed:'complete',unaffected:'low',uncertain:'pending'};const summary=result.summary||{};
  const facts=Object.keys(labels).map(k=>`<span><strong>${Number(summary[k])||0}</strong>${labels[k]}</span>`).join('');
- const packages=(result.results||[]).map(item=>{const rows=(item.applicability||[]).map(a=>{const status=labels[a.status]?a.status:'uncertain';return `<li><span class="badge ${tone[status]}">${labels[status]}</span> <strong>${esc(a.advisory_id||'Unknown advisory')}</strong>${(a.cve_ids||[]).length?' · '+esc(a.cve_ids.join(', ')):''}<div class="help">${esc(a.reason||'')}${a.fixed_version?' · Fixed in '+esc(a.fixed_version):''}</div></li>`;}).join('');
+ const packages=(result.results||[]).map(item=>{const rows=(item.applicability||[]).map(a=>{const status=labels[a.status]?a.status:'uncertain';return `<li><span class="badge ${tone[status]}">${labels[status]}</span> <strong>${esc(a.advisory_id||'Unknown advisory')}</strong>${(a.cve_ids||[]).length?' · '+esc(a.cve_ids.join(', ')):''}<div class="help">${esc(a.reason||'')}${a.fixed_version?' · Fixed in '+esc(a.fixed_version):''}${advisoryDate(a.published_at)?' · Published '+esc(advisoryDate(a.published_at)):''}</div></li>`;}).join('');
   return `<h4>${esc(item.binary||'')} <span class="help">source ${esc(item.package?.name||'')} ${esc(item.version||'')}</span></h4>${rows?`<ul class="advisory-applicability">${rows}</ul>`:'<p class="help">No matching advisory IDs.</p>'}`;}).join('');
  return `<div class="status-facts">${facts}</div><p class="help">${esc(result.coverage||'')}</p>${packages}`;}
 async function advancedControls(){

@@ -3011,6 +3011,16 @@ Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-sc
 - **Retained results:** `GET /api/operations/{host}/advisories` passes stored scans through `advisories.retained()`. Inside an `Applicability could not be established:` reason, only known problems survive and anything else becomes `version comparison failed`. The status stays `uncertain`, and the stored row is not rewritten.
 - **Unchanged:** affected, fixed and unaffected results, their reasons and fixed versions; every fail-closed path; and the schema, routes, roles and response authorization.
 
+#### Advisory publication dates — worker checkpoint #862
+
+Before this checkpoint advisory scan results had no record of when an advisory was published. So nothing could anchor an exposure to publication, as requirement D asks.
+
+- **Recorded:** each applicability row now carries `published_at` and `modified_at` in epoch seconds. Both come from the full OSV record that the scan already fetches for range data, so the scan makes no additional requests.
+- **Fail closed:** only timezone-qualified RFC 3339 values are accepted, with fractions truncated to microseconds. A value that is missing, malformed, non-string, before 1990 or more than a day past the scan clock becomes `null`, never a guessed date. Unfetched records also carry `null` dates. Dates never change the applicability status.
+- **Shown:** the advisory-matching panel adds "Published YYYY-MM-DD" (UTC) beside the fixed version, and shows nothing when the date is unknown. The scan coverage text states that these are advisory-record dates, not the vendor fix date or the time exposure began.
+- **Compatibility:** results stored before this change read unchanged, without the keys. No schema, route, role, notification, patch-selection or response-authorization change.
+- **Remaining in requirement D:** feeding `published_at` into `exposure_window()` and the exposure history, verified restart and activation, scheduled scans, fleet views, RPM updateinfo, and exploitation monitoring and containment.
+
 #### Affected-advisory in-app notifications — worker checkpoint #822
 
 Before this checkpoint an `affected` result from an administrator-run advisory scan was visible only while the scan dialog stayed open. `app/advisory_exposure_notifications.py` is a leader-side reconciler called from `operations.collect_alerts()`. It publishes one admin-only `cve-exposure`/`affected-advisories` notification (medium, `#servers/<host>/patching`) for each active, non-enrolling server whose stored `advisories:<host>` scan still has `affected` rows.
