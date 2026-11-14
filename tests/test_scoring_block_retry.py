@@ -4,12 +4,13 @@ import time
 import pytest
 from sqlalchemy import select
 
-from app import ai, notifications, operations, update_scores
-from app.db import Audit, Host, Package, Session, Setting
+from app import ai, notifications, operations, scoring_block_notifications, update_scores
+from app.db import Audit, Host, Package, Session, Setting, config
 from test_operations import login_as
 from test_scoring_block_notifications import rejected_key, seed, success, states
 
-RETRY = '/api/update-scores/blocked/retry'
+BLOCKED = '/api/update-scores/blocked'
+RETRY = BLOCKED + '/retry'
 
 
 def scoring_revisions():
@@ -38,6 +39,19 @@ def test_settings_report_the_notification_predicate_count(blocked):
         s.merge(Setting(key='server-ai:two', value={'paused': True}))
         s.commit()
     assert blocked.get('/api/settings').json()['ai_scoring_blocked'] == 1
+
+
+def test_blocked_endpoint_matches_the_notification_predicate(blocked):
+    def predicate():
+        with Session() as s:
+            return scoring_block_notifications.blocked_count(s, config(s))[0]
+    assert blocked.get(BLOCKED).json() == {'blocked': 2} and predicate() == 2
+    with Session() as s:
+        s.merge(Setting(key='server-ai:two', value={'paused': True}))
+        s.commit()
+    assert blocked.get(BLOCKED).json() == {'blocked': 1} and predicate() == 1
+    assert blocked.post(RETRY).json()['retried'] == 1
+    assert blocked.get(BLOCKED).json() == {'blocked': 0} and predicate() == 0
 
 
 def test_retry_requeues_without_a_provider_call_and_scheduler_scores_them(blocked, monkeypatch):
@@ -102,6 +116,7 @@ def test_retry_requires_an_administrator(blocked, role):
     blocked.post('/api/logout')
     login_as(blocked, 'reader-' + role, role)
     assert blocked.post(RETRY).status_code == 403
+    assert blocked.get(BLOCKED).status_code == 403
     assert blocked.get('/api/settings').status_code == 403
     assert states() == {'one': 'blocked', 'two': 'blocked'}
 

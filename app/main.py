@@ -1384,6 +1384,17 @@ def clear_provider_backoff(body:ProviderBackoffClearInput,user=Depends(admin_use
         audit(s,'clear AI provider backoff',user['username']+' cleared reviewed active floor: '+body.reason.strip());s.commit()
     return {'cleared':active}
 
+@app.get('/api/update-scores/blocked')
+def blocked_update_scores(user=Depends(admin_user)):
+    """Count update scores blocked under the current AI configuration (#815).
+
+    Uses the same predicate as the ``ai-scoring``/``configuration-blocked``
+    notification and the retry action. Read-only.
+    """
+    from . import scoring_block_notifications
+    with Session() as s:
+        return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
 @app.post('/api/update-scores/blocked/retry')
 def retry_blocked_update_scores(user=Depends(admin_user)):
     """Re-queue update scores blocked under the current AI configuration (#815).

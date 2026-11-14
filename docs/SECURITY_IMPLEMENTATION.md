@@ -2517,8 +2517,9 @@ indefinitely.
   work is still not covered.
 
 Worker checkpoint #815 adds the administrator retry for blocked update scores.
-Settings → AI reports `ai_scoring_blocked`, which uses the same predicate as the
-`ai-scoring`/`configuration-blocked` notification. When the count is non-zero,
+The admin-only `GET /api/update-scores/blocked` and the `ai_scoring_blocked` field
+of admin `GET /api/settings` (shown in Settings → AI) report the count, using the
+same predicate as the `ai-scoring`/`configuration-blocked` notification. When the count is non-zero,
 the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protected
 `POST /api/update-scores/blocked/retry`.
 - **Scope:** only scores that the notification counts are re-queued, as `pending`
