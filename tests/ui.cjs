@@ -215,6 +215,7 @@ const assert=require('assert/strict');
     await require('./ui_background_refresh.cjs')(page);
     await require('./ui_fleet_spool.cjs')(page,capture);
     await require('./ui_startup_pages.cjs')(page,capture);
+    await require('./ui_startup_at_jobs.cjs')(page,capture);
     await require('./ui_server_directory.cjs')(page,capture);
     await require('./ui_servers.cjs')(page,capture);
     await require('./ui_snapshot_pages.cjs')(page,capture);
