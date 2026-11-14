@@ -32,10 +32,21 @@ directory, a canonical-name directory outranks an alias-name directory of the
 same specificity. An alias whose target is not the canonical name's own winning
 fragment is reported as an ``alias_target_shadowed`` gap rather than guessed.
 
+Each non-template record carries an ``expanded`` view of ``EXPAND_KEYS`` with
+systemd specifiers expanded only where their value is fixed: unit-name
+specifiers (with unescaping) and manager specifiers documented for the scope.
+Host, boot and environment-dependent specifiers are never guessed; a value
+containing one stays raw and the unit gets an ``unexpanded_specifier`` gap.
+``$VAR`` environment substitution is not performed.
+
 ``resolve_user`` applies the same rules to one account's ``systemd --user``
 manager using the user search table (``user_search_paths``). Units from the
 account's own configuration/data directories have origin ``user`` and are never
 package defaults; the account owning the manager is the effective identity.
+An optional ``xdg`` mapping taken from the user manager's environment applies
+non-default ``XDG_CONFIG_HOME``/``XDG_DATA_HOME``/``XDG_CACHE_HOME`` and
+``XDG_CONFIG_DIRS``/``XDG_DATA_DIRS``; an invalid value is a coverage gap and
+is never replaced by a guessed default.
 """
 from __future__ import annotations
 
@@ -45,7 +56,7 @@ import posixpath
 import re
 from typing import Any, Iterable
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 MAX_OBSERVATIONS = 4096
 MAX_TEXT = 65536
 MAX_VALUE = 4096
@@ -92,16 +103,31 @@ LIMITATIONS = (
     'Runtime active/inactive/failed state is not collected by this contract.',
     'Per-user (systemd --user) units are resolved separately by resolve_user().',
     'Package ownership and vendor-default authenticity are not verified here.',
-    'Specifier expansion (%i, %n, ...) and environment substitution are not performed.',
+    'Specifiers are expanded only in EXPAND_KEYS and only where their value is fixed; '
+    'host/boot/environment specifiers stay raw as gaps. $VAR environment substitution is not performed.',
+    'System %u/%U/%h/%s follow current systemd.unit(5) (the manager user, not User=); older '
+    'systemd releases resolved them from User=, and the collector does not record the systemd version.',
     'Only the settings named in LIST_KEYS/SCALAR_KEYS are resolved into config.',
 )
 USER_LIMITATIONS = (
     'Runtime active/inactive/failed state and lingering are not collected by this contract.',
-    'Non-default XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CONFIG_DIRS/XDG_DATA_DIRS are not applied.',
+    'XDG_* directories are applied only when the caller supplies the user manager\'s environment as xdg; '
+    'otherwise the XDG Base Directory defaults are assumed.',
     'Package ownership and vendor-default authenticity are not verified here.',
-    'Specifier expansion (%i, %n, %h, ...) and environment substitution are not performed.',
+    'Specifiers are expanded only in EXPAND_KEYS and only where their value is fixed; %U, %G, %g, %s '
+    'and host/boot/environment specifiers stay raw as gaps. $VAR environment substitution is not performed.',
     'Only the settings named in LIST_KEYS/SCALAR_KEYS are resolved into config.',
 )
+# Settings whose values get an ``expanded`` view. Raw ``config`` is never rewritten.
+EXPAND_KEYS = frozenset({
+    'ExecStart', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecStopPost', 'ExecReload',
+    'ExecCondition', 'User', 'Group', 'WorkingDirectory', 'RootDirectory', 'EnvironmentFile',
+})
+# Manager specifiers whose value systemd.unit(5) fixes for the system manager.
+SYSTEM_MANAGER_SPECIFIERS = {
+    'u': 'root', 'U': '0', 'g': 'root', 'G': '0', 'h': '/root', 's': '/bin/sh',
+    't': '/run', 'S': '/var/lib', 'C': '/var/cache', 'L': '/var/log', 'E': '/etc',
+}
 
 
 def _gap(code: str, path: str = '', detail: str = '') -> dict[str, str]:
@@ -207,7 +233,8 @@ def resolve(observations: Any, collected_roots: Any = None) -> dict[str, Any]:
     the search directories the collector actually enumerated; every other
     search directory is reported as an uncollected coverage gap.
     """
-    return _resolve(observations, collected_roots, SEARCH_PATHS, _ENABLEMENT_ORIGINS, [])
+    return _resolve(observations, collected_roots, SEARCH_PATHS, _ENABLEMENT_ORIGINS, [],
+                    manager_specifiers=SYSTEM_MANAGER_SPECIFIERS)
 
 
 def _valid_dir(value: Any) -> bool:
@@ -215,15 +242,94 @@ def _valid_dir(value: Any) -> bool:
             and '\n' not in value and len(value) <= 1024 and posixpath.normpath(value) == value)
 
 
-def user_search_paths(home: Any, runtime_dir: Any) -> tuple[tuple[tuple[str, str], ...], list[dict[str, str]]]:
+# Bounds for caller-supplied XDG_CONFIG_DIRS/XDG_DATA_DIRS entries.
+MAX_XDG_DIRS = 32
+XDG_KEYS = ('config_home', 'data_home', 'cache_home', 'config_dirs', 'data_dirs')
+# XDG Base Directory defaults used when a key is absent or empty.
+_XDG_DEFAULT_CONFIG_DIRS = ('/etc/xdg',)
+_XDG_DEFAULT_DATA_DIRS = ('/usr/local/share', '/usr/share')
+_XDG_DIR_ORIGINS = {'/etc/xdg': 'administrator', '/usr/local/share': 'local', '/usr/share': 'vendor'}
+
+
+def _xdg_path(value: Any) -> str | None:
+    """A trailing ``/`` is tolerated; anything else must already be a valid directory."""
+    if isinstance(value, str) and len(value) > 1:
+        value = value.rstrip('/') or '/'
+    return value if _valid_dir(value) else None
+
+
+def _xdg_settings(home: str | None, xdg: Any) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Resolve the XDG directories for one user manager.
+
+    Absent, ``None`` or empty values take the XDG Base Directory default (the
+    home-relative ones only when ``home`` is valid). A supplied invalid value
+    is reported and its directories are left out rather than defaulted.
+    """
+    gaps: list[dict[str, str]] = []
+    if xdg is None:
+        xdg = {}
+    elif not isinstance(xdg, dict):
+        gaps.append(_gap('xdg_invalid'))
+        xdg = {}
+    unknown = sorted(str(k)[:64] for k in xdg if k not in XDG_KEYS)
+    if unknown:
+        gaps.append(_gap('xdg_unknown_key', detail=','.join(unknown)[:512]))
+    defaults = {'config_home': home and f'{home}/.config', 'data_home': home and f'{home}/.local/share',
+                'cache_home': home and f'{home}/.cache'}
+    out: dict[str, Any] = {}
+    for key, default in defaults.items():
+        value = xdg.get(key)
+        if value is None or value == '':
+            out[key] = default
+            continue
+        out[key] = _xdg_path(value)
+        if out[key] is None:
+            gaps.append(_gap('xdg_' + key + '_invalid', value[:512] if isinstance(value, str) else ''))
+    for key, default in (('config_dirs', _XDG_DEFAULT_CONFIG_DIRS), ('data_dirs', _XDG_DEFAULT_DATA_DIRS)):
+        value = xdg.get(key)
+        if isinstance(value, str):
+            value = value.split(':')
+        if value is None or (isinstance(value, (list, tuple)) and not any(v != '' for v in value)):
+            out[key] = list(default)
+            continue
+        if not isinstance(value, (list, tuple)):
+            gaps.append(_gap('xdg_' + key + '_invalid'))
+            out[key] = []
+            continue
+        entries = [v for v in value if v != '']
+        if len(entries) > MAX_XDG_DIRS:
+            gaps.append(_gap('xdg_' + key + '_cap', detail=f'{len(entries)} > {MAX_XDG_DIRS}'))
+            entries = entries[:MAX_XDG_DIRS]
+        dirs = []
+        for entry in entries:
+            path = _xdg_path(entry)
+            if path is None:
+                gaps.append(_gap('xdg_' + key + '_invalid', entry[:512] if isinstance(entry, str) else ''))
+            else:
+                dirs.append(path)
+        out[key] = dirs
+    return out, gaps
+
+
+def _xdg_dir_origin(path: str, home: str | None, fallback: str) -> str:
+    if home and (path == home or path.startswith(home + '/')):
+        return 'user'
+    return _XDG_DIR_ORIGINS.get(path, fallback)
+
+
+def user_search_paths(home: Any, runtime_dir: Any,
+                      xdg: Any = None) -> tuple[tuple[tuple[str, str], ...], list[dict[str, str]]]:
     """Return the user-manager search table for one account, highest first.
 
-    Follows the ``systemd --user`` table of ``systemd.unit(5)`` with default
-    ``XDG_CONFIG_HOME``/``XDG_DATA_HOME`` under ``home``, default
-    ``XDG_CONFIG_DIRS``/``XDG_DATA_DIRS`` and ``$XDG_RUNTIME_DIR`` set to
-    ``runtime_dir``. An invalid home or runtime directory omits its directories
-    and returns a gap. A directory that would coincide with another one in the
-    table is omitted and reported, never merged or guessed.
+    Follows the ``systemd --user`` table of ``systemd.unit(5)`` with
+    ``$XDG_RUNTIME_DIR`` set to ``runtime_dir``. ``xdg`` optionally carries the
+    user manager's ``config_home``, ``data_home``, ``cache_home``,
+    ``config_dirs`` and ``data_dirs`` (lists or ``:``-separated strings);
+    absent or empty values use the XDG Base Directory defaults under ``home``,
+    ``/etc/xdg`` and ``/usr/local/share:/usr/share``. An invalid home, runtime
+    directory or supplied XDG value omits its directories and returns a gap. A
+    directory that would coincide with another one in the table is omitted and
+    reported, never merged or guessed.
     """
     gaps: list[dict[str, str]] = []
     h = home if _valid_dir(home) else None
@@ -232,20 +338,24 @@ def user_search_paths(home: Any, runtime_dir: Any) -> tuple[tuple[tuple[str, str
         gaps.append(_gap('user_home_invalid', home[:512] if isinstance(home, str) else ''))
     if r is None:
         gaps.append(_gap('user_runtime_dir_invalid', runtime_dir[:512] if isinstance(runtime_dir, str) else ''))
+    dirs, xdg_gaps = _xdg_settings(h, xdg)
+    gaps.extend(xdg_gaps)
+    ch, dh = dirs['config_home'], dirs['data_home']
+    config_dirs = [(f'{d}/systemd/user', _xdg_dir_origin(d, h, 'administrator')) for d in dirs['config_dirs']]
+    data_dirs = [(f'{d}/systemd/user', _xdg_dir_origin(d, h, 'local')) for d in dirs['data_dirs']]
     table: list[tuple[str | None, str]] = [
-        (h and f'{h}/.config/systemd/user.control', 'user'),
+        (ch and f'{ch}/systemd/user.control', 'user'),
         (r and f'{r}/systemd/user.control', 'runtime'),
         (r and f'{r}/systemd/transient', 'transient'),
         (r and f'{r}/systemd/generator.early', 'generated'),
-        (h and f'{h}/.config/systemd/user', 'user'),
-        ('/etc/xdg/systemd/user', 'administrator'),
+        (ch and f'{ch}/systemd/user', 'user'),
+        *config_dirs,
         ('/etc/systemd/user', 'administrator'),
         (r and f'{r}/systemd/user', 'runtime'),
         ('/run/systemd/user', 'runtime'),
         (r and f'{r}/systemd/generator', 'generated'),
-        (h and f'{h}/.local/share/systemd/user', 'user'),
-        ('/usr/local/share/systemd/user', 'local'),
-        ('/usr/share/systemd/user', 'vendor'),
+        (dh and f'{dh}/systemd/user', 'user'),
+        *data_dirs,
         ('/usr/local/lib/systemd/user', 'local'),
         ('/usr/lib/systemd/user', 'vendor'),
         ('/lib/systemd/user', 'vendor'),
@@ -265,7 +375,7 @@ def user_search_paths(home: Any, runtime_dir: Any) -> tuple[tuple[tuple[str, str
 
 
 def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
-                 collected_roots: Any = None) -> dict[str, Any]:
+                 collected_roots: Any = None, xdg: Any = None) -> dict[str, Any]:
     """Resolve one account's effective ``systemd --user`` units.
 
     ``home`` and ``runtime_dir`` (``$XDG_RUNTIME_DIR``, normally
@@ -275,20 +385,37 @@ def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
     ``declared_user`` and a different value is reported as a gap. Exec
     prefixes ``+``/``!`` relax sandboxing within the account and do not gain
     root, so ``privileged_exec`` is always false here. Enablement links in the
-    account's own configuration directory count as enabled.
+    account's own configuration directory count as enabled. ``xdg`` is the
+    optional user-manager XDG environment described in ``user_search_paths``.
     """
-    table, gaps = user_search_paths(home, runtime_dir)
+    table, gaps = user_search_paths(home, runtime_dir, xdg)
     valid_account = isinstance(account, str) and 0 < len(account) <= 255 and account.isprintable() \
         and '/' not in account and ':' not in account
     if not valid_account:
         gaps.append(_gap('user_account_invalid'))
+    manager: dict[str, str] = {}
+    if valid_account:
+        manager['u'] = account
+    if _valid_dir(home):
+        manager['h'] = home
+    # %E/%C are XDG_CONFIG_HOME/XDG_CACHE_HOME; %S/%L moved between systemd
+    # releases, so they stay unexpanded rather than guessed.
+    dirs, _ = _xdg_settings(home if _valid_dir(home) else None, xdg)
+    if dirs['config_home']:
+        manager['E'] = dirs['config_home']
+    if dirs['cache_home']:
+        manager['C'] = dirs['cache_home']
+    if _valid_dir(runtime_dir):
+        manager['t'] = runtime_dir
     result = _resolve(observations, collected_roots, table, _ENABLEMENT_ORIGINS | {'user'}, gaps,
-                      scope='user', account=account if valid_account else None)
+                      scope='user', account=account if valid_account else None,
+                      manager_specifiers=manager)
     return result
 
 
 def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_origins,
-             initial_gaps, scope: str = 'system', account: Any = None) -> dict[str, Any]:
+             initial_gaps, scope: str = 'system', account: Any = None,
+             manager_specifiers: dict[str, str] | None = None) -> dict[str, Any]:
     rank = {root: i for i, (root, _) in enumerate(search_paths)}
     origins = dict(search_paths)
     roots_by_len = sorted(rank, key=len, reverse=True)
@@ -412,6 +539,7 @@ def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_o
             if declared is not None and declared != account:
                 gaps.append(_gap('user_unit_declared_user', unit['fragment'] or name, str(declared)[:256]))
             unit['privileged_exec'] = False
+        _expand_unit(unit, alias_target.get(name, name), manager_specifiers or {}, gaps)
         referenced.add(unit['fragment'])
         units.append(unit)
         unit_index[name] = unit
@@ -472,6 +600,130 @@ def _resolve(observations: Any, collected_roots: Any, search_paths, enablement_o
         'limitations': list(USER_LIMITATIONS if scope == 'user' else LIMITATIONS),
         'digest': digest,
     }
+
+
+_HEX = frozenset('0123456789abcdefABCDEF')
+
+
+def _unescape(value: str) -> str | None:
+    """Undo systemd unit-name escaping (``-`` is ``/``, ``\\xNN`` is a byte); None if invalid."""
+    out: list[str] = []
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if c == '-':
+            out.append('/')
+            i += 1
+        elif c == '\\':
+            hx = value[i + 2:i + 4]
+            if value[i + 1:i + 2] != 'x' or len(hx) != 2 or not set(hx) <= _HEX:
+                return None
+            code = int(hx, 16)
+            if code == 0:
+                return None
+            out.append(chr(code))
+            i += 4
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def name_specifiers(name: Any) -> dict[str, str] | None:
+    """Return the unit-name specifiers of ``systemd.unit(5)`` for one unit name.
+
+    Covers ``%n %N %p %P %i %I %j %J %f``. A specifier whose escaped text cannot
+    be unescaped exactly is omitted, so callers report it rather than guess.
+    Returns None for an invalid or template (instance-less) name.
+    """
+    parts = parse_name(name)
+    if parts is None or parts['template']:
+        return None
+    full = parts['name']
+    stem = full[:-(len(parts['type']) + 1)]
+    prefix = parts['prefix']
+    instance = parts['instance'] or ''
+    last = prefix.rsplit('-', 1)[-1] if '-' in prefix else prefix
+    spec = {'n': full, 'N': stem, 'p': prefix, 'i': instance, 'j': last}
+    for upper, raw in (('P', prefix), ('I', instance), ('J', last)):
+        un = _unescape(raw)
+        if un is not None:
+            spec[upper] = un
+    path_source = instance if parts['instance'] else prefix
+    if path_source == '-':
+        spec['f'] = '/'
+    else:
+        un = _unescape(path_source)
+        if un is not None:
+            spec['f'] = un if un.startswith('/') else '/' + un
+    return spec
+
+
+def expand_specifiers(value: str, table: dict[str, str]) -> tuple[str, list[str]]:
+    """Expand ``%X`` specifiers from ``table``; ``%%`` is a literal percent.
+
+    Returns ``(expanded, missing)``. When any specifier is not in ``table`` (or a
+    trailing ``%`` has no letter), ``missing`` lists them and the raw value is
+    returned unchanged: a partially expanded command is never presented.
+    """
+    out: list[str] = []
+    missing: list[str] = []
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if c != '%':
+            out.append(c)
+            i += 1
+            continue
+        letter = value[i + 1:i + 2]
+        if letter == '%':
+            out.append('%')
+        elif letter and letter in table:
+            out.append(table[letter])
+        else:
+            missing.append(letter or '%')
+        i += 2
+    if missing:
+        return value, sorted(set(missing))
+    return ''.join(out), []
+
+
+def _expand_unit(unit: dict[str, Any], id_name: str, manager: dict[str, str],
+                 gaps: list[dict[str, str]]) -> None:
+    """Attach ``expanded`` and ``specifiers`` to one resolved unit record."""
+    names = name_specifiers(id_name) if not unit['template'] else None
+    if names is None:
+        unit['expanded'] = None
+        unit['specifiers'] = 'not_applicable'
+        return
+    table = {**manager, **names}
+    expanded: dict[str, dict[str, Any]] = {}
+    missing: set[str] = set()
+    used = False
+    for section in sorted(unit['config']):
+        for key in sorted(unit['config'][section]):
+            if key not in EXPAND_KEYS:
+                continue
+            raw = unit['config'][section][key]
+            values = raw if isinstance(raw, list) else [raw]
+            new = []
+            for v in values:
+                if not isinstance(v, str):
+                    new.append(v)
+                    continue
+                used = used or '%' in v
+                e, m = expand_specifiers(v, table)
+                missing.update(m)
+                new.append(e)
+            expanded.setdefault(section, {})[key] = new if isinstance(raw, list) else new[0]
+    unit['expanded'] = expanded
+    if missing:
+        unit['specifiers'] = 'partial'
+        unit['incomplete'] = True
+        gaps.append(_gap('unexpanded_specifier', unit['fragment'] or unit['name'],
+                         ','.join('%' + m for m in sorted(missing))))
+    else:
+        unit['specifiers'] = 'expanded' if used else 'none'
 
 
 def _effective_path(rec: dict[str, Any] | None) -> str | None:

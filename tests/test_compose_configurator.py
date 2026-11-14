@@ -70,6 +70,9 @@ def test_custom_network_ports_worker_ids_and_environment_are_consistent(tmp_path
         assert env["PUBLIC_URL"] == "${PUBLIC_URL:-https://localhost:8443}"
         assert env["MRPATCHY_EXPECTED_WORKER_IDS"] == "rack-a-1,rack-a-2,rack-a-3"
     assert [services[tool.service_name("worker", i)]["environment"]["MRPATCHY_WORKER_ID"] for i in range(1, 4)] == ["rack-a-1", "rack-a-2", "rack-a-3"]
+    # The coordinator tick (and its expected-worker notifications) runs in workers (#773).
+    assert all(services[tool.service_name("worker", i)]["environment"]["MRPATCHY_EXPECTED_WORKER_IDS"]
+               == "rack-a-1,rack-a-2,rack-a-3" for i in range(1, 4))
     assert services["worker"]["environment"]["MRPATCHY_JOB_CONCURRENCY"] == "6"
     assert services["worker"]["mem_limit"] == "6g"
     assert [port["published"] for port in services["caddy"]["ports"]] == ["8080", "8443", "8443"]

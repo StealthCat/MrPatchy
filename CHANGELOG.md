@@ -1,3 +1,142 @@
+## 1.60.0 — 2026-11-14
+
+1. [PR #859](https://github.com/StealthCat/MrPatchy/pull/859): Advisory scans now retain durable per-server CVE exposure history, with first/last affected observations, resolution and reopening records. The admin advisory response adds up to 500 history items, open exposures first, an accurate total open count and coverage limits. This adds a database table and response key; existing records are not backfilled and history starts with the next scan. Scan intervals remain telemetry gaps, uncertain or unscanned packages do not resolve exposure, and a version-based resolution does not verify restart or reboot. This does not change response authorization or trigger any response action.
+
+## 1.59.110 — 2026-11-14
+
+1. [PR #863](https://github.com/StealthCat/MrPatchy/pull/863): Advisory scans now retain matching OSV records' published and modified dates, and the applicability panel shows a valid publication date in UTC. Missing, invalid or unfetched dates remain null and do not change applicability status. This adds response metadata and display only, with no schema, route, role, patch-selection or response-authorization change. Dates describe the advisory record, not the vendor fix time or exposure start. Using publication dates in exposure windows/history, verified restart, scheduled scans, fleet views, RPM updateinfo and exploitation monitoring remain incomplete.
+
+## 1.59.109 — 2026-11-14
+
+1. [PR #861](https://github.com/StealthCat/MrPatchy/pull/861): Shows legacy per-purpose hourly allowances for process triage, update scoring and automatic incident/startup plans in the shared AI start-gates status and Investigations card, including prior-hour usage and next eligibility when exhausted. This adds a response field and UI only; admission behavior, shared gates, schema and response authorization are unchanged. The displayed plan allowance mirrors the existing fixed scheduler limit, and legacy-mode migration remains an operator decision.
+
+## 1.59.108 — 2026-11-14
+
+1. [PR #855](https://github.com/StealthCat/MrPatchy/pull/855): Adds `.env.controller.example` for the split controller role, listing app, Caddy and GCP controller settings while leaving out worker-only pools, IDs, drain settings and data-volume configuration. The example renders the same controller configuration as the complete `.env.example`; `MRPATCHY_EXPECTED_WORKER_IDS` is empty for role-file replicas. This is additive and leaves existing complete-installation settings unchanged. It is a template only: remote-machine secret provisioning, controller-only/join-worker installer modes and multi-host acceptance remain open. No schema, API, role or response-authorization changes.
+
+## 1.59.107 — 2026-11-14
+
+1. [PR #853](https://github.com/StealthCat/MrPatchy/pull/853): Adds `.env.worker.example` and worker-only Compose startup instructions. The template lists worker-role settings, is ignored by Git and Docker builds, and CI renders it; tests check the template against the worker Compose variables. Additive only: Compose files, installers and application behavior are unchanged, the existing inline volume override continues to work, and an explicit `--env-file` prevents a controller `.env` in the same checkout from leaking into the worker project. This template does not provision remote-machine secrets or shared state, add controller-only/join-worker installer modes, or validate multi-host deployment. No schema, API, role or response-authorization change.
+
+## 1.59.106 — 2026-11-14
+
+1. [PR #851](https://github.com/StealthCat/MrPatchy/pull/851): Added role-specific GCP runtime Compose overlays for controller and worker deployments, allowing the existing gcloud/IAP runtime with the split role files. The overlays are additive; attached service accounts use the role files, while WIF credentials stay on the full-installation path. Scan-policy enablement timestamps are now persisted at microsecond precision so MySQL JSON round-trips to the value returned by the API. No schema, route, role or response-authorization changes. Controller-only/join-worker installer modes and remote-machine workers remain out of scope.
+
+## 1.59.105 — 2026-11-14
+
+1. [PR #842](https://github.com/StealthCat/MrPatchy/pull/842): Scheduled-scan coverage notifications now flag an enabled policy whose first scan has not been enqueued after the interval plus one-hour grace. The timestamp is server-managed in the existing policy JSON; no schema, route, role or response-authorization change. Existing enabled policies without the timestamp remain silent until saved, and re-enabling may notify before the next scheduler tick queues a scan.
+
+## 1.59.104 — 2026-11-14
+
+1. [PR #840](https://github.com/StealthCat/MrPatchy/pull/840): Scheduled malware-scan coverage notifications now flag a queued or running scan that remains pending longer than its configured interval plus one hour, instead of leaving the coverage notice silent. Existing stuck episodes can receive one `stalled` revision; this adds no schema, API, role or authorization change. It does not cancel, retry or recover jobs. A policy with no first scan attempt remains silent; YARA schedules and configurable grace periods are out of scope.
+
+## 1.59.103 — 2026-11-14
+
+1. [PR #832](https://github.com/StealthCat/MrPatchy/pull/832): Adds individual Debian-family `at` job details to Startup → Files and Coverage, parsed only from already-hashed `/var/spool/cron/atjobs` bytes when parsed-job collection is requested. Shows queue, scheduled time, owner and bounded commands with the existing best-effort redaction; counts exported environment assignments without storing values, and reports unrecognized layouts as unparsed. Only atd’s reserved `=` queue is marked running; uppercase batch queues retain their letter. Older agents show “not reported.” No schema, auth, scope-root, baseline or response-authorization change. Material limits: atd status is not evaluated, the RHEL-family `/var/spool/at` spool and referenced scripts are outside scope, and no AI classification is made.
+
+## 1.59.102 — 2026-11-14
+
+1. [PR #818](https://github.com/StealthCat/MrPatchy/pull/818): Adds a fixed-text, admin-only in-app notification for failed or incomplete scheduled malware scans and scans overdue by more than the configured interval plus one hour. Notices resolve when coverage is recorded, the schedule is disabled or the server leaves scope. This adds no schema, role, API, SMTP/webhook, scan scheduling or response-authorization change. Material limits: queued/running attempts and enabled policies with no first scan remain suppressed, so stuck or never-started schedules may still be silent; [issue #816](https://github.com/StealthCat/MrPatchy/issues/816) remains open for this follow-up.
+
+## 1.59.101 — 2026-11-14
+
+1. [PR #821](https://github.com/StealthCat/MrPatchy/pull/821): Adds a fixed-text, admin-only in-app notice when verified Debian or Ubuntu releases are past standard support, including ended support, Ubuntu Pro entitlement not observed, or Debian LTS eligibility unverified. It uses the reviewed catalog and inventory freshness; stale inventory holds the state, and the event resolves when coverage returns or the host/release leaves scope. Already-affected servers receive a notice on the next coordinator tick. This is additive notification behavior with no schema, route, role, SMTP/webhook, patching, upgrade or response-authorization change. #341 remains open for advance warning, entitlement discovery, RPM/vendor catalogs, catalog refresh/signing, migration planning, fleet reporting and real-target acceptance.
+
+## 1.59.100 — 2026-11-14
+
+1. [PR #817](https://github.com/StealthCat/MrPatchy/pull/817): Adds admin-only endpoints to count and retry update scores blocked by a non-transient AI provider failure, plus a Settings → AI notice and retry control. Retries only current-configuration blocked scores for current package pairs on active, unpaused servers; they send no provider request and remain subject to normal scheduler admission. The `/api/settings` response gains the additive `ai_scoring_blocked` field. No schema or response-authorization change. Retry is fleet-wide; earlier-signature rows and blocked advisory-plan work are out of scope.
+
+## 1.59.99 — 2026-11-14
+
+1. [PR #823](https://github.com/StealthCat/MrPatchy/pull/823): Adds a counts-only admin notification when the latest stored advisory scan still shows affected rows for currently matching installed package versions. Existing affected scans publish one notification after upgrade; unreadable inventory keeps the exposure active until data can be refreshed. Results reflect the last administrator-run scan and version applicability is not evidence of exploitation; scheduled scans remain out of scope. No schema, route, role or response-authorization change.
+
+## 1.59.98 — 2026-11-14
+
+1. [PR #797](https://github.com/StealthCat/MrPatchy/pull/797): Fetches OSV advisory details concurrently over one pooled client (up to 8 workers), shortening the scan and its per-server lock time. The 200-record cap, shared 60-second scan budget, request timeouts, no-redirect policy and fail-closed uncertain results are unchanged. No schema, API, role, UI or response-authorization change. A slow scan can still hold the per-server lock for the remaining scan budget; notifications and scheduled scans remain out of scope.
+
+## 1.59.97 — 2026-11-13
+
+1. [PR #814](https://github.com/StealthCat/MrPatchy/pull/814): Adds browser-side username-pattern and password-length constraints matching the existing sign-in API contract, rejecting invalid usernames before a request is sent. Frontend-only; the server-side validation and sanitized error handling are unchanged. No account or authentication behavior changes for valid credentials.
+
+## 1.59.96 — 2026-11-13
+
+1. [PR #813](https://github.com/StealthCat/MrPatchy/pull/813): Keeps Account → Operations usable when saved SMTP/webhook settings cannot be decrypted and lets administrators replace them. Adds an admin-only in-app warning while open alerts await delivery. The GET notifications response adds `unreadable`; an existing `failing:unknown` event becomes `unreadable` once, creating a new unread revision. Replacement discards unrecoverable secrets, which must be entered again. The notice does not send or retry alerts; it has no deep link, and the advanced SMTP editor has no separate unreadable indicator. No schema, role or response-authorization change.
+
+## 1.59.95 — 2026-11-13
+
+1. [PR #768](https://github.com/StealthCat/MrPatchy/pull/768): Adds an admin-only notification when repository refresh failures leave metadata stale enough to block patching, with fixed text and a link to the server's Repositories tab. It resolves after refresh recovery or server disable/delete. Additive behavior for existing installations; the threshold is twice `repo_minutes`, and raw repository errors remain in the existing SMTP/webhook alert only.
+
+## 1.59.94 — 2026-11-13
+
+1. [PR #807](https://github.com/StealthCat/MrPatchy/pull/807): Fixes #805's intermittent command-output browser-test race by forcing a delayed host lookup and waiting for text from this test's fixture before asserting. Test-only; no runtime behavior change. Other hash-navigation waits were not audited.
+
+## 1.59.93 — 2026-11-13
+
+1. [PR #801](https://github.com/StealthCat/MrPatchy/pull/801): Adds pure parsers for systemd --user environment and lingering-list inputs, retaining only documented HOME/XDG values and reporting malformed or capped inputs as coverage gaps. This is additive and performs no I/O or response action. Collecting those inputs, account enumeration, runtime state, collector wiring and UI remain open under #702.
+
+## 1.59.92 — 2026-11-13
+
+1. [PR #800](https://github.com/StealthCat/MrPatchy/pull/800): Applies the supplied systemd --user XDG config/data/cache homes and search directories when resolving user unit paths; invalid values are reported as coverage gaps rather than replaced by guessed defaults. This is an additive contract change with unchanged default output and system-scope resolution. Manager-environment collection, runtime-state collection, account enumeration, collector wiring and UI remain open under #702.
+
+## 1.59.91 — 2026-11-13
+
+1. [PR #793](https://github.com/StealthCat/MrPatchy/pull/793): Adds a high-severity, admin-only in-app warning when enabled SMTP or webhook delivery has an open alert with at least three recorded failures. Fixed channel-level text does not expose alert, host, URL, token, recipient or error details; the warning resolves when no alert meets the condition. Delivery, retry/backoff, acknowledgement, schema, roles and response authorization are unchanged. The threshold is fixed at three, there is no deep link, and an unreadable configuration alone cannot trigger a warning. Switching channels with an already-failing undelivered backlog can surface the channel-level warning before the new channel's next delivery attempt.
+
+## 1.59.90 — 2026-11-13
+
+1. [PR #795](https://github.com/StealthCat/MrPatchy/pull/795): Adds one admin-only in-app notification when a server with fresh telemetry has an overdue or future-dated file-integrity hash sweep. Fixed controller-classified text and resolution on recovery make the existing patching hold visible without echoing endpoint data; stale telemetry remains owned by the telemetry-loss alert. No schema, route, role, authorization or patching-gate changes. A missing sweep is not a clean-host or compromise verdict; detection is limited to active, non-enrolling servers with telemetry received within 120 seconds, and disable/delete resolution occurs on the next coordinator tick.
+
+## 1.59.89 — 2026-11-13
+
+1. [PR #791](https://github.com/StealthCat/MrPatchy/pull/791): Update scoring now stops hourly retries after any non-transient, non-policy AI failure, including rejected credentials, quota/model failures and invalid or incomplete structured results. Affected scores are blocked under the current model/key signature and become eligible immediately after that configuration changes; one admin-only in-app notification is published while blocks remain and resolved when none remain. Startup adds one `update_scores.configuration` column to existing databases. Existing API fields and retry behavior for transient failures, policy waits and non-AI errors are unchanged. No route, role, response-authorization or UI change; no manual per-score retry, blocked advisory-plan coverage, or blocked-score count on the Investigations status card. This source update does not publish a Docker image.
+
+## 1.59.88 — 2026-11-13
+
+1. [PR #799](https://github.com/StealthCat/MrPatchy/pull/799): Advisory applicability results no longer expose internal version-comparator exception text (CodeQL `py/stack-trace-exposure`, alert #14). Comparison failures remain `uncertain` with a fixed reason, and legacy stored results are sanitized when read. Existing statuses, counts and fixed versions are unchanged; no schema, route, role, UI or response-authorization change. Previously stored text remains in the database until a new scan replaces the record. This source update does not publish a Docker image.
+
+## 1.59.87 — 2026-11-13
+
+1. [PR #788](https://github.com/StealthCat/MrPatchy/pull/788): Resolved in-app notification history older than the configured `history_days` retention is now pruned during hourly leader cleanup in batches of 500. Only events whose current revision is resolved before the cutoff are removed; active histories and recently resolved events are retained. The event identity row remains so a recurring event gets the next unread revision number. Each batch rechecks event state under a row lock, preserving prior history if an event is reopened while pruning. No schema, route, UI, role or response-authorization change. Already-open tabs may show a pruned resolved event until their next refresh, and the identity row remains for each distinct event. This source update does not publish a Docker image.
+
+## 1.59.86 — 2026-11-13
+
+1. [PR #789](https://github.com/StealthCat/MrPatchy/pull/789): The pure systemd unit contract now provides a bounded expanded view for fixed unit-name and manager specifiers in commands, accounts and paths. Host, boot and environment-dependent specifiers remain raw as coverage gaps; raw configuration is unchanged. Contract version 2 changes the record digest. No collection, UI, schema or response-authorization behavior changes. The systemd version is not collected, so legacy specifier semantics may differ; collection wiring and UI remain open under #702.
+
+## 1.59.85 — 2026-11-13
+
+1. [PR #784](https://github.com/StealthCat/MrPatchy/pull/784): Operations advisory matches now show per-server applicability as Affected, Fixed, Not affected or Uncertain using the server's distribution, source package and installed version. The dialog shows escaped status details and counts while retaining raw results; failures and lookups beyond the bounds remain Uncertain, not safe. Closes #783.
+2. Compatibility and limits: no schema, route, setting or role change; RPM keeps its updateinfo path. Existing stored scans gain applicability and summary only after a new scan. Each scan makes sequential OSV detail requests (up to 200 records or a shared 60-second budget); the per-host lock can be held for that duration, deferring queued jobs and making configuration changes return 409. If the fetch bound is reached, alphabetically earlier IDs are classified and the rest remain Uncertain. Classification is not exploitation evidence and authorizes no patching or response. Broader distribution ingestion, persisted exposure windows, scheduled scans/notifications and containment wiring remain incomplete. This source update does not publish a Docker image.
+
+## 1.59.84 — 2026-11-13
+
+1. [PR #786](https://github.com/StealthCat/MrPatchy/pull/786): Disabling a server now resolves its active agent-spool notification with a fixed explanation because polling has stopped. If critical pressure or new loss persists after re-enabling, the same event reopens as unread. Deletion retains its own resolution; if credential cleanup fails after the server is disabled, the disabled resolution is retained and retrying deletion adds no duplicate revision. Closes #785.
+2. Compatibility and limits: no schema, API or configuration change; the notification remains advisory and authorizes no remediation. Stale-telemetry and warning-level notifications and configurable thresholds remain out of scope. This source update does not publish a Docker image.
+
+## 1.59.83 — 2026-11-13
+
+1. [PR #764](https://github.com/StealthCat/MrPatchy/pull/764): When process triage misses the fleet known-good cache, the AI run timeline now explains why, before any paid provider call. The possible reasons are an administrator re-triage bypass, a changed-artifact bypass, incomplete exact verified context (with up to three fixed contract labels), no candidate, a revoked candidate, or a candidate that was not reusable at lookup time. Messages are fixed text with no evidence values or identifiers. The diagnostic is read-only and fails open, so lookup, reuse, billing, verdicts, approvals and response boundaries are unchanged. Closes #763.
+2. Compatibility and limits: no schema, API or configuration change. Each cache miss adds one pruned AI-run timeline event. The candidate state is read after lookup, so it reflects the current state rather than the state at lookup time. This source update does not publish a Docker image.
+
+## 1.59.82 — 2026-11-13
+
+1. [PR #762](https://github.com/StealthCat/MrPatchy/pull/762): Expected controllers (`MRPATCHY_EXPECTED_CONTROLLER_IDS`) in an attention state now raise one administrator-only in-app notification each, linking to **Activity → Workers**, matching expected workers. `missing`, `stale` and `stopped` are high severity, and `unknown` and `version_mismatch` are medium. Text is fixed and copies no reported values. The revision is the state, so unchanged passes publish nothing. Recovery or removal from configuration resolves the event. An invalid configuration raises one separate event and leaves existing events unchanged, and a freshness window of startup grace suppresses new attention. Failures are logged without stopping the coordinator tick. Closes #761.
+2. Compatibility and limits: an additive notification producer, with no schema or API change. It carries no readiness, failover, serving or response authority. Nothing is published when no controllers are configured. This source update does not publish a Docker image.
+
+## 1.59.81 — 2026-11-13
+
+1. [PR #758](https://github.com/StealthCat/MrPatchy/pull/758): Operation output on the operation detail page, the Operations list and package-operation history now renders as plain-text monospace. It preserves whitespace and column alignment, treats markup in command output as literal text, and scrolls long lines in place on desktop and mobile without stretching the page. A Copy output control copies the exact original text. On plain-HTTP deployments the copy fallback also works inside the package-operation dialog. Fixes #753.
+2. Compatibility and limits: frontend only, with no API, schema, authorization, role or audit change. Mascot and theme colours are unchanged. Other preformatted blocks that show JSON evidence or receipts keep their existing style. This source update does not publish a Docker image.
+
+## 1.59.80 — 2026-11-13
+
+1. [PR #756](https://github.com/StealthCat/MrPatchy/pull/756): When `MRPATCHY_EXPECTED_WORKER_IDS` is unset, the Workers page now infers its expected workers from up to 500 retained worker registrations, counting each identity once, including stale, stopped and unknown ones. With none, it shows zero expected. The page shows the expected count and labels its source. A configured list remains authoritative, and expected-worker notifications still come only from that configuration. Administrators can remove an obsolete registration after confirming, through the admin-only `POST /api/operations/workers/remove`. Removal is bound to the registration's boot. It is allowed only for stale, stopped or heartbeat-less entries, and refused with 409 while a process still holds that worker identity. A pending drain request is kept unless the registration reported a graceful stop, so a delayed worker that recovers stays drained. Removal is audited and does not edit configuration or stop any process. Fixes #755.
+2. Compatibility and limits: `/api/operations/workers` adds `expected_count`, `expectation_source` and `inferred_limit`, with no schema change. An ID that remains in a configured list shows as missing after removal. With more than 500 retained registrations, inference reports an error instead of a partial count. This source update does not publish a Docker image.
+
+## 1.59.79 — 2026-11-13
+
+1. [PR #774](https://github.com/StealthCat/MrPatchy/pull/774): Fixed: expected-worker and expected-controller attention notifications never fired in Docker deployments. The coordinator tick that raises them runs in the worker containers, because the app sets `DISABLE_SCHEDULER`, but only the app received the expected inventory. `compose.yaml` and `compose.worker.yaml` now pass `MRPATCHY_EXPECTED_WORKER_IDS` and `MRPATCHY_EXPECTED_CONTROLLER_IDS` to workers, and `MRPATCHY_EXPECTED_CONTROLLER_IDS` also reaches the app. Prefix-generated stacks with apps give their workers the same generated inventory, while worker-only stacks keep the `.env` pass-through. `.env.example`, `docs/COMPOSE_CONFIGURATION.md` and README now say to set the same values for every worker stack. Fixes #773.
+2. Compatibility and limits: recreate the worker containers (`docker compose up -d`) after upgrading. Once `MRPATCHY_EXPECTED_WORKER_IDS` is set, administrators may start receiving notifications they never saw before. Workers from `compose.worker.yaml` still use generated IDs, so leave the variable empty with those files unless the IDs are known. No application code, schema or authorization change. This source update does not publish a Docker image.
+
 ## 1.59.78 — 2026-11-13
 
 1. [PR #752](https://github.com/StealthCat/MrPatchy/pull/752): Administrators now get an in-app notification when a server's agent event spool reaches critical pressure (at least 90% full; medium severity) or reports newly lost observation batches (high severity). One episode stays open without flooding and escalates at most once. It resolves automatically once spool use is below 70% with no new loss, reopens as a fresh unread revision if pressure or loss returns, and resolves when the server is deleted. Reason text is fixed and the event is administrator-only. Refs #108, which stays open.

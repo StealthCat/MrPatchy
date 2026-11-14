@@ -2346,6 +2346,20 @@ no lookup, publication, revocation, approval or response semantics. Recording
 review completion, notifying administrator-initiated revocations, hit/miss
 reasons and saved-call estimates remain open.
 
+Worker checkpoint #763 explains process-triage cache misses. When the exact
+known-good lookup returns no hit, the worker opens a separate read-only session
+after the lookup mutation and adds one fixed-text `known_good_lookup` event to
+the AI run timeline. The event says the lookup was bypassed by administrator
+re-triage, bypassed by an authenticated artifact change, had ineligible context
+(with up to three fixed contract labels), found no candidate, found a revoked
+candidate, or found an active candidate that was not reusable at lookup time
+(unavailable then, or failed provenance revalidation).
+`lookup()`, hits, publication, revocation, budget, role and response
+boundaries are unchanged. A cache hit records no miss event, and a failed
+diagnostic is logged without affecting the verdict. The events are ordinary
+pruned AI-log diagnostics. Durable miss counters, saved-call estimates and
+matched production acceptance remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -2487,6 +2501,52 @@ plus the counted and remaining amounts recorded when the warning was raised.
   headroom smaller than the next call's quote but above 20% of the cap still
   defers without notice.
 
+Worker checkpoint #790 extends configuration blocking to update-importance
+scoring. Before this checkpoint a non-transient provider rejection (rejected key,
+denied access, unavailable quota or an unsupported model) marked the batch
+`error`, and the same request was resent on the next scoring pass an hour later,
+indefinitely.
+- **Blocking:** any non-transient, non-policy `ai.AIError` from a scoring
+  batch marks the batch's scores `blocked`, matching process triage
+  (`ai_retry.failed`). This covers provider rejections (rejected key, denied
+  access, unavailable quota, unsupported model) and declined, incomplete or
+  invalid structured results, including the scoring module's own batch
+  validation. The process-triage model/key signature
+  (`ai_retry.configuration_signature`) is recorded in the additive
+  `update_scores.configuration` column. Blocked scores are not selected again
+  under that signature, so no further provider request is sent; a changed saved
+  model or key makes them eligible immediately. Transient failures, policy
+  waits and exceptions that are not `AIError` keep the existing
+  `error`/`deferred` behaviour.
+- **Notification:** while AI and update scoring are enabled and a
+  current-candidate score on an active, unpaused server is blocked under the
+  current signature, `operations.collect_alerts()` publishes one admin-only
+  `ai-scoring`/`configuration-blocked` notification (low severity,
+  `#settings/ai`). The text is fixed; the revision is bound to a re-hashed
+  signature digest, so further blocked scores add no revision. One `resolved`
+  revision follows a configuration change, disabled AI or scoring, paused,
+  disabled or deleted servers, or superseded package evidence.
+- **Unchanged:** routes, roles, admission, reservations, SMTP/webhook alerts and
+  response authorization. Scores remain advisory.
+Worker checkpoint #815 adds the administrator retry for blocked update scores.
+The admin-only `GET /api/update-scores/blocked` and the `ai_scoring_blocked` field
+of admin `GET /api/settings` (shown in Settings → AI) report the count, using the
+same predicate as the `ai-scoring`/`configuration-blocked` notification. When the count is non-zero,
+the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protected
+`POST /api/update-scores/blocked/retry`.
+- **Scope:** only scores that the notification counts are re-queued, as `pending`
+  with no hourly wait. These are current-signature `blocked` rows for the current
+  installed/candidate pair on active, unpaused servers. Blocked scores on paused,
+  disabled or deleted servers, superseded evidence and rows blocked under an
+  earlier configuration are unchanged. The UPDATE re-checks state and signature.
+- **No bypass:** the action sends no provider request. The normal scheduler still
+  applies AI and scoring enablement, pause, lifecycle, shared rate/daily-cap
+  admission and reservations. A repeat failure blocks again and resurfaces the
+  notification. Each non-empty retry is audited.
+- **Unchanged:** schema, roles, response authorization and SMTP/webhook alerts.
+  Blocked advisory-plan work is still not covered.
+
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
@@ -2562,6 +2622,22 @@ Other transport timeouts, interrupted workers and lost replies retain conservati
 charges when the provider outcome is unknown. The existing transient backoff still
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
+
+### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
+
+Installations still on `legacy` control mode now see their hidden hourly
+allowances in the administrator **Shared AI start gates** snapshot
+(`purpose_limits`). Process triage, update scoring and automatic incident/startup
+plans each report their limit, the count in the last hour, and an exact next
+eligibility. That time is when the sliding window next drops below the limit,
+not the oldest entry plus one hour. Triage uses both counters that admission
+enforces and reopens only when both fall below the limit. Update scoring that is
+disabled in Settings is reported as disabled, not as used up. These holds apply
+to one purpose each and do not change the global `blockers`, `can_start_now` or
+`next_start_at`. Explicit modes return an empty list. The entries carry only
+counts and timestamps. Admission behavior is unchanged. Migrating legacy
+installations to an explicit mode and the broader shared-controls acceptance
+remain open.
 
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
@@ -2920,6 +2996,74 @@ exploitation detectors, typed automatic containment, server/fleet views,
 notifications and real-target acceptance remain planned. A vulnerable version, an
 advisory match or AI output still authorizes no containment.
 
+### Per-server advisory applicability — worker checkpoint #783
+
+The opt-in Operations advisory check now applies the pure `cve_exposure.classify()` contract to OSV matches stored for a server.
+
+- **Full records:** `querybatch` returns advisory IDs only. The scan fetches each distinct valid ID from `https://api.osv.dev/v1/vulns/{id}`, without redirects, up to 200 detail records and a shared 60-second wall-clock budget.
+- **Exact match:** each record is classified against the server's exact ecosystem, source package and installed source version.
+- **Stored fields:** each result item gains an `applicability` list (`affected`, `fixed`, `unaffected` or `uncertain`, with reason, CVE aliases and lowest complete fixed version). The scan gains counts by status. Existing vulnerability, coverage, ecosystem and checked fields remain.
+- **Fail closed:** retrieval failure, mismatched record ID, invalid ID or exhausted fetch/time budget yields `uncertain`, never `unaffected`. When the count bound is reached, IDs are processed alphabetically and the remainder stay uncertain.
+- **UI:** the Reviewed fleet workflows dialog shows status counts and an escaped per-advisory list, with raw JSON retained in a collapsible section.
+- **No authority:** classification selects no patches, triggers no response or containment and calls no AI provider. `affected` means version applicability, not exploitation evidence; `uncertain` is never treated as safe.
+- **Compatibility:** no schema, route, setting or role change. RPM keeps its updateinfo path. Previously stored scans lack applicability and summary until a new scan; read-back returns stored data unchanged.
+- **Operational limit (narrowed by #796 below):** detail fetches are sequential and run during the advisory scan's per-host lock. A scan can hold that lock for up to 60 seconds, deferring queued work and causing per-host configuration changes to return 409 while it runs.
+
+#### Concurrent advisory detail fetches — worker checkpoint #796
+
+- **Concurrency:** detail records are fetched by a bounded pool of 8 workers sharing one pooled `httpx.Client` per scan. Redirects stay disabled, connection limits match the pool size, and the client is closed when the scan ends. Eight 0.2-second fixture fetches finish in about 0.2 seconds instead of 1.6.
+- **Unchanged bounds:** 200 records, chosen alphabetically, and one shared 60-second wall-clock budget. Each request's timeout is `min(30, remaining)`. A worker rechecks the deadline before sending, so a fetch that would start after the budget is never sent and is reported `uncertain` with the time-budget reason.
+- **Unchanged results:** every fail-closed reason stays the same, and per-package result order follows the batch query.
+- **Remaining limit:** the scan still runs inside the per-host lock. A scan with many slow records can still hold it for up to the 60-second budget, but a typical scan now holds it for about one-eighth of the serial time.
+- **No other change:** no schema, route, role, setting, UI, AI or response change.
+
+Requirement D remains incomplete: broad ingestion across supported distributions, persisted exposure windows and producers, scheduled scans and notifications, and exploitation monitoring/containment wiring remain outstanding.
+
+#### Fixed uncertainty reasons for advisory applicability — worker checkpoint #798
+
+Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-scanning/14), `py/stack-trace-exposure`. Before this fix, `cve_exposure.classify()` copied raw `ValueError`/`TypeError`/`OSError` text from the version comparator into the `uncertain` reason. The advisory scan then stored that reason and the advisory API returned it, so a missing or failing `dpkg` exposed interpreter and path details to administrators.
+
+- **Fixed reasons only:** range validation now returns reasons from a closed, fixed set rather than raising. Any comparator exception is reported as `version comparison failed`, and exception text is never read. Native comparisons pre-check Debian syntax, so the actionable `version does not have valid Debian version syntax` reason is kept.
+- **Retained results:** `GET /api/operations/{host}/advisories` passes stored scans through `advisories.retained()`. Inside an `Applicability could not be established:` reason, only known problems survive and anything else becomes `version comparison failed`. The status stays `uncertain`, and the stored row is not rewritten.
+- **Unchanged:** affected, fixed and unaffected results, their reasons and fixed versions; every fail-closed path; and the schema, routes, roles and response authorization.
+
+#### Advisory publication dates — worker checkpoint #862
+
+Before this checkpoint advisory scan results had no record of when an advisory was published. The recorded date is now available, but requirement D's exposure-window model has not yet been implemented.
+
+- **Recorded:** each applicability row now carries `published_at` and `modified_at` in epoch seconds. Both come from the full OSV record that the scan already fetches for range data, so the scan makes no additional requests.
+- **Fail closed:** only timezone-qualified RFC 3339 values are accepted, with fractions truncated to microseconds. A value that is missing, malformed, non-string, before 1990 or more than a day past the scan clock becomes `null`, never a guessed date. Unfetched records also carry `null` dates. Dates never change the applicability status.
+- **Shown:** the advisory-matching panel adds "Published YYYY-MM-DD" (UTC) beside the fixed version, and shows nothing when the date is unknown. The scan coverage text states that these are advisory-record dates, not the vendor fix date or the time exposure began.
+- **Compatibility:** results stored before this change read unchanged, without the keys. No schema, route, role, notification, patch-selection or response-authorization change.
+- **Remaining in requirement D:** feeding `published_at` into `exposure_window()`, verified restart and activation, scheduled scans, fleet views, RPM updateinfo, and exploitation monitoring and containment. The durable history and latest-scan publication fields are now implemented in #859 and #863.
+
+#### Durable per-server exposure history — worker checkpoint #858
+
+Each advisory scan still stores the latest result in `advisories:<host>`. The additive `cve_exposure_history` table (`advisories.ExposureHistory`) separately keeps one row per server, advisory ID and source package for every pair a scan has classified as `affected`.
+
+- **Opening:** the first `affected` observation records the first-affected time and installed version. Later `affected` scans update the last-affected time and version and the vendor fixed version. The first-seen values are never moved.
+- **Resolving:** a later scan of the same source package resolves an open exposure, recording the resolving time, version and reason. It resolves when the result is `fixed` or `unaffected`, or when the advisory is no longer listed for the installed version (`not-listed`).
+- **Never resolved:** an `uncertain` result never resolves an exposure and never opens one. A package that a scan did not include is never resolved by it. When binaries of one source disagree on version, absence of the advisory resolves nothing. When binaries of one source differ in classification, the most exposed one wins.
+- **Reopening:** an `affected` observation after resolution reopens the row, increments `reopened` and keeps the original first-affected time.
+- **Read API:** `GET /api/operations/{host}/advisories` adds `exposure_history`, with items, an open count, `truncated` (limit 500) and a coverage statement. Open exposures are listed before resolved ones, and the open count is a total over all of the server's rows rather than only the returned page. It remains admin-only. The coverage statement discloses three limits:
+  - times between manual scans are telemetry gaps;
+  - the ledger does not show publication time (the latest-scan applicability rows carry valid OSV published/modified dates as documented in #862);
+  - version resolution does not verify the required restart or reboot.
+- **Unchanged:** the latest-scan setting, applicability classification, notifications, roles, patch selection and response authorization. The ledger authorizes nothing. The table is created by `create_all` on SQLite and MySQL, and the standalone migration copies it automatically. History is retained when a server is soft-deleted, like the latest-scan setting.
+- **Remaining in requirement D:** advisory feeding publication dates into `exposure_window()`, verified restart and activation, scheduled scans, UI rendering of the history, fleet views, RPM updateinfo, and exploitation monitoring and containment wiring.
+
+
+#### Affected-advisory in-app notifications — worker checkpoint #822
+
+Before this checkpoint an `affected` result from an administrator-run advisory scan was visible only while the scan dialog stayed open. `app/advisory_exposure_notifications.py` is a leader-side reconciler called from `operations.collect_alerts()`. It publishes one admin-only `cve-exposure`/`affected-advisories` notification (medium, `#servers/<host>/patching`) for each active, non-enrolling server whose stored `advisories:<host>` scan still has `affected` rows.
+
+- **Still current only:** a row counts only while the scanned binary package is installed at the scanned source name and version. Upgrading, downgrading or removing it stops the row counting. An unreadable or missing inventory keeps the stored rows, so a missing snapshot never resolves an exposure.
+- **Fixed text:** the reason carries controller-computed counts only: distinct advisory/package matches, packages, matches naming a vendor fix version and uncertain results. Advisory IDs, summaries, reasons, package names and other stored strings are never copied. The text says applicability is not exploitation evidence and that uncertain results still need review.
+- **Revision binding:** the revision is a digest of the current (advisory, package, source, version) set. An identical rescan publishes nothing; a new affected advisory resurfaces as unread.
+- **Resolution:** one `resolved` revision when no current affected rows remain (a clean rescan or package change) or the server is disabled, deleted or re-enrolling. The resolved text says it is not a clean-host verdict.
+- **Unchanged:** the producer only reads. It runs no scan, contacts no advisory service or AI provider, selects no patches and authorizes no containment or response. No SMTP/webhook alert, schema, route or role change.
+- **Limitations:** results are only as fresh as the last administrator-run scan; scheduled scans, per-CVE incidents, fleet views and RPM updateinfo remain open in requirement D.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
@@ -3185,9 +3329,7 @@ unit carries an origin class (vendor location, overridden, custom, runtime,
 generated or transient), and `package_verified` is always false. Uncollected search
 directories, unreadable, oversized or malformed input, invalid names, unresolved,
 dangling or foreign links, missing trigger targets and over-cap input all become
-explicit coverage gaps. The result carries a deterministic digest. Runtime unit
-state, per-user units, specifier expansion, read-only collection wiring, package
-provenance, UI and AI classification remain open, so roadmap F is not complete.
+explicit coverage gaps. The result carries a deterministic digest. Runtime unit state, read-only collection wiring, package provenance, UI and AI classification remain open, so roadmap F is not complete. Fixed systemd specifiers are covered by the #702 checkpoint below; host/boot/environment-dependent specifiers and `$VAR` substitution remain explicit gaps.
 
 Worker checkpoint (issue #702, per-user units): the same contract adds
 `resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
@@ -3206,10 +3348,69 @@ as `declared_user`, a different value is a `user_unit_declared_user` gap, and
 An invalid home, runtime directory or account, or a runtime directory that would
 coincide with a system user directory, is an explicit gap; its directories are omitted.
 System units outside the user table are `outside_search_path` gaps.
-System-scope `resolve()` output is unchanged. Non-default XDG variables, lingering
-and runtime state, specifier expansion, enumerating accounts, collection wiring,
-UI and AI classification remain open.
+System-scope `resolve()` output is unchanged. Manager-environment and lingering-list collection, runtime state, host/boot/environment-dependent specifiers, `$VAR` substitution, enumerating accounts, collection wiring, UI and AI classification remain open.
 
+
+Worker checkpoint (issue #702, user manager environment and lingering): this
+is contract-only, so roadmap F remains incomplete. The new pure module
+`app/systemd_user_env.py` turns two captured, read-only observations into the
+per-account inputs that `resolve_user()` needs.
+`parse_manager_environment()` reads `systemctl --user show-environment` output,
+in plain `KEY=value` form and systemd's `KEY=$'...'` C-style quoting. It keeps
+only `HOME`, `XDG_RUNTIME_DIR` and the five XDG base-directory variables, and
+drops all other variables without echoing them. Malformed lines, invalid names,
+unsupported escapes, invalid UTF-8, duplicate keys, NUL/newline and over-cap
+input (over 64 KiB or 1,024 lines) become coverage gaps; affected keys are omitted
+and never guessed. `parse_linger()` validates a `/var/lib/systemd/linger`
+listing into sorted account names, rejecting invalid or over-cap entries as
+gaps. The manager environment and lingering list are not collected yet; runtime
+state, account enumeration, collector wiring, UI and AI classification remain
+open.
+
+Worker checkpoint (issue #702, specifier expansion): contract version 2 adds a
+bounded `expanded` view of `Exec*`, `User=`, `Group=`, `WorkingDirectory=`,
+`RootDirectory=` and `EnvironmentFile=` to every non-template unit. Raw `config`,
+`exec` and `account` are unchanged. Name specifiers `%n %N %p %P %i %I %j %J %f %%`
+follow `systemd.unit(5)`, including unescaping for `%P %I %J %f`. An alias record
+uses its canonical name. Manager specifiers are expanded only where the scope fixes
+their value. For the system manager these are `%u`=root, `%U`=0, `%g`=root, `%G`=0,
+`%h`=/root, `%s`=/bin/sh, `%t`=/run, `%S`=/var/lib, `%C`=/var/cache, `%L`=/var/log
+and `%E`=/etc. For a user manager they are `%u` (the account), `%h` (home), `%t`
+(runtime directory), `%E` (~/.config) and `%C` (~/.cache). Every other specifier stays
+raw and becomes an `unexpanded_specifier` gap that names the letters. That covers
+host and boot identity, `%T`/`%V` (which depend on the environment), the user
+manager's `%U`/`%G`/`%g`/`%s`, `%S`/`%L` (whose values changed between systemd
+releases), unknown letters and a trailing `%`. A value with any such specifier is
+never partially expanded. System `%u`/`%U`/`%h`/`%s` follow current
+`systemd.unit(5)`, where they name the manager's user rather than `User=`. Older
+systemd releases resolved them from `User=`, and the collector does not yet record
+the systemd version, so this is listed as a limitation. Each record states `specifiers` as `none`, `expanded`,
+`partial` or `not_applicable` (templates). `$VAR` environment substitution,
+manager-environment collection, collection wiring, UI and AI classification remain open.
+
+### Non-default XDG directories for systemd --user — worker checkpoint #800
+
+Contract-only; roadmap F remains incomplete. `user_search_paths()` and
+`resolve_user()` accept an optional `xdg` mapping taken from the user manager's
+environment. It can carry `config_home`, `data_home` and `cache_home`, plus
+`config_dirs` and `data_dirs` (a list or a `:`-separated string).
+
+- **Search table:** follows `systemd.unit(5)`: `$XDG_CONFIG_HOME/systemd/user{.control,}`,
+  each `$XDG_CONFIG_DIRS/systemd/user` before `/etc/systemd/user`,
+  `$XDG_DATA_HOME/systemd/user`, and each `$XDG_DATA_DIRS/systemd/user`
+  before `/usr/local/lib/systemd/user`.
+- **Defaults:** absent or empty values retain the XDG Base Directory defaults;
+  output without `xdg` is unchanged.
+- **Invalid values:** relative, non-normalized, NUL/newline or wrong-type values
+  are not replaced by defaults. Their directories are omitted and an
+  `xdg_*_invalid` gap marks the result incomplete. Unknown keys and more than 32
+  directory entries also produce coverage gaps. Duplicate roots remain
+  `user_search_path_conflict`.
+- **Origins/specifiers:** account-home paths are `user`; config paths are
+  `administrator`; `/usr/share` is `vendor`, while local data directories
+  are `local`. `%E`/`%C` follow valid config/cache homes.
+- **Still open:** manager-environment collection, lingering/runtime state,
+  account enumeration, collection wiring, UI and AI classification.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
@@ -3300,6 +3501,38 @@ exactly one class with its basis, verification strength (`authenticated`,
 **Not covered:** collecting ownership, package-database digests or authenticated
 vendor artifacts from targets; persistence; UI; AI classification; response actions.
 No schema, API, auth or response-authorization change.
+
+### Individual queued at jobs — worker checkpoint #831
+
+The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
+`/var/spool/cron` root, so its job files were hashed but opaque. When the controller
+asks for parsed jobs (`cron_jobs`), the agent now decodes each job file name. The name has the form
+`<queue><5-hex job><8-hex minutes since the epoch>` and gives the queue, job
+number and scheduled run time. atd renames a job it is executing into the reserved `=`
+queue, so only `=` is reported as running. An uppercase letter is a batch-style queue
+(at(1)), not a running job, and its letter is kept as is.
+The agent then parses the hashed bytes as data. Nothing is executed or sourced.
+
+- The `# atrun uid= gid=` and `# mail` headers give the owner.
+- Exported environment assignments are counted. Their values are never stored.
+- The `umask` and working-directory `cd … || { … }` boilerplate is skipped.
+- Commands come from the `marcinDELIMITER` heredoc (at ≥ 3.1.14) or the plain lines that follow (older at). They are capped at 32 lines of 512 characters, use the cron redaction patterns, and have control characters escaped.
+- Any other layout is reported as unparsed with no commands. Nothing is guessed.
+
+The controller validates the optional `at` record strictly, including agreement with
+the spool file name. Startup comparisons and incident evidence stay metadata-only.
+Startup → Files shows queue, scheduled time, owner and commands, and search finds at
+commands and accounts. The Coverage catalog has a Debian-family at queue row with
+parsed and older-agent counts. Scope is unchanged, so existing baselines remain
+comparable.
+
+**Limits:**
+- Whether atd runs is not evaluated.
+- The RHEL-family `/var/spool/at` spool is outside built-in scope.
+- Referenced scripts are not inspected.
+- No AI classification is made.
+
+Remaining roadmap F work is tracked above.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -3494,6 +3727,27 @@ Still open for this requirement: remote-machine provisioning of keys, SSH identi
 artifacts and locking state; installer modes; split files combined with the GCP
 override; and multi-host MySQL, drain, failure and recovery acceptance.
 
+### GCP overlays for the role files — worker checkpoint #850
+
+`compose.gcp.yaml` names both `app` and `worker`, so layering it on a role file adds
+the other role's partial service. `compose.controller.gcp.yaml` (app only) and
+`compose.worker.gcp.yaml` (worker only) carry exactly the matching `compose.gcp.yaml`
+service blocks. `tests/test_compose_roles.py` keeps them byte-for-byte in sync and
+renders both combinations through `docker compose config`:
+- The controller pair yields exactly app and Caddy, with the hardening, networks,
+  ports, volumes, image and build of `compose.yaml` plus `compose.gcp.yaml`.
+- The worker pair yields exactly the worker, with the full GCP worker's hardening,
+  image and command, the external controller volume and an empty `MRPATCHY_WORKER_ID`.
+- Both fail closed without `GCP_PROJECT` or `GCP_ZONE`. A test also records the
+  stray service the combined overlay would add.
+
+CI renders both pairs. Workers reuse the controller's `/data/gcloud` configuration on
+the shared volume, so an attached service account needs no worker sign-in. Still open:
+role files with the WIF `compose.gcp-auth.json` mount, installer controller-only and
+join-worker modes, remote-machine workers and the dedicated gcp-integration node.
+No runtime code, role, authorization or complete-installation behavior changes.
+
+
 ### Deployment files and runtime roles
 
 | File | Supported deployment |
@@ -3505,6 +3759,35 @@ override; and multi-host MySQL, drain, failure and recovery acceptance.
 - Preserve the existing one-command complete installation and its persistent data. Reuse service definitions where practical to avoid drift. Provide role-specific environment examples and document supported combinations with the GCP override.
 - Give workers a role-specific startup path that does not initialize web/TLS configuration, require a local Caddy/app container or inherit a local-app Compose dependency. Keep web administration and TLS configuration in the controller role.
 - Support independent app/worker deployment and same-host worker scaling without fixed container-name conflicts. Use compatible versioned application images and explicit schema/protocol compatibility checks so mismatched workers fail clearly before claiming jobs.
+
+### Worker-role environment example — worker checkpoint #852
+
+`.env.worker.example` is the role-specific environment template for
+`compose.worker.yaml` and the GCP worker overlay. It documents every variable those
+files read: the required `MRPATCHY_CONTROLLER_DATA_VOLUME`, `DATABASE_URL`, the pool
+limits, the drain window, the memory limit, the expected controller inventory and
+`GCP_PROJECT`/`GCP_ZONE`. Its values equal the file defaults. It carries no
+administrator password, domain, ports, OIDC, control-network or fixed worker-ID
+settings and no credentials. `.env.worker` is git- and docker-ignored.
+
+Tests fail when a worker file gains an undocumented variable or the example gains a
+controller-only key. They also check that rendering with the example equals the
+default worker render. CI renders the example.
+
+This is a template only. Remote-machine secret provisioning and installer modes
+remain open.
+
+#### Controller-role environment example — worker checkpoint #854
+
+`.env.controller.example` is the role-specific environment template for
+`compose.controller.yaml` and the GCP controller overlay. It documents the
+variables the extended app and Caddy services and the role files read; its values
+match `.env.example` or the Compose defaults. It has no worker pools, worker ID,
+drain window, worker memory limit or controller data-volume setting, and leaves
+`MRPATCHY_EXPECTED_WORKER_IDS` empty for role-file replicas. Tests check the
+variable set, values and rendered configuration, and CI renders the example.
+This is a template only; remote-machine secret provisioning and installer modes
+remain open.
 
 ### Database, secrets and persistent state
 
@@ -3583,6 +3866,27 @@ paths, addresses or telemetry. Settings rows are read in bounded batches rather
 than once per server. The view never inspects, repairs or authorizes anything.
 Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
 unified dashboard acceptance remain open.
+
+### Expected-controller health notifications — worker checkpoint #761
+
+On the elected coordinator's tick, after the expected-worker producer, each
+controller configured in `MRPATCHY_EXPECTED_CONTROLLER_IDS` that is `missing`,
+`stale` or `stopped` (high), or `unknown` or `version_mismatch` (medium),
+publishes one admin-only `deployment` / `controller-health` notification linked to
+Activity → Workers. The subject revision is the classified state, so unchanged
+passes publish nothing and a state change resurfaces even after it was read.
+Reasons are fixed text built from the configured identity and the classification;
+reported registration values are never copied. Recovery to `reporting`, or removing
+the identity from the configuration, resolves the event. An invalid configuration
+publishes a separate `controller-expectation` event and leaves earlier controller
+events untouched, because removal cannot be proven. One freshness window of startup
+grace suppresses new attention while co-started controllers register; resolutions
+always apply. A failure is logged and never stops the coordinator tick. Version
+comparison uses the coordinator process's source version. Notifications are
+attention only: they assess no HTTP/TLS readiness, grant no failover, serving or
+response authority, and read/dismiss stays separate from acknowledgement. Still
+planned for this requirement: endpoint-agent resource metrics and readiness,
+GCP-node inventory, HTTPS/Caddy checks and unified dashboard acceptance.
 
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
@@ -4066,6 +4370,35 @@ Milestones 2–4 remain open.
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
+Worker checkpoint (issue #787): this increment adds a milestone-1 retention policy
+for resolved notification history. Before it, only `notification_arrivals` were
+pruned. Revisions and per-user read/dismiss rows of resolved events grew without
+bound. The leader's hourly cleanup now calls `notifications.prune_resolved()` with
+the existing `history_days` cutoff, after arrival pruning.
+
+- **What is pruned:** an event whose current revision is `resolved` and whose last
+  update precedes the cutoff loses all of its revisions and per-user state. It then
+  disappears from lists, counts and arrivals.
+- **What is kept:** active events keep every revision at any age, so actionable
+  history stays discoverable. Resolved events newer than the cutoff are untouched.
+- **Identity row:** the event identity row stays. A recurring subject continues its
+  revision sequence, so the new active revision is unread, appears in arrivals and
+  never reuses a pruned revision number. Replay cursors, exact-revision read/dismiss
+  and cross-tab toast keys therefore cannot collide.
+- **Races:** rows written at or after the cutoff, such as a racing publish, read or
+  dismiss, are never deleted. Each batch rechecks eligibility with a locking read
+  of the event rows before deleting, so an event reopened or changed after the
+  candidate selection keeps all of its earlier revisions. Publishers update the
+  event row, so they wait for the batch to commit.
+- **Batches:** work runs in bounded batches of 500 events, each committed
+  separately. A failure is logged and does not stop the cleanup loop.
+
+Limits: identity rows of pruned events are retained, which is one small row per
+distinct subject. Superseded revisions of long-lived active events are not pruned.
+Pruning does not change the stream digest, so an already open tab can keep showing
+a pruned resolved item until its next authoritative refresh. No schema, route, UI,
+role or response-authorization change.
+
 The current glass theme, existing mascot artwork and incremental UI polish are
 starting points, not evidence that this milestone is finished. Use
 [the UI design guide](UI_DESIGN.md) to maintain one consistent design system.
@@ -7980,7 +8313,160 @@ The event links to the server summary's spool card. An episode stays open withou
 The event is advisory. It never acknowledges, restarts, drains or remediates anything, and it does not change response authorization. There is no schema change.
 
 **Remaining:**
-- Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.
+- ~~Disabling a server leaves an open episode active until the server is re-enabled and polled, or deleted.~~ Addressed by the #785 worker checkpoint below.
 - Stale telemetry raises no spool notification. Worker/agent liveness producers cover stale telemetry separately.
 - Warning-level pressure is shown on the summary card only.
 - Configurable thresholds remain outstanding.
+
+
+### Spool attention resolves on server disable — worker checkpoint #785
+
+Disabling a server through the lifecycle endpoint stops polling, so fresh telemetry could never resolve an open spool episode. In the same transaction as the disable, the controller now adds one `info`, `resolved` revision (`server-disabled`) to a still-active `agent-spool` / `spool-health` event. The fixed text says monitoring is paused and that the event reopens if pressure or new loss persists after the server is re-enabled. A disable with no active episode publishes nothing.
+
+Deletion keeps its own `server-deleted` resolution. Deleting a server that is already disabled adds no further revision. If deletion commits the disable but local credential cleanup then fails, the server stays disabled and the episode is resolved with the same `server-disabled` revision, so a retried deletion adds no further revision. After the server is re-enabled, the next critical or new-loss poll reopens the same event as an unread active revision.
+
+The event remains advisory. Roles, audit, job cancellation and response authorization are unchanged, and there is no schema change. Configurable thresholds and warning-level notifications remain outstanding.
+
+Worker checkpoint #794 adds a file-integrity coverage producer
+(`app/integrity_sweep_notifications.py`), called from `operations.collect_alerts`
+on the coordinator tick. A stalled hash sweep already adds an `integrity` issue,
+which blocks automatic and scheduled patching, but its only signal was the
+raw-text `integrity` SMTP/webhook alert. That alert is kept out of the bell
+because it carries endpoint text.
+- **Trigger:** one admin-only `integrity-sweep`/`hash-sweep-stalled` event for
+  each active, non-enrolling server whose telemetry is fresh (`last_seen` within
+  120 seconds). It fires when either:
+  - the last hash sweep is more than 30 minutes old (`overdue`); this sustained
+    threshold avoids flapping around the 360-second ingest check;
+  - the sweep time is more than 120 seconds in the future (`future`).
+- **Payload:** `medium` severity, fixed text per category and a link to
+  `#servers/<host>/overview`. No endpoint paths, errors or timestamps are copied.
+- **Revisions:** an unchanged category publishes nothing, and a category change
+  appends a revision.
+- **Resolution:** the event resolves once on recovery, on stale telemetry (the
+  telemetry-loss producer owns that case) or when the server is disabled,
+  deleted or re-enrolling. Disable and delete resolve on the next coordinator
+  tick, so they can lag by about 30 seconds.
+- **Unchanged:** a rejected payload never blocks alert collection. The raw
+  `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
+  is acknowledged, remediated or authorized, and there is no schema change.
+- **Remaining:** a configurable threshold, and a native agent sweep-stall
+  acceptance test.
+
+
+### External alert-delivery failure notifications — worker checkpoint #792
+
+This adds a roadmap J health producer for the SMTP/webhook outbox itself. `operations.deliver_one()` retries each open alert with backoff and stores only a sanitized error class. Until now, a broken channel was visible only on per-alert rows in the Operations panel, so administrators who rely on email or a webhook could miss every alert without knowing it.
+
+`collect_alerts` now publishes one admin-only in-app event (`alert-delivery` / `delivery-failing`, severity high) when both of these are true:
+
+- external delivery is enabled;
+- at least one open, undelivered alert has recorded an error on 3 or more delivery attempts.
+
+The reason text is fixed per channel (SMTP email or webhook). It never contains alert messages, server names, URLs, tokens, recipients or error strings. The revision binds only to the channel, so more failures or a changing error class do not create new unread revisions. The event resolves once when no alert still meets the condition: delivery succeeded, the alert resolved or was acknowledged, or delivery was disabled or removed. A later failing episode reopens it as an unread revision. An unreadable delivery configuration is reported as an unknown channel and never raises.
+
+The producer is read-only. It never sends, retries, changes backoff or acknowledges anything, and it adds no `Alert` row, so a broken channel cannot alert about itself. There are no schema, role or response-authorization changes.
+
+**Remaining:**
+- The event has no deep link, because the Operations panel is a modal with no route.
+- The threshold is fixed.
+- ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
+
+### Repository-refresh failure in-app notifications — worker checkpoint #767
+
+`operations.collect_alerts` now publishes an admin-only, medium-severity
+`repository-refresh` operational notification when an enabled, non-deleted,
+non-enrolling server has a repository refresh error, and its last successful
+refresh is missing or older than `repo_minutes × 120` seconds. That is the
+same staleness threshold `validate_patch` and scheduled execution use to block
+patching. The notification links to the server's Repositories tab.
+
+The reason is fixed text and never carries the endpoint error, which may hold
+mirror URLs or credentials. Repeated passes therefore keep one revision per
+outage. A transient failure with fresh metadata publishes nothing. The
+existing operational resolution path resolves the notification when a refresh
+succeeds or the server is disabled or deleted.
+
+The raw-text `repository` SMTP/webhook alert is unchanged and stays outside
+the in-app allowlist; no outbox alert kind is added. The notification is
+attention only and grants no retry, remediation or patch authority.
+
+
+### Unreadable alert-delivery configuration — worker checkpoint #812
+
+A saved SMTP/webhook delivery configuration that can no longer be decrypted (for example after the encryption key changed) previously made `GET /api/operations/notifications`, `PUT /api/operations/notifications` and `PUT /api/operations/smtp` fail with 500. Administrators could neither open Account → Operations nor replace the configuration. `deliver_one()` raised before counting an attempt, so no alert was delivered and the #792 producer never saw a failure.
+
+- **Routes:** the GET route now returns `unreadable: true` with no stored values and no ciphertext; readable configurations return `unreadable: false`. Both save routes replace an unreadable value. Secrets cannot be retained, so the token or password must be entered again.
+- **Delivery:** `deliver_one()` returns without counting an attempt or raising.
+- **Notice:** while the configuration is unreadable and at least one open alert is undelivered, the admin-only `alert-delivery`/`delivery-failing` event is published at subject revision `unreadable` with high severity and fixed text. Repeated polls add no unread revision. It resolves once a readable configuration is saved or nothing is left undelivered. An unreadable configuration with nothing undelivered stays quiet. The former `failing:unknown` revision is replaced by `unreadable`, so an event already active on that revision gains one unread revision after upgrade.
+- **UI:** the Operations panel shows a warning explaining that external delivery has stopped and the configuration must be saved again.
+- **Unchanged:** the notice never sends, retries, acknowledges or authorizes anything. There are no schema, role or response-authorization changes.
+
+### OS support-lifecycle notifications — worker checkpoint #341 (roadmap J)
+
+This delivers the "lifecycle alerts" item of #341's remaining scope. The server Overview already showed the reviewed vendor lifecycle from `os_lifecycle.evaluate`, but nothing told administrators when a release crossed its standard-support end date or had no reviewed support phase left.
+
+`operations.collect_alerts` now calls `app/os_lifecycle_notifications.py` on each coordinator tick. It uses the same `repo_minutes × 120` inventory freshness window as the Overview card.
+
+- **Trigger:** one admin-only `os-lifecycle`/`support-ended` event per active, non-enrolling, non-deleted server whose exact Debian/Ubuntu release is:
+  - `ended`: no reviewed vendor support phase remains (high);
+  - `subscription`: Ubuntu standard support ended and extended coverage depends on an Ubuntu Pro entitlement the inventory does not observe (medium);
+  - `lts-unverified`: Debian standard support ended and the host is not verified as eligible for Debian LTS (medium).
+- **Quiet:** standard support and verified Debian LTS coverage publish nothing.
+- **Payload:** the reason text is composed only from the controller's reviewed catalog: the release label and end dates. It never copies endpoint `os-release` text. It links to `#servers/<host>/overview`.
+- **Revisions:** the subject revision binds the category, vendor and release. Repeated ticks add nothing, and a category change (for example, an Ubuntu Pro window ending) appends an unread revision.
+- **Resolution:** the event resolves on an upgrade to a supported release, on an unknown, unsupported or derivative release, or when the server is disabled, deleted or re-enrolling.
+- **Freshness:** stale or missing inventory holds the current state. It neither opens a new event nor falsely resolves an existing one, because freshness gaps cannot prove an upgrade. The Overview card already discloses those gaps.
+- **Unchanged:** a rejected payload never blocks alert collection, and no SMTP/webhook `Alert` row is added. The producer changes no patching, upgrade, subscription, schema, role or response-authorization state, and it acknowledges or authorizes nothing.
+- **Remaining (#341):** a configurable advance-warning window before an end date, Ubuntu Pro entitlement discovery, RPM/vendor catalog coverage, catalog refresh and signing, the migration queue and plans, fleet filters and reports, and real-target acceptance.
+
+### Scheduled malware-scan coverage notifications — worker checkpoint #816
+
+This adds a roadmap J coverage producer, `app/scan_coverage_notifications.py`. `operations.collect_alerts` calls it on the coordinator tick. Before this change, the only place a scheduled malware scan (`security-policy:<host>`, run by `incidents.schedule_tick`) showed it had failed, lost coverage or stopped arriving was the fleet Security coverage page. No SMTP/webhook alert and no in-app event was raised for it.
+
+- **Scope:** active, non-enrolling and non-deleted servers with scheduled scanning enabled. The producer reads the latest `security-scan` job and that job's own receipt, and classifies them with the same `security_coverage.assessment` the coverage page uses.
+- **Trigger:** one admin-only `security-scan` / `scheduled-scan-coverage` event per server, for one of these categories:
+  - `failed`: the latest scan failed, was blocked or was interrupted;
+  - `incomplete`: the receipt is missing, or it records gaps, an unavailable scanner, stale or unverifiable signatures, or invalid metadata;
+  - `overdue`: no completed scan within the configured interval plus a one-hour grace period, for example while response holds, recovery-required operations or a full queue pause the scheduler.
+- **Payload:** `medium` severity, fixed text per category, and a link to `#servers/<host>/security`. Paths, rule names, engine output, errors and timestamps are never copied.
+- **Revisions:** an unchanged category publishes nothing, and a category change appends one revision. A queued or running scan leaves the event unchanged.
+- **Resolution:** the event resolves once when any of these happens:
+  - a recorded scan arrives;
+  - a scan with findings arrives, which the `malware-detection` incident producer owns;
+  - scheduled scanning is disabled;
+  - the server is disabled, deleted or re-enrolling.
+
+  A later failing episode reopens the event as an unread revision.
+- **Unchanged:** the producer never enqueues, retries or cancels scans, and never changes patching state, the scheduler, incidents or response authorization. A rejected payload never blocks SMTP/webhook alert collection. There is no schema or role change.
+- **Remaining:**
+  - Queued or running attempts can suppress overdue notices indefinitely, and an enabled policy with no first scan attempt remains silent; stuck or never-started schedules need follow-up coverage.
+  - YARA scans have no schedule, so they are not covered.
+  - The grace period is fixed.
+  - Execution-triggered scan coverage keeps its existing `execution scan coverage` operational alert.
+
+### Stuck scheduled scans in coverage notifications — worker checkpoint #839
+
+The #816 producer kept its event unchanged, or silent, whenever the latest `security-scan` job was queued or running. `incidents.schedule_tick` does not enqueue another scan while one is pending. So a job that workers never claim, or a running job that never finishes, suppressed the coverage notice indefinitely.
+
+- **Change:** a queued or running latest attempt holds the event only while its age is within the configured interval plus the one-hour grace period. After that, `classify` returns a new `stalled` category.
+- **Payload:** `medium` severity, fixed text, admin-only, and a link to `#servers/<host>/security`. Moving from `overdue`, `failed` or `incomplete` to `stalled` appends one revision. An unchanged `stalled` adds none. When the job completes with a recorded scan, the event resolves.
+- **Unchanged:** the producer still never cancels, retries, recovers or enqueues jobs. `security_coverage.assessment`, the scheduler, the schema, roles and response authorization are untouched. The unused `ENGINE` constant was removed.
+- **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `480100d` and pass after the change, and the existing 10 tests still pass.
+- **Remaining:** an enabled policy that never gets a first scan attempt is still silent, because the policy has no durable "enabled since" marker. YARA schedules and a configurable grace period remain out of scope.
+
+### Never-started scheduled scans in coverage notifications — worker checkpoint #841
+
+`incidents.schedule_tick` skips enqueueing while a host is quarantined, a YARA or execution scan is pending, a job needs recovery or the queue is full. If one of those holds from the moment scheduled scanning is enabled, the server has no `security-scan` job or scan. The #816 producer treated that `never_scanned` state as "the scheduler has not started yet" and stayed silent forever.
+
+- **Change:** saving a security scan policy with `enabled: true` records a server-managed `enabled_since` epoch in the existing `security-policy:<host>` JSON.
+  - It is kept on later saves while scanning stays enabled.
+  - It is reset on a disabled-to-enabled transition, or when a legacy enabled policy without it is re-saved.
+  - It is removed when scanning is disabled.
+  - Clients cannot set it.
+- **Classification:** `classify` returns the existing `overdue` category for `never_scanned` once `enabled_since` is older than the interval plus the one-hour grace period. Revisions, resolution, payload and roles behave as in #816.
+- **Unchanged:** the producer is still read-only, and the scheduler, `security_coverage.assessment`, schema, roles and response authorization are untouched.
+- **Validation:** three focused tests fail on the #840 head `3bbcf07` (main `480100d` plus #839) and pass after the change. The related incident, coverage, notification, route-role and lifecycle suites pass on SQLite.
+- **Remaining:**
+  - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
+  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.

@@ -246,3 +246,89 @@ def expected_controllers(now):
             items.append({'id': identity, 'registered': registered, 'state': state, 'reason': reason,
                           'age_seconds': max(0, age) if age is not None else None, 'readiness': 'not_assessed'})
     return items, None
+
+
+# In-app attention for configured expected controllers (roadmap H/J). Reasons are fixed text built from the
+# configured identity and classified state only; reported registration values are never copied.
+NOTIFY_SOURCE = 'deployment'
+NOTIFY_KIND = 'controller-health'
+NOTIFY_CONFIG_KIND = 'controller-expectation'
+NOTIFY_CONFIG_SUBJECT = 'MRPATCHY_EXPECTED_CONTROLLER_IDS'
+NOTIFY_LINK = '#activity/workers'
+NOTIFY_SEVERITY = {'missing': 'high', 'stale': 'high', 'stopped': 'high', 'unknown': 'medium', 'version_mismatch': 'medium'}
+NOTIFY_TEXT = {
+    'missing': 'has no matching registration. The web process may be absent, misconfigured or unable to reach the database.',
+    'stale': 'stopped sending heartbeats. It may be stopped, unreachable or unable to write to the database; serving readiness is not assessed.',
+    'stopped': 'reported a graceful stop and is not running.',
+    'unknown': 'has a missing, invalid, future-dated or unrecognized report. Check clocks and controller logs.',
+    'version_mismatch': 'reports a different version from the coordinator; compatibility is not certified.',
+}
+PROCESS_STARTED = time.time()
+
+
+def _active_controller_events(s):
+    # Filter on the current revision's lifecycle so retained resolved history never crowds out active events.
+    from . import notifications
+    Event, Revision = notifications.NotificationEvent, notifications.NotificationRevision
+    rows = s.execute(select(Event.kind, Event.subject_id).join(
+        Revision, (Revision.event_id == Event.id) & (Revision.revision == Event.revision)).where(
+        Event.source == NOTIFY_SOURCE, Event.kind.in_((NOTIFY_KIND, NOTIFY_CONFIG_KIND)),
+        Revision.lifecycle == 'active').limit(500))
+    return {(kind, subject) for kind, subject in rows}
+
+
+def publish_notifications(now=None, started=None):
+    """Publish/resolve admin-only in-app events for configured expected controllers.
+
+    Runs from the elected coordinator's tick in its own transaction. One freshness window of startup grace
+    suppresses new attention while co-started controllers register; resolutions always apply. A notification
+    is attention only: it grants no readiness, failover or response authority. Returns published revisions.
+    """
+    from . import notifications
+    now = time.time() if now is None else now
+    started = PROCESS_STARTED if started is None else started
+    grace = now - started < FRESH_SECONDS
+    expected, error = expected_controllers(now)
+    published = 0
+    with Session() as s:
+        active = _active_controller_events(s)
+
+        def emit(kind, subject_type, subject_id, revision, severity, reason, lifecycle='active'):
+            nonlocal published
+            _, created = notifications.publish(
+                s, source=NOTIFY_SOURCE, kind=kind, subject_type=subject_type, subject_id=subject_id,
+                subject_revision=revision, severity=severity, reason=reason, deep_link=NOTIFY_LINK,
+                minimum_role='admin', lifecycle=lifecycle, now=now)
+            published += created
+        config = (NOTIFY_CONFIG_KIND, NOTIFY_CONFIG_SUBJECT)
+        if error:
+            if not grace or config in active:
+                emit(NOTIFY_CONFIG_KIND, 'deployment-config', NOTIFY_CONFIG_SUBJECT, 'invalid', 'medium',
+                     'The expected-controller configuration (MRPATCHY_EXPECTED_CONTROLLER_IDS) is invalid, so expected '
+                     'controllers cannot be checked. Correct it in the deployment configuration.')
+        else:
+            if config in active:
+                emit(NOTIFY_CONFIG_KIND, 'deployment-config', NOTIFY_CONFIG_SUBJECT, 'resolved', 'info',
+                     'The expected-controller configuration is valid or cleared.', lifecycle='resolved')
+            seen = set()
+            for item in expected:
+                identity, state = item['id'], item['state']
+                seen.add(identity)
+                key = (NOTIFY_KIND, identity)
+                if state in NOTIFY_SEVERITY:
+                    if grace and key not in active:
+                        continue
+                    emit(NOTIFY_KIND, 'controller', identity, state, NOTIFY_SEVERITY[state],
+                         'Expected controller ' + identity + ' ' + NOTIFY_TEXT[state])
+                elif key in active:
+                    emit(NOTIFY_KIND, 'controller', identity, 'resolved:' + state, 'info',
+                         'Expected controller ' + identity + ' is now ' + state.replace('_', ' ')
+                         + '; it no longer needs attention. Serving readiness is not assessed.', lifecycle='resolved')
+            # An invalid configuration leaves earlier events untouched: removal is unknown.
+            for kind, identity in active:
+                if kind == NOTIFY_KIND and identity not in seen:
+                    emit(NOTIFY_KIND, 'controller', identity, 'resolved:not-expected', 'info',
+                         'Controller ' + identity + ' is no longer in the expected-controller configuration.',
+                         lifecycle='resolved')
+        s.commit()
+    return published

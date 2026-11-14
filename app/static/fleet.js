@@ -134,8 +134,9 @@ function aiControlGates(snapshot){
  }
  const limitations=Array.isArray(snapshot.limitations)&&snapshot.limitations.length?`<ul class="help">${snapshot.limitations.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'';
  const refresh=`<div class="actions"><button type="button" data-ai-control-retry>Refresh start gates</button></div>`;
+ const purposes=aiPurposeLimits(snapshot.purpose_limits,when);
  if(snapshot.can_start_now&&!snapshot.blockers.length){
-  return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${limitations}${refresh}`;
+  return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${purposes}${limitations}${refresh}`;
  }
  const items=snapshot.blockers.map(blocker=>{
   const code=typeof blocker?.code==='string'?blocker.code:'unknown';
@@ -145,7 +146,24 @@ function aiControlGates(snapshot){
  }).join('');
  const nextStart=when(snapshot.next_start_at);
  const summary=nextStart?`<p><strong>Next eligible start:</strong> ${nextStart}. This is the latest time among the blocking gates. Work may still wait after it.</p>`:`<p><strong>No automatic next start.</strong> At least one hold has no scheduled end, or its time is only a recheck boundary.</p>`;
- return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${limitations}${refresh}`;
+ return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${purposes}${limitations}${refresh}`;
+}
+// Legacy per-purpose hourly allowances (#860). Each holds only its own purpose.
+const AI_PURPOSE_LABELS={triage:'Process triage',update_scoring:'Update scoring',automatic_plans:'Automatic incident and startup plans'};
+function aiPurposeLimits(limits,when){
+ if(!Array.isArray(limits)||!limits.length)return '';
+ const count=value=>Number.isSafeInteger(value)&&value>=0?String(value):'Unavailable';
+ const rows=limits.map(item=>{
+  const purpose=typeof item?.purpose==='string'?item.purpose:'unknown';
+  const label=AI_PURPOSE_LABELS[purpose]||purpose.replaceAll('_',' ');
+  const used=`${count(item?.used)} of ${count(item?.limit)} in the last hour`;
+  let state;
+  if(item?.state==='disabled')state='Disabled in Settings, so this allowance is not in use';
+  else if(item?.state==='available')state='Allowance available';
+  else{const next=when(item?.next_at);state=next?`Allowance used up. Next eligible ${next}`:'Allowance used up. No scheduled reopening';}
+  return `<li><strong>${esc(label)}</strong> · ${esc(used)}<br><small>${esc(state)}.</small></li>`;
+ }).join('');
+ return `<h3>Legacy hourly allowances</h3><p class="help">This installation still uses the legacy per-purpose hourly limits. Each one holds only its own purpose and is not one of the shared gates above.</p><ul data-ai-purpose-limits>${rows}</ul>`;
 }
 async function loadAiControlGates(root,revision){
  const section=root.querySelector('#ai-control-gates');if(!section)return;
@@ -296,7 +314,7 @@ async function packageHistory(revision=renderRevision,context=null){
  const load=async()=>{const turn=++ticket;try{const data=await api('/package-history?host_id='+encodeURIComponent(context?.hostId||$('#history-host').value)+'&q='+encodeURIComponent($('#history-search').value)+'&offset='+offset);if(turn!==ticket||!currentView(revision,context?'servers':'history')||!table.isConnected)return;
  table.innerHTML=data.items.length?`<div class="table-wrap"><table><thead><tr><th>Observed</th><th>Server / package</th><th>Change</th><th>Before → after</th><th>Origin</th><th>Historical AI importance</th></tr></thead><tbody>${data.items.map(r=>`<tr><td>${date(r.observed)}<small>Recorded ${date(r.recorded)}</small></td><td>${esc(r.name)}<small>${esc(hostName(r.host_id))}</small></td><td>${badge(r.action)}</td><td>${esc(r.before.join(', ')||'—')} → ${esc(r.after.join(', ')||'—')}${r.state_before!==r.state_after?`<small>${esc(r.state_before||'—')} → ${esc(r.state_after||'—')}</small>`:''}</td><td>${esc(r.source)}<small>${esc(r.actor||'Observed; actor unknown')}</small>${r.job_id?`<button data-history-job="${r.job_id}">View operation</button>`:''}</td><td>${r.assessment?assessmentCell(r.assessment):'No saved assessment'}</td></tr>`).join('')}</tbody></table></div>`:empty('No package changes recorded','History begins with the next inventory collected after this version is deployed.');
  $('#package-history-prev').disabled=offset===0;$('#package-history-next').disabled=!data.more;
- table.querySelectorAll('[data-history-job]').forEach(button=>button.onclick=async()=>{const rev=modalRevision;try{const j=await api('/jobs/'+button.dataset.historyJob);if(rev!==modalRevision||!table.isConnected)return;modal('Package operation',`<p>${esc(j.action)} · ${badge(j.state)} · ${date(j.created)}</p><pre>${esc(j.output||'Awaiting execution')}</pre>`);}catch(e){toast(e.message);}});
+ table.querySelectorAll('[data-history-job]').forEach(button=>button.onclick=async()=>{const rev=modalRevision;try{const j=await api('/jobs/'+button.dataset.historyJob);if(rev!==modalRevision||!table.isConnected)return;modal('Package operation',`<p>${esc(j.action)} · ${badge(j.state)} · ${date(j.created)}</p>${PatchyUI.commandOutput(j.output,'Package operation output','Awaiting execution')}`);}catch(e){toast(e.message);}});
  }catch(e){if(table.isConnected)toast(e.message);}};
  if(!context)$('#history-host').onchange=()=>{offset=0;load();};$('#history-search').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{if(table.isConnected){offset=0;load();}},250);};$('#package-history-prev').onclick=()=>{offset=Math.max(0,offset-100);load();};$('#package-history-next').onclick=()=>{offset+=100;load();};await load();
 }

@@ -124,7 +124,7 @@ def config(s):
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
 def register_models():
     # Imports register mappings only; no DDL or web application bootstrap.
-    from . import identity,operations,notifications,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good,known_good_review,file_trust,fleet_queries  # noqa: F401
+    from . import identity,operations,notifications,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good,known_good_review,file_trust,fleet_queries,advisories  # noqa: F401
     from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health,service_monitor,execution_scans  # noqa: F401
 
 def init():
@@ -152,6 +152,8 @@ def init():
         score_columns={c['name'] for c in inspect(connection).get_columns('update_scores')}
         if 'next_at' not in score_columns:
             connection.execute(text('ALTER TABLE update_scores ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
+        if 'configuration' not in score_columns:
+            connection.execute(text("ALTER TABLE update_scores ADD COLUMN configuration VARCHAR(64) NOT NULL DEFAULT ''"))
         job_columns={c['name'] for c in inspect(connection).get_columns('jobs')}
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
