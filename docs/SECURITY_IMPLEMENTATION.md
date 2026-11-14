@@ -2927,6 +2927,21 @@ until the corresponding detection and response milestones are completed.
 - Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
 - Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
 
+### Pending-reboot visibility — worker checkpoint #828
+
+The read-only agent inventory now reports whether installed updates await a
+reboot: the Debian `/var/run/reboot-required` flag with up to 50 validated
+package names from `reboot-required.pkgs`, or the RPM marker only when it names
+the current boot (the same rule the bridge health check uses). The controller
+validates this untrusted value strictly; malformed or absent reports (older
+agents) are `not_reported`, never `not_required`. The flag alone does not retain
+a new inventory revision or reset repository refresh state. Server Overview and
+Patching show the state, report time and requesting packages as escaped text.
+This is visibility only: nothing reboots the server, and patch, release and
+response authorization are unchanged. Remaining for roadmap D: running-process
+use of replaced libraries without a reboot flag, binding reboot completion to
+CVE exposure closure, and notifications.
+
 ### Applicability and exposure-window contract — worker checkpoint #672
 
 The first bounded increment adds the pure `app/cve_exposure.py` contract. It has
