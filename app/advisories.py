@@ -17,7 +17,12 @@ _ADVISORY_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}')
 STATUSES=(cve_exposure.AFFECTED,cve_exposure.FIXED,cve_exposure.UNAFFECTED,cve_exposure.UNCERTAIN)
 COVERAGE=('Matching advisory IDs, not proof that unlisted packages are safe. Applicability compares the installed '
     'source version with this distribution release\'s vendor ranges only; "affected" is version applicability, not '
-    'evidence of exploitation, and "uncertain" is never treated as safe. Review vendor advisories before selecting patches.')
+    'evidence of exploitation, and "uncertain" is never treated as safe. Published and modified dates come from the '
+    'advisory record: they are not the vendor fix date or the time exposure began, and an unknown date is left blank. '
+    'Review vendor advisories before selecting patches.')
+# A record date this far past the scan clock is treated as invalid rather than trusted.
+RECORD_DATE_SKEW=86400
+_RFC3339=re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})')
 
 def ecosystem(os_release,inventory=None):
     values={}
@@ -106,16 +111,35 @@ def _fetch_records(ids):
     finally:client.close()
     return records
 
-def _applicability(vuln,records,eco,package,version):
+def record_date(value,now):
+    """Return an OSV RFC 3339 timestamp as epoch seconds, or None when it cannot be trusted.
+
+    Only timezone-qualified values are accepted; dates before 1990 or more than
+    RECORD_DATE_SKEW past ``now`` are rejected instead of guessed.
+    """
+    if not isinstance(value,str) or len(value)>40 or not _RFC3339.fullmatch(value):return None
+    from datetime import datetime  # local: keeps the module import block unchanged
+    text=value[:-1]+'+00:00' if value.endswith('Z') else value
+    head,_,tail=text.partition('.')
+    if tail:text=head+'.'+tail[:-6][:6].ljust(6,'0')+tail[-6:]  # normalize to microseconds
+    try:stamp=datetime.fromisoformat(text).timestamp()
+    except (ValueError,OverflowError):return None
+    if stamp<631152000 or stamp>now+RECORD_DATE_SKEW:return None
+    return stamp
+
+def _applicability(vuln,records,eco,package,version,now=None):
+    now=time.time() if now is None else now
     advisory_id=vuln.get('id') if isinstance(vuln,dict) else None
     record=records.get(advisory_id) if isinstance(advisory_id,str) else None
+    dates={'published_at':None,'modified_at':None}
     if isinstance(record,dict):
-        try:return cve_exposure.classify(record,eco,package,version)
+        dates={'published_at':record_date(record.get('published'),now),'modified_at':record_date(record.get('modified'),now)}
+        try:return {**cve_exposure.classify(record,eco,package,version),**dates}
         except Exception:  # noqa: BLE001 - classify is total, but never let a defect read as safe
             reason='Applicability could not be established'
     else:reason=record or 'Advisory ID is missing or invalid'
     return {'advisory_id':advisory_id if isinstance(advisory_id,str) and _ADVISORY_ID.fullmatch(advisory_id) else None,
-            'cve_ids':[],'status':cve_exposure.UNCERTAIN,'reason':reason,'fixed_version':None,'fix_available':False}
+            'cve_ids':[],'status':cve_exposure.UNCERTAIN,'reason':reason,'fixed_version':None,'fix_available':False,**dates}
 
 def retained(result):
     """Return a stored scan result with uncertainty reasons reduced to fixed text.
