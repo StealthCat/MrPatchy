@@ -2316,6 +2316,22 @@ endpoint. The panel adds presentation only: lookup, publication, revocation,
 role, approval and response boundaries are unchanged. Hit/miss reasons,
 saved-call or cost estimates and matched production acceptance remain open.
 
+Worker checkpoint #781 records administrator review completion for a revoked
+candidate. The admin-only, CSRF-protected `POST /api/ai/known-good/{fingerprint}/review`
+takes the expected version, the expected revocation time and a review note. It
+runs under the same `ai-triage` lock as revocation and is audited. The new
+`ai_known_good_reviews` table, created without altering existing tables, binds
+the review to the fingerprint, version, revocation time and reviewed linked
+count. Assessment history reports `review_required: false` with reviewer, time and
+note only while all four still match, so a new revocation or another linked
+assessment requires review again. The summary adds
+`reuse_assessments_pending_review` and the fleet panel's review notice uses it.
+Recording review resolves any active fleet known-good bell event for the
+candidate, whichever kind produced it, with fixed text. Review never reactivates the candidate, approves a
+behavior, rewrites an assessment or authorizes a response; active, unknown,
+changed or already-reviewed revocations are refused. Per-assessment review
+remains out of scope.
+
 Worker checkpoint #744 notifies administrators when an AI contradiction
 automatically revokes a fleet known-good candidate. In the same transaction as
 the revocation, `known_good.invalidate_contradiction` publishes one fleet-scoped,

@@ -1063,6 +1063,12 @@ class RevokeKnownGoodInput(BaseModel):
     reason:str=Field(min_length=10,max_length=1000)
 
 
+class ReviewKnownGoodInput(BaseModel):
+    expected_version:int=Field(ge=1,le=1_000_000,strict=True)
+    expected_revoked_at:float=Field(gt=0)
+    note:str=Field(min_length=10,max_length=1000)
+
+
 @app.post('/api/investigations/{behavior_id}/retriage')
 def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin_user)):
     from . import ai_assessments,ai_claims
@@ -1114,6 +1120,27 @@ def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(adm
             except ValueError as error:raise HTTPException(409,str(error)) from None
             s.commit()
             return {**result,'detail':f'Candidate revoked across the fleet. {result["linked_assessments"]} linked assessment(s) require review.'}
+    finally:lock.release()
+
+
+@app.post('/api/ai/known-good/{fingerprint}/review')
+def review_known_good(fingerprint:str,body:ReviewKnownGoodInput,user=Depends(admin_user)):
+    """Record review of a revoked candidate's linked assessments; changes no trust or response state."""
+    from . import known_good_review
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    note=body.note.strip()
+    if len(note)<10:raise HTTPException(400,'Provide a meaningful review note')
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):
+        raise HTTPException(409,'An investigation is updating known-good state. Reopen the assessment when it finishes.')
+    try:
+        with Session() as s:
+            try:result=known_good_review.record(s,fingerprint,body.expected_version,body.expected_revoked_at,user['username'],note)
+            except LookupError as error:raise HTTPException(404,str(error)) from None
+            except ValueError as error:raise HTTPException(409,str(error)) from None
+            s.commit()
+            return {**result,'detail':f'Review recorded for {result["linked_assessments"]} linked assessment(s). The candidate stays revoked.'}
     finally:lock.release()
 
 
