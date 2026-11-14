@@ -2,6 +2,7 @@
 from sqlalchemy import func, select
 
 from app.db import Audit, Session
+from tests.ai_settings_helpers import confirmed_put
 
 FULL = {'ai_model': 'm1', 'ai_enabled': False, 'ai_hourly_limit': 7, 'ai_updates_enabled': False,
         'ai_update_hourly_limit': 9, 'ai_control_mode': 'daily_cap', 'ai_rate_per_hour': 33,
@@ -21,7 +22,7 @@ def saved(admin):
 
 def test_partial_ai_section_save_keeps_stored_controls(admin):
     admin.put('/api/settings/ai-key', json={'api_key': 'fixture-key'})
-    assert admin.put('/api/settings/ai', json=FULL).status_code == 200
+    assert confirmed_put(admin, '/api/settings/ai', FULL).status_code == 200
     r = admin.put('/api/settings/ai', json={'ai_model': '  m2  '})
     assert r.status_code == 200 and r.json()['ai_model'] == 'm2'
     state = saved(admin)
@@ -32,7 +33,7 @@ def test_partial_ai_section_save_keeps_stored_controls(admin):
 
 def test_partial_save_validates_enable_against_stored_model(admin):
     admin.put('/api/settings/ai-key', json={'api_key': 'fixture-key'})
-    assert admin.put('/api/settings/ai', json=FULL).status_code == 200
+    assert confirmed_put(admin, '/api/settings/ai', FULL).status_code == 200
     assert admin.put('/api/settings/ai', json={'ai_enabled': True}).status_code == 200
     assert saved(admin)['ai_model'] == 'm1' and saved(admin)['ai_enabled']
 
@@ -48,7 +49,7 @@ def test_revision_is_stable_and_tracks_control_values_only(admin):
 
 def test_stale_section_revision_is_rejected_without_write_or_audit(admin):
     stale = saved(admin)['ai_controls_revision']
-    assert admin.put('/api/settings/ai', json=FULL | {'expected_ai_controls_revision': stale}).status_code == 200
+    assert confirmed_put(admin, '/api/settings/ai', FULL | {'expected_ai_controls_revision': stale}).status_code == 200
     before, count = saved(admin), audits()
     r = admin.put('/api/settings/ai', json=FULL | {'ai_control_mode': 'unthrottled', 'ai_model': 'm9',
                                                    'expected_ai_controls_revision': stale})
@@ -60,7 +61,7 @@ def test_stale_section_revision_is_rejected_without_write_or_audit(admin):
 
 def test_current_section_revision_is_accepted_and_returns_next(admin):
     current = saved(admin)['ai_controls_revision']
-    r = admin.put('/api/settings/ai', json=FULL | {'expected_ai_controls_revision': current})
+    r = confirmed_put(admin, '/api/settings/ai', FULL | {'expected_ai_controls_revision': current})
     assert r.status_code == 200
     assert r.json()['ai_controls_revision'] == saved(admin)['ai_controls_revision'] != current
     assert 'expected_ai_controls_revision' not in admin.get('/api/settings').json()
@@ -69,12 +70,12 @@ def test_current_section_revision_is_accepted_and_returns_next(admin):
 def test_legacy_settings_endpoint_checks_revision(admin):
     base = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}}
     stale = saved(admin)['ai_controls_revision']
-    assert admin.put('/api/settings', json=base | CONTROLS).status_code == 200
+    assert confirmed_put(admin, '/api/settings', base | CONTROLS).status_code == 200
     count = audits()
     r = admin.put('/api/settings', json=base | {'ai_control_mode': 'unthrottled', 'expected_ai_controls_revision': stale})
     assert r.status_code == 409 and saved(admin)['ai_control_mode'] == 'daily_cap' and audits() == count
     current = saved(admin)['ai_controls_revision']
-    ok = admin.put('/api/settings', json=base | {'ai_control_mode': 'rate', 'expected_ai_controls_revision': current})
+    ok = confirmed_put(admin, '/api/settings', base | {'ai_control_mode': 'rate', 'expected_ai_controls_revision': current})
     assert ok.status_code == 200 and saved(admin)['ai_control_mode'] == 'rate'
     assert ok.json()['ai_controls_revision'] == saved(admin)['ai_controls_revision']
 

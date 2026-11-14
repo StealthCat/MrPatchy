@@ -2648,9 +2648,45 @@ keeps the entries. Both settings save paths append
 `; expands AI admission or spend: …` to the existing audit detail.
 
 Admission, budget reservation, pause, lifecycle, role and response authorization
-behavior are unchanged. **Limitation:** API clients that save without
-previewing are still accepted; their expansions are audited but not refused.
+behavior are unchanged. API clients that saved without previewing were accepted
+and audited at this checkpoint. #881 now refuses unconfirmed expansions.
 Automatic migration of legacy installations remains open.
+
+### Refuse unconfirmed AI admission/spend expansions on save — worker checkpoint #881
+
+The #871 limitation is closed. An expanding save is no longer just audited; the
+server refuses it unless the request carries a matching confirmation.
+`POST /api/settings/ai/preview` now returns `expansion_confirmation`. It is a
+SHA-256 digest that binds the current stored-controls revision to the exact list
+of expansions, and it is `null` when nothing expands.
+
+Both `PUT /api/settings/ai` and `PUT /api/settings` recompute the expansions
+under the existing settings lock, after the revision check. If anything expands
+and `confirm_ai_expansion` is missing or does not match, the request gets 409
+listing the expansions. It writes no settings and no audit entry.
+
+Saves that need no confirmation:
+- lowering a limit;
+- disabling update scoring;
+- a model-only change;
+- leaving the controls unchanged.
+
+Settings → AI sends the confirmation only after **Save with these expansions**.
+Cancel and Escape still save nothing.
+
+A confirmation for one expansion cannot authorize a different or larger one.
+After the stored controls change to different values it no longer matches.
+
+**Limitation:** the revision is a content hash. If the controls return to
+exactly the values they had when the preview ran, that same confirmation
+matches again. It still authorizes only the expansion it listed, and only for an
+authenticated, CSRF-protected administrator.
+
+The digest is not a credential, and admission, budget reservation, pause,
+lifecycle, role and response authorization are unchanged.
+
+**Compatibility:** API clients that save expanding controls must preview first
+and resend the save with the returned confirmation.
 
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 

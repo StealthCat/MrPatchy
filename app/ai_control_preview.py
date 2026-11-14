@@ -6,6 +6,8 @@ nothing and never contacts a provider. It describes the ceilings Mr Patchy's own
 controls enforce; provider limits, finite concurrency, pause, lifecycle, roles and
 data sharing apply in every mode and are not modelled here.
 """
+import hashlib
+import json
 from decimal import Decimal, InvalidOperation
 
 from .ai_control_status import AUTO_PLAN_HOURLY_LIMIT
@@ -28,7 +30,7 @@ PURPOSES = (
 )
 LIMITATION = ('Preview compares Mr Patchy rate and spend ceilings only. Provider limits, finite concurrency, '
               'global and per-server pause, lifecycle, roles and data sharing still apply in every mode. '
-              'Saving through the API without previewing is still accepted and audited.')
+              'Saving an expansion requires the confirmation this preview returns.')
 
 
 def _money(value):
@@ -135,3 +137,17 @@ def audit_suffix(stored, proposed):
     """Return the audit detail suffix naming every expansion, or an empty string."""
     expansions = compare(stored, proposed)['expansions']
     return ('; expands AI admission or spend: ' + ' '.join(expansions)) if expansions else ''
+
+
+def expansion_confirmation(stored_revision, expansions):
+    """Return the opaque confirmation an expanding save must carry, or ``None``.
+
+    It binds the stored controls revision to the exact expansion list, so it cannot
+    be replayed after the stored controls change or used for a different expansion.
+    It is a digest of non-secret values, not an authorization credential: the save
+    still requires an authenticated administrator and CSRF protection.
+    """
+    if not expansions:
+        return None
+    payload = json.dumps([stored_revision, list(expansions)], separators=(',', ':'), ensure_ascii=True)
+    return hashlib.sha256(('mrpatchy-ai-expansion-v1:' + payload).encode()).hexdigest()

@@ -138,13 +138,15 @@ function renderAISettings(data,revision,container){
   try{result=await api('/settings/ai/preview','POST',controls);}
   catch(error){if(alive())saveResult.textContent='AI settings were not saved. Effects could not be previewed: '+error.message;return false;}
   if(!alive())return false;
-  if(!result.expands)return true;
+  if(!result.expands)return {};
+  // The server refuses an unconfirmed expansion (#881); send back the confirmation bound to what was shown.
+  const confirmation={confirm_ai_expansion:result.expansion_confirmation};
   return new Promise(resolve=>{
    modal('Confirm expanded AI admission or spend',`<p>Saving these AI settings lets Mr Patchy start more AI work or spend more than the saved controls allow:</p><ul id="ai-expansion-list">${result.expansions.map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p class="help">${esc(result.limitation)}</p><div class="actions"><button type="button" class="primary" id="ai-expansion-confirm">Save with these expansions</button><button type="button" id="ai-expansion-cancel">Cancel</button></div>`);
    const dialog=$('#modal'),dialogRevision=modalRevision;let settled=false;
    const finish=value=>{if(settled)return;settled=true;dialog.removeEventListener('close',onClose);if(dialog.open&&dialogRevision===modalRevision)dialog.close();resolve(value);};
    const onClose=()=>finish(false);dialog.addEventListener('close',onClose);
-   $('#ai-expansion-confirm').onclick=()=>finish(true);$('#ai-expansion-cancel').onclick=()=>finish(false);
+   $('#ai-expansion-confirm').onclick=()=>finish(confirmation);$('#ai-expansion-cancel').onclick=()=>finish(false);
    $('#ai-expansion-cancel').focus();
   });
  };
@@ -182,7 +184,9 @@ function renderAISettings(data,revision,container){
   if(test&&!model){saveResult.textContent='Select or enter a model to test.';return;}
   const body={ai_model:model,ai_enabled:f.has('ai_enabled'),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:f.get('ai_budget_timezone').trim()};
   if(controlsRevision)body.expected_ai_controls_revision=controlsRevision;
-  if(!await confirmExpansion(body)){if(alive()&&!saveResult.textContent.startsWith('AI settings were not saved'))saveResult.textContent='Save cancelled. Nothing was saved; your entries are still in the form.';return;}
+  const confirmed=await confirmExpansion(body);
+  if(!confirmed){if(alive()&&!saveResult.textContent.startsWith('AI settings were not saved'))saveResult.textContent='Save cancelled. Nothing was saved; your entries are still in the form.';return;}
+  Object.assign(body,confirmed);
   ++listGeneration;refresh.disabled=false;setBusy(true);saveResult.textContent='Saving AI settings…';testResult.textContent='';
   try{
    const response=await api('/settings/ai','PUT',body);if(!alive())return;
