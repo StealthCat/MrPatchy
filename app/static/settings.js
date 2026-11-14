@@ -39,14 +39,23 @@ function discardSettingsChanges(){trackedSettingsForms.clear();}
 // listeners run before the shell's navigation and Refresh handlers and can hold
 // them. A hashchange cannot be cancelled, so it is undone by moving back through
 // session history (never by rewriting an entry, which would drop the page the
-// user came from) and redone with the same move on Discard changes. Each entry
-// carries its position in history.state; replaceState keeps that position.
+// user came from) and redone with the same move on Discard changes. Entry
+// positions come from the Navigation API, or else from an index kept in
+// history.state that replaceState preserves.
 const SETTINGS_HISTORY_KEY='mrpatchyHistoryIndex';
-const historyIndex=()=>{const s=history.state;return s&&typeof s==='object'&&Number.isInteger(s[SETTINGS_HISTORY_KEY])?s[SETTINGS_HISTORY_KEY]:null;};
+// Where the Navigation API reports entry positions, nothing is written to history:
+// stamping every entry adds a same-document navigation per hashchange, and a reload
+// issued right after a hash navigation could then restore an older entry.
+const navigationIndex=()=>{const entry=window.navigation?.currentEntry;return entry&&Number.isInteger(entry.index)&&entry.index>=0?entry.index:null;};
+const stampsHistory=navigationIndex()===null;
+const stampedIndex=()=>{const s=history.state;return s&&typeof s==='object'&&Number.isInteger(s[SETTINGS_HISTORY_KEY])?s[SETTINGS_HISTORY_KEY]:null;};
+const historyIndex=()=>stampsHistory?stampedIndex():navigationIndex();
 const nativeReplaceState=history.replaceState.bind(history);
 const stampHistory=(state,index)=>index===null||(state!==null&&typeof state!=='object')?state:{...(state||{}),[SETTINGS_HISTORY_KEY]:index};
-history.replaceState=function(state,...rest){const s=state&&typeof state==='object'&&SETTINGS_HISTORY_KEY in state?state:stampHistory(state,historyIndex());return nativeReplaceState(s,...rest);};
-if(historyIndex()===null)nativeReplaceState(stampHistory(history.state,0),'');
+if(stampsHistory){
+ history.replaceState=function(state,...rest){const s=state&&typeof state==='object'&&SETTINGS_HISTORY_KEY in state?state:stampHistory(state,historyIndex());return nativeReplaceState(s,...rest);};
+ if(historyIndex()===null)nativeReplaceState(stampHistory(history.state,0),'');
+}
 let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex();
 // Set only while the guard's own history.go undo is in flight. Entries can share
 // an index (rapid back-to-back hash changes settle the newer entry first), so
@@ -54,7 +63,7 @@ let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex();
 let pendingHistoryUndo=null;
 function settleHistory(){
  let index=historyIndex();
- if(index===null){index=(settledHistoryIndex??-1)+1;nativeReplaceState(stampHistory(history.state,index),'');}
+ if(index===null&&stampsHistory){index=(settledHistoryIndex??-1)+1;nativeReplaceState(stampHistory(history.state,index),'');}
  settledSettingsHash=location.hash;settledHistoryIndex=index;
 }
 function unsavedSettingsPending(){return !document.getElementById('shell').classList.contains('hidden')&&settingsHasUnsavedChanges();}
