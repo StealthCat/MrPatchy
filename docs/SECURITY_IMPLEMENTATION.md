@@ -2512,9 +2512,24 @@ indefinitely.
   disabled or deleted servers, or superseded package evidence.
 - **Unchanged:** routes, roles, admission, reservations, SMTP/webhook alerts and
   response authorization. Scores remain advisory.
-- **Limitation:** there is no administrator retry action for a blocked score;
-  changing the saved model or key is the unblock path. Blocked advisory-plan
-  work is still not covered.
+Worker checkpoint #815 adds the administrator retry for blocked update scores.
+The admin-only `GET /api/update-scores/blocked` and the `ai_scoring_blocked` field
+of admin `GET /api/settings` (shown in Settings → AI) report the count, using the
+same predicate as the `ai-scoring`/`configuration-blocked` notification. When the count is non-zero,
+the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protected
+`POST /api/update-scores/blocked/retry`.
+- **Scope:** only scores that the notification counts are re-queued, as `pending`
+  with no hourly wait. These are current-signature `blocked` rows for the current
+  installed/candidate pair on active, unpaused servers. Blocked scores on paused,
+  disabled or deleted servers, superseded evidence and rows blocked under an
+  earlier configuration are unchanged. The UPDATE re-checks state and signature.
+- **No bypass:** the action sends no provider request. The normal scheduler still
+  applies AI and scoring enablement, pause, lifecycle, shared rate/daily-cap
+  admission and reservations. A repeat failure blocks again and resurfaces the
+  notification. Each non-empty retry is audited.
+- **Unchanged:** schema, roles, response authorization and SMTP/webhook alerts.
+  Blocked advisory-plan work is still not covered.
+
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
@@ -8246,7 +8261,6 @@ A saved SMTP/webhook delivery configuration that can no longer be decrypted (for
 - **Notice:** while the configuration is unreadable and at least one open alert is undelivered, the admin-only `alert-delivery`/`delivery-failing` event is published at subject revision `unreadable` with high severity and fixed text. Repeated polls add no unread revision. It resolves once a readable configuration is saved or nothing is left undelivered. An unreadable configuration with nothing undelivered stays quiet. The former `failing:unknown` revision is replaced by `unreadable`, so an event already active on that revision gains one unread revision after upgrade.
 - **UI:** the Operations panel shows a warning explaining that external delivery has stopped and the configuration must be saved again.
 - **Unchanged:** the notice never sends, retries, acknowledges or authorizes anything. There are no schema, role or response-authorization changes.
-
 
 ### OS support-lifecycle notifications — worker checkpoint #341 (roadmap J)
 
