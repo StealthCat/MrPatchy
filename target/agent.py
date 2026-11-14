@@ -1011,7 +1011,11 @@ def security_scan(paths,yara_rules=None):
 PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
                      '/var/spool/cron','/etc/init.d','/etc/profile.d')
-PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload')
+PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab')
+# Built-in files that administrators could previously select as custom paths. A stored
+# custom path equal to one of them is already covered by built-in scope, so it is
+# accepted and inventoried once instead of failing saved policies after an upgrade.
+PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab',)
 PACKAGE_ID = r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}'
 
 
@@ -1019,6 +1023,9 @@ def validate_custom_paths(paths):
     if not isinstance(paths,list) or len(paths)>16:raise ValueError('Select up to 16 custom file or directory paths')
     selected=list(PERSISTENCE_ROOTS)+list(PERSISTENCE_FILES)
     for value in paths:
+        if value in PROMOTED_PERSISTENCE_FILES:
+            if paths.count(value)>1:raise ValueError('Custom paths must not overlap each other or built-in startup scope')
+            continue
         if not isinstance(value,str) or not 1<len(value)<=4096 or not value.startswith('/') or value.startswith('//') or str(Path(value))!=value or '..' in Path(value).parts or any(ord(c)<32 for c in value):raise ValueError('Custom paths must be canonical absolute paths without control characters')
         if scan_excluded(Path(value)):raise ValueError('Custom path is in an excluded filesystem or quarantine directory')
         if any(value==root or value.startswith(root+'/') or root.startswith(value+'/') for root in selected):raise ValueError('Custom paths must not overlap each other or built-in startup scope')
@@ -1219,6 +1226,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
             except FileNotFoundError:report['missing_roots'].append(value)
             except OSError:gap(path,'Persistence file parent inaccessible')
         for value in paths:
+            if value in PROMOTED_PERSISTENCE_FILES:continue
             path=Path(value);selected=False
             try:
                 with scan_root(path.parent) as parent:

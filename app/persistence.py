@@ -69,15 +69,26 @@ def validate(inventory):
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
 
+# Paths later agents added to built-in startup scope. Keep this list explicit and
+# reviewed: only these additions compare against an earlier inventory's scope.
+ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab',)
+NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
+                     'and not reported as added; collect a new baseline to include them in future comparisons.')
+
+
 def compare(before,after):
     result={'state':'unavailable','changes':[], 'note':'No comparable complete prior inventory; absence is not evidence of removal.'}
     try:validate(before);validate(after)
     except ValueError:return result
     if before['state']!='collected' or after['state']!='collected':return result
-    if set(before['scope'])!=set(after['scope']):
+    added=set(after['scope'])-set(before['scope'])
+    if set(before['scope'])-set(after['scope']) or not added<=set(ADDITIVE_BUILTIN_SCOPE):
         return {**result,'note':'Inventory scope changed; collect another complete inventory with the same scope.'}
+    # Paths a later agent added to built-in scope were never observed by the earlier
+    # inventory, so their files are newly covered rather than added on the host.
+    def previously_scoped(path):return not any(path==root or path.startswith(root+'/') for root in added)
     # Parsed cron detail is administrator-view data; change evidence stays metadata-only.
-    old={r['path']:metadata(r) for r in before['entries']};new={r['path']:metadata(r) for r in after['entries']}
+    old={r['path']:metadata(r) for r in before['entries']};new={r['path']:metadata(r) for r in after['entries'] if previously_scoped(r['path'])}
     changes=[]
     fields=('kind','sha256','target','uid','gid','mode','size')
     for path in sorted(old.keys()|new.keys()):
@@ -86,7 +97,9 @@ def compare(before,after):
         if previous is None or current is None or changed:
             changes.append({'path':path,'kind':'added' if previous is None else 'removed' if current is None else 'changed',
                             'fields':changed,'before':previous,'after':current})
-    return {'state':'compared','changes':changes,'note':'Observed changes between complete inventories, not an approved baseline or a malware verdict. Modification time alone is ignored.'}
+    compared={'state':'compared','changes':changes,'note':'Observed changes between complete inventories, not an approved baseline or a malware verdict. Modification time alone is ignored.'}
+    if added:compared['newly_in_scope']=sorted(added)
+    return compared
 
 
 MAX_AGE=86400
@@ -116,7 +129,9 @@ def status(s,host_id):
     before=s.get(Inspection,baseline.inspection_id) if baseline else None
     trusted=bool(baseline and baseline.host_id==host_id and before and before.host_id==host_id and digest(before.report.get('persistence'))==baseline.evidence_digest)
     comparison=compare(before.report.get('persistence') if trusted else None,inv)
-    if comparison['state']=='compared':comparison['note']='Compared with the administrator-reviewed startup baseline; matches are not a clean-host verdict.'
+    if comparison['state']=='compared':
+        comparison['note']='Compared with the administrator-reviewed startup baseline; matches are not a clean-host verdict.'
+        if comparison.get('newly_in_scope'):comparison['note']+=NEWLY_IN_SCOPE_NOTE
     if active and not trusted:state='unavailable'
     elif not baseline:state='not_configured'
     elif not row or not 0<=time.time()-row.created<=MAX_AGE:state='stale'
