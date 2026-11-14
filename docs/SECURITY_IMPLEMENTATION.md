@@ -4423,8 +4423,9 @@ Leaving with a value that differs from the snapshot asks first. This applies to 
 section tab, any shell link, Back/Forward or the page Refresh control. The user
 sees a "Leave without saving?" dialog with **Stay on this page** (also Escape)
 and **Discard changes**. A hashchange cannot be cancelled, so the move is undone
-through session history (`history.go`, using a position index kept in
-`history.state`) without rewriting any entry, and the shell does not render
+through session history (`history.go`, using the Navigation API entry index,
+or a position index kept in `history.state` where that API is unavailable)
+without rewriting any entry, and the shell does not render
 until the user chooses Discard, which repeats the move. Back/Forward → Stay
 therefore leaves the history stack intact. Only the guard's own undo arrival is
 held; any other arrival, including one on an entry that shares the settled
