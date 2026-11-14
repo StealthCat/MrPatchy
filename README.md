@@ -686,10 +686,13 @@ reservation before any provider request or usage receipt is created. A refused s
 does not call the provider or consume a triage retry attempt.
 
 Existing installations initially retain their separate investigation, scoring and
-incident-plan hourly allowances. Settings shows the conservative suggested shared
-rate (the lower existing automatic allowance); an administrator must review and save
-the migration, which is audited. Fresh installations use shared rate mode. The legacy
-incident/startup-plan queue allowance is disabled only after that explicit migration.
+incident-plan hourly allowances. Settings → AI lists the current per-purpose limits,
+including automatic incident/startup plans, and suggests the lowest enabled hourly
+allowance as the shared rate. An administrator can apply it to the form; the usual
+preview, confirmation, revision check and audit flow applies when saving. The proposal
+never raises a purpose's hourly ceiling, though it may lower higher legacy limits.
+Fresh installations use shared rate mode. Legacy limits remain until an administrator
+saves the migration.
 
 Administrators using legacy mode can inspect process-triage, update-scoring and automatic incident/startup-plan hourly allowances in Investigations → Shared AI start gates, including prior-hour usage and the next eligibility time when an allowance is exhausted. These per-purpose holds are displayed separately and do not change the shared global gates or admission behavior.
 
