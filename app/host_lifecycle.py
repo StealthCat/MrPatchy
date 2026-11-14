@@ -209,5 +209,7 @@ def remove(s,host,expected,confirmation,actor,reason):
     incidents.resolve_host_notifications(s,host.id)
     from . import triage_notifications
     triage_notifications.resolve_host_notifications(s,host.id)
+    from . import ai_pause_notifications
+    ai_pause_notifications.resolve_host_notification(s,host.id)
     audit(s,'delete server',host.id+' '+actor+' '+reason.strip()+'; local credentials removed; history retained')
     s.commit()
