@@ -158,10 +158,29 @@ async function loadAiControlGates(root,revision){
  section.innerHTML=aiControlGates(snapshot);section.removeAttribute('aria-busy');
  section.querySelectorAll('[data-ai-control-retry]').forEach(button=>button.onclick=()=>loadAiControlGates(root,revision));
 }
+// Daily-cap window on the Investigations worker card (#876). Display-only, from
+// the same admin-only ai_budget.status payload that Settings shows.
+function aiBudgetStatus(budget){
+ if(!budget||budget.enabled!==true)return '';
+ const usd=value=>typeof value==='string'&&/^\d{1,12}(\.\d{1,12})?$/.test(value)?'$'+value:'Unavailable';
+ const when=value=>Number.isFinite(value)&&value>0?date(value):null;
+ const zone=typeof budget.timezone==='string'&&budget.timezone?budget.timezone:'timezone unavailable';
+ const resetAt=when(budget.next_reset);
+ const reset=!resetAt?'Next reset unavailable.':budget.next_reset_authoritative===false
+  ?`Configured reset ${resetAt} (${esc(zone)}) is only a recheck boundary: spend admitted before a timezone change stays counted, so headroom may not refill then.`
+  :`Resets ${resetAt} (${esc(zone)}).`;
+ const count=budget.unreconciled_call_count;
+ const pending=Number.isSafeInteger(count)&&count>0
+  ?`<p class="help" data-ai-budget-unreconciled><strong>${count} transmitted AI ${count===1?'call awaits':'calls await'} reconciliation.</strong> Oldest reservation ${when(budget.oldest_unreconciled_reservation_at)||'time unavailable'}. Their full reserved ceiling stays counted until a usage receipt reconciles them.</p>`
+  :Number.isSafeInteger(count)&&count===0?'':'<p class="help" data-ai-budget-unreconciled>Calls awaiting reconciliation: Unavailable.</p>';
+ const facts=[['cap',budget.cap_usd],['counted',budget.counted_usd],['settled',budget.settled_usd],['reserved',budget.reserved_usd],['uncertain',budget.uncertain_usd],['remaining',budget.remaining_usd]]
+  .map(([label,value])=>`<span><strong>${esc(usd(value))}</strong> ${label}</span>`).join('');
+ return `<section class="ai-budget-status" data-ai-budget-status aria-labelledby="ai-budget-status-title"><h3 id="ai-budget-status-title">Daily AI spend cap</h3><div class="status-facts">${facts}</div><p class="help">${reset} Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled. Public price estimates are not provider invoices.</p>${pending}</section>`;
+}
 function triageStatus(status){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value:'Unavailable';
  const control=aiAdmissionControl(status);
- const budget=status.budget||{};const spend=budget.enabled?`<p class="help">Daily budget: $${esc(budget.counted_usd)} counted · $${esc(budget.remaining_usd)} remaining · $${esc(budget.uncertain_usd)} uncertain · resets ${date(budget.next_reset)} (${esc(budget.timezone)}). Public price estimates are not provider invoices.</p>`:'';
+ const spend=aiBudgetStatus(status.budget);
  const plans=status.plan_deferred_by_action;
  const planDetails=plans&&status.plan_deferred>0?`<details><summary>Deferred plans by purpose</summary>
  <p class="help">Queue-ready means the job is due and server AI is active. Shared controls can still delay a start. Recorded retry times may belong to paused servers.</p>
