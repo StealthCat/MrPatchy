@@ -1,3 +1,7 @@
+## 1.59.106 — 2026-11-14
+
+1. [PR #851](https://github.com/StealthCat/MrPatchy/pull/851): Added role-specific GCP runtime Compose overlays for controller and worker deployments, allowing the existing gcloud/IAP runtime with the split role files. The overlays are additive; attached service accounts use the role files, while WIF credentials stay on the full-installation path. Scan-policy enablement timestamps are now persisted at microsecond precision so MySQL JSON round-trips to the value returned by the API. No schema, route, role or response-authorization changes. Controller-only/join-worker installer modes and remote-machine workers remain out of scope.
+
 ## 1.59.105 — 2026-11-14
 
 1. [PR #842](https://github.com/StealthCat/MrPatchy/pull/842): Scheduled-scan coverage notifications now flag an enabled policy whose first scan has not been enqueued after the interval plus one-hour grace. The timestamp is server-managed in the existing policy JSON; no schema, route, role or response-authorization change. Existing enabled policies without the timestamp remain silent until saved, and re-enabling may notify before the next scheduler tick queues a scan.

@@ -78,12 +78,51 @@ To scale, rerun the worker command with a new `--scale` value. Before planned
 maintenance, drain workers in the UI and verify their state; `docker compose stop`
 also drains active jobs within the worker's long stop grace period.
 
-The following remain unsupported in this increment:
+### Google Cloud IAP runtime with the role files
+
+Don't layer `compose.gcp.yaml` on a role file. It defines both `app` and `worker`,
+so on `compose.controller.yaml` it adds a partial worker service (and on
+`compose.worker.yaml` a partial app service) without the role's command, hardening,
+volumes or networks. Use the role-specific overlays instead. Each carries exactly the
+matching `compose.gcp.yaml` service block (the `mrpatchy:gcp` image built from
+`deploy/Dockerfile.gcp`, `CLOUDSDK_CONFIG=/data/gcloud` and the required
+`GCP_PROJECT`/`GCP_ZONE`), and a test keeps them in sync:
+
+| Role file | GCP overlay |
+|---|---|
+| `compose.controller.yaml` | `compose.controller.gcp.yaml` (app only) |
+| `compose.worker.yaml` | `compose.worker.gcp.yaml` (worker only) |
+
+```sh
+# Prerequisite: the GCP image derives from the base image (install-gcp.sh builds it too).
+docker build -t mrpatchy:base .
+
+# Controller with the gcloud runtime.
+docker compose --env-file .env -p mrpatchy \
+  -f compose.controller.yaml -f compose.controller.gcp.yaml up -d --build --wait --remove-orphans
+
+# Three GCP-enabled workers on the same Docker host.
+MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data docker compose --env-file .env -p mrpatchy-workers \
+  -f compose.worker.yaml -f compose.worker.gcp.yaml up -d --build --scale worker=3
+```
+
+Rendering fails closed when `GCP_PROJECT` or `GCP_ZONE` is unset. Explicit `-f`
+options take precedence over the `COMPOSE_FILE` line that `install-gcp.sh` writes to
+`.env`, so keep using these explicit commands, not `./gcp-compose.sh` or plain
+`docker compose`, once you move to the role files; otherwise a later command would
+start the complete installation again. The workers reuse the controller's gcloud
+configuration in `/data/gcloud` on the shared data volume, so an attached GCE
+service account works without separate worker sign-in. The overlays don't carry the
+Workload Identity Federation mount from `compose.gcp-auth.json`, which also names both
+services. Keep WIF installations on `compose.yaml` with `./gcp-compose.sh` for now.
+
+### Unsupported in this increment
+
 - Workers on another machine: a Docker volume name doesn't share the encryption key, SSH identities, artifacts or locking state across hosts.
-- Combining the role files with `compose.gcp.yaml`, which also defines a worker.
+- Role files with the WIF credential mount from `compose.gcp-auth.json`.
 - Network-mounted SQLite.
 
-Use `compose.yaml` (optionally with `compose.gcp.yaml`) for those installations.
+Use `compose.yaml` (optionally with `compose.gcp.yaml` through `./gcp-compose.sh`) for those installations.
 
 ## Use the generated YAML
 
