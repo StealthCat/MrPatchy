@@ -4276,7 +4276,10 @@ and **Discard changes**. A hashchange cannot be cancelled, so the move is undone
 through session history (`history.go`, using a position index kept in
 `history.state`) without rewriting any entry, and the shell does not render
 until the user chooses Discard, which repeats the move. Back/Forward → Stay
-therefore leaves the history stack intact. Reloading or closing the tab triggers the
+therefore leaves the history stack intact. Only the guard's own undo arrival is
+held; any other arrival, including one on an entry that shares the settled
+position, renders normally, and a move that cannot be measured restores the
+address in place instead of reloading. Reloading or closing the tab triggers the
 browser's native `beforeunload` prompt. Reverting an edit or saving it clears the
 warning. The Settings search box and the spend-history filter are view filters
 and never prompt. Sign-out and session expiry are not held. The change is UI-only,
