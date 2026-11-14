@@ -3685,9 +3685,21 @@ renders both combinations through `docker compose config`:
 
 CI renders both pairs. Workers reuse the controller's `/data/gcloud` configuration on
 the shared volume, so an attached service account needs no worker sign-in. Still open:
-role files with the WIF `compose.gcp-auth.json` mount, installer controller-only and
-join-worker modes, remote-machine workers and the dedicated gcp-integration node.
+installer controller-only and join-worker modes, remote-machine workers and the
+dedicated gcp-integration node; WIF role overlays are covered by checkpoint #866.
 No runtime code, role, authorization or complete-installation behavior changes.
+
+### WIF credential overlays for the role files — worker checkpoint #866
+
+With `--credential-dir`, `install-gcp.sh` writes `compose.controller.gcp-auth.json`
+(app only) and `compose.worker.gcp-auth.json` (worker only) next to the combined
+`compose.gcp-auth.json`. Each carries that file's validated read-only `/gcp` bind
+mount for its one service, has mode 0600, is Git/Docker-ignored, and is refused when
+the path is a symlink. Tests render each role pair with its overlay and get exactly
+app and Caddy, or exactly the worker, with the mount only on the named service.
+`COMPOSE_FILE`, `gcp-compose.sh` and the installer's sign-in and check flow are
+unchanged. Controller-only and join-worker installer modes, remote-machine workers
+and the dedicated gcp-integration node remain open.
 
 
 ### Deployment files and runtime roles
