@@ -118,8 +118,9 @@ function aiControlGates(snapshot){
  }
  const limitations=Array.isArray(snapshot.limitations)&&snapshot.limitations.length?`<ul class="help">${snapshot.limitations.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'';
  const refresh=`<div class="actions"><button type="button" data-ai-control-retry>Refresh start gates</button></div>`;
+ const purposes=aiPurposeLimits(snapshot.purpose_limits,when);
  if(snapshot.can_start_now&&!snapshot.blockers.length){
-  return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${limitations}${refresh}`;
+  return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${purposes}${limitations}${refresh}`;
  }
  const items=snapshot.blockers.map(blocker=>{
   const code=typeof blocker?.code==='string'?blocker.code:'unknown';
@@ -129,7 +130,24 @@ function aiControlGates(snapshot){
  }).join('');
  const nextStart=when(snapshot.next_start_at);
  const summary=nextStart?`<p><strong>Next eligible start:</strong> ${nextStart}. This is the latest time among the blocking gates. Work may still wait after it.</p>`:`<p><strong>No automatic next start.</strong> At least one hold has no scheduled end, or its time is only a recheck boundary.</p>`;
- return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${limitations}${refresh}`;
+ return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${purposes}${limitations}${refresh}`;
+}
+// Legacy per-purpose hourly allowances (#860). Each holds only its own purpose.
+const AI_PURPOSE_LABELS={triage:'Process triage',update_scoring:'Update scoring',automatic_plans:'Automatic incident and startup plans'};
+function aiPurposeLimits(limits,when){
+ if(!Array.isArray(limits)||!limits.length)return '';
+ const count=value=>Number.isSafeInteger(value)&&value>=0?String(value):'Unavailable';
+ const rows=limits.map(item=>{
+  const purpose=typeof item?.purpose==='string'?item.purpose:'unknown';
+  const label=AI_PURPOSE_LABELS[purpose]||purpose.replaceAll('_',' ');
+  const used=`${count(item?.used)} of ${count(item?.limit)} in the last hour`;
+  let state;
+  if(item?.state==='disabled')state='Disabled in Settings, so this allowance is not in use';
+  else if(item?.state==='available')state='Allowance available';
+  else{const next=when(item?.next_at);state=next?`Allowance used up. Next eligible ${next}`:'Allowance used up. No scheduled reopening';}
+  return `<li><strong>${esc(label)}</strong> · ${esc(used)}<br><small>${esc(state)}.</small></li>`;
+ }).join('');
+ return `<h3>Legacy hourly allowances</h3><p class="help">This installation still uses the legacy per-purpose hourly limits. Each one holds only its own purpose and is not one of the shared gates above.</p><ul data-ai-purpose-limits>${rows}</ul>`;
 }
 async function loadAiControlGates(root,revision){
  const section=root.querySelector('#ai-control-gates');if(!section)return;

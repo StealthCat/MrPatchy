@@ -2607,6 +2607,22 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
+
+Installations still on `legacy` control mode now see their hidden hourly
+allowances in the administrator **Shared AI start gates** snapshot
+(`purpose_limits`). Process triage, update scoring and automatic incident/startup
+plans each report their limit, the count in the last hour, and an exact next
+eligibility. That time is when the sliding window next drops below the limit,
+not the oldest entry plus one hour. Triage uses both counters that admission
+enforces and reopens only when both fall below the limit. Update scoring that is
+disabled in Settings is reported as disabled, not as used up. These holds apply
+to one purpose each and do not change the global `blockers`, `can_start_now` or
+`next_start_at`. Explicit modes return an empty list. The entries carry only
+counts and timestamps. Admission behavior is unchanged. Migrating legacy
+installations to an explicit mode and the broader shared-controls acceptance
+remain open.
+
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
 The administrator's Investigations queue notice now names the admission control
