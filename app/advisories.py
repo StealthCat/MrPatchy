@@ -1,6 +1,5 @@
 """Opt-in OSV queries using distro-specific source package versions."""
 import concurrent.futures
-import datetime
 import re
 import time
 import httpx
@@ -119,10 +118,11 @@ def record_date(value,now):
     RECORD_DATE_SKEW past ``now`` are rejected instead of guessed.
     """
     if not isinstance(value,str) or len(value)>40 or not _RFC3339.fullmatch(value):return None
+    from datetime import datetime  # local: keeps the module import block unchanged
     text=value[:-1]+'+00:00' if value.endswith('Z') else value
     head,_,tail=text.partition('.')
     if tail:text=head+'.'+tail[:-6][:6].ljust(6,'0')+tail[-6:]  # normalize to microseconds
-    try:stamp=datetime.datetime.fromisoformat(text).timestamp()
+    try:stamp=datetime.fromisoformat(text).timestamp()
     except (ValueError,OverflowError):return None
     if stamp<631152000 or stamp>now+RECORD_DATE_SKEW:return None
     return stamp
