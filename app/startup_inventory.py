@@ -48,15 +48,16 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
     revision=digest({'inspection':latest['id'],'inventory':inventory,'baseline':assessment['baseline']})
     if expected_digest and expected_digest!=revision:raise ValueError('Startup inventory or baseline changed; reopen the browser')
     changes={r['path']:r['kind'] for r in assessment['comparison']['changes']} if assessment['comparison']['state']=='compared' else None
-    # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
-    newly=assessment['comparison'].get('newly_in_scope',[]) if changes is not None else []
     rows=[]
+    newly=assessment['comparison'].get('newly_in_scope',[]) if changes is not None else []
     for entry in inventory['entries']:
         key,label=mechanism(entry['path'])
         row={k:entry[k] for k in ('path','kind','uid','gid','mode','size','sha256','target') if k in entry}
-        row.update(mechanism=key,mechanism_label=label,change=('not_in_baseline' if any(entry['path']==root or entry['path'].startswith(root+'/') for root in newly) else changes.get(entry['path'],'unchanged')) if changes is not None else 'not_compared',origin='not_assessed',jobs_state=jobs_state(entry))
+        row.update(mechanism=key,mechanism_label=label,change=changes.get(entry['path'],'unchanged') if changes is not None else 'not_compared',origin='not_assessed',jobs_state=jobs_state(entry))
         if 'cron' in entry:row['cron']=entry['cron']
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
+        # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
+        if changes is not None and any(entry['path']==root or entry['path'].startswith(root+'/') for root in newly):row['change']='not_in_baseline'
         if q.casefold() in (entry['path']+' '+label+' '+jobs).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     catalog=[{'id':key,'label':label,'observed_files':sum(mechanism(e['path'])[0]==key for e in inventory['entries'])} for key,label,_ in CATALOG]
