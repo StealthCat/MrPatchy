@@ -107,10 +107,31 @@ def test_compose_reports_exactly_the_variables_the_test_derives():
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, env={"PATH": "/usr/bin:/bin:/usr/local/bin"})
     if result.returncode and "variables" in result.stderr:
         pytest.skip("this Docker Compose version has no config --variables")
+    if result.returncode and "${" in result.stderr:
+        # Some Compose releases cannot parse nested defaults such as ${HTTP_BIND_IP:-${BIND_IP:-0.0.0.0}}
+        # in --variables mode, although they interpolate them correctly when rendering. Require the real
+        # render to succeed; test_every_controller_interpolation_uses_the_derived_syntax still pins the set.
+        rendered = _render(CONTROLLER_ENV_EXAMPLE)
+        assert rendered.returncode == 0, rendered.stderr
+        pytest.skip("this Docker Compose version's config --variables cannot parse nested defaults")
     assert result.returncode == 0, result.stderr
     derived = {name for text in _controller_sources()[:2] + [(ROOT / "compose.controller.yaml").read_text()]
                for name in VARIABLE.findall(text)}
     assert set(json.loads(result.stdout)) == derived
+
+
+def test_every_controller_interpolation_uses_the_derived_syntax():
+    """Compose-independent check: every ``$`` the controller role reads is ``$$`` or ``${NAME...}``.
+
+    With no bare ``$NAME`` references, the ``${NAME`` names VARIABLE extracts are exactly the
+    variables Compose interpolates, even where ``config --variables`` is unavailable.
+    """
+    texts = _controller_sources() + [(ROOT / "compose.controller.yaml").read_text()]
+    for text in texts:
+        stripped = text.replace("$$", "")
+        assert re.findall(r"\$(?!\{[A-Z][A-Z0-9_]*)", stripped) == [], "unexpected interpolation syntax"
+    assert {"HTTP_BIND_IP", "BIND_IP"} <= _controller_variables() | {
+        name for text in texts for name in VARIABLE.findall(text)}
 
 
 def test_controller_env_example_renders_with_the_gcp_controller_overlay():
