@@ -11,3 +11,4 @@ node_modules/
 .env.ci
 .env.gcp
 compose.gcp-auth.json
+.env.worker

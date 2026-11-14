@@ -115,11 +115,117 @@ def test_legacy_mode_discloses_unreflected_per_purpose_hourly_limits(admin):
     assert result['mode'] == 'legacy'
     assert result['limitations'][:len(ai_control_status.LIMITATIONS)] == ai_control_status.LIMITATIONS
     assert result['limitations'][-1] == ai_control_status.LEGACY_LIMITATION
-    assert 'per-purpose hourly limits' in result['limitations'][-1]
+    assert 'per-purpose hourly allowances' in result['limitations'][-1]
     for mode in ('rate', 'daily_cap', 'rate_and_daily', 'unthrottled'):
         configure(mode=mode)
         with Session() as session:
             assert ai_control_status.snapshot(session, 1000)['limitations'] == ai_control_status.LIMITATIONS
+            assert ai_control_status.snapshot(session, 1000)['purpose_limits'] == []
+
+
+def legacy_config(**values):
+    configure(mode='legacy')
+    with Session() as session:
+        settings = dict(session.get(Setting, 'config').value)
+        settings.update(values)
+        session.merge(Setting(key='config', value=settings))
+        session.commit()
+
+
+def add_history(*, attempts=(), triage=(), scoring=(), plans=(), other_jobs=()):
+    from app.ai_runs import AIRun
+    from app.db import Behavior, Job
+    with Session() as session:
+        for index, at in enumerate(attempts):
+            session.add(Behavior(id=f'private-behavior-{index}', host_id='private-host', evidence={'cmd': 'private'},
+                                 attempted=at))
+        for purpose, times in (('triage', triage), ('update_scoring', scoring)):
+            for index, at in enumerate(times):
+                session.add(AIRun(id=f'private-{purpose}-{index}', purpose=purpose, host_id='private-host',
+                                  model='private-model', subject='private-subject', started=at))
+        for index, (action, at) in enumerate([*plans, *other_jobs]):
+            session.add(Job(id=f'private-job-{index}', host_id='private-host', action=action,
+                            payload={'private': True}, created=at))
+        session.commit()
+
+
+def limits_by_purpose(now):
+    with Session() as session:
+        result = ai_control_status.snapshot(session, now)
+    return result, {item['purpose']: item for item in result['purpose_limits']}
+
+
+def test_legacy_allowances_report_exact_sliding_window_opening(admin):
+    now = 2_000_000_000.0
+    legacy_config(ai_hourly_limit=3, ai_update_hourly_limit=2)
+    # Five scoring runs in the window with a limit of two: the gate reopens
+    # when only one remains, i.e. after the fourth-oldest entry expires.
+    add_history(scoring=(now - 3000, now - 2500, now - 2000, now - 1500, now - 10),
+                plans=[('security-plan', now - 3500 + i) for i in range(6)] +
+                      [('startup-plan', now - 1000 + i) for i in range(4)],
+                other_jobs=[('refresh', now - 100), ('security-plan', now - 3600)])
+    result, limits = limits_by_purpose(now)
+
+    assert [item['purpose'] for item in result['purpose_limits']] == ['triage', 'update_scoring', 'automatic_plans']
+    assert limits['triage'] == {'purpose': 'triage', 'limit': 3, 'used': 0, 'state': 'available', 'next_at': None}
+    assert limits['update_scoring'] == {'purpose': 'update_scoring', 'limit': 2, 'used': 5,
+                                        'state': 'exhausted', 'next_at': now - 1500 + 3600}
+    # Ten plans counted (the run exactly an hour old is outside the window);
+    # with the fixed limit of ten the oldest must leave first.
+    assert limits['automatic_plans'] == {'purpose': 'automatic_plans', 'limit': 10, 'used': 10,
+                                         'state': 'exhausted', 'next_at': now - 3500 + 3600}
+    # Per-purpose holds do not change the shared global gates.
+    assert result['can_start_now'] and result['blockers'] == [] and result['next_start_at'] is None
+    rendered = str(result)
+    for private in ('private-behavior', 'private-host', 'private-model', 'private-subject', 'private-job',
+                    'private-triage', 'private-update'):
+        assert private not in rendered
+
+    # At the opening instant the window has dropped below the limit.
+    _, limits = limits_by_purpose(now - 1500 + 3600)
+    assert limits['update_scoring']['state'] == 'available' and limits['update_scoring']['used'] == 1
+    assert limits['update_scoring']['next_at'] is None
+
+
+def test_legacy_triage_allowance_waits_for_both_admission_counters(admin):
+    now = 2_000_000_000.0
+    legacy_config(ai_hourly_limit=2)
+    add_history(attempts=(now - 3000, now - 2900, now - 100), triage=(now - 2000, now - 1000, now - 50, now - 40))
+    _, limits = limits_by_purpose(now)
+    # Attempts reopen at (now-2900)+3600; runs reopen at (now-50)+3600. Admission
+    # needs both counters below the limit, so the later time applies.
+    assert limits['triage'] == {'purpose': 'triage', 'limit': 2, 'used': 4, 'state': 'exhausted',
+                                'next_at': now - 50 + 3600}
+
+    # Exhausting only one counter still holds triage.
+    with Session() as session:
+        from app.ai_runs import AIRun
+        session.query(AIRun).delete()
+        session.commit()
+    _, limits = limits_by_purpose(now)
+    assert limits['triage'] == {'purpose': 'triage', 'limit': 2, 'used': 3, 'state': 'exhausted',
+                                'next_at': now - 2900 + 3600}
+
+
+def test_disabled_update_scoring_is_not_reported_as_exhausted(admin):
+    now = 2_000_000_000.0
+    legacy_config(ai_update_hourly_limit=1, ai_updates_enabled=False)
+    add_history(scoring=(now - 30, now - 20))
+    _, limits = limits_by_purpose(now)
+    assert limits['update_scoring'] == {'purpose': 'update_scoring', 'limit': 1, 'used': 2,
+                                        'state': 'disabled', 'next_at': None}
+
+
+def test_legacy_allowances_match_actual_admission_refusals(admin, monkeypatch):
+    # The reported counters use the same predicates admission enforces.
+    from app import ai_claims
+    now = 2_000_000_000.0
+    legacy_config(ai_hourly_limit=2)
+    add_history(attempts=(now - 30, now - 20))
+    monkeypatch.setattr(ai_claims.time, 'time', lambda: now)
+    assert ai_claims.acquire() is None
+    _, limits = limits_by_purpose(now)
+    assert limits['triage']['state'] == 'exhausted' and limits['triage']['next_at'] == now - 30 + 3600
 
 
 def test_control_snapshot_requires_admin(client):

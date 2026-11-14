@@ -1,3 +1,55 @@
+## 1.60.0 — 2026-11-14
+
+1. [PR #859](https://github.com/StealthCat/MrPatchy/pull/859): Advisory scans now retain durable per-server CVE exposure history, with first/last affected observations, resolution and reopening records. The admin advisory response adds up to 500 history items, open exposures first, an accurate total open count and coverage limits. This adds a database table and response key; existing records are not backfilled and history starts with the next scan. Scan intervals remain telemetry gaps, uncertain or unscanned packages do not resolve exposure, and a version-based resolution does not verify restart or reboot. This does not change response authorization or trigger any response action.
+
+## 1.59.110 — 2026-11-14
+
+1. [PR #863](https://github.com/StealthCat/MrPatchy/pull/863): Advisory scans now retain matching OSV records' published and modified dates, and the applicability panel shows a valid publication date in UTC. Missing, invalid or unfetched dates remain null and do not change applicability status. This adds response metadata and display only, with no schema, route, role, patch-selection or response-authorization change. Dates describe the advisory record, not the vendor fix time or exposure start. Using publication dates in exposure windows/history, verified restart, scheduled scans, fleet views, RPM updateinfo and exploitation monitoring remain incomplete.
+
+## 1.59.109 — 2026-11-14
+
+1. [PR #861](https://github.com/StealthCat/MrPatchy/pull/861): Shows legacy per-purpose hourly allowances for process triage, update scoring and automatic incident/startup plans in the shared AI start-gates status and Investigations card, including prior-hour usage and next eligibility when exhausted. This adds a response field and UI only; admission behavior, shared gates, schema and response authorization are unchanged. The displayed plan allowance mirrors the existing fixed scheduler limit, and legacy-mode migration remains an operator decision.
+
+## 1.59.108 — 2026-11-14
+
+1. [PR #855](https://github.com/StealthCat/MrPatchy/pull/855): Adds `.env.controller.example` for the split controller role, listing app, Caddy and GCP controller settings while leaving out worker-only pools, IDs, drain settings and data-volume configuration. The example renders the same controller configuration as the complete `.env.example`; `MRPATCHY_EXPECTED_WORKER_IDS` is empty for role-file replicas. This is additive and leaves existing complete-installation settings unchanged. It is a template only: remote-machine secret provisioning, controller-only/join-worker installer modes and multi-host acceptance remain open. No schema, API, role or response-authorization changes.
+
+## 1.59.107 — 2026-11-14
+
+1. [PR #853](https://github.com/StealthCat/MrPatchy/pull/853): Adds `.env.worker.example` and worker-only Compose startup instructions. The template lists worker-role settings, is ignored by Git and Docker builds, and CI renders it; tests check the template against the worker Compose variables. Additive only: Compose files, installers and application behavior are unchanged, the existing inline volume override continues to work, and an explicit `--env-file` prevents a controller `.env` in the same checkout from leaking into the worker project. This template does not provision remote-machine secrets or shared state, add controller-only/join-worker installer modes, or validate multi-host deployment. No schema, API, role or response-authorization change.
+
+## 1.59.106 — 2026-11-14
+
+1. [PR #851](https://github.com/StealthCat/MrPatchy/pull/851): Added role-specific GCP runtime Compose overlays for controller and worker deployments, allowing the existing gcloud/IAP runtime with the split role files. The overlays are additive; attached service accounts use the role files, while WIF credentials stay on the full-installation path. Scan-policy enablement timestamps are now persisted at microsecond precision so MySQL JSON round-trips to the value returned by the API. No schema, route, role or response-authorization changes. Controller-only/join-worker installer modes and remote-machine workers remain out of scope.
+
+## 1.59.105 — 2026-11-14
+
+1. [PR #842](https://github.com/StealthCat/MrPatchy/pull/842): Scheduled-scan coverage notifications now flag an enabled policy whose first scan has not been enqueued after the interval plus one-hour grace. The timestamp is server-managed in the existing policy JSON; no schema, route, role or response-authorization change. Existing enabled policies without the timestamp remain silent until saved, and re-enabling may notify before the next scheduler tick queues a scan.
+
+## 1.59.104 — 2026-11-14
+
+1. [PR #840](https://github.com/StealthCat/MrPatchy/pull/840): Scheduled malware-scan coverage notifications now flag a queued or running scan that remains pending longer than its configured interval plus one hour, instead of leaving the coverage notice silent. Existing stuck episodes can receive one `stalled` revision; this adds no schema, API, role or authorization change. It does not cancel, retry or recover jobs. A policy with no first scan attempt remains silent; YARA schedules and configurable grace periods are out of scope.
+
+## 1.59.103 — 2026-11-14
+
+1. [PR #832](https://github.com/StealthCat/MrPatchy/pull/832): Adds individual Debian-family `at` job details to Startup → Files and Coverage, parsed only from already-hashed `/var/spool/cron/atjobs` bytes when parsed-job collection is requested. Shows queue, scheduled time, owner and bounded commands with the existing best-effort redaction; counts exported environment assignments without storing values, and reports unrecognized layouts as unparsed. Only atd’s reserved `=` queue is marked running; uppercase batch queues retain their letter. Older agents show “not reported.” No schema, auth, scope-root, baseline or response-authorization change. Material limits: atd status is not evaluated, the RHEL-family `/var/spool/at` spool and referenced scripts are outside scope, and no AI classification is made.
+
+## 1.59.102 — 2026-11-14
+
+1. [PR #818](https://github.com/StealthCat/MrPatchy/pull/818): Adds a fixed-text, admin-only in-app notification for failed or incomplete scheduled malware scans and scans overdue by more than the configured interval plus one hour. Notices resolve when coverage is recorded, the schedule is disabled or the server leaves scope. This adds no schema, role, API, SMTP/webhook, scan scheduling or response-authorization change. Material limits: queued/running attempts and enabled policies with no first scan remain suppressed, so stuck or never-started schedules may still be silent; [issue #816](https://github.com/StealthCat/MrPatchy/issues/816) remains open for this follow-up.
+
+## 1.59.101 — 2026-11-14
+
+1. [PR #821](https://github.com/StealthCat/MrPatchy/pull/821): Adds a fixed-text, admin-only in-app notice when verified Debian or Ubuntu releases are past standard support, including ended support, Ubuntu Pro entitlement not observed, or Debian LTS eligibility unverified. It uses the reviewed catalog and inventory freshness; stale inventory holds the state, and the event resolves when coverage returns or the host/release leaves scope. Already-affected servers receive a notice on the next coordinator tick. This is additive notification behavior with no schema, route, role, SMTP/webhook, patching, upgrade or response-authorization change. #341 remains open for advance warning, entitlement discovery, RPM/vendor catalogs, catalog refresh/signing, migration planning, fleet reporting and real-target acceptance.
+
+## 1.59.100 — 2026-11-14
+
+1. [PR #817](https://github.com/StealthCat/MrPatchy/pull/817): Adds admin-only endpoints to count and retry update scores blocked by a non-transient AI provider failure, plus a Settings → AI notice and retry control. Retries only current-configuration blocked scores for current package pairs on active, unpaused servers; they send no provider request and remain subject to normal scheduler admission. The `/api/settings` response gains the additive `ai_scoring_blocked` field. No schema or response-authorization change. Retry is fleet-wide; earlier-signature rows and blocked advisory-plan work are out of scope.
+
+## 1.59.99 — 2026-11-14
+
+1. [PR #823](https://github.com/StealthCat/MrPatchy/pull/823): Adds a counts-only admin notification when the latest stored advisory scan still shows affected rows for currently matching installed package versions. Existing affected scans publish one notification after upgrade; unreadable inventory keeps the exposure active until data can be refreshed. Results reflect the last administrator-run scan and version applicability is not evidence of exploitation; scheduled scans remain out of scope. No schema, route, role or response-authorization change.
+
 ## 1.59.98 — 2026-11-14
 
 1. [PR #797](https://github.com/StealthCat/MrPatchy/pull/797): Fetches OSV advisory details concurrently over one pooled client (up to 8 workers), shortening the scan and its per-server lock time. The 200-record cap, shared 60-second scan budget, request timeouts, no-redirect policy and fail-closed uncertain results are unchanged. No schema, API, role, UI or response-authorization change. A slow scan can still hold the per-server lock for the remaining scan budget; notifications and scheduled scans remain out of scope.

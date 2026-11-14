@@ -8,3 +8,4 @@ tests
 docs
 .env.gcp
 compose.gcp-auth.json
+.env.worker

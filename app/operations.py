@@ -319,6 +319,18 @@ def collect_alerts(now=None):
         from . import integrity_sweep_notifications
         try:integrity_sweep_notifications.publish(s,hosts,now)
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
+        # In-app only: scheduled malware-scan coverage has no SMTP/webhook alert.
+        from . import scan_coverage_notifications
+        try:scan_coverage_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app scheduled-scan coverage notifications')
+        # In-app only: lifecycle text comes from the reviewed catalog, never endpoint text.
+        from . import os_lifecycle_notifications
+        try:os_lifecycle_notifications.publish(s,hosts,now,cfg['repo_minutes']*120)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app OS lifecycle notifications')
+        # In-app only: stored advisory applicability; counts only, never advisory or package text.
+        from . import advisory_exposure_notifications
+        try:advisory_exposure_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app advisory exposure notifications')
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)

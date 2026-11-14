@@ -10,6 +10,7 @@ import re
 import secrets
 import shlex
 import threading
+import math
 import time
 import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
@@ -61,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.98"
+APP_VERSION = "1.60.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1202,11 +1203,12 @@ def audit_detail(entry_id:int,user=Depends(admin_user)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(admin_user)):
-    from . import ai_budget,ai_provider_backoff
+    from . import ai_budget,ai_provider_backoff,scoring_block_notifications
     with Session() as s:
         cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
+            'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
             'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
                 'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
 
@@ -1382,6 +1384,31 @@ def clear_provider_backoff(body:ProviderBackoffClearInput,user=Depends(admin_use
     with Session() as s:
         audit(s,'clear AI provider backoff',user['username']+' cleared reviewed active floor: '+body.reason.strip());s.commit()
     return {'cleared':active}
+
+@app.get('/api/update-scores/blocked')
+def blocked_update_scores(user=Depends(admin_user)):
+    """Count update scores blocked under the current AI configuration (#815).
+
+    Uses the same predicate as the ``ai-scoring``/``configuration-blocked``
+    notification and the retry action. Read-only.
+    """
+    from . import scoring_block_notifications
+    with Session() as s:
+        return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
+@app.post('/api/update-scores/blocked/retry')
+def retry_blocked_update_scores(user=Depends(admin_user)):
+    """Re-queue update scores blocked under the current AI configuration (#815).
+
+    Sends no provider request: the scheduler still applies enablement, pause,
+    lifecycle and shared rate/daily-cap admission to the re-queued scores.
+    """
+    from . import scoring_block_notifications
+    with Session() as s:
+        retried=scoring_block_notifications.retry(s,config(s))
+        if retried:audit(s,'retry blocked AI update scores',user['username']+' re-queued '+str(retried)+' blocked update score(s)')
+        s.commit()
+    return {'retried':retried,'detail':(str(retried)+' blocked update score'+('' if retried==1 else 's')+' queued for the next scoring pass. AI pause, shared rate and daily-cap admission still apply.') if retried else 'No update scores are blocked under the current AI configuration.'}
 
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1906,19 +1933,20 @@ def rollout(body:RolloutInput,user=Depends(admin_user)):
 class AdvisoryInput(BaseModel): packages:list[str]=Field(min_length=1,max_length=100)
 @app.post('/api/operations/{host_id}/advisories')
 def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(admin_user)):
-    from .advisories import scan
+    from .advisories import scan,record_history
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
         result=scan(h.inventory,body.packages)
         if len(json.dumps(result).encode())>2000000:raise HTTPException(413,'Advisory result too large')
-        s.merge(Setting(key='advisories:'+host_id,value=result));s.commit()
+        s.merge(Setting(key='advisories:'+host_id,value=result));record_history(s,host_id,result);s.commit()
         return result
 @app.get('/api/operations/{host_id}/advisories')
 def get_advisories(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
-        from .advisories import retained
-        return retained(row.value) if row else {'results':[],'coverage':'Not checked'}
+        from .advisories import retained,history
+        result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
+        return {**result,'exposure_history':history(s,host_id)}
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
@@ -3087,9 +3115,20 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
     validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
-            host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
+            host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
+            value=body.model_dump()
+            # Server-managed enablement time (#841) lets coverage notifications tell a newly enabled policy
+            # from one whose first scheduled scan has never been enqueued. Clients cannot set it.
+            previous=row.value if row and isinstance(row.value,dict) else {}
+            since=previous.get('enabled_since')
+            if value['enabled']:
+                kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
+                # Whole microseconds keep the decimal form at <=16 significant digits (an exact double below 2**53),
+                # so MySQL's JSON parser stores the same double the API returns instead of one bit off.
+                value['enabled_since']=since if kept else math.floor(time.time()*1_000_000)/1_000_000
+            s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
-    return body.model_dump()
+    return value
 
 
 class IncidentReview(BaseModel):
