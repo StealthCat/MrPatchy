@@ -114,6 +114,7 @@ function renderAISettings(data,revision,container){
  const toggleManual=()=>{const enabled=select.value==='__manual__';$('#ai-manual-label').hidden=!enabled;manual.required=enabled;manual.disabled=!enabled;};
  const markChanged=()=>{saveResult.textContent='Unsaved changes.';testResult.textContent='';toggleManual();};
  form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();
+ const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
  // Effects of this change (#871): read-only preview of admission/spend ceilings before save.
  $('#ai-test-result').insertAdjacentHTML('afterend','<div class="notice ai-control-effects" id="ai-control-effects" role="status" aria-live="polite" hidden></div>');
  const effectsPanel=$('#ai-control-effects'),CONTROL_KEYS=['ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone','ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled'];
@@ -147,7 +148,6 @@ function renderAISettings(data,revision,container){
    $('#ai-expansion-cancel').focus();
   });
  };
- const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
  const load=async()=>{
   if(busy)return;const ticket=++listGeneration,version=keyRevision;
   refresh.disabled=true;status.textContent='Loading models using the saved API key…';
@@ -187,9 +187,9 @@ function renderAISettings(data,revision,container){
   try{
    const response=await api('/settings/ai','PUT',body);if(!alive())return;
    keyRevision=response.api_key_revision;if(response.ai_controls_revision)controlsRevision=response.ai_controls_revision;
+   effectsPanel.hidden=true;effectsPanel.textContent='';
    $('#ai-saved-model').textContent='Saved model: '+(response.ai_model||'None');
    saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';
-   effectsPanel.hidden=true;effectsPanel.textContent='';
    if(test){
     testResult.textContent='Testing saved model '+response.ai_model+'…';
     try{
