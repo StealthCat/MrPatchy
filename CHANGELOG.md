@@ -1,3 +1,7 @@
+## 1.59.107 — 2026-11-14
+
+1. [PR #853](https://github.com/StealthCat/MrPatchy/pull/853): Adds `.env.worker.example` and worker-only Compose startup instructions. The template lists worker-role settings, is ignored by Git and Docker builds, and CI renders it; tests check the template against the worker Compose variables. Additive only: Compose files, installers and application behavior are unchanged, the existing inline volume override continues to work, and an explicit `--env-file` prevents a controller `.env` in the same checkout from leaking into the worker project. This template does not provision remote-machine secrets or shared state, add controller-only/join-worker installer modes, or validate multi-host deployment. No schema, API, role or response-authorization change.
+
 ## 1.59.106 — 2026-11-14
 
 1. [PR #851](https://github.com/StealthCat/MrPatchy/pull/851): Added role-specific GCP runtime Compose overlays for controller and worker deployments, allowing the existing gcloud/IAP runtime with the split role files. The overlays are additive; attached service accounts use the role files, while WIF credentials stay on the full-installation path. Scan-policy enablement timestamps are now persisted at microsecond precision so MySQL JSON round-trips to the value returned by the API. No schema, route, role or response-authorization changes. Controller-only/join-worker installer modes and remote-machine workers remain out of scope.
