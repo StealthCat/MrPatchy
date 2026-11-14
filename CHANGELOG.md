@@ -1,6 +1,6 @@
 ## 1.59.106 — 2026-11-14
 
-1. [PR #851](https://github.com/StealthCat/MrPatchy/pull/851): Added role-specific GCP runtime Compose overlays for controller and worker deployments, allowing the existing gcloud/IAP runtime with the split role files. This is additive and does not change application runtime behavior, schema, roles or authorization. Role-file overlays support attached service accounts; WIF credential mounts remain on the full installation path, and controller-only/join-worker installer modes plus remote-machine workers remain out of scope.
+1. [PR #851](https://github.com/StealthCat/MrPatchy/pull/851): Added role-specific GCP runtime Compose overlays for controller and worker deployments, allowing the existing gcloud/IAP runtime with the split role files. The overlays are additive; attached service accounts use the role files, while WIF credentials stay on the full-installation path. Scan-policy enablement timestamps are now persisted at microsecond precision so MySQL JSON round-trips to the value returned by the API. No schema, route, role or response-authorization changes. Controller-only/join-worker installer modes and remote-machine workers remain out of scope.
 
 ## 1.59.105 — 2026-11-14
 
