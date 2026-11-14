@@ -2980,6 +2980,21 @@ Fixes [CodeQL alert #14](https://github.com/StealthCat/MrPatchy/security/code-sc
 - **Retained results:** `GET /api/operations/{host}/advisories` passes stored scans through `advisories.retained()`. Inside an `Applicability could not be established:` reason, only known problems survive and anything else becomes `version comparison failed`. The status stays `uncertain`, and the stored row is not rewritten.
 - **Unchanged:** affected, fixed and unaffected results, their reasons and fixed versions; every fail-closed path; and the schema, routes, roles and response authorization.
 
+### Pending-reboot visibility — worker checkpoint #828
+
+The read-only agent inventory now reports whether installed updates await a
+reboot: the Debian `/var/run/reboot-required` flag with up to 50 validated
+package names from `reboot-required.pkgs`, or the RPM marker only when it names
+the current boot (the same rule the bridge health check uses). The controller
+validates this untrusted value strictly; malformed or absent reports (older
+agents) are `not_reported`, never `not_required`. The flag alone does not retain
+a new inventory revision or reset repository refresh state. Server Overview and
+Patching show the state, report time and requesting packages as escaped text.
+This is visibility only: nothing reboots the server, and patch, release and
+response authorization are unchanged. Remaining for roadmap D: running-process
+use of replaced libraries without a reboot flag, binding reboot completion to
+CVE exposure closure, and notifications.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**

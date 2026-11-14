@@ -81,8 +81,10 @@ def save_inventory(s,h,inv):
     items=package_backend.installed(inv)
     if h.inventory and any(h.inventory.get(key)!=inv.get(key) for key in ('status','files','keys','architecture','foreign_architectures','machine_id','package_manager','rpm_vars','module_platform_id')):
         h.last_repo=0
-    previous={k:v for k,v in h.inventory.items() if k!='collected'}
-    current={k:v for k,v in inv.items() if k!='collected'}
+    # The pending-reboot flag is current state, not inventory history: flipping it alone
+    # does not retain another full inventory revision.
+    previous={k:v for k,v in h.inventory.items() if k not in ('collected','reboot')}
+    current={k:v for k,v in inv.items() if k not in ('collected','reboot')}
     old={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     package_history.record(s,h,inv,old,items)
     if previous!=current or not s.scalar(select(InventoryRevision.id).where(InventoryRevision.host_id==h.id).limit(1)):

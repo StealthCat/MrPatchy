@@ -148,13 +148,39 @@ def digest(path):
     return hash_artifact(path,{})
 def read(path):
     return Path(path).read_text(errors='replace')
+REBOOT_PACKAGE_LIMIT = 50
+
+
+def reboot_state(flag=Path('/var/run/reboot-required'),packages=Path('/var/run/reboot-required.pkgs'),
+                 marker=Path('/opt/drpatch/rpm-reboot-required'),boot=Path('/proc/sys/kernel/random/boot_id')):
+    """Read-only pending-reboot report. Mirrors the bridge health check: the Debian flag file,
+    or the RPM marker only when it names the current boot. Package names are bounded and
+    validated; nothing is executed."""
+    required=flag.is_file();names=[];truncated=False
+    if not required:
+        try:
+            current=boot.read_text()[:100].strip()
+            required=bool(current) and marker.is_file() and marker.stat().st_size<200 and marker.read_text().strip()==current
+        except OSError:required=False
+    if required:
+        try:
+            if packages.is_file() and packages.stat().st_size<64_000:
+                for line in packages.read_text(errors='replace').splitlines():
+                    name=line.strip()
+                    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}',name) or name in names:continue
+                    if len(names)>=REBOOT_PACKAGE_LIMIT:truncated=True;break
+                    names.append(name)
+        except OSError:pass
+    return {'required':required,'packages':names,'packages_truncated':truncated}
+
+
 def inventory():
     if not Path('/var/lib/dpkg/status').exists():
         import sys
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         try:from rpm_support import local_inventory
         except ImportError:from target.rpm_support import local_inventory
-        return local_inventory()
+        return {**local_inventory(),'reboot':reboot_state()}
     files = {}
     for pattern in ['/etc/apt/sources.list', '/etc/apt/sources.list.d/*', '/etc/apt/preferences', '/etc/apt/preferences.d/*']:
         for name in glob.glob(pattern):
@@ -174,7 +200,7 @@ def inventory():
                 keys[name]=base64.b64encode(p.read_bytes()).decode()
     arch = subprocess.check_output(['dpkg', '--print-architecture'], text=True).strip()
     foreign = subprocess.check_output(['dpkg', '--print-foreign-architectures'], text=True).split()
-    return {'os': read('/etc/os-release'), 'architecture': arch, 'foreign_architectures': foreign, 'status': read('/var/lib/dpkg/status'), 'files': files, 'keys': keys, 'machine_id': read('/etc/machine-id').strip(), 'collected': time.time()}
+    return {'os': read('/etc/os-release'), 'architecture': arch, 'foreign_architectures': foreign, 'status': read('/var/lib/dpkg/status'), 'files': files, 'keys': keys, 'machine_id': read('/etc/machine-id').strip(), 'reboot': reboot_state(), 'collected': time.time()}
 def address(value, ipv6):
     ip, port = value.split(':')
     raw = bytes.fromhex(ip)
