@@ -3835,6 +3835,33 @@ than once per server. The view never inspects, repairs or authorizes anything.
 Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
 unified dashboard acceptance remain open.
 
+### Endpoint-agent resource metrics — worker checkpoint #870
+
+Activity → Workers → **Endpoint agents** adds a **Resources** column. Each row of
+`GET /api/operations/agents` carries a `resources` object, built only from the
+agent's retained telemetry: the `device_health` root-filesystem observation (#348)
+and the `resource_pressure` record (#391). Before this, the controller stored both
+but never read them.
+
+- **Values:** root-filesystem bytes and inodes as used/available percentages,
+  available bytes, memory available percentage and total, and CPU/memory PSI
+  `some avg60`.
+- **Validation:** only version-1 records count. Non-integer, negative, zero-total,
+  inconsistent (available or used above total) or non-finite values are reported
+  as unknown and never guessed. Agent-reported gaps stay unknown.
+- **Telemetry state:** stale telemetry is shown with a stale note. Missing or
+  future-dated telemetry shows no metrics, and older agents without the records
+  show "Not reported by this agent".
+- **Advisory flags:** root-filesystem space, inodes or memory at or below
+  10 % available. They never change the health classification, counts, alerts,
+  repairs or authorization.
+
+Source, scope and process data stay out of the response. No schema or agent change.
+
+**Limits:** endpoint-agent readiness, alerts, history/hysteresis, time sync and
+certificate expiry, the GCP-node inventory and the unified dashboard acceptance
+remain open.
+
 ### Expected-controller health notifications — worker checkpoint #761
 
 On the elected coordinator's tick, after the expected-worker producer, each
