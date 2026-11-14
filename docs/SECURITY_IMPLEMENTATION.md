@@ -4324,6 +4324,28 @@ starting points, not evidence that this milestone is finished. Use
 - Exercise critical end-to-end workflows through the new pages/tabs/menus: login, enrollment and Overview landing, server selection, update selection/approval, scheduling, AI pause/investigation, security evidence/response review, jobs/history, deployment health and settings. Include direct links, Back/Forward, keyboard navigation, permissions and long-content/failed-loading cases.
 - Mark the rework complete only after the defined screen inventory has been migrated and the readability, usability, navigation, visual and regression criteria are met. Existing glass CSS, a few mascot placements or one polished screen do not complete the milestone. Once complete, the existing completion gate prevents open-ended cosmetic work merely to fill scheduled cycles.
 
+Worker checkpoint (issue #513, Settings slice): every Settings form now records a
+snapshot of the values it loaded or last saved successfully. The forms covered are
+the API key, AI settings, Patch policy, History retention and Database destination.
+Leaving with a value that differs from the snapshot asks first. This applies to a
+section tab, any shell link, Back/Forward or the page Refresh control. The user
+sees a "Leave without saving?" dialog with **Stay on this page** (also Escape)
+and **Discard changes**. A hashchange cannot be cancelled, so the move is undone
+through session history (`history.go`, using a position index kept in
+`history.state`) without rewriting any entry, and the shell does not render
+until the user chooses Discard, which repeats the move. Back/Forward → Stay
+therefore leaves the history stack intact. Only the guard's own undo arrival is
+held; any other arrival, including one on an entry that shares the settled
+position, renders normally, and a move that cannot be measured restores the
+address in place instead of reloading. Reloading or closing the tab triggers the
+browser's native `beforeunload` prompt. Reverting an edit or saving it clears the
+warning. The Settings search box and the spend-history filter are view filters
+and never prompt. Sign-out and session expiry are not held. The change is UI-only,
+with no API, schema, authorization or response changes. Remaining #513 items:
+section navigation restructuring, splitting the AI page, consistent save
+feedback, role-aware destinations and screenshots. The UI rework remains
+incomplete.
+
 
 ## v0.6.0 — server workbench navigation foundation
 

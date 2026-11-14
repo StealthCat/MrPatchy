@@ -54,6 +54,7 @@ const assert=require('assert/strict');
     await require('./ui_models.cjs')(page,capture);
     await require('./ui_ai.cjs')(page);
     await require('./ui_database.cjs')(page,capture);
+    await require('./ui_settings_unsaved.cjs')(page);
     await page.locator('[href="#settings/https"]').first().click();
     await page.locator('#tls-button').waitFor();
     await require('./ui_tls.cjs')(page,capture);
