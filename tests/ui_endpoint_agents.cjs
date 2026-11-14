@@ -4,7 +4,7 @@ module.exports=async(page,capture)=>{
  const now=Date.now()/1000;let failure=false,role='admin';const calls=[];
  const row=(id,health,extra={})=>({host_id:id,name:id,deployment_type:health==='healthy'?'systemd':null,verification:{state:health==='healthy'?'current':health==='offline'?'unavailable':null,checked:now-30,age_seconds:30,issue_count:0},telemetry:{state:'fresh',collected:now-20},health,reason:'Fixture reason for '+health+'.',...extra});
  const agents=route=>{const offset=Number(new URL(route.request().url()).searchParams.get('offset')||0);calls.push(offset);if(failure)return route.fulfill({status:500,json:{detail:'Agent health unavailable'}});
-  const items=offset===50?[row('last-agent','healthy')]:[row('down-agent','offline'),row('<img src=x onerror="window.__agentInjected=true">','unknown'),row('ok-agent','healthy')];
+  const items=offset===50?[row('last-agent','healthy')]:[row('down-agent','offline',{resources:{state:'unavailable',disk:null,inodes:null,memory:null,cpu_pressure_avg60:null,memory_pressure_avg60:null,attention:[]}}),row('<img src=x onerror="window.__agentInjected=true">','unknown',{resources:{state:'absent',disk:null,inodes:null,memory:null,cpu_pressure_avg60:null,memory_pressure_avg60:null,attention:[]}}),row('ok-agent','healthy',{telemetry:{state:'stale',collected:now-2000},resources:{state:'present',disk:{total:64*2**30,available:3*2**30,available_percent:4.7,used_percent:95.3},inodes:null,memory:{total:8*2**30,available:6*2**30,available_percent:75},cpu_pressure_avg60:1.25,memory_pressure_avg60:null,attention:['disk-space-low','<img src=x onerror="window.__agentInjected=true">']}})];
   return route.fulfill({json:{generated_at:now,items,offset,limit:50,total:51,more:offset===0,counts:{offline:1,degraded:0,unknown:1,healthy:49},verification_stale_seconds:600,telemetry_stale_seconds:900,gaps:['Disabled servers are not monitored.']}});};
  const identity=async route=>{const response=await route.fetch();return route.fulfill({response,json:{...await response.json(),role}});};
  await page.route('**/api/operations/agents*',agents);await page.route('**/api/identity',identity);
@@ -17,6 +17,18 @@ module.exports=async(page,capture)=>{
   await section.getByText('systemd service (verified receipt)',{exact:false}).waitFor();
   await section.getByText('Deployment type not verified',{exact:false}).first().waitFor();
   await section.getByText('49 healthy',{exact:true}).waitFor();
+  // Resource metrics (issue #870): validated values, explicit unknowns, advisory flags only.
+  assert.equal(await section.locator('thead th').nth(4).textContent(),'Resources');
+  const ok=section.locator('tbody tr').filter({hasText:'ok-agent'}).locator('td').nth(4);
+  await ok.getByText('Disk 95.3% used · 3.0 GiB available',{exact:true}).waitFor();
+  await ok.getByText('Inodes: unknown',{exact:true}).waitFor();
+  await ok.getByText('Memory 75% available of 8.0 GiB',{exact:true}).waitFor();
+  await ok.getByText('Stall (60 s avg): CPU 1.25% · memory unknown',{exact:true}).waitFor();
+  await ok.getByText('From stale telemetry; current values are unknown.',{exact:true}).waitFor();
+  assert.deepEqual(await ok.locator('.agent-resource-attention').allTextContents(),['Low disk space'],'Only known advisory codes are labelled');
+  assert.equal(await section.locator('tbody tr').filter({hasText:'down-agent'}).locator('td').nth(4).textContent(),'No current telemetry');
+  await section.getByText('Not reported by this agent',{exact:true}).waitFor();
+  assert.equal(await section.locator('tbody tr').filter({hasText:'down-agent'}).locator('.badge').first().textContent(),'offline','Resources never change the health badge');
   assert.equal(await section.getByRole('link',{name:'down-agent'}).getAttribute('href'),'#servers/down-agent/agent');
   for(const width of [320,768,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await capture('endpoint-agents-'+width);}
   await page.setViewportSize({width:1440,height:1000});

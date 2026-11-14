@@ -56,7 +56,7 @@ function renderAISettings(data,revision,container){
  const migration=data.ai_control_migration?.required;
  const budget=data.ai_budget||{},catalog=budget.pricing_catalog||{},providerBackoff=data.ai_provider_backoff||{};
  container.innerHTML=`<form class="card" id="ai-key-form"><h2>1. API key</h2><p class="help">Save your key independently—even if the old model is invalid. Saving does not call OpenAI.</p><fieldset><label>OpenAI API key <span id="ai-key-state">${data.api_key_configured?'· saved':'· not configured'}</span><input name="api_key" type="password" autocomplete="new-password" placeholder="Enter a new key to replace the saved key" required maxlength="1000"></label><button class="primary" type="submit">Save API key</button></fieldset><p id="ai-key-result" class="help" role="status"></p></form><form class="card" id="ai-settings-form"><h2>2. Model &amp; investigations</h2><p id="ai-saved-model" class="settings-saved">Saved model: ${esc(data.ai_model||'None')}</p><fieldset>${modelPicker(data)}<div class="actions ai-save-actions"><button type="submit" class="primary">Save AI settings</button><button type="submit" id="ai-test">Save and test selected model</button></div><p id="ai-save-result" class="help" role="status"></p><p id="ai-test-result" class="help" role="status"></p><p class="help">Save and test first saves the selected model, then sends one small structured-output request. No server evidence is included. The result identifies the exact model tested. An accessible model may still lack Responses API or JSON-schema support.</p><label class="check"><input name="ai_enabled" type="checkbox" ${data.ai_enabled?'checked':''}>Enable central OpenAI API investigations</label><p class="help">Sends executable paths, SHA-256 hashes, UIDs, and network endpoint metadata. Investigations may request fixed read-only package, executable and service checks. Arguments, environment variables and arbitrary file contents are excluded. Each investigation uses up to two calls. Responses use store: false; your API organization’s data policies still apply.</p>${migration?`<div class="notice"><strong>Admission migration review required.</strong> Existing separate limits remain active until saved. Suggested shared rate: ${esc(data.ai_control_migration.suggested_rate_per_hour)} work starts/hour, no accumulated burst.</div>`:''}<label>Mr Patchy admission mode<select name="ai_control_mode"><option value="legacy" ${data.ai_control_mode==='legacy'?'selected':''}>Legacy separate hourly limits</option><option value="rate" ${data.ai_control_mode==='rate'?'selected':''}>Shared smooth rate throttle</option><option value="daily_cap" ${data.ai_control_mode==='daily_cap'?'selected':''}>Daily spend cap</option><option value="rate_and_daily" ${data.ai_control_mode==='rate_and_daily'?'selected':''}>Rate throttle + daily spend cap</option><option value="unthrottled" ${data.ai_control_mode==='unthrottled'?'selected':''}>Unthrottled by Mr Patchy</option></select></label><label>Shared AI work starts per hour<input name="ai_rate_per_hour" type="number" min="1" max="1000" value="${data.ai_rate_per_hour}" required></label><div class="form-grid"><label>Daily AI cap · USD<input name="ai_daily_cap_usd" type="number" min="0.01" max="1000000" step="0.01" value="${esc(data.ai_daily_cap_usd)}" required></label><label>Budget reset · IANA timezone<input name="ai_budget_timezone" maxlength="64" value="${esc(data.ai_budget_timezone)}" required placeholder="America/New_York"></label><label>Advance cap warning · % of cap<input name="ai_daily_cap_warning_percent" type="number" min="0" max="99" step="1" value="${esc(data.ai_daily_cap_warning_percent??80)}" required aria-describedby="ai-cap-warning-help"></label></div><p class="help" id="ai-cap-warning-help">Administrators get one in-app notification per budget day when counted spend reaches this share of the cap. Enter 0 to turn the advance warning off; the cap-reached notification and admission are unchanged.</p><div class="notice"><strong>Current budget window</strong><br>Counted $${esc(budget.counted_usd||'0')} · settled $${esc(budget.settled_usd||'0')} · reserved $${esc(budget.reserved_usd||'0')} · uncertain $${esc(budget.uncertain_usd||'0')} · remaining $${esc(budget.remaining_usd||data.ai_daily_cap_usd)}${budget.next_reset?' · resets '+date(budget.next_reset):''}${providerBackoff.blocked?`<br><strong>Provider backoff active</strong> · ${esc(providerBackoff.failures)} consecutive transient failure(s) · recorded ${date(providerBackoff.updated_at)} · next eligible ${date(providerBackoff.next_at)}<br>${esc(providerBackoff.reason)}<br><button type="button" id="provider-backoff-clear">Review and clear provider backoff</button>`:''}</div><p class="help">Capped modes reserve a conservative ceiling before every provider call and reconcile valid usage receipts. Unknown model/tier pricing is blocked, never treated as free. Sent calls without reliable usage retain the full reservation after timeout or restart. Provider Retry-After and transient backoff are shared across workers and purposes. Clearing a reviewed provider floor sends no request and does not bypass rate, budget, retry, pause, lifecycle or concurrency controls. Estimates use a versioned public price catalog and are not provider invoices. Unthrottled removes Mr Patchy rate/spend controls only; finite concurrency, provider limits, global/per-server pause, roles and data sharing still apply.</p><label>Legacy maximum investigations per hour<input name="ai_hourly_limit" type="number" min="1" max="1000" value="${data.ai_hourly_limit}" required></label><label class="check"><input name="ai_updates_enabled" type="checkbox" ${data.ai_updates_enabled?'checked':''}>Automatically score pending updates</label><p class="help">Sends package names, versions, OS release and priority classification. Scores are advisory estimates, not verified CVSS ratings, and never authorize installation.</p><label>Legacy maximum scoring batches per hour · up to 5 updates each<input name="ai_update_hourly_limit" type="number" min="1" max="1000" value="${data.ai_update_hourly_limit}" required></label></fieldset><a class="mint" href="#ai-logs">Inspect AI run logs →</a></form>`;
- container.insertAdjacentHTML('beforeend',`<section class="card" id="ai-spend-history" aria-labelledby="ai-spend-history-title"><h2 id="ai-spend-history-title">3. Retained spend history</h2><form id="ai-spend-history-filter" class="form-grid"><label>Period<select id="ai-spend-history-days" aria-describedby="ai-spend-history-help"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label><label>Budget timezone<input id="ai-spend-history-timezone" maxlength="64" placeholder="America/New_York" aria-describedby="ai-spend-history-timezone-help"></label><div class="actions full"><button type="submit">Apply timezone filter</button></div></form><p class="help" id="ai-spend-history-timezone-help">Use the recorded IANA timezone. Clear the field and apply to show all timezones.</p><p class="help" id="ai-spend-history-help">Settled amounts are local public-price estimates based on retained usage—not provider invoices. Transmitted, uncertain and unrecognized unreleased calls retain their conservative ceiling.</p><div id="ai-spend-history-results"><p class="help" role="status">Loading retained AI spend history…</p></div></section>`);
+ container.insertAdjacentHTML('beforeend',`<section class="card" id="ai-spend-history" aria-labelledby="ai-spend-history-title"><h2 id="ai-spend-history-title">3. Retained spend history</h2><form id="ai-spend-history-filter" class="form-grid"><label>Period<select id="ai-spend-history-days" aria-describedby="ai-spend-history-help"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label><label>Budget timezone<input id="ai-spend-history-timezone" maxlength="64" placeholder="America/New_York" aria-describedby="ai-spend-history-timezone-help"></label><div class="actions full"><button type="submit">Apply timezone filter</button><button type="button" id="ai-spend-history-download">Download CSV</button></div></form><p class="help" id="ai-spend-history-download-status" role="status"></p><p class="help" id="ai-spend-history-timezone-help">Use the recorded IANA timezone. Clear the field and apply to show all timezones.</p><p class="help" id="ai-spend-history-help">Settled amounts are local public-price estimates based on retained usage—not provider invoices. Transmitted, uncertain and unrecognized unreleased calls retain their conservative ceiling. The CSV download uses the selected period and applied timezone filter and contains only these window totals, for comparison with your provider’s billing records.</p><div id="ai-spend-history-results"><p class="help" role="status">Loading retained AI spend history…</p></div></section>`);
  const notices=container.querySelectorAll('.notice'),budgetNotice=notices[notices.length-1];
  if(budget.enabled&&Number.isInteger(budget.unreconciled_call_count)){
   const count=budget.unreconciled_call_count;
@@ -70,6 +70,14 @@ function renderAISettings(data,revision,container){
  const keyForm=$('#ai-key-form'),form=$('#ai-settings-form'),select=$('#ai-model'),manual=$('#ai-model-manual');
  const keyResult=$('#ai-key-result'),saveResult=$('#ai-save-result'),testResult=$('#ai-test-result'),status=$('#ai-model-status'),refresh=$('#ai-model-refresh');
  const alive=()=>currentView(revision,'settings')&&container.isConnected;
+ // Inserted after the budget notice lookup so this notice never receives budget details.
+ if(data.ai_scoring_blocked>0)container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend',`<div class="notice" id="scoring-blocked"><strong>${esc(data.ai_scoring_blocked)} update ${data.ai_scoring_blocked===1?'score is':'scores are'} blocked</strong> by a non-transient AI provider failure under the saved model and key. No automatic retry is scheduled. After resolving the cause (for example restored quota or access), retry them; changing the saved model or key also makes them eligible.<br><button type="button" id="scoring-blocked-retry">Retry blocked scores</button><span id="scoring-blocked-result" class="help" role="status"></span></div>`);
+ const retryScoring=$('#scoring-blocked-retry');
+ if(retryScoring)retryScoring.onclick=async()=>{
+  const result=$('#scoring-blocked-result');retryScoring.disabled=true;result.textContent=' Queuing…';
+  try{const reply=await api('/update-scores/blocked/retry','POST');if(currentView(revision,'settings')&&result.isConnected)result.textContent=' '+reply.detail;}
+  catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=' '+error.message;retryScoring.disabled=false;}
+ };
  const clearBackoff=$('#provider-backoff-clear');
  if(clearBackoff)clearBackoff.onclick=()=>{
   modal('Review shared provider backoff',`<p>This floor was recorded ${date(providerBackoff.updated_at)} and currently blocks every new provider call until ${date(providerBackoff.next_at)}. Clear it only after reviewing provider availability, quota and the recorded reason. A newer or expired floor will be preserved.</p><p class="help">This sends no provider or target request. Rate, budget, item retry, pause, lifecycle and concurrency controls remain authoritative.</p><form id="provider-backoff-clear-form"><label>Reason<textarea name="reason" minlength="10" maxlength="1000" required></textarea></label><label>Type CLEAR BACKOFF<input name="confirmation" pattern="CLEAR BACKOFF" autocomplete="off" required></label><button class="primary">Clear reviewed provider backoff</button></form>`);
@@ -96,6 +104,31 @@ function renderAISettings(data,revision,container){
   }catch(error){if(alive()&&ticket===historyGeneration){historyResults.innerHTML=PatchyUI.error('Retained spend history could not be loaded',esc(error.message));}}
  };
  historyDays.onchange=loadHistory;
+ const historyDownload=$('#ai-spend-history-download'),historyDownloadStatus=$('#ai-spend-history-download-status');
+ historyDownload.onclick=async()=>{
+  const session=sessionRevision,days=historyDays.value,timezone=appliedTimezone;
+  historyDownload.disabled=true;historyDownloadStatus.textContent='Preparing retained spend history CSV…';
+  try{
+   const params=new URLSearchParams({days});if(timezone)params.set('timezone',timezone);
+   const response=await fetch('/api/settings/ai-spend-history.csv?'+params,{headers:{'X-CSRF-Token':csrf}});
+   if(session!==sessionRevision||!alive())return;
+   if(!response.ok){
+    let detail;try{detail=(await response.json()).detail;}catch{}
+    if(response.status===401)showLogin(csrf?'Session expired. Sign in again.':'');
+    throw Error(apiErrorMessage(detail)||`Spend history download failed (HTTP ${response.status})`);
+   }
+   const truncated=response.headers.get('X-MrPatchy-Spend-History-Truncated')==='true';
+   const limit=response.headers.get('X-MrPatchy-Spend-History-Max-Windows')||'';
+   const blob=await response.blob();
+   if(session!==sessionRevision||!alive())return;
+   const url=URL.createObjectURL(new Blob([blob],{type:'text/csv'})),link=document.createElement('a');
+   link.href=url;link.download=`mrpatchy-ai-spend-${Number(days)}d${timezone?'-'+timezone.replace(/[^A-Za-z0-9_+-]+/g,'_'):''}.csv`;
+   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+   historyDownloadStatus.textContent=truncated?`Downloaded the newest ${limit} accounting windows. Additional reset/timezone groups exist in this period and are not in the file.`:'Retained spend history CSV downloaded. Amounts are local public-price estimates, not provider invoices.';
+  }catch(error){if(session===sessionRevision&&alive())historyDownloadStatus.textContent='Download failed: '+error.message;}
+  finally{if(historyDownload.isConnected)historyDownload.disabled=false;}
+ };
+
  $('#ai-spend-history-filter').onsubmit=event=>{
   event.preventDefault();
   appliedTimezone=historyTimezone.value.trim();
@@ -107,6 +140,39 @@ function renderAISettings(data,revision,container){
  const markChanged=()=>{saveResult.textContent='Unsaved changes.';testResult.textContent='';toggleManual();};
  form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();
  const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
+ // Effects of this change (#871): read-only preview of admission/spend ceilings before save.
+ $('#ai-test-result').insertAdjacentHTML('afterend','<div class="notice ai-control-effects" id="ai-control-effects" role="status" aria-live="polite" hidden></div>');
+ const effectsPanel=$('#ai-control-effects'),CONTROL_KEYS=['ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone','ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled'];
+ const controlBody=()=>{const f=new FormData(form);return {ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:String(f.get('ai_budget_timezone')||'').trim(),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled')};};
+ const controlsValid=()=>CONTROL_KEYS.every(name=>{const field=form.elements[name];return !field||field.checkValidity();});
+ const effectsHtml=result=>result.changed?`<strong>Effects of this change</strong><ul class="ai-control-effects-list">${result.effects.map(item=>`<li${item.expands?' class="expands"':''}>${item.expands?'<strong>Expands:</strong> ':''}${esc(item.text)}</li>`).join('')}</ul><small>${esc(result.limitation)}</small>`:'<strong>Effects of this change</strong><br>No change to Mr Patchy admission or spend ceilings.';
+ let effectsGeneration=0,effectsTimer=0;
+ const refreshEffects=()=>{
+  clearTimeout(effectsTimer);const ticket=++effectsGeneration;
+  if(!controlsValid()){effectsPanel.hidden=false;effectsPanel.textContent='Effects of this change: correct the highlighted control values to preview them.';return;}
+  effectsTimer=setTimeout(async()=>{
+   try{const result=await api('/settings/ai/preview','POST',controlBody());if(!alive()||ticket!==effectsGeneration)return;effectsPanel.hidden=false;effectsPanel.innerHTML=effectsHtml(result);}
+   catch(error){if(alive()&&ticket===effectsGeneration){effectsPanel.hidden=false;effectsPanel.textContent='Effects could not be previewed. '+error.message;}}
+  },250);
+ };
+ const onControlEdit=event=>{if(CONTROL_KEYS.includes(event.target?.name))refreshEffects();};
+ form.addEventListener('input',onControlEdit);form.addEventListener('change',onControlEdit);
+ const confirmExpansion=async body=>{
+  const controls=Object.fromEntries(CONTROL_KEYS.map(key=>[key,body[key]]));
+  let result;
+  try{result=await api('/settings/ai/preview','POST',controls);}
+  catch(error){if(alive())saveResult.textContent='AI settings were not saved. Effects could not be previewed: '+error.message;return false;}
+  if(!alive())return false;
+  if(!result.expands)return true;
+  return new Promise(resolve=>{
+   modal('Confirm expanded AI admission or spend',`<p>Saving these AI settings lets Mr Patchy start more AI work or spend more than the saved controls allow:</p><ul id="ai-expansion-list">${result.expansions.map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p class="help">${esc(result.limitation)}</p><div class="actions"><button type="button" class="primary" id="ai-expansion-confirm">Save with these expansions</button><button type="button" id="ai-expansion-cancel">Cancel</button></div>`);
+   const dialog=$('#modal'),dialogRevision=modalRevision;let settled=false;
+   const finish=value=>{if(settled)return;settled=true;dialog.removeEventListener('close',onClose);if(dialog.open&&dialogRevision===modalRevision)dialog.close();resolve(value);};
+   const onClose=()=>finish(false);dialog.addEventListener('close',onClose);
+   $('#ai-expansion-confirm').onclick=()=>finish(true);$('#ai-expansion-cancel').onclick=()=>finish(false);
+   $('#ai-expansion-cancel').focus();
+  });
+ };
  const load=async()=>{
   if(busy)return;const ticket=++listGeneration,version=keyRevision;
   refresh.disabled=true;status.textContent='Loading models using the saved API key…';
@@ -141,10 +207,12 @@ function renderAISettings(data,revision,container){
   if(test&&!model){saveResult.textContent='Select or enter a model to test.';return;}
   const body={ai_model:model,ai_enabled:f.has('ai_enabled'),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:f.get('ai_budget_timezone').trim(),ai_daily_cap_warning_percent:+f.get('ai_daily_cap_warning_percent')};
   if(controlsRevision)body.expected_ai_controls_revision=controlsRevision;
+  if(!await confirmExpansion(body)){if(alive()&&!saveResult.textContent.startsWith('AI settings were not saved'))saveResult.textContent='Save cancelled. Nothing was saved; your entries are still in the form.';return;}
   ++listGeneration;refresh.disabled=false;setBusy(true);saveResult.textContent='Saving AI settings…';testResult.textContent='';
   try{
    const response=await api('/settings/ai','PUT',body);if(!alive())return;
    keyRevision=response.api_key_revision;if(response.ai_controls_revision)controlsRevision=response.ai_controls_revision;
+   effectsPanel.hidden=true;effectsPanel.textContent='';
    $('#ai-saved-model').textContent='Saved model: '+(response.ai_model||'None');
    saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';
    if(test){

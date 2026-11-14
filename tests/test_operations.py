@@ -128,6 +128,7 @@ def test_advisories_use_source_versions_and_paginate(monkeypatch):
     monkeypatch.setattr(advisories.httpx,'post',post)
     def get(url,**kwargs):raise RuntimeError('detail unavailable')
     monkeypatch.setattr(advisories.httpx,'get',get)
+    monkeypatch.setattr(advisories,'_detail_client',lambda:SimpleNamespace(get=get,close=lambda:None),raising=False)
     result=advisories.scan(inv,['binary:amd64'])
     assert calls[0]['queries'][0]=={'package':{'ecosystem':'Ubuntu:24.04:LTS','name':'source'},'version':'2'}
     assert result['results'][0]['vulnerabilities'][0]['id']=='CVE-test'
