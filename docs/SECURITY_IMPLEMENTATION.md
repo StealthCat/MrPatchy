@@ -2109,6 +2109,15 @@ server is rejected in full; no paused-server payload is sent. Existing retry/quo
 limits apply after resuming. Failed/blocked attempts remain visible in AI activity
 and job output, with a controlled pause diagnostic rather than a provider failure.
 
+Worker checkpoint #868 adds the pause to the in-app notification center (roadmap J
+coverage producer). Pausing a server publishes one admin-only, host-scoped `ai-pause`
+event (severity low) in the policy-save transaction, deep-linked to the server's
+Security tab. Resuming or deleting the server resolves it, and pausing again reopens
+the same event as a new unread revision. Reaffirming a pause or changing only the
+capacity adds no revision, and rejected saves publish nothing. The payload is fixed
+text: no reason, server name or actor. It is advisory and changes no AI or response
+state. Servers paused before this change get their event on the next saved pause.
+
 Cross-process per-server provider locks serialize state changes with outbound requests.
 A pause/resume attempted during a request returns HTTP 409 **without changing state**;
 retry after it finishes. A successful save prevents subsequent requests, but cannot

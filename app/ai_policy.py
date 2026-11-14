@@ -97,5 +97,7 @@ def save(s,host,paused,expected,reason,actor,concurrency_limit=None):
     if paused!=current['paused']:action='server AI paused' if paused else 'server AI resumed'
     elif concurrency_limit!=current['concurrency_limit']:action='server AI concurrency changed'
     else:action='server AI policy reaffirmed'
+    from . import ai_pause_notifications
+    ai_pause_notifications.sync(s,host.id,paused,value['revision'])
     audit(s,action,host.id+' '+actor+' '+str(concurrency_limit)+' slot(s) '+reason.strip());s.commit()
     return status(s,host.id)
