@@ -755,7 +755,7 @@ are excluded. The report contains bounded aggregate windows only, never provider
 model, credential, prompt, evidence or response details. At most four reset/timezone
 groups per requested day are returned, with an explicit truncation notice if heavier
 configuration churn exceeds that bound. These local public-price estimates are not
-provider invoices. Administrators can filter them by the exact IANA timezone recorded with each ledger window. Filtering occurs before grouping and the window limit; clearing restores the all-timezone report without changing current or unsaved budget settings.
+provider invoices. Administrators can filter them by the exact IANA timezone recorded with each ledger window. Filtering occurs before grouping and the window limit; clearing restores the all-timezone report without changing current or unsaved budget settings. Administrators can also download these same bounded totals as CSV using the applied period and timezone filter; formula-leading retained text is neutralized, and truncated exports are identified. The file remains a local public-price estimate, not a provider invoice.
 
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
@@ -953,9 +953,7 @@ is set, each listed controller that is missing, stale, stopped, has an invalid o
 unrecognized report, or runs a different version raises one administrator-only
 in-app notification, which resolves
 when it reports again. An invalid setting raises its own notification. These
-notifications grant no readiness, failover or response authority. Endpoint-agent
-resource metrics and readiness, GCP-node inventory and remote deployment acceptance
-remain planned. Rebuild the controller and keep worker versions matched.
+notifications grant no readiness, failover or response authority. Activity → Workers → Endpoint agents now shows root filesystem space and inodes, available memory, and CPU/memory pressure from retained telemetry. Missing or invalid values stay unknown; low-resource flags are advisory and do not change health, alerts, repairs or authorization. Endpoint-agent readiness, low-resource notifications, history/hysteresis, time sync, certificate expiry, GCP-node inventory and remote deployment acceptance remain planned. Rebuild the controller and keep worker versions matched.
 
 
 ### Worker controller/key startup gate (v0.13.0)

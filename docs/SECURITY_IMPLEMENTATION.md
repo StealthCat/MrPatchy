@@ -2599,6 +2599,22 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Retained spend history CSV download — worker checkpoint #874
+
+Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
+`GET /api/settings/ai-spend-history.csv` takes the same `days` (1–90) and optional
+IANA `timezone` filter as the JSON history and serializes the same bounded SQL
+aggregation without loading ledger rows. Columns are UTC window start/reset, the
+recorded timezone, call count and settled/reserved/sent/uncertain/other/counted
+USD. No model names, pricing sources, run/call identifiers or evidence are
+exported. Retained text cells starting with `=`, `+`, `-`, `@`, tab or CR are
+prefixed with `'` against spreadsheet formula injection. Truncation to the newest
+windows is disclosed in `X-MrPatchy-Spend-History-Truncated`/`-Max-Windows` headers
+and in the panel. The download uses the applied filter, not unapplied typed text.
+Amounts remain local public-price estimates for comparison with provider billing
+records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
+and the wider roadmap A acceptance remain planned.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
@@ -3916,8 +3932,34 @@ expected `mrpatchy-agent.service` unit. Otherwise it is "not verified".
 Responses carry fixed reasons and an issue count only, with no receipt hashes,
 paths, addresses or telemetry. Settings rows are read in bounded batches rather
 than once per server. The view never inspects, repairs or authorizes anything.
-Endpoint-agent resource metrics, readiness, alerts, GCP-node inventory and the
-unified dashboard acceptance remain open.
+Endpoint-agent readiness and alerting, GCP-node inventory and unified dashboard acceptance remain open.
+
+### Endpoint-agent resource metrics — worker checkpoint #870
+
+Activity → Workers → **Endpoint agents** adds a **Resources** column. Each row of
+`GET /api/operations/agents` carries a `resources` object, built only from the
+agent's retained telemetry: the `device_health` root-filesystem observation (#348)
+and the `resource_pressure` record (#391). Before this, the controller stored both
+but never read them.
+
+- **Values:** root-filesystem bytes and inodes as used/available percentages,
+  available bytes, memory available percentage and total, and CPU/memory PSI
+  `some avg60`.
+- **Validation:** only version-1 records count. Non-integer, negative, zero-total,
+  inconsistent (available or used above total) or non-finite values are reported
+  as unknown and never guessed. Agent-reported gaps stay unknown.
+- **Telemetry state:** stale telemetry is shown with a stale note. Missing or
+  future-dated telemetry shows no metrics, and older agents without the records
+  show "Not reported by this agent".
+- **Advisory flags:** root-filesystem space, inodes or memory at or below
+  10 % available. They never change the health classification, counts, alerts,
+  repairs or authorization.
+
+Source, scope and process data stay out of the response. No schema or agent change.
+
+**Limits:** endpoint-agent readiness, alerts, history/hysteresis, time sync and
+certificate expiry, the GCP-node inventory and the unified dashboard acceptance
+remain open.
 
 ### Expected-controller health notifications — worker checkpoint #761
 
