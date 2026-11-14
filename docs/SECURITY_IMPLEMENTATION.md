@@ -2531,6 +2531,31 @@ the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protec
   Blocked advisory-plan work is still not covered.
 
 
+Worker checkpoint #806 covers failed advisory-plan work. Before this checkpoint,
+a `security-plan` or `startup-plan` job that ended `failed` published nothing.
+That covers rejected keys, unsupported models, declined or invalid structured
+results, and evidence or validation refusals. A failed automatic proposal
+disappeared because automatic planning tries once per incident evidence revision.
+- **Notification:** `job_notifications` now publishes one admin-only
+  `operations`/`<action>` event per plan incident when such a job fails. The
+  event subject is the incident (`incident` for `security-plan`,
+  `startup-incident` for `startup-plan`), with `host_id` kept for
+  authorization, so a plan for one incident never resolves or overwrites
+  another incident's failure. It links to `#activity/jobs/<id>`. The reason is
+  fixed text saying no plan was proposed and nothing ran; no provider message,
+  error or evidence is copied. A later failure for the same incident appends a
+  revision; a later `complete` plan for the same incident resolves it.
+- **Not published:** controlled AI waits (budget, pacing, provider backoff,
+  pause) keep the job queued. Automatic proposals the worker skips before any
+  AI call, because the policy was turned off or the evidence changed, are
+  superseded attempts, not failures.
+- **Unchanged:** routes, roles, admission, spend reservation, plan approval and
+  response authorization. Nothing is retried and no SMTP/webhook alert is
+  added. Existing operation-failure events keep their `operator` audience.
+- **Limitation:** failed jobs are not blocked under a configuration signature as
+  scoring and triage are, so a new incident revision under a rejected
+  configuration still makes one automatic attempt.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
