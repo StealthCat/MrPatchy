@@ -571,7 +571,7 @@ After **Finish and verify installation**, Mr Patchy follows the deployment job a
 
 Server workspaces use primary **Overview / Packages / Security / Settings** tabs (subject to role and server state), plus **More sections** grouped into updates/history, investigations/evidence and administration. Existing deep links still work. Package search and Updates only filters are remembered per server and separately for the fleet view while signed in, including when refreshing or returning with Back/Forward. Signing out or reloading clears these in-memory filters; patch selections are never restored. See [UI design and migration inventory](docs/UI_DESIGN.md#screen-migration-inventory).
 
-The Servers directory has local name/address/architecture search, enabled/disabled filters and 24-server pages. Filters/page position survive navigation and refresh while signed in, then clear on reload/sign-out. Each server’s Overview has **Summary**, **System & collector**, and **Patching status** pages with deep links (`#servers/ID/overview/system`, `#servers/ID/overview/patching`); switching servers keeps the selected Overview page. Server controls and backend verification/approval rules are unchanged.
+The Servers directory has local name/address/architecture search, enabled/disabled filters and 24-server pages. Administrators also see an **AI paused** badge on paused servers and can filter by the stored per-server pause setting; this does not indicate global AI readiness. Filters/page position survive navigation and in-app refresh while signed in, then clear on full reload/sign-out. Each server’s Overview has **Summary**, **System & collector**, and **Patching status** pages with deep links (`#servers/ID/overview/system`, `#servers/ID/overview/patching`); switching servers keeps the selected Overview page. Server controls and backend verification/approval rules are unchanged.
 
 
 ### Worker registrations and cooperative drain (v0.9.0)
@@ -686,10 +686,13 @@ reservation before any provider request or usage receipt is created. A refused s
 does not call the provider or consume a triage retry attempt.
 
 Existing installations initially retain their separate investigation, scoring and
-incident-plan hourly allowances. Settings shows the conservative suggested shared
-rate (the lower existing automatic allowance); an administrator must review and save
-the migration, which is audited. Fresh installations use shared rate mode. The legacy
-incident/startup-plan queue allowance is disabled only after that explicit migration.
+incident-plan hourly allowances. Settings → AI lists the current per-purpose limits,
+including automatic incident/startup plans, and suggests the lowest enabled hourly
+allowance as the shared rate. An administrator can apply it to the form; the usual
+preview, confirmation, revision check and audit flow applies when saving. The proposal
+never raises a purpose's hourly ceiling, though it may lower higher legacy limits.
+Fresh installations use shared rate mode. Legacy limits remain until an administrator
+saves the migration.
 
 Administrators using legacy mode can inspect process-triage, update-scoring and automatic incident/startup-plan hourly allowances in Investigations → Shared AI start gates, including prior-hour usage and the next eligibility time when an allowance is exhausted. These per-purpose holds are displayed separately and do not change the shared global gates or admission behavior.
 
