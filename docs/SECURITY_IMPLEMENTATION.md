@@ -8336,3 +8336,13 @@ This adds a roadmap J coverage producer, `app/scan_coverage_notifications.py`. `
   - YARA scans have no schedule, so they are not covered.
   - The grace period is fixed.
   - Execution-triggered scan coverage keeps its existing `execution scan coverage` operational alert.
+
+### Stuck scheduled scans in coverage notifications — worker checkpoint #839
+
+The #816 producer kept its event unchanged, or silent, whenever the latest `security-scan` job was queued or running. `incidents.schedule_tick` does not enqueue another scan while one is pending. So a job that workers never claim, or a running job that never finishes, suppressed the coverage notice indefinitely.
+
+- **Change:** a queued or running latest attempt holds the event only while its age is within the configured interval plus the one-hour grace period. After that, `classify` returns a new `stalled` category.
+- **Payload:** `medium` severity, fixed text, admin-only, and a link to `#servers/<host>/security`. Moving from `overdue`, `failed` or `incomplete` to `stalled` appends one revision. An unchanged `stalled` adds none. When the job completes with a recorded scan, the event resolves.
+- **Unchanged:** the producer still never cancels, retries, recovers or enqueues jobs. `security_coverage.assessment`, the scheduler, the schema, roles and response authorization are untouched. The unused `ENGINE` constant was removed.
+- **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `480100d` and pass after the change, and the existing 10 tests still pass.
+- **Remaining:** an enabled policy that never gets a first scan attempt is still silent, because the policy has no durable "enabled since" marker. YARA schedules and a configurable grace period remain out of scope.
