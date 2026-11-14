@@ -49,9 +49,21 @@ registrations rather than adding new ones (see "Worker identity persistence" bel
 docker compose -p mrpatchy -f compose.controller.yaml up -d --build --wait
 
 # Three workers on the same Docker host, as a separate project.
-MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data \
-  docker compose -p mrpatchy-workers -f compose.worker.yaml up -d --build --scale worker=3
+cp .env.worker.example .env.worker   # then review it; keep it private (it is git- and docker-ignored)
+docker compose -p mrpatchy-workers --env-file .env.worker -f compose.worker.yaml up -d --build --scale worker=3
 ```
+
+`.env.worker.example` lists exactly the variables the worker role files read:
+the required controller data volume, `DATABASE_URL`, the per-replica pool limits,
+the drain window, the memory limit, the expected controller inventory and the GCP
+project/zone for the GCP worker overlay. Its values equal the worker file defaults.
+It deliberately has no administrator password, domain, ports, OIDC, control-network
+or fixed worker-ID settings, which belong to the controller's `.env` (`.env.example`).
+Passing `--env-file .env.worker` keeps a controller `.env` in the same checkout from
+leaking those settings into the worker project. Exporting
+`MRPATCHY_CONTROLLER_DATA_VOLUME` inline, as earlier releases documented, still works.
+`tests/test_compose_roles.py` fails if a worker file gains a variable the example
+does not document.
 
 The worker file requires `MRPATCHY_CONTROLLER_DATA_VOLUME`. Compose refuses to render
 without it and marks the volume external, so it never creates an empty replacement.
