@@ -8362,3 +8362,13 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
   - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+
+### Notification-center status filter — worker checkpoint #835 (roadmap J)
+
+The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
+- **API:** `GET /api/notifications` accepts an optional `lifecycle` value of `active` or `resolved`. The filter applies to the event's **current** revision, so an event that resolved and then reopened is listed as active only. Any other value returns 400 with the fixed text "Invalid notification status filter".
+- **Counts and paging:** `total` and `more` use the same filter. The bell's unread count, arrivals and the SSE stream cursor ignore the center filter and are unchanged.
+- **Same boundaries:** role visibility, per-account read/dismiss state and the include-dismissed and unread-only options combine with the status filter. The route keeps its self-service session check.
+- **UI:** Apply keeps the selection across re-renders, Clear resets it with the other filters, and Previous/Next keep it.
+- **Unchanged:** this filters display only. It never acknowledges, resolves or reopens an event, changes response authorization or alters schema.
+- **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.

@@ -25,6 +25,7 @@ const assert=require('assert/strict');
     await require('./ui_notifications_read_shown.cjs')(page,capture);
     await require('./ui_notifications_sync.cjs')(page,capture);
     await require('./ui_fleet_updates.cjs')(page);
+    await require('./ui_notifications_status_filter.cjs')(page,capture);
     await require('./ui_enroll_retry.cjs')(page,capture);
     await page.getByRole('button',{name:'+ Add server',exact:true}).click();
     await page.locator('[name=name]').fill('Test Ubuntu');
