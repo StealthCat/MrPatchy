@@ -3898,6 +3898,24 @@ belongs to an active server.
   checks, and read/dismiss grants nothing. Resolution can lag by about one
   scheduler tick (~30 seconds). Per-user targeting remains open.
 
+### Patch-deadline notifications — worker checkpoint #775
+
+The SMTP/webhook `overdue` alert stays outbox-only because its package count
+changes with every arriving or installed update. A separate producer publishes
+one admin-only `operations`/`patch-deadline` event per active, non-enrolling
+server that has a pending update past its configured priority deadline. It reads
+the highest overdue priority with one grouped query per 500-server chunk. The
+reason text is fixed and names only that priority, with no counts, package names
+or endpoint text. Severity maps critical→critical, high→high, normal→medium and
+low→low. Count changes are no-ops, and a change of the highest overdue priority
+appends one revision. The event deep-links to the server Patching timeline and
+resolves through the shared operational path once nothing is overdue, a deadline
+is extended, or the server is disabled, deleted or enrolling. A rejected publish
+keeps any existing event active. Nothing installs packages, acknowledges alerts,
+changes deadlines or authorizes responses. Holds, freezes and failed operations
+are not distinguished in the text. Coordinator integration and exact-head checks
+remain required.
+
 ### Asynchronous delivery and access control
 
 - Provide authenticated server push, preferably Server-Sent Events for the one-way event feed, with heartbeat, automatic reconnect and event-ID/cursor replay. Use authoritative paginated catch-up for first connection, page reload, sleeping/offline tabs and reconnect. If history was pruned or a cursor is invalid, explicitly resynchronize counts/history and disclose the gap. A documented polling fallback may provide degraded delivery; periodic whole-page refresh alone does not satisfy live notifications. See the [EventSource standard](https://html.spec.whatwg.org/multipage/server-sent-events.html).
