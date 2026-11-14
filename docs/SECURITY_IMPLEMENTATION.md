@@ -3681,19 +3681,6 @@ override; and multi-host MySQL, drain, failure and recovery acceptance.
 - Give workers a role-specific startup path that does not initialize web/TLS configuration, require a local Caddy/app container or inherit a local-app Compose dependency. Keep web administration and TLS configuration in the controller role.
 - Support independent app/worker deployment and same-host worker scaling without fixed container-name conflicts. Use compatible versioned application images and explicit schema/protocol compatibility checks so mismatched workers fail clearly before claiming jobs.
 
-#### Controller-role environment example — worker checkpoint #854
-
-`.env.controller.example` is the role-specific environment template for
-`compose.controller.yaml` and the GCP controller overlay. It documents every variable
-the extended app and Caddy services and the role files read. Its set values equal
-`.env.example` or the compose defaults, so rendering with it matches rendering with
-`.env.example`. It carries no worker pool limits, worker ID, drain window, worker
-memory limit or controller data-volume name. It sets `MRPATCHY_EXPECTED_WORKER_IDS`
-empty, as role-file replicas never take fixed IDs. Tests fail on an undocumented
-controller variable, a worker-only key or a render mismatch, and CI renders the
-example. This is a template only. Remote-machine secret provisioning and installer
-modes remain open.
-
 ### Database, secrets and persistent state
 
 - Use MySQL 8+ for supported multi-machine deployments. Retain SQLite for the local/shared-local-filesystem deployment; do not present a network-mounted SQLite database as the remote-worker solution.
@@ -3707,6 +3694,19 @@ modes remain open.
 - Add graceful drain for maintenance/upgrades: stop accepting new jobs, finish or safely record active work, and preserve explicit recovery state after interruption. Detect lost workers without replaying destructive target operations or inventing successful completion.
 - Offer installation modes for complete installation, controller only and join as worker. Validate database/TLS connectivity, compatible schema/version, required secrets/storage and target/repository connectivity for the chosen role. Provide clear independent start, scale, drain, upgrade, removal and troubleshooting instructions.
 - Document required network paths and authentication for the selected topology. A worker-only machine must start successfully without local web/TLS services; existing SSH host verification and least-privilege target access continue to apply.
+
+#### Controller-role environment example — worker checkpoint #854
+
+`.env.controller.example` is the role-specific environment template for
+`compose.controller.yaml` and the GCP controller overlay. It documents every variable
+the extended app and Caddy services and the role files read. Its set values equal
+`.env.example` or the compose defaults, so rendering with it matches rendering with
+`.env.example`. It carries no worker pool limits, worker ID, drain window, worker
+memory limit or controller data-volume name. It sets `MRPATCHY_EXPECTED_WORKER_IDS`
+empty, as role-file replicas never take fixed IDs. Tests fail on an undocumented
+controller variable, a worker-only key or a render mismatch, and CI renders the
+example. This is a template only. Remote-machine secret provisioning and installer
+modes remain open.
 
 ### Acceptance and rollout
 
