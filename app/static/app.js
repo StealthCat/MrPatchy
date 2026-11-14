@@ -420,6 +420,20 @@ function controllerRegistrations(data){
  const table=data.items.length?`<div class="table-wrap"><table class="controller-registry-table"><thead><tr><th>Identity / runtime</th><th>Liveness</th><th>Version / scheduler</th><th>Last report</th></tr></thead><tbody>${data.items.map(row=>`<tr><td><strong>${field(row.id)}</strong><small>controller · ${field(row.deployment_type)}<br>Boot ${field(row.boot_id)}</small></td><td>${badge(row.state)}<small>${field(row.reason)}</small><small>Readiness: not assessed</small></td><td>${field(row.version)}<small>Scheduler: ${row.scheduler==='embedded'?'embedded in this process':row.scheduler==='disabled'?'disabled in this process':'not reported'}</small></td><td>${row.heartbeat?date(row.heartbeat):'Not reported'}<small>Reported uptime: ${row.uptime_seconds===null||row.uptime_seconds===undefined?'unavailable':field(Math.floor(row.uptime_seconds))+' seconds'}</small></td></tr>`).join('')}</tbody></table></div>${data.more?'<p class="help">Showing the 50 most recently reporting controller registrations; older history is not listed.</p>':''}${data.truncated?'<p class="help controller-registry-truncated">Retained registration history exceeds the scan limit. This instance and expected controllers are always included; other controllers may be missing from this list.</p>':''}`:empty('No controllers registered yet','Restart controllers on this version to begin reporting.');
  return `<section class="card" id="controller-registrations"><h2>Controllers</h2><p class="help">Web instances that recently wrote to the shared database. A fresh report does not verify HTTPS serving, Caddy routing or readiness, and carries no failover or response authority.</p><ul class="help">${(data.gaps||[]).map(gap=>`<li>${esc(gap)}</li>`).join('')}</ul>${expected}${table}</section>`;
 }
+function deploymentHealth(data){
+ if(data.error)return `<section class="card" id="deployment-health"><h2>Deployment health</h2><p role="alert">${esc(data.error)}</p></section>`;
+ const states=Array.isArray(data.states)?data.states:['offline','degraded','unknown','maintenance','healthy'],labels={controllers:'Controllers',workers:'Workers',endpoint_agents:'Endpoint agents'},sources={configuration:'expected list from controller configuration',registrations:'retained registrations',servers:'enabled servers'};
+ const overall=data.overall||{state:'unknown',reason:'Deployment health is unavailable.'};
+ const rows=Object.keys(labels).map(key=>{const row=(data.components||{})[key]||{counts:{},total:0,state:null,gaps:[]};
+  return `<tr><th scope="row">${labels[key]}<small>${esc(sources[row.source]||'source not reported')}</small></th><td>${row.state?badge(row.state):'<span class="help">none counted</span>'}${row.error?`<small role="alert">${esc(row.error)}</small>`:''}</td><td><span class="deployment-health-counts">${states.filter(state=>(row.counts||{})[state]).map(state=>`<span>${esc(row.counts[state])} ${esc(state)}</span>`).join('')||'<span>0 counted</span>'}</span>${(row.gaps||[]).map(gap=>`<small>${esc(gap)}</small>`).join('')}</td></tr>`;}).join('');
+ return `<section class="card" id="deployment-health"><h2>Deployment health</h2><p class="deployment-health-overall">${badge(overall.state)} <span>${esc(overall.reason)}</span></p><div class="table-wrap"><table class="deployment-health-table"><thead><tr><th>Component</th><th>Worst state</th><th>Counts</th></tr></thead><tbody>${rows}</tbody></table></div><ul class="help">${(data.gaps||[]).map(gap=>`<li>${esc(gap)}</li>`).join('')}</ul><p class="help">Details for each component are listed below.</p></section>`;
+}
+async function loadDeploymentHealth(revision){
+ const data=await api('/operations/deployment-health').catch(error=>({error:error.message||'Deployment health is unavailable.'}));
+ const section=$('#deployment-health');
+ if(!currentView(revision,'activity')||!section||!section.isConnected)return;
+ section.outerHTML=deploymentHealth(data);
+}
 function endpointAgentHealth(data){
  if(data.error)return `<section class="card" id="endpoint-agent-health"><h2>Endpoint agents</h2><p role="alert">${esc(data.error)}</p></section>`;
  const counts=data.counts||{},labels={offline:'offline',degraded:'degraded',unknown:'unknown',healthy:'healthy'};
@@ -435,20 +449,6 @@ async function loadEndpointAgentHealth(revision,offset=0){
  if(!currentView(revision,'activity')||!section||!section.isConnected)return;
  section.outerHTML=endpointAgentHealth(data);
  $('#endpoint-agent-health').querySelectorAll('[data-agent-offset]').forEach(button=>button.onclick=()=>loadEndpointAgentHealth(revision,Number(button.dataset.agentOffset)));
-}
-function deploymentHealth(data){
- if(data.error)return `<section class="card" id="deployment-health"><h2>Deployment health</h2><p role="alert">${esc(data.error)}</p></section>`;
- const states=Array.isArray(data.states)?data.states:['offline','degraded','unknown','maintenance','healthy'],labels={controllers:'Controllers',workers:'Workers',endpoint_agents:'Endpoint agents'},sources={configuration:'expected list from controller configuration',registrations:'retained registrations',servers:'enabled servers'};
- const overall=data.overall||{state:'unknown',reason:'Deployment health is unavailable.'};
- const rows=Object.keys(labels).map(key=>{const row=(data.components||{})[key]||{counts:{},total:0,state:null,gaps:[]};
-  return `<tr><th scope="row">${labels[key]}<small>${esc(sources[row.source]||'source not reported')}</small></th><td>${row.state?badge(row.state):'<span class="help">none counted</span>'}${row.error?`<small role="alert">${esc(row.error)}</small>`:''}</td><td><span class="deployment-health-counts">${states.filter(state=>(row.counts||{})[state]).map(state=>`<span>${esc(row.counts[state])} ${esc(state)}</span>`).join('')||'<span>0 counted</span>'}</span>${(row.gaps||[]).map(gap=>`<small>${esc(gap)}</small>`).join('')}</td></tr>`;}).join('');
- return `<section class="card" id="deployment-health"><h2>Deployment health</h2><p class="deployment-health-overall">${badge(overall.state)} <span>${esc(overall.reason)}</span></p><div class="table-wrap"><table class="deployment-health-table"><thead><tr><th>Component</th><th>Worst state</th><th>Counts</th></tr></thead><tbody>${rows}</tbody></table></div><ul class="help">${(data.gaps||[]).map(gap=>`<li>${esc(gap)}</li>`).join('')}</ul><p class="help">Details for each component are listed below.</p></section>`;
-}
-async function loadDeploymentHealth(revision){
- const data=await api('/operations/deployment-health').catch(error=>({error:error.message||'Deployment health is unavailable.'}));
- const section=$('#deployment-health');
- if(!currentView(revision,'activity')||!section||!section.isConnected)return;
- section.outerHTML=deploymentHealth(data);
 }
 async function workerRegistrations(revision,offset=0){
  const root=$('#content');
