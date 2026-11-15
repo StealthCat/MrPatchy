@@ -1,3 +1,7 @@
+## 1.67.0 — 2026-11-15
+
+1. [PR #925](https://github.com/StealthCat/MrPatchy/pull/925): Add **Show → Cached known good** to fleet and per-server Investigations, listing only verdicts whose current state is an exact known-good reuse and allowing review or bulk Re-triage. Compatibility: adds optional `cached=true`; the default response is unchanged, with no schema, role, admission, spend or response-authorization changes. Limits: filter state has no URL deep link, fleet-wide selection across pages remains open, and filtered scans use bounded chunks over retained candidates with the same offset-pagination behavior as the default view.
+
 ## 1.66.0 — 2026-11-15
 
 1. [PR #908](https://github.com/StealthCat/MrPatchy/pull/908): Add Settings → Malware response, where administrators can record and audit one fleet-wide automatic-response policy against the existing eligibility contract. Compare-and-set saves, audit entries and fail-closed handling keep invalid or unconfirmed enforcement disabled. Compatibility: additive administrator-only read/write endpoints and UI; existing installs default to Disabled; no migration, detector, executor, provider call, or response-authorization change. Limits: policy has no runtime effect, Enforce is unavailable, and per-server/group policies and enforcement remain open.

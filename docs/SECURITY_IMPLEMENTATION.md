@@ -2406,6 +2406,21 @@ admission/spend controls still apply when they run. This delivers the
 "selected" part of explicit Re-triage only. Fleet-wide selection across pages
 and cache-hit filters remain open.
 
+Worker checkpoint #924 adds a cache-hit filter to the Investigations list. On the
+fleet and per-server Investigations pages, **Show → Cached known good** requests
+`GET /api/investigations?cached=true`. That returns only rows whose current state
+came from an exact known-good reuse, which are exactly the rows with the badge. A
+SQL `EXISTS` prefilter limits the scan to completed rows that have a retained
+`known_good` assessment. Each chunk is then confirmed with the same
+current-state check the badge uses, and `offset`/`limit` count filtered rows. A
+later provider result, a re-triage request or changed state removes the row.
+Host read authorization, the inactive-server exclusion and role-limited reuse
+details are unchanged. The choice is kept per view, like the page offset,
+without a URL deep link. Changing it returns to page 1. The selection and bulk
+Re-triage controls work on the filtered rows. There is no schema, admission,
+spend, pause or authorization change, and filtering makes no provider call.
+Fleet-wide selection across pages remains open.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
