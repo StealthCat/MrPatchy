@@ -48,7 +48,7 @@ def test_open_exposures_group_by_advisory_across_servers(fleet):
     assert usn1['fixed_known'] == 2
     assert [(e['host_name'], e['enabled']) for e in usn1['exposures']] == [('Bravo', True), ('Alpha', True), ('Charlie', False)]
     assert usn1['exposures'][0]['fixed_version'] == '1.1' and usn1['exposures'][2]['fixed_version'] is None
-    assert not data['truncated'] and not usn1['exposures_truncated']
+    assert not data['truncated'] and not usn1['exposures_truncated'] and usn1['exposures_total'] == 3
     assert 'not evidence of exploitation' in data['coverage'] and 'not' in data['coverage']
 
 
@@ -67,12 +67,49 @@ def test_resolved_and_deleted_server_exposures_are_excluded(fleet):
 def test_caps_flag_truncation_but_totals_cover_every_row(fleet):
     _record(fleet, 'h-a', 100, *[('p%d' % n, '1.0', [_row('USN-%d' % n, 'affected')]) for n in range(5)])
     _record(fleet, 'h-b', 100, ('p0', '1.0', [_row('USN-0', 'affected')]), ('q0', '1.0', [_row('USN-0', 'affected')]))
-    data = advisories.fleet_open(fleet, advisory_limit=2, server_limit=2)
+    data = advisories.fleet_open(fleet, advisory_limit=2, exposure_limit=2)
     assert data['truncated'] and len(data['items']) == 2
     assert data['totals'] == {'open_exposures': 7, 'servers': 2, 'advisories': 5}
     first = data['items'][0]
     assert first['advisory_id'] == 'USN-0' and first['servers'] == 2 and first['packages'] == 2
-    assert len(first['exposures']) == 2 and first['exposures_truncated']
+    assert len(first['exposures']) == 2 and first['exposures_truncated'] and first['exposures_total'] == 3
+
+
+def test_one_server_with_many_packages_reports_exposures_not_servers(fleet):
+    # One server, six affected packages under one advisory: the cap is on
+    # exposures (server x package), so truncation must not claim more servers.
+    _record(fleet, 'h-a', 100, *[('p%d' % n, '1.0', [_row('USN-1', 'affected', '1.1' if n % 2 else None,
+                                                          ('CVE-2026-000%d' % n,))]) for n in range(6)])
+    item, = advisories.fleet_open(fleet, exposure_limit=2)['items']
+    assert item['servers'] == 1 and item['packages'] == 6
+    assert item['exposures_total'] == 6 and len(item['exposures']) == 2 and item['exposures_truncated']
+    assert [e['package'] for e in item['exposures']] == ['p0', 'p1']
+    # Summary fields still cover every open row, not just the listed ones.
+    assert item['fixed_known'] == 3 and item['cve_ids'] == ['CVE-2026-000%d' % n for n in range(6)]
+
+
+def test_rows_query_loads_at_most_the_per_advisory_limit(fleet, monkeypatch):
+    _record(fleet, 'h-a', 100, *[('p%d' % n, '1.0', [_row('USN-1', 'affected'), _row('USN-2', 'affected')])
+                                 for n in range(6)])
+    _record(fleet, 'h-b', 100, *[('q%d' % n, '1.0', [_row('USN-1', 'affected')]) for n in range(4)])
+    loaded = []
+    execute = fleet.execute
+
+    def spy(statement, *args, **kwargs):
+        frozen = execute(statement, *args, **kwargs).freeze()
+        loaded.append(len(frozen().all()))
+        return frozen()
+    monkeypatch.setattr(fleet, 'execute', spy)
+    data = advisories.fleet_open(fleet, exposure_limit=3)
+    monkeypatch.undo()
+    # Two advisories x at most three rows each; main loaded all 16 rows at once.
+    assert max(loaded) <= 2 * 3
+    assert [(i['advisory_id'], i['exposures_total'], len(i['exposures'])) for i in data['items']] == [
+        ('USN-1', 10, 3), ('USN-2', 6, 3)]
+    # Under the limit the summary is unchanged by the bound.
+    assert advisories.fleet_open(fleet, exposure_limit=50) == advisories.fleet_open(fleet, exposure_limit=10)
+    full = advisories.fleet_open(fleet)['items'][0]
+    assert len(full['exposures']) == 10 and not full['exposures_truncated']
 
 
 def test_fleet_route_is_admin_only_read_only(admin, monkeypatch):
