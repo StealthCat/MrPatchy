@@ -2467,7 +2467,7 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Validation:** `tests/test_triage_blocked_retry.py` (11 of 14 fail on main `68887ce`; all pass after) covers scope, exclusions, batching, lock refusal, roles, audit and notification resolve/resurface. `tests/ui_retry_blocked_investigations.cjs` fails on main and passes after. It covers visibility, the action, a partial batch, malformed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** per-server Investigations tabs do not offer the action, because the status count is fleet-wide. Blocked advisory-plan work is still not covered.
 
-#### Per-server blocked retry — worker checkpoint #946 (backend)
+#### Per-server blocked retry — worker checkpoint #946
 
 - **Change:** `blocked_count` and `retry_candidates` take an optional `host_id` that narrows the #934 predicate. Omitted, the fleet behavior is unchanged.
   - Admin-only `GET /api/hosts/{id}/investigations/blocked` returns `{blocked}` for one server, or 0 while AI is disabled.
@@ -2475,7 +2475,9 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
   - Unknown servers return 404. A paused or inactive server retries nothing.
 - **No bypass:** no provider request is sent, and there are no schema, admission, reservation or response-authorization changes.
 - **Validation:** six host-scope tests in `tests/test_triage_blocked_retry.py` fail on main `0842ba4` and pass after. They cover scope isolation, AI disabled, pause, 404, the lock, roles and audit. The existing fleet tests still pass.
-- **Remaining:** the Server → Investigations action and its browser module.
+- **UI:** Server → Investigations shows **Retry blocked investigations** to administrators only, while the server is enabled and its count is above 0. It calls the host route and refreshes the tab afterwards. A failed count read hides the action; operators never request the count.
+- **UI validation:** `tests/ui_host_retry_blocked_investigations.cjs` fails on main and passes after. It covers the host-only endpoint (never the fleet route), the refresh, a partial batch, singular wording, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** blocked advisory-plan work is still not covered.
 
 ### Throttling, daily cap and unthrottled operation
 
