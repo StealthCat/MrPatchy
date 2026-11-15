@@ -3265,7 +3265,8 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
                 kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
                 # Whole microseconds keep the decimal form at <=16 significant digits (an exact double below 2**53),
                 # so MySQL's JSON parser stores the same double the API returns instead of one bit off.
-                value['enabled_since']=since if kept else math.floor(time.time()*1_000_000)/1_000_000
+                from .scan_coverage_notifications import whole_microseconds
+                value['enabled_since']=since if kept else whole_microseconds(time.time())
             s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
     return value
