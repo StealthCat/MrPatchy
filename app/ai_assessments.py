@@ -8,7 +8,7 @@ import hashlib
 import json
 import time
 import uuid
-from sqlalchemy import String, Text, Double, JSON, Index, select
+from sqlalchemy import String, Text, Double, JSON, Index, select, exists
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
 
@@ -148,6 +148,34 @@ def record_reuse(s, row, hit):
         inputs=[],refresh={})
     s.add(saved)
     return saved
+
+
+REUSE_SCAN_CHUNK=200
+
+
+def reused_page(s, stmt, subject, offset, limit):
+    """Return one page of rows whose current state came from an exact known-good reuse.
+
+    ``stmt`` is the caller's ordered, already-authorized Behavior query without
+    offset or limit, and ``subject`` is its Behavior ID column. A SQL EXISTS
+    prefilter keeps the scan to completed rows with a retained known-good
+    assessment; current_reuse then confirms each chunk, so the result matches the
+    list badge exactly. offset/limit count confirmed rows, and the scan walks at
+    most the prefiltered rows needed to fill the requested page.
+    """
+    stmt=stmt.where(exists().where(Assessment.subject==subject,Assessment.source=='known_good'))
+    page=[];skipped=0;scanned=0
+    while len(page)<limit:
+        chunk=list(s.scalars(stmt.offset(scanned).limit(REUSE_SCAN_CHUNK)))
+        if not chunk:break
+        scanned+=len(chunk)
+        marked=current_reuse(s,chunk)
+        for row in chunk:
+            if row.id not in marked:continue
+            if skipped<offset:skipped+=1;continue
+            page.append(row)
+            if len(page)==limit:break
+    return page
 
 
 def current_reuse(s, rows, include_source=False):
