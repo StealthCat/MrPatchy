@@ -22,6 +22,36 @@ async function requestInvestigationRetriage(id){
  }catch(error){if(view===renderRevision&&session===sessionRevision)toast(error.message);}
 }
 
+const RETRIAGE_COMPLETE=['low','medium','high','unknown'];
+function retriageEligible(row){return RETRIAGE_COMPLETE.includes(row.verdict)&&/^[a-f0-9]{64}$/.test(row.revision||'');}
+function retriageCheckbox(row){return `<label class="check retriage-select"><input type="checkbox" data-retriage-select data-id="${esc(row.id)}" data-revision="${esc(row.revision)}" data-approved="${row.approved?'true':'false'}" data-executable="${esc(row.evidence?.executable||row.id)}" data-host="${esc(row.host_id)}">Select for Re-triage</label>`;}
+function bulkRetriageBar(){return `<div class="actions retriage-bulk" data-admin><button type="button" id="bulk-retriage" disabled aria-describedby="bulk-retriage-help">Re-triage selected (<span id="bulk-retriage-count">0</span>)</button><button type="button" id="bulk-retriage-clear" disabled>Clear selection</button><span class="help" id="bulk-retriage-help">Select completed investigations on this page to request fresh AI triage for all of them at once.</span></div>`;}
+function bindBulkRetriage(root){
+ const button=root.querySelector('#bulk-retriage');if(!button)return;
+ const clear=root.querySelector('#bulk-retriage-clear'),boxes=()=>[...root.querySelectorAll('[data-retriage-select]')];
+ const sync=()=>{const count=boxes().filter(box=>box.checked).length;root.querySelector('#bulk-retriage-count').textContent=count;button.disabled=!count;clear.disabled=!count;};
+ boxes().forEach(box=>{box.onchange=sync;});
+ clear.onclick=()=>{boxes().forEach(box=>{box.checked=false;});sync();};
+ button.onclick=()=>requestBulkRetriage(boxes().filter(box=>box.checked).map(box=>({id:box.dataset.id,expected_revision:box.dataset.revision,approved:box.dataset.approved==='true',executable:box.dataset.executable,host_id:box.dataset.host})));
+ sync();
+}
+function requestBulkRetriage(selected){
+ if(!selected.length)return;
+ const view=renderRevision,session=sessionRevision,approved=selected.filter(item=>item.approved).length;
+ const list=selected.slice(0,10).map(item=>`<li><strong class="assessment-artifact">${esc(item.executable)}</strong> · ${esc(hostName(item.host_id))}${item.approved?' · approved':''}</li>`).join('')+(selected.length>10?`<li>and ${selected.length-10} more</li>`:'');
+ modal('Request fresh AI triage for selected investigations',`<p>Investigate these ${selected.length} selected investigation(s) again? Each saved result stays in its Assessment history. This queues new investigations, may incur provider charges, and does not approve any response.</p><ul class="retriage-bulk-list">${list}</ul><p class="help">All or nothing: if any selected item changed or cannot be re-triaged, nothing is queued. AI pause, data sharing, saved model and admission limits still apply when the work runs. No fleet trust is changed.</p><form id="bulk-retriage-form"><label>Reason<textarea name="reason" minlength="10" maxlength="4000" required></textarea></label>${approved?`<label class="check"><input name="withdraw" type="checkbox" required>I withdraw the current approval of ${approved} selected behavior(s) until they are reviewed again.</label>`:''}<button class="primary">Queue fresh triage for ${selected.length}</button></form>`);
+ const form=$('#bulk-retriage-form'),dialog=modalRevision;
+ const active=()=>form.isConnected&&dialog===modalRevision&&view===renderRevision&&session===sessionRevision;
+ form.onsubmit=async event=>{
+  event.preventDefault();const button=form.querySelector('button');if(button.disabled)return;button.disabled=true;
+  try{
+   const values=new FormData(form);
+   const result=await api('/investigations/retriage','POST',{items:selected.map(({id,expected_revision})=>({id,expected_revision})),reason:values.get('reason'),withdraw_approval:values.has('withdraw')});
+   if(!active())return;$('#modal').close();toast(result.detail);await render();
+  }catch(error){if(active())toast(error.message);}finally{if(active())button.disabled=false;}
+ };
+}
+
 function requestKnownGoodRevocation(fingerprint,version,linked){
  const view=renderRevision,session=sessionRevision;
  modal('Revoke fleet safe candidate',`<p>Stop all future reuse of exact fingerprint <code class="known-good-fingerprint">${esc(fingerprint)}</code>? ${esc(linked)} linked assessment(s) will be marked for review without changing their saved results.</p><p class="help">This does not re-run AI, remove historical evidence, approve a response or suppress deterministic protection. Do not enter credentials or raw endpoint evidence.</p><form id="known-good-revoke-form"><label>Reason<textarea name="reason" minlength="10" maxlength="1000" required></textarea></label><label class="check"><input name="confirm" type="checkbox" required>I understand this invalidates the candidate across the fleet.</label><button class="primary">Revoke fleet candidate</button></form>`);
@@ -109,7 +139,7 @@ function aiAdmissionControl(status){
 // Shared AI start gates (#727): renders the administrator-only control snapshot
 // from /api/settings/ai-control-status (#546). Display-only; never a promise that
 // a specific call will start.
-const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
+const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',credential:'Saved API key unreadable',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
 function aiControlGates(snapshot){
  const when=value=>Number.isFinite(value)&&value>0?date(value):null;
  const head=state=>`<div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2>${badge(state)}</div>`;
@@ -334,7 +364,7 @@ async function users(revision=renderRevision){
 
 async function fleetSecurityCoverage(revision){
  const root=$('#content');let offset=0,query='',ticket=0;
- root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section>';
+ root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>';
  const current=()=>currentView(revision,'security')&&root.isConnected;
  const load=async()=>{const turn=++ticket;try{
   const data=await api('/security/coverage?offset='+offset+'&q='+encodeURIComponent(query));if(!current()||turn!==ticket)return;
@@ -343,7 +373,46 @@ async function fleetSecurityCoverage(revision){
   root.querySelector('#coverage-results').innerHTML='<p>'+data.summary.servers+' servers on this page · '+data.summary.disabled+' disabled · '+data.summary.open_incidents+' open or acknowledged scanner incidents</p>'+data.items.map(h=>'<article class="card"><div class="card-head"><h2>'+esc(h.name)+'</h2><a class="button" href="'+serverLink(h.id,'security')+'">Review server security</a></div><p>'+badge(h.enabled?'enabled':'disabled')+' · Last contact '+date(h.last_seen)+' · '+h.open_incidents+' open incidents · ClamAV age limit '+h.expected_hours+' hours · YARA age limit 24 hours</p>'+(!h.enabled?'<p class="notice">Management is disabled. These results are historical; collection is suspended.</p>':'')+'<div class="server-grid">'+engine('ClamAV',h.engines.ClamAV)+engine('YARA',h.engines.YARA)+'</div></article>').join('')+(data.items.length?'':'<p>No matching managed servers.</p>');
   root.querySelector('#coverage-prev').disabled=!offset;root.querySelector('#coverage-next').disabled=!data.more;
  }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').innerHTML=PatchyUI.error('Unable to load coverage',esc(error.message));}};
- root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await load();
+ root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root)]);
+}
+
+// Stored advisory-scan ledger only (#911): version applicability, never exploitation evidence, a clean-host verdict
+// or verified patch activation. The endpoint is admin-only and reads stored rows; this card makes no outbound call.
+async function fleetExposure(revision,root){
+ const card=root.querySelector('#fleet-exposure');if(!card||!isAdmin())return;
+ const body=card.querySelector('.fleet-exposure-body');let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&body.isConnected&&currentView(revision,'security');
+  body.innerHTML='<p role="status">Loading fleet exposure…</p>';
+  try{const data=await api('/cve-exposure/fleet');if(!current())return;body.innerHTML=fleetExposureContent(data);}
+  catch(error){if(!current())return;body.innerHTML='<div class="notice" role="alert"><p>Fleet exposure is unavailable. The rest of this page is unaffected.</p><button type="button" class="fleet-exposure-retry">Retry fleet exposure</button></div>';}
+  body.querySelectorAll('.fleet-exposure-retry,.fleet-exposure-refresh').forEach(button=>button.onclick=load);
+ };
+ await load();
+}
+function fleetExposureContent(data){
+ const time=value=>typeof value==='number'&&Number.isFinite(value)&&value>0?date(value):'Unknown';
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unknown';
+ const text=value=>typeof value==='string'&&value?esc(value):'Unknown';
+ const limits='<p class="help">This is version applicability recorded by administrator-run advisory scans. It is not exploitation evidence, not a clean-host verdict and does not verify that a patch took effect. A server missing from this list may simply never have been scanned.</p>';
+ const refresh='<div class="actions"><button type="button" class="fleet-exposure-refresh">Refresh fleet exposure</button></div>';
+ if(!data||typeof data!=='object'||!Array.isArray(data.items))return '<div class="notice" role="status"><p>Fleet exposure is unavailable in this response.</p></div>'+limits+refresh;
+ const totals=data.totals&&typeof data.totals==='object'?data.totals:{},coverage=typeof data.coverage==='string'?'<p class="help fleet-exposure-coverage">'+esc(data.coverage)+'</p>':'';
+ const summary='<div class="status-facts" role="status"><span><strong>'+count(totals.open_exposures)+'</strong>Open exposures</span><span><strong>'+count(totals.servers)+'</strong>Servers affected</span><span><strong>'+count(totals.advisories)+'</strong>Advisories</span></div>';
+ const truncated=data.truncated===true?'<div class="notice">Only the first '+count(data.items.length)+' advisories are shown, ordered by the number of affected servers. The totals above count every open exposure.</div>':'';
+ if(!data.items.length)return summary+'<p>No open exposure is recorded on any current server. Servers that have never had an advisory scan also show nothing, so this is not a clean-fleet verdict.</p>'+limits+coverage+refresh;
+ const rows=data.items.map(raw=>{
+  const item=raw&&typeof raw==='object'?raw:{},cves=Array.isArray(item.cve_ids)?item.cve_ids.filter(c=>typeof c==='string'):[];
+  const exposures=(Array.isArray(item.exposures)?item.exposures:[]).map(raw=>{const e=raw&&typeof raw==='object'?raw:{};
+   const host=typeof e.host_id==='string'&&e.host_id?'<a href="'+serverLink(e.host_id,'patching')+'">'+text(e.host_name)+'</a>':text(e.host_name);
+   const fixed=typeof e.fixed_version==='string'&&e.fixed_version?' · Vendor fix '+esc(e.fixed_version):'';
+   const reopened=Number.isSafeInteger(e.reopened)&&e.reopened>0?' · Reopened '+e.reopened.toLocaleString()+' time'+(e.reopened===1?'':'s'):'';
+   const disabled=e.enabled===false?' <span class="badge disabled">Management disabled · not refreshed</span>':'';
+   return '<li><div>'+host+disabled+'</div><div class="help">Package '+text(e.package)+' · First affected '+esc(time(e.first_affected_at))+' at version '+text(e.first_affected_version)+' · Last affected '+esc(time(e.last_affected_at))+' at version '+text(e.last_affected_version)+fixed+reopened+'</div></li>';}).join('');
+  const more=item.exposures_truncated===true?'<p class="help">More affected servers are not listed. Open each server\'s Patching page for its full history.</p>':'';
+  return '<li><details><summary><span class="badge high">Open</span> <strong>'+text(item.advisory_id)+'</strong>'+(cves.length?' · '+esc(cves.join(', ')):'')+' · '+count(item.servers)+' server'+(item.servers===1?'':'s')+' · '+count(item.packages)+' package'+(item.packages===1?'':'s')+' · Earliest '+esc(time(item.first_affected_at))+'</summary><ul class="fleet-exposure-servers">'+exposures+'</ul>'+more+'</details></li>';
+ }).join('');
+ return summary+truncated+'<ul class="advisory-applicability fleet-exposure-list">'+rows+'</ul>'+limits+coverage+refresh;
 }
 
 async function aiRunPage(revision,context,base,parts){

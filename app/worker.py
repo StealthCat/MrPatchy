@@ -923,7 +923,7 @@ def _loop(reporter):
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
+        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; leader_since=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
@@ -953,7 +953,10 @@ def _loop(reporter):
                 draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
                 worker_health.touch()
                 if draining and is_leader:leader.release();is_leader=False
-                if not draining and not is_leader:is_leader=leader.acquire(False)
+                if not draining and not is_leader:
+                    is_leader=leader.acquire(False)
+                    # Telemetry silence before this point is the coordinator's own gap, not the servers'.
+                    if is_leader:leader_since=now
                 if is_leader:
                     ai_runs.heartbeat()
                     if now-last_advisory_reconcile>=5:
@@ -989,7 +992,7 @@ def _loop(reporter):
                                     try:enqueue(s,h.id,'refresh')
                                     except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
-                        operations.collect_alerts()
+                        operations.collect_alerts(observing_since=leader_since)
                         # In-app only; a failure must not stop the coordinator tick.
                         try:
                             from . import worker_registry
