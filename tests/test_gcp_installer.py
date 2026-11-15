@@ -38,6 +38,7 @@ if "config" in args and "--format" in args:
         print(json.dumps({"name":name,"services":{"worker":{"environment":{"DATABASE_URL":env.get("DATABASE_URL","sqlite:////data/mrpatchy.db").replace("$","$$")}}},
                           "volumes":{"app-data":{"name":env.get("MRPATCHY_CONTROLLER_DATA_VOLUME")}}}))
     else:
+        if os.environ.get("MOCK_CONTROLLER_RENDER_FAIL"):sys.exit("cannot render controller")
         name=os.environ.get("MOCK_PROJECT","mrpatchy")
         print(json.dumps({"name":name,"services":{"app":{"environment":{"DATABASE_URL":os.environ.get("MOCK_DATABASE_URL","sqlite:////data/mrpatchy.db").replace("$","$$")}}},
                           "volumes":{"app-data":{"name":name+"_app-data"}}}))
@@ -427,6 +428,35 @@ def test_compose_wrapper_worker_selector(installer):
     assert wrapper().returncode==2
     (root/'.env.worker').unlink()
     assert wrapper().returncode==2
+
+
+def test_compose_wrapper_refuses_worker_project_equal_to_controller(installer):
+    # .env.worker edited after installation to reuse the controller project must never reach worker Compose.
+    root,_=installer
+    env={**os.environ,'PATH':str(root/'bin')+':'+os.environ['PATH'],'MOCK_LOG':str(root/'commands')}
+    def wrapper(**overrides):
+        return subprocess.run(['bash',str(root/'gcp-compose.sh'),'--workers','up','-d'],env={**env,**overrides},capture_output=True,text=True)
+    def worker_calls():
+        log=root/'commands'
+        return [row for row in _commands(root) if 'compose.worker.yaml' in row] if log.exists() else []
+    (root/'.env.gcp').write_text('GCP_PROJECT=p\nGCP_ZONE=z\nMRPATCHY_GCP_MODE=controller\n')
+    for value in ('mrpatchy',"'mrpatchy'",'"mrpatchy"'):
+        (root/'.env.worker').write_text('COMPOSE_PROJECT_NAME=patchy-workers\nCOMPOSE_PROJECT_NAME='+value+'\n')
+        result=wrapper()
+        assert result.returncode==2 and 'must differ from the controller project mrpatchy' in result.stderr
+    (root/'.env.worker').write_text('COMPOSE_PROJECT_NAME=custom-ctl\n')
+    result=wrapper(MOCK_PROJECT='custom-ctl')
+    assert result.returncode==2 and 'controller project custom-ctl' in result.stderr
+    result=wrapper(MOCK_CONTROLLER_RENDER_FAIL='1')
+    assert result.returncode==2 and 'Could not render the controller project' in result.stderr
+    assert worker_calls()==[]
+    # The controller render is read-only and uses the controller's own files, including its WIF overlay.
+    (root/'compose.controller.gcp-auth.json').write_text('{}')
+    assert wrapper().returncode==0
+    renders=[row for row in _commands(root) if 'config' in row and 'compose.controller.yaml' in _files(row)]
+    assert renders and _files(renders[-1])==['compose.controller.yaml','compose.controller.gcp.yaml','compose.controller.gcp-auth.json']
+    row=_commands(root)[-1]
+    assert row[:3]==['compose','-p','custom-ctl'] and row[-2:]==['up','-d']
 
 
 def test_recorded_worker_files_render_with_compose(installer,tmp_path):

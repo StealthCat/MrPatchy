@@ -226,7 +226,11 @@ checkout with `--mode controller`. Pass the same `--project`, `--zone` and
 
 Use `./gcp-compose.sh --workers …` for later worker operations, for example
 `./gcp-compose.sh --workers ps` or `./gcp-compose.sh --workers up -d --scale worker=4`.
-Plain `./gcp-compose.sh` keeps operating the controller. Drain workers in the UI
+Plain `./gcp-compose.sh` keeps operating the controller. Every `--workers` call first
+renders the controller configuration and refuses (exit 2, before any worker Compose
+command) when `.env.worker` names the controller's effective Compose project or the
+controller cannot be rendered, so a later edit to `.env.worker` cannot point worker
+lifecycle commands at the controller project. Drain workers in the UI
 before planned maintenance, as above. This mode does not provision workers on
 another machine.
 
