@@ -43,6 +43,7 @@ cancels scans, changes patching state, or acknowledges, remediates or
 authorizes anything.
 """
 import math
+from fractions import Fraction
 
 from sqlalchemy import func, select
 
@@ -117,6 +118,16 @@ def _enabled_age(policy, now):
     return now - since
 
 
+def whole_microseconds(seconds):
+    """Return ``seconds`` truncated to whole microseconds, never later than ``seconds`` (#942).
+
+    ``math.floor(seconds * 1_000_000)`` is not safe at epoch magnitudes: the product is near 1.8e15, where doubles
+    are 0.25 apart, so it can round up to the next microsecond and store a marker after ``now``. The exact rational
+    product avoids that, and dividing the integer by 10**6 gives the nearest double to that decimal, at most ``seconds``.
+    """
+    return math.floor(Fraction(seconds) * 1_000_000) / 1_000_000
+
+
 def _legacy_markers(session, policies, attempts, now):
     """Return policies with a conservative ``enabled_since`` for enabled, never-scanned legacy policies (#883).
 
@@ -138,7 +149,7 @@ def _legacy_markers(session, policies, attempts, now):
         since = row.value.get('first_seen') if row and isinstance(row.value, dict) else None
         if not _valid_time(since, now):
             # Whole microseconds keep the stored JSON double exact on MySQL, as for ``enabled_since``.
-            since = math.floor(now * 1_000_000) / 1_000_000
+            since = whole_microseconds(now)
             if row:
                 row.value = {'first_seen': since}
             else:
