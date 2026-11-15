@@ -31,7 +31,8 @@ parser (``auth-options.c``):
 It performs no I/O, never runs a command and never authorizes a response
 action. Anything it cannot resolve exactly (unreadable, oversized or over-cap
 input, an unknown key type, expiry without a timezone close to the observation
-time, ``environment=`` whose effect depends on ``PermitUserEnvironment``) is an
+time, ``environment=`` whose effect depends on ``PermitUserEnvironment``,
+unvalidated ``permitopen``/``permitlisten`` syntax) is an
 explicit coverage gap and is never reported as covered.
 """
 from __future__ import annotations
@@ -275,6 +276,10 @@ def parse_line(line: str, *, now: float | None = None) -> dict[str, Any]:
     if opts['environment']:
         record['gaps'].append(_gap('environment_requires_sshd_config',
                                    'environment= only applies when sshd PermitUserEnvironment allows it.'))
+    if opts['permitopen'] or opts['permitlisten']:
+        record['gaps'].append(_gap('forwarding_spec_unvalidated',
+                                   'permitopen/permitlisten host:port syntax is not validated here; sshd '
+                                   'refuses the line if a value is malformed.'))
     if expiry and now is not None:
         delta = now - expiry['epoch']
         if expiry['utc'] or abs(delta) > _LOCAL_EXPIRY_MARGIN_SECONDS:

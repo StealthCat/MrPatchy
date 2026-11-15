@@ -8598,11 +8598,12 @@ The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` a
   - unreadable, oversized or truncated files;
   - an unknown key type;
   - `environment=`, which depends on `PermitUserEnvironment`;
+  - `permitopen`/`permitlisten` values, whose host:port syntax is not validated (`forwarding_spec_unvalidated`);
   - a local-time expiry within the ±14-hour zone range of the observation, or an expiry with no observation time;
   - the file, line, option, value and comment caps.
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
 - **Validation:** `tests/test_authorized_keys.py` has 27 tests. They cannot run on main, where the module does not exist, and they pass on the branch. They include a real `cryptography`-generated OpenSSH Ed25519 key.
 - **Remaining:**
   - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
-  - `permitopen`/`permitlisten` syntax validation;
+  - `permitopen`/`permitlisten` syntax validation, which is a gap today;
   - provenance, AI classification and UI.

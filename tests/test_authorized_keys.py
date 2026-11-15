@@ -122,7 +122,7 @@ def test_value_options_are_reported():
     assert rec['principals'] == 'ops,deploy'
     assert rec['tunnel'] == '0'
     assert rec['cert_authority'] is True and rec['verify_required'] is True
-    assert {g['kind'] for g in rec['gaps']} == {'environment_requires_sshd_config'}
+    assert {g['kind'] for g in rec['gaps']} == {'environment_requires_sshd_config', 'forwarding_spec_unvalidated'}
 
 
 def test_expiry_utc_local_and_unevaluated():
