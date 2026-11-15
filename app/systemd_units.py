@@ -43,6 +43,10 @@ containing one stays raw and the unit gets an ``unexpanded_specifier`` gap.
 manager using the user search table (``user_search_paths``). Units from the
 account's own configuration/data directories have origin ``user`` and are never
 package defaults; the account owning the manager is the effective identity.
+An optional ``xdg`` mapping taken from the user manager's environment applies
+non-default ``XDG_CONFIG_HOME``/``XDG_DATA_HOME``/``XDG_CACHE_HOME`` and
+``XDG_CONFIG_DIRS``/``XDG_DATA_DIRS``; an invalid value is a coverage gap and
+is never replaced by a guessed default.
 """
 from __future__ import annotations
 
@@ -107,7 +111,8 @@ LIMITATIONS = (
 )
 USER_LIMITATIONS = (
     'Runtime active/inactive/failed state and lingering are not collected by this contract.',
-    'Non-default XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CONFIG_DIRS/XDG_DATA_DIRS are not applied.',
+    'XDG_* directories are applied only when the caller supplies the user manager\'s environment as xdg; '
+    'otherwise the XDG Base Directory defaults are assumed.',
     'Package ownership and vendor-default authenticity are not verified here.',
     'Specifiers are expanded only in EXPAND_KEYS and only where their value is fixed; %U, %G, %g, %s '
     'and host/boot/environment specifiers stay raw as gaps. $VAR environment substitution is not performed.',
@@ -237,15 +242,94 @@ def _valid_dir(value: Any) -> bool:
             and '\n' not in value and len(value) <= 1024 and posixpath.normpath(value) == value)
 
 
-def user_search_paths(home: Any, runtime_dir: Any) -> tuple[tuple[tuple[str, str], ...], list[dict[str, str]]]:
+# Bounds for caller-supplied XDG_CONFIG_DIRS/XDG_DATA_DIRS entries.
+MAX_XDG_DIRS = 32
+XDG_KEYS = ('config_home', 'data_home', 'cache_home', 'config_dirs', 'data_dirs')
+# XDG Base Directory defaults used when a key is absent or empty.
+_XDG_DEFAULT_CONFIG_DIRS = ('/etc/xdg',)
+_XDG_DEFAULT_DATA_DIRS = ('/usr/local/share', '/usr/share')
+_XDG_DIR_ORIGINS = {'/etc/xdg': 'administrator', '/usr/local/share': 'local', '/usr/share': 'vendor'}
+
+
+def _xdg_path(value: Any) -> str | None:
+    """A trailing ``/`` is tolerated; anything else must already be a valid directory."""
+    if isinstance(value, str) and len(value) > 1:
+        value = value.rstrip('/') or '/'
+    return value if _valid_dir(value) else None
+
+
+def _xdg_settings(home: str | None, xdg: Any) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Resolve the XDG directories for one user manager.
+
+    Absent, ``None`` or empty values take the XDG Base Directory default (the
+    home-relative ones only when ``home`` is valid). A supplied invalid value
+    is reported and its directories are left out rather than defaulted.
+    """
+    gaps: list[dict[str, str]] = []
+    if xdg is None:
+        xdg = {}
+    elif not isinstance(xdg, dict):
+        gaps.append(_gap('xdg_invalid'))
+        xdg = {}
+    unknown = sorted(str(k)[:64] for k in xdg if k not in XDG_KEYS)
+    if unknown:
+        gaps.append(_gap('xdg_unknown_key', detail=','.join(unknown)[:512]))
+    defaults = {'config_home': home and f'{home}/.config', 'data_home': home and f'{home}/.local/share',
+                'cache_home': home and f'{home}/.cache'}
+    out: dict[str, Any] = {}
+    for key, default in defaults.items():
+        value = xdg.get(key)
+        if value is None or value == '':
+            out[key] = default
+            continue
+        out[key] = _xdg_path(value)
+        if out[key] is None:
+            gaps.append(_gap('xdg_' + key + '_invalid', value[:512] if isinstance(value, str) else ''))
+    for key, default in (('config_dirs', _XDG_DEFAULT_CONFIG_DIRS), ('data_dirs', _XDG_DEFAULT_DATA_DIRS)):
+        value = xdg.get(key)
+        if isinstance(value, str):
+            value = value.split(':')
+        if value is None or (isinstance(value, (list, tuple)) and not any(v != '' for v in value)):
+            out[key] = list(default)
+            continue
+        if not isinstance(value, (list, tuple)):
+            gaps.append(_gap('xdg_' + key + '_invalid'))
+            out[key] = []
+            continue
+        entries = [v for v in value if v != '']
+        if len(entries) > MAX_XDG_DIRS:
+            gaps.append(_gap('xdg_' + key + '_cap', detail=f'{len(entries)} > {MAX_XDG_DIRS}'))
+            entries = entries[:MAX_XDG_DIRS]
+        dirs = []
+        for entry in entries:
+            path = _xdg_path(entry)
+            if path is None:
+                gaps.append(_gap('xdg_' + key + '_invalid', entry[:512] if isinstance(entry, str) else ''))
+            else:
+                dirs.append(path)
+        out[key] = dirs
+    return out, gaps
+
+
+def _xdg_dir_origin(path: str, home: str | None, fallback: str) -> str:
+    if home and (path == home or path.startswith(home + '/')):
+        return 'user'
+    return _XDG_DIR_ORIGINS.get(path, fallback)
+
+
+def user_search_paths(home: Any, runtime_dir: Any,
+                      xdg: Any = None) -> tuple[tuple[tuple[str, str], ...], list[dict[str, str]]]:
     """Return the user-manager search table for one account, highest first.
 
-    Follows the ``systemd --user`` table of ``systemd.unit(5)`` with default
-    ``XDG_CONFIG_HOME``/``XDG_DATA_HOME`` under ``home``, default
-    ``XDG_CONFIG_DIRS``/``XDG_DATA_DIRS`` and ``$XDG_RUNTIME_DIR`` set to
-    ``runtime_dir``. An invalid home or runtime directory omits its directories
-    and returns a gap. A directory that would coincide with another one in the
-    table is omitted and reported, never merged or guessed.
+    Follows the ``systemd --user`` table of ``systemd.unit(5)`` with
+    ``$XDG_RUNTIME_DIR`` set to ``runtime_dir``. ``xdg`` optionally carries the
+    user manager's ``config_home``, ``data_home``, ``cache_home``,
+    ``config_dirs`` and ``data_dirs`` (lists or ``:``-separated strings);
+    absent or empty values use the XDG Base Directory defaults under ``home``,
+    ``/etc/xdg`` and ``/usr/local/share:/usr/share``. An invalid home, runtime
+    directory or supplied XDG value omits its directories and returns a gap. A
+    directory that would coincide with another one in the table is omitted and
+    reported, never merged or guessed.
     """
     gaps: list[dict[str, str]] = []
     h = home if _valid_dir(home) else None
@@ -254,20 +338,24 @@ def user_search_paths(home: Any, runtime_dir: Any) -> tuple[tuple[tuple[str, str
         gaps.append(_gap('user_home_invalid', home[:512] if isinstance(home, str) else ''))
     if r is None:
         gaps.append(_gap('user_runtime_dir_invalid', runtime_dir[:512] if isinstance(runtime_dir, str) else ''))
+    dirs, xdg_gaps = _xdg_settings(h, xdg)
+    gaps.extend(xdg_gaps)
+    ch, dh = dirs['config_home'], dirs['data_home']
+    config_dirs = [(f'{d}/systemd/user', _xdg_dir_origin(d, h, 'administrator')) for d in dirs['config_dirs']]
+    data_dirs = [(f'{d}/systemd/user', _xdg_dir_origin(d, h, 'local')) for d in dirs['data_dirs']]
     table: list[tuple[str | None, str]] = [
-        (h and f'{h}/.config/systemd/user.control', 'user'),
+        (ch and f'{ch}/systemd/user.control', 'user'),
         (r and f'{r}/systemd/user.control', 'runtime'),
         (r and f'{r}/systemd/transient', 'transient'),
         (r and f'{r}/systemd/generator.early', 'generated'),
-        (h and f'{h}/.config/systemd/user', 'user'),
-        ('/etc/xdg/systemd/user', 'administrator'),
+        (ch and f'{ch}/systemd/user', 'user'),
+        *config_dirs,
         ('/etc/systemd/user', 'administrator'),
         (r and f'{r}/systemd/user', 'runtime'),
         ('/run/systemd/user', 'runtime'),
         (r and f'{r}/systemd/generator', 'generated'),
-        (h and f'{h}/.local/share/systemd/user', 'user'),
-        ('/usr/local/share/systemd/user', 'local'),
-        ('/usr/share/systemd/user', 'vendor'),
+        (dh and f'{dh}/systemd/user', 'user'),
+        *data_dirs,
         ('/usr/local/lib/systemd/user', 'local'),
         ('/usr/lib/systemd/user', 'vendor'),
         ('/lib/systemd/user', 'vendor'),
@@ -287,7 +375,7 @@ def user_search_paths(home: Any, runtime_dir: Any) -> tuple[tuple[tuple[str, str
 
 
 def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
-                 collected_roots: Any = None) -> dict[str, Any]:
+                 collected_roots: Any = None, xdg: Any = None) -> dict[str, Any]:
     """Resolve one account's effective ``systemd --user`` units.
 
     ``home`` and ``runtime_dir`` (``$XDG_RUNTIME_DIR``, normally
@@ -297,9 +385,10 @@ def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
     ``declared_user`` and a different value is reported as a gap. Exec
     prefixes ``+``/``!`` relax sandboxing within the account and do not gain
     root, so ``privileged_exec`` is always false here. Enablement links in the
-    account's own configuration directory count as enabled.
+    account's own configuration directory count as enabled. ``xdg`` is the
+    optional user-manager XDG environment described in ``user_search_paths``.
     """
-    table, gaps = user_search_paths(home, runtime_dir)
+    table, gaps = user_search_paths(home, runtime_dir, xdg)
     valid_account = isinstance(account, str) and 0 < len(account) <= 255 and account.isprintable() \
         and '/' not in account and ':' not in account
     if not valid_account:
@@ -308,9 +397,14 @@ def resolve_user(observations: Any, home: Any, runtime_dir: Any, account: Any,
     if valid_account:
         manager['u'] = account
     if _valid_dir(home):
-        # Default XDG_CONFIG_HOME/XDG_CACHE_HOME; %S/%L moved between systemd
-        # releases, so they stay unexpanded rather than guessed.
-        manager.update(h=home, E=f'{home}/.config', C=f'{home}/.cache')
+        manager['h'] = home
+    # %E/%C are XDG_CONFIG_HOME/XDG_CACHE_HOME; %S/%L moved between systemd
+    # releases, so they stay unexpanded rather than guessed.
+    dirs, _ = _xdg_settings(home if _valid_dir(home) else None, xdg)
+    if dirs['config_home']:
+        manager['E'] = dirs['config_home']
+    if dirs['cache_home']:
+        manager['C'] = dirs['cache_home']
     if _valid_dir(runtime_dir):
         manager['t'] = runtime_dir
     result = _resolve(observations, collected_roots, table, _ENABLEMENT_ORIGINS | {'user'}, gaps,

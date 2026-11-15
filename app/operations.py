@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_pricing,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
+from . import ai_budget,ai_credential_notifications,ai_pricing,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -151,6 +151,10 @@ def _pricing_catalog_alert(s,cfg,record,now):
             severity='info',reason='The AI public-price catalog no longer needs administrator attention.',
             deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
 
+REPOSITORY_REFRESH_MESSAGE=('Repository metadata refresh is failing and no refresh has succeeded within two refresh '
+    'intervals. Package updates and scheduled patching on this server are blocked until a refresh succeeds. Review '
+    'Repositories and the latest refresh operation in Activity.')
+
 # Human-attention server alerts mirrored into in-app notifications:
 # alert kind -> (notification kind, severity, server tab for the deep link).
 # Messages for these kinds are composed from counts, states and record IDs only.
@@ -170,9 +174,18 @@ OPERATIONAL_NOTIFICATIONS={
     'service coverage':('service-coverage','medium','security'),
     'execution scan coverage':('execution-scan-coverage','medium','security'),
     'scheduled patching':('scheduled-patching','medium','patching'),
+    # Notification-only: keep raw repository errors out of the in-app notification.
+    'repository refresh':('repository-refresh','medium','repositories'),
     'agent health':('agent-health','medium','agent'),
     'startup baseline':('startup-baseline','medium','integrity'),
+    # Notification-only (no outbox Alert): the 120-second `stale` alert flaps, so the bell
+    # only reports telemetry silence that has persisted for TELEMETRY_LOST_SECONDS.
+    'telemetry lost':('telemetry-lost','high','agent'),
 }
+TELEMETRY_LOST_SECONDS=900
+TELEMETRY_LOST_MESSAGE=('No telemetry has arrived from this server for at least 15 minutes. It may be powered off, '
+    'unreachable, or its agent or SSH access may have failed. Review Agent health and Connection. Security '
+    'coverage is unavailable while telemetry is missing; this is not a clean-host verdict.')
 OPERATIONAL_NOTIFICATION_SOURCE='operations'
 OPERATIONAL_NOTIFICATION_SUBJECT='server'
 
@@ -204,7 +217,9 @@ def _resolve_operational_notifications(s,published,now):
             deep_link='#servers/'+host_id+'/'+tabs[notification_kind],
             minimum_role='admin',lifecycle='resolved',now=now)
 
-def collect_alerts(now=None):
+def collect_alerts(now=None,observing_since=None):
+    # observing_since: when this coordinator began polling. Silence older than that is the
+    # controller's own outage, so telemetry loss is only published after a full threshold of observation.
     with Session() as s:
         now=time.time() if now is None else now;cfg=config(s);active=set();published=set()
         # One fleet read fills the identity map, so per-alert publish lookups issue no queries.
@@ -226,6 +241,8 @@ def collect_alerts(now=None):
                 # leaves the session untouched and never blocks SMTP/webhook alerts.
                 try:_operational_notification(s,host_id,kind,message,now)
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
+        # In-app only: an unusable saved key stops every paid AI path before sending.
+        ai_credential_notifications.publish(s,cfg,now)
         ai_budget.publish_unpriced_model_notification(s,cfg,now)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
@@ -292,6 +309,14 @@ def collect_alerts(now=None):
             if recovery:record(host,'recovery',str(len(recovery))+' operation(s) require console recovery/reconciliation. See Activity: '+', '.join(recovery[:10]))
             if host.state=='enrolling':continue
             if now-host.last_seen>120:record(host,'stale','Telemetry has not arrived within 120 seconds')
+            if now-host.last_seen>TELEMETRY_LOST_SECONDS:
+                # Keeping the key published holds an existing event active across a coordinator restart,
+                # while new events wait until polling has had a full threshold to refresh last_seen.
+                published.add((host.id,OPERATIONAL_NOTIFICATIONS['telemetry lost'][0]))
+                if observing_since is None or now-observing_since>TELEMETRY_LOST_SECONDS:
+                    # Fixed text keeps one stable revision per outage; resolution reuses the operational path.
+                    try:_operational_notification(s,host.id,'telemetry lost',TELEMETRY_LOST_MESSAGE,now)
+                    except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for telemetry loss on %s',host.id)
             if host.integrity:record(host,'integrity',json.dumps(host.integrity)[:8000])
             agent=settings.get('agent-status:'+host.id)
             if agent and agent.value.get('state') not in ('current','outdated'):
@@ -302,15 +327,38 @@ def collect_alerts(now=None):
                 if assessment['state']!='matches':
                     record(host,'startup baseline','Startup inventory '+assessment['state']+' against the reviewed baseline. Review File integrity; differences are not a malware verdict.')
             if host.repo_error:record(host,'repository',host.repo_error[:8000])
+            if host.repo_error and (not host.last_repo or now-host.last_repo>cfg['repo_minutes']*120):
+                published.add((host.id,OPERATIONAL_NOTIFICATIONS['repository refresh'][0]))
+                try:_operational_notification(s,host.id,'repository refresh',REPOSITORY_REFRESH_MESSAGE,now)
+                except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for repository refresh on %s',host.id)
             if host.id in overdue_hosts:
                 count=sum(now>p.available_since+cfg['deadlines'][p.priority]*3600 for p in s.scalars(select(Package).where(Package.host_id==host.id,Package.candidate!='')))
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
+        # In-app only: the raw integrity alert carries endpoint text; publish fixed controller-classified wording.
+        from . import integrity_sweep_notifications
+        try:integrity_sweep_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
+        # In-app only: scheduled malware-scan coverage has no SMTP/webhook alert.
+        from . import scan_coverage_notifications
+        try:scan_coverage_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app scheduled-scan coverage notifications')
+        # In-app only: lifecycle text comes from the reviewed catalog, never endpoint text.
+        from . import os_lifecycle_notifications
+        try:os_lifecycle_notifications.publish(s,hosts,now,cfg['repo_minutes']*120,cfg.get('os_lifecycle_warning_days',0))
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app OS lifecycle notifications')
+        # In-app only: stored advisory applicability; counts only, never advisory or package text.
+        from . import advisory_exposure_notifications
+        try:advisory_exposure_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app advisory exposure notifications')
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
         _resolve_operational_notifications(s,published,now)
+        # This producer observes the resolved outbox; it never sends or retries alerts.
+        from . import alert_delivery_notifications
+        alert_delivery_notifications.publish(s,now)
         s.commit()
 
 def delivery_error(error):
@@ -327,8 +375,11 @@ def deliver_one():
     with Session() as s:
         setting=s.get(Setting,'notifications')
         if not setting:return
-        cfg=json.loads(unseal(setting.value['encrypted']))
-        if not cfg.get('enabled'):return
+        # An unreadable configuration cannot be delivered; alert_delivery_notifications
+        # raises the in-app notice. Count no attempt and never raise into the poll executor.
+        try:cfg=json.loads(unseal(setting.value['encrypted']))
+        except Exception:return
+        if not isinstance(cfg,dict) or not cfg.get('enabled'):return
         alert=next((row for row in s.scalars(select(Alert).where(Alert.state=='open',Alert.notified==0).order_by(Alert.attempted).limit(200)) if time.time()-row.attempted>=min(3600,30*2**min(row.attempts,7))),None)
         if not alert:return
         alert.attempted=time.time();alert.attempts+=1;s.commit()

@@ -301,3 +301,139 @@ def test_concurrent_refresh_requests_create_one_intent_and_preserve_one_prior_re
         assert len(list(s.scalars(select(ai_assessments.Refresh))))==1
         assert len(list(s.scalars(select(ai_assessments.Assessment))))==1
         assert s.get(Behavior,'subject').verdict=='pending' and not s.get(Behavior,'subject').approved
+
+
+def seed_many(verdicts=('low','unknown','high'),approved=()):
+    with Session() as s:
+        for id in ('one','two'):s.add(Host(id=id,name=id,address='192.0.2.1',fingerprint=''))
+        for index,verdict in enumerate(verdicts):
+            s.add(Behavior(id=f'subject-{index}',host_id=('one','two')[index%2],verdict=verdict,approved=index in approved,
+                analysis='Original retained result',evidence={'executable':f'/srv/fixture-{index}','sha256':'a'*64,'uid':'1000','identity_verified':True}))
+        s.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model'}))
+        s.merge(Setting(key='openai_key',value={'encrypted':seal('private-key')}));s.commit()
+
+
+def selection(admin,count=3):
+    return [{'id':f'subject-{index}','expected_revision':current(admin,f'subject-{index}')['current']['revision']} for index in range(count)]
+
+
+def bulk(admin,items,**values):
+    return admin.post('/api/investigations/retriage',json={'items':items,'reason':'Threat context changed for these',**values})
+
+
+def queued_ids():
+    with Session() as s:return sorted(row.subject for row in s.scalars(select(ai_assessments.Refresh)))
+
+
+def test_bulk_retriage_queues_every_selected_completed_investigation_without_provider_calls(admin,monkeypatch):
+    seed_many()
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:pytest.fail('Queueing must not call AI'))
+    response=bulk(admin,selection(admin))
+    assert response.status_code==200,response.text
+    assert response.json()['queued']==3 and len(set(response.json()['request_ids']))==3
+    assert queued_ids()==['subject-0','subject-1','subject-2']
+    with Session() as s:
+        for index in range(3):
+            row=s.get(Behavior,f'subject-{index}')
+            assert row.verdict=='pending' and not row.approved and row.attempted==0
+        # Each prior result is retained and each request is audited individually.
+        assert len(list(s.scalars(select(ai_assessments.Assessment))))==3
+        assert len(list(s.scalars(select(Audit).where(Audit.action=='request AI re-triage'))))==3
+        assert len(list(s.scalars(select(Audit).where(Audit.action=='request bulk AI re-triage'))))==1
+    for index in range(3):
+        refresh=current(admin,f'subject-{index}')['current']['refresh']
+        assert refresh['actor']=='admin' and refresh['reason']=='Threat context changed for these' and refresh['bypass_cache']
+
+
+def test_bulk_retriage_is_all_or_nothing_and_names_each_refusal(admin):
+    seed_many(verdicts=('low','pending','error'))
+    items=selection(admin)
+    response=bulk(admin,items)
+    assert response.status_code==409
+    detail=response.json()['detail']
+    assert detail.startswith('Nothing was queued. 2 selected') and '/srv/fixture-1' in detail and '/srv/fixture-2' in detail
+    assert '/srv/fixture-0' not in detail
+    assert queued_ids()==[]
+    with Session() as s:
+        assert s.get(Behavior,'subject-0').verdict=='low'
+        assert not list(s.scalars(select(ai_assessments.Assessment)))
+        assert not list(s.scalars(select(Audit).where(Audit.action.like('request%re-triage'))))
+
+
+def test_bulk_retriage_rejects_stale_revisions_and_existing_requests(admin):
+    seed_many()
+    items=selection(admin)
+    with Session() as s:s.get(Behavior,'subject-1').analysis='Changed after the list was loaded';s.commit()
+    assert bulk(admin,items).status_code==409 and queued_ids()==[]
+    items=selection(admin)
+    assert admin.post('/api/investigations/subject-2/retriage',json={'expected_revision':items[2]['expected_revision'],'reason':'Single request first'}).status_code==200
+    response=bulk(admin,items)
+    assert response.status_code==409 and queued_ids()==['subject-2']
+
+
+def test_bulk_retriage_requires_explicit_approval_withdrawal(admin):
+    seed_many(approved=(1,))
+    items=selection(admin)
+    response=bulk(admin,items)
+    assert response.status_code==409 and 'withdrawal' in response.json()['detail'] and queued_ids()==[]
+    with Session() as s:assert s.get(Behavior,'subject-1').approved
+    assert bulk(admin,items,withdraw_approval=True).status_code==200
+    with Session() as s:
+        assert not s.get(Behavior,'subject-1').approved
+        assert s.scalar(select(Audit).where(Audit.action=='withdraw behavior approval for re-triage'))
+    assert current(admin,'subject-1')['current']['refresh']['withdrew_approval']
+
+
+def test_bulk_retriage_validates_selection_and_inactive_servers(admin):
+    seed_many()
+    items=selection(admin)
+    assert bulk(admin,[items[0],items[0]]).status_code==400
+    assert bulk(admin,[]).status_code==422
+    assert bulk(admin,[{'id':f'x{index}','expected_revision':'a'*64} for index in range(51)]).status_code==422
+    assert bulk(admin,items,reason=' '*10).status_code==400
+    assert bulk(admin,items+[{'id':'missing','expected_revision':'a'*64}]).status_code==404
+    with Session() as s:s.get(Host,'two').enabled=False;s.commit()
+    response=bulk(admin,items)
+    assert response.status_code==409 and 'server management is unavailable' in response.json()['detail']
+    assert '/srv/fixture-1' in response.json()['detail'] and queued_ids()==[]
+
+
+def test_bulk_retriage_refuses_running_investigations(admin):
+    from app import ai_claims
+    seed_many()
+    items=selection(admin)
+    with Session() as s:
+        s.add(ai_claims.Claim(subject='subject-0',host_id='one',token='t',worker_id='w',boot_id='b',run_id='r',revision='a'*64,configuration='c',created=time.time(),renewed=time.time(),expires=time.time()+60))
+        s.commit()
+    response=bulk(admin,items)
+    assert response.status_code==409 and 'investigation is running' in response.json()['detail'] and queued_ids()==[]
+    with Session() as s:s.delete(s.get(ai_claims.Claim,'subject-0'));s.commit()
+    lock=worker.Lock('ai-triage');assert lock.acquire(False)
+    try:assert bulk(admin,items).status_code==409
+    finally:lock.release()
+    assert queued_ids()==[]
+    assert bulk(admin,items).status_code==200
+
+
+def test_bulk_retriage_names_active_provider_retry_after_as_a_refusal(admin):
+    seed_many()
+    items=selection(admin)
+    with Session() as s:
+        s.add(ai_retry.TriageRetry(subject='subject-1',configuration='c',state='deferred',provider_until=time.time()+600,reason='Provider asked to wait'))
+        s.commit()
+    response=bulk(admin,items)
+    assert response.status_code==409,response.text
+    detail=response.json()['detail']
+    assert detail.startswith('Nothing was queued. 1 selected') and '/srv/fixture-1: Provider Retry-After is still active' in detail
+    assert queued_ids()==[]
+    with Session() as s:assert s.get(Behavior,'subject-0').verdict=='low'
+    with Session() as s:s.get(ai_retry.TriageRetry,'subject-1').provider_until=time.time()-1;s.commit()
+    assert bulk(admin,items).status_code==200 and queued_ids()==['subject-0','subject-1','subject-2']
+
+
+@pytest.mark.parametrize('role',['viewer','operator'])
+def test_bulk_retriage_is_admin_only(admin,role):
+    seed_many();items=selection(admin)
+    with Session() as s:s.get(User,'admin').role=role;s.commit()
+    assert bulk(admin,items).status_code==403
+    assert queued_ids()==[]

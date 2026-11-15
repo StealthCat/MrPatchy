@@ -11,6 +11,11 @@ module.exports=async(page,capture)=>{
   indefinite:{generated_at:now,mode:'daily_cap',can_start_now:false,next_start_at:null,blockers:[
    {code:'disabled',message:'Central AI provider calls are disabled by an administrator.',next_at:null,recheck_at:null},
    {code:'daily_cap',message:'The daily spend cap has no remaining recorded headroom; retained prior windows make the configured reset a recheck boundary only.',next_at:null,recheck_at:now+7200}],limitations},
+  legacy:{generated_at:now,mode:'legacy',can_start_now:true,next_start_at:null,blockers:[],limitations,purpose_limits:[
+   {purpose:'triage',limit:20,used:20,state:'exhausted',next_at:now+900},
+   {purpose:'update_scoring',limit:20,used:3,state:'disabled',next_at:null},
+   {purpose:'automatic_plans',limit:10,used:2,state:'available',next_at:null},
+   {purpose:'<img src=x onerror=window.__gateInjected=true>',limit:'x',used:-1,state:'exhausted',next_at:'soon'}]},
   malformed:{can_start_now:false,next_start_at:'<b>x</b>',blockers:[{code:'<img src=x onerror=window.__gateInjected=true>',message:'<img src=x onerror=window.__gateInjected=true>',next_at:'soon'}],limitations:['<img src=x onerror=window.__gateInjected=true>']},
  };
  const status={pending:2,active:0,queued:2,reported_capacity:2,ready:2,blocked:0,paused:0,hourly_limit:20,recent_attempts:0,worker_seen:now,enabled:true,reason:'ready',message:'Waiting for shared admission.',retry_at:null,last_error:'',admission:{mode:'rate',rate_per_hour:12}};
@@ -39,6 +44,29 @@ module.exports=async(page,capture)=>{
    await capture('ai-control-gates-'+width);
   }
   await page.setViewportSize({width:1440,height:1000});
+
+  // Legacy per-purpose allowances (#860) are listed apart from the shared gates.
+  mode='legacy';await page.reload();
+  await card.getByText('Legacy hourly allowances',{exact:false}).waitFor();
+  assert.equal(await card.locator('.badge').innerText(),'open');
+  const legacy=await card.locator('[data-ai-purpose-limits]').innerText();
+  assert.match(legacy,/Process triage · 20 of 20 in the last hour/);
+  assert.match(legacy,/Allowance used up\. Next eligible /);
+  assert.match(legacy,/Update scoring · 3 of 20 in the last hour\s+Disabled in Settings/);
+  assert.match(legacy,/Automatic incident and startup plans · 2 of 10 in the last hour\s+Allowance available/);
+  assert.match(legacy,/Unavailable of Unavailable in the last hour\s+Allowance used up\. No scheduled reopening/);
+  assert.equal(await page.locator('#content img[src=x]').count(),0);
+  assert.equal(await page.evaluate(()=>window.__gateInjected),undefined);
+  for(const width of [320,1440]){
+   await page.setViewportSize({width,height:1000});
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+   await card.scrollIntoViewIfNeeded();
+   await capture('ai-control-legacy-allowances-'+width);
+  }
+  await page.setViewportSize({width:1440,height:1000});
+  mode='open';await page.reload();
+  await card.getByText('All shared global gates are open now.',{exact:false}).waitFor();
+  assert.equal(await card.locator('[data-ai-purpose-limits]').count(),0);
 
   mode='indefinite';await page.reload();
   await card.getByText('No automatic next start.',{exact:false}).waitFor();
@@ -72,6 +100,63 @@ module.exports=async(page,capture)=>{
    assert.equal(requests,calls);
   }finally{await page.unroute('**/api/identity',identity);}
   await page.reload();await card.getByText('held by 1 shared gate',{exact:false}).waitFor();
+
+  // The fleet AI activity page shows the same snapshot above its run filters.
+  mode='finite';
+  await page.goto(new URL('/#ai-logs',page.url()).href);
+  const activityCard=page.getByRole('region',{name:'Shared AI start gates',exact:true});
+  await activityCard.getByText('held by 2 shared gates',{exact:false}).waitFor();
+  assert.equal(await page.locator('#ai-control-gates').count(),1);
+  const activity=await activityCard.innerText();
+  assert.match(activity,/Shared provider backoff/);assert.match(activity,/Next eligible start:/);
+  // Placed after the worker status card and before the timing panel and run filters.
+  assert(await page.evaluate(()=>{const gates=document.querySelector('#ai-control-gates'),toolbar=document.querySelector('#ai-log-purpose').closest('.toolbar');
+   const timing=document.querySelector('#ai-triage-timing-title').closest('section');
+   return !!(gates.compareDocumentPosition(toolbar)&Node.DOCUMENT_POSITION_FOLLOWING)&&!!(gates.compareDocumentPosition(timing)&Node.DOCUMENT_POSITION_FOLLOWING);}));
+  await page.getByRole('heading',{name:'AI worker status',exact:true}).waitFor();
+  for(const width of [320,768,1440]){
+   await page.setViewportSize({width,height:1000});
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+   await activityCard.scrollIntoViewIfNeeded();
+   await capture('ai-activity-control-gates-'+width);
+  }
+  await page.setViewportSize({width:1440,height:1000});
+  mode='open';let calls=requests;
+  await activityCard.getByRole('button',{name:'Refresh start gates'}).click();
+  await activityCard.getByText('All shared global gates are open now.',{exact:false}).waitFor();
+  assert.equal(requests,calls+1);
+  mode='malformed';await page.reload();
+  await activityCard.getByText('held by 1 shared gate',{exact:false}).waitFor();
+  assert.equal(await page.locator('#content img[src=x]').count(),0);
+  assert.equal(await page.evaluate(()=>window.__gateInjected),undefined);
+  mode='error';await page.reload();
+  await activityCard.getByText('Shared AI start gates are unavailable right now.',{exact:false}).waitFor();
+  // The run list still loads when the snapshot fails.
+  await page.locator('#ai-log-table').waitFor();
+
+  // A response that arrives after the administrator leaves the page is discarded.
+  mode='open';let release;const held=new Promise(resolve=>release=resolve);
+  const slow=async route=>{await held;return gates(route);};
+  await page.unroute('**/api/settings/ai-control-status',gates);await page.route('**/api/settings/ai-control-status',slow);
+  try{
+   await page.reload();await page.locator('#ai-control-gates [role=status]').waitFor();
+   await page.locator('[data-nav=overview]').click();
+   await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
+   release();await page.waitForTimeout(200);
+   assert.equal(await page.locator('#ai-control-gates').count(),0);
+   assert.doesNotMatch(await page.locator('#content').innerText(),/shared global gates/);
+  }finally{release();await page.unroute('**/api/settings/ai-control-status',slow);await page.route('**/api/settings/ai-control-status',gates);}
+
+  // Viewers are routed away from AI activity and never request the snapshot.
+  await page.route('**/api/identity',identity);
+  try{
+   calls=requests;await page.goto(new URL('/#ai-logs',page.url()).href);await page.reload();
+   await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
+   assert.equal(await page.locator('#ai-control-gates').count(),0);
+   assert.equal(requests,calls);
+  }finally{await page.unroute('**/api/identity',identity);}
+  await page.goto(new URL('/#investigations',page.url()).href);await page.reload();
+  await card.getByText('All shared global gates are open now.',{exact:false}).waitFor();
  }finally{
   await page.unroute('**/api/settings/ai-control-status',gates);await page.unroute('**/api/investigation-status',statusRoute);await page.unroute('**/api/investigations?*',rows);
  }

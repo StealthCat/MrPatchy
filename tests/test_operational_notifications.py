@@ -94,7 +94,7 @@ def test_recovery_alert_publishes_deduplicates_changes_resolves_and_reopens(admi
 def test_only_allowlisted_kinds_publish_and_viewers_cannot_see_them(admin):
     # Stale telemetry, raw integrity JSON and repository errors stay outbox-only.
     add_host(last_seen=1, integrity={'path': '/etc/passwd', 'raw': 'endpoint text'},
-             repo_error='E: repository https://user:secret@example invalid')
+             repo_error='E: repository https://user:secret@example invalid', last_repo=time.time())
     add_job('job-r')
     with Session() as s:
         s.add(User(username='viewer', password='x', role='viewer'))
@@ -103,11 +103,12 @@ def test_only_allowlisted_kinds_publish_and_viewers_cannot_see_them(admin):
     with Session() as s:
         kinds = {alert.kind for alert in s.query(operations.Alert)}
         assert {'stale', 'integrity', 'repository', 'recovery'} <= kinds
-        assert [event.kind for event in operational_events(s)] == ['recovery-required']
+        # Long telemetry silence is reported in-app with fixed text, never as the raw stale alert.
+        assert [event.kind for event in operational_events(s)] == ['recovery-required', 'telemetry-lost']
         reasons = ' '.join(row.reason for row in s.scalars(select(notifications.NotificationRevision)))
         assert 'secret' not in reasons and 'endpoint text' not in reasons
         assert notifications.unread_count(s, 'viewer') == 0
-        assert notifications.unread_count(s, 'admin') == 1
+        assert notifications.unread_count(s, 'admin') == 2
 
 
 def test_disabled_and_deleted_servers_resolve_their_notifications(admin):
@@ -167,8 +168,77 @@ def test_startup_baseline_links_to_the_file_integrity_review_panel(admin):
         assert revision.reason == alert.message and 'File integrity' in alert.message
 
 
+def refresh_events(s):
+    return [event for event in operational_events(s) if event.kind == 'repository-refresh']
+
+
+def test_persistent_repository_refresh_failure_notifies_once_with_fixed_text_and_resolves(admin):
+    now = time.time()
+    with Session() as s:
+        stale = operations.config(s)['repo_minutes'] * 120
+    secret = 'E: https://user:secret@mirror.example/ubuntu 404 endpoint text'
+    add_host(last_repo=now - stale - 60, repo_error=secret)
+    with Session() as s:
+        s.add(User(username='viewer', password='x', role='viewer'))
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        # A later poll with a different endpoint error keeps one revision: the text is fixed.
+        s.get(Host, HOST).repo_error = secret + ' (retry)'
+        s.commit()
+    operations.collect_alerts(now + 300)
+    with Session() as s:
+        [event] = refresh_events(s)
+        revision = current(s, event)
+        assert (event.subject_type, event.subject_id, event.host_id, event.minimum_role) == (
+            'server', HOST, HOST, 'admin')
+        assert event.revision == 1 and revision.lifecycle == 'active' and revision.severity == 'medium'
+        assert revision.deep_link == '#servers/' + HOST + '/repositories'
+        assert revision.reason == operations.REPOSITORY_REFRESH_MESSAGE
+        assert 'secret' not in revision.reason and 'endpoint text' not in revision.reason
+        assert notifications.unread_count(s, 'viewer') == 0
+        assert notifications.unread_count(s, 'admin') == 1
+        # The SMTP/webhook alert keeps its raw message and no new outbox kind is introduced.
+        alert = s.query(operations.Alert).filter_by(kind='repository').one()
+        assert alert.message == secret + ' (retry)'
+        assert 'repository refresh' not in {row.kind for row in s.query(operations.Alert)}
+        # A successful refresh clears the error and refreshes the metadata timestamp.
+        host = s.get(Host, HOST)
+        host.repo_error = ''
+        host.last_repo = now + 400
+        s.commit()
+
+    operations.collect_alerts(now + 400)
+    with Session() as s:
+        [event] = refresh_events(s)
+        assert event.revision == 2 and current(s, event).lifecycle == 'resolved'
+
+
+def test_transient_refresh_failure_with_fresh_metadata_does_not_notify(admin):
+    now = time.time()
+    add_host(last_repo=now - 60, repo_error='E: temporary failure resolving mirror')
+    operations.collect_alerts(now)
+    with Session() as s:
+        assert refresh_events(s) == []
+        assert s.query(operations.Alert).filter_by(kind='repository').count() == 1
+
+
+def test_never_refreshed_failing_server_notifies_and_deletion_resolves(admin):
+    add_host(repo_error='E: no release file')
+    operations.collect_alerts()
+    with Session() as s:
+        [event] = refresh_events(s)
+        assert current(s, event).lifecycle == 'active'
+        s.get(Host, HOST).deleted_at = time.time()
+        s.commit()
+    operations.collect_alerts()
+    with Session() as s:
+        [event] = refresh_events(s)
+        assert current(s, event).lifecycle == 'resolved'
+
+
 def test_allowlist_is_well_formed():
-    tabs = {'history', 'security', 'patching', 'agent', 'integrity'}
+    tabs = {'history', 'security', 'patching', 'agent', 'integrity', 'repositories'}
     kinds = [value[0] for value in operations.OPERATIONAL_NOTIFICATIONS.values()]
     assert len(kinds) == len(set(kinds))
     for notification_kind, severity, tab in operations.OPERATIONAL_NOTIFICATIONS.values():
@@ -192,3 +262,109 @@ def test_allowlisted_tabs_exist_and_baseline_review_lives_on_integrity():
     integrity = integrity[:integrity.index('\n}\n')]
     assert 'renderPersistenceBaseline(' in integrity
     assert operations.OPERATIONAL_NOTIFICATIONS['startup baseline'][2] == 'integrity'
+
+
+def telemetry_events(s):
+    return [event for event in operational_events(s) if event.kind == 'telemetry-lost']
+
+
+def test_telemetry_loss_notifies_once_resolves_and_reopens_without_outbox_alert(admin):
+    now = time.time()
+    add_host(last_seen=now - operations.TELEMETRY_LOST_SECONDS - 60)
+    with Session() as s:
+        s.add(User(username='viewer', password='x', role='viewer'))
+        s.commit()
+    operations.collect_alerts(now)
+    operations.collect_alerts(now + 300)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        revision = current(s, event)
+        assert (event.subject_type, event.subject_id, event.host_id, event.minimum_role) == (
+            'server', HOST, HOST, 'admin')
+        assert event.revision == 1 and revision.lifecycle == 'active' and revision.severity == 'high'
+        assert revision.deep_link == '#servers/' + HOST + '/agent'
+        assert revision.reason == operations.TELEMETRY_LOST_MESSAGE
+        assert notifications.unread_count(s, 'viewer') == 0
+        # The outbox keeps only the existing stale alert; no new SMTP/webhook kind is introduced.
+        kinds = {alert.kind for alert in s.query(operations.Alert)}
+        assert 'stale' in kinds and 'telemetry lost' not in kinds
+        s.get(Host, HOST).last_seen = now + 400
+        s.commit()
+
+    operations.collect_alerts(now + 400)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 2 and current(s, event).lifecycle == 'resolved'
+
+    operations.collect_alerts(now + 400 + operations.TELEMETRY_LOST_SECONDS + 60)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 3 and current(s, event).lifecycle == 'active'
+
+
+def test_short_stale_enrolling_and_disabled_servers_do_not_report_telemetry_loss(admin):
+    now = time.time()
+    add_host(last_seen=now - 300)  # stale for SMTP/webhook, below the in-app threshold
+    add_host(OTHER, last_seen=1)
+    with Session() as s:
+        s.get(Host, OTHER).state = 'enrolling'
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        assert telemetry_events(s) == []
+        assert s.query(operations.Alert).filter_by(kind='stale', host_id=HOST).count() == 1
+        s.get(Host, HOST).last_seen = 1
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert current(s, event).lifecycle == 'active'
+        s.get(Host, HOST).enabled = False
+        s.commit()
+    operations.collect_alerts(now)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert current(s, event).lifecycle == 'resolved'
+
+
+def test_coordinator_outage_does_not_flood_telemetry_loss_until_observed_for_threshold(admin):
+    # After a controller/coordinator outage every server's last_seen is old; the first leader
+    # tick runs before asynchronous polls land, so the silence is the coordinator's own gap.
+    now = time.time()
+    add_host(last_seen=now - 3600)
+    add_host(OTHER, last_seen=now - 3600)
+    operations.collect_alerts(now, observing_since=now)
+    operations.collect_alerts(now + operations.TELEMETRY_LOST_SECONDS, observing_since=now)
+    with Session() as s:
+        assert telemetry_events(s) == []
+        # Polls landed for one server; the other stays silent.
+        s.get(Host, OTHER).last_seen = now + operations.TELEMETRY_LOST_SECONDS + 30
+        s.commit()
+    operations.collect_alerts(now + operations.TELEMETRY_LOST_SECONDS + 60, observing_since=now)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.subject_id == HOST and current(s, event).lifecycle == 'active'
+        assert event.revision == 1
+
+
+def test_leader_change_keeps_existing_telemetry_loss_active_without_new_revision(admin):
+    now = time.time()
+    add_host(last_seen=now - 3600)
+    operations.collect_alerts(now)
+    # A new leader starts observing: the genuine outage stays active rather than resolving and reopening.
+    operations.collect_alerts(now + 30, observing_since=now + 30)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 1 and current(s, event).lifecycle == 'active'
+        s.get(Host, HOST).last_seen = now + 60
+        s.commit()
+    operations.collect_alerts(now + 60, observing_since=now + 30)
+    with Session() as s:
+        [event] = telemetry_events(s)
+        assert event.revision == 2 and current(s, event).lifecycle == 'resolved'
+
+
+def test_worker_passes_leadership_start_to_alert_collection():
+    source = (Path(__file__).resolve().parents[1] / 'app' / 'worker.py').read_text()
+    assert 'if is_leader:leader_since=now' in source
+    assert 'operations.collect_alerts(observing_since=leader_since)' in source

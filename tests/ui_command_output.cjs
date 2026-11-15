@@ -11,7 +11,8 @@ module.exports=async(page,capture)=>{
  await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
  await page.route('**/api/jobs/output-operation*',detail);await page.route('**/api/jobs',list);await page.route('**/api/jobs?*',list);
  const check=async(scope)=>{
-  const pre=scope.locator('.command-output pre');await pre.waitFor();
+  // Wait for this fixture's render, not any .command-output a stale view may still show (#805).
+  const pre=scope.locator('.command-output pre').filter({hasText:'openssl           3.0.2-0ubuntu1'});await pre.waitFor();
   assert.equal(await pre.evaluate(e=>e.textContent),output,'rendered text must equal the original, including the leading newline, tabs and trailing spaces');
   const style=await pre.evaluate(e=>{const s=getComputedStyle(e);return {ws:s.whiteSpace,wrap:s.overflowWrap,font:s.fontFamily,ox:s.overflowX};});
   assert.ok(['pre'].includes(style.ws)||style.ws.startsWith('pre ')||style.ws==='preserve nowrap',`white-space ${style.ws}`);
@@ -19,6 +20,11 @@ module.exports=async(page,capture)=>{
   assert.equal(await pre.locator('b,img').count(),0);
   return pre;
  };
+ // #805: render() keeps the previous view on screen while it awaits /api/identity and /api/hosts.
+ // Delay the first hosts read so the previous test's Operation detail (same heading, its own
+ // .command-output) is guaranteed to still be shown when the waits below start.
+ let slowHosts=true;const hostsDelay=async route=>{if(slowHosts){slowHosts=false;await new Promise(r=>setTimeout(r,600));}return route.fallback();};
+ await page.route('**/api/hosts',hostsDelay);
  try{
   for(const width of [320,768,1440]){
    await page.setViewportSize({width,height:1000});
@@ -55,5 +61,5 @@ module.exports=async(page,capture)=>{
    return result;
   },'line1\n  line2\twith tab');
   assert.deepEqual(fallback,{copied:'line1\n  line2\twith tab',status:'Output copied.',leftover:0},'fallback copy inside a modal dialog copies the exact text');
- }finally{job.output=output;await page.unroute('**/api/jobs/output-operation*',detail);await page.unroute('**/api/jobs',list);await page.unroute('**/api/jobs?*',list);await page.context().clearPermissions();await page.setViewportSize({width:1440,height:1000});}
+ }finally{job.output=output;await page.unroute('**/api/jobs/output-operation*',detail);await page.unroute('**/api/jobs',list);await page.unroute('**/api/jobs?*',list);await page.unroute('**/api/hosts',hostsDelay);await page.context().clearPermissions();await page.setViewportSize({width:1440,height:1000});}
 };
