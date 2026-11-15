@@ -1033,7 +1033,8 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,cached:bool=False,u
         # cached=true lists only rows whose current state is an exact known-good reuse:
         # the same rows that carry the list badge. Pagination counts filtered rows.
         if cached:rows=ai_assessments.reused_page(s,stmt.where(Behavior.verdict.in_(ai_assessments.COMPLETE)),Behavior.id,offset,limit)
-        else:rows=list(s.scalars(stmt.offset(offset).limit(limit)));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
+        else:rows=list(s.scalars(stmt.offset(offset).limit(limit)))
+        signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
         reused=ai_assessments.current_reuse(s,rows,include_source=user.get('role')=='admin')
