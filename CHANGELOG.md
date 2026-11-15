@@ -1,3 +1,7 @@
+## 1.64.0 — 2026-11-15
+
+1. [PR #919](https://github.com/StealthCat/MrPatchy/pull/919): Add an optional controller-only GCP installer mode that configures the app and Caddy with the split role Compose files, records the selected mode, runs gcloud checks inside the app and leaves the existing complete mode as the default. Compatibility: complete-mode commands remain unchanged; `.env.gcp` records the selected mode; no schema, API, role or response-authorization change. Limits: no live GCP/WIF acceptance; join-worker mode and remote-machine workers remain open. A pre-existing complete Compose stack without recorded mode must be inspected before switching because its running worker may remain orphaned.
+
 ## 1.63.1 — 2026-11-15
 
 1. [PR #916](https://github.com/StealthCat/MrPatchy/pull/916): Administrators can configure a low-severity, admin-only in-app warning before a verified release reaches its standard-support or verified Debian LTS end date. The advance window is 90 days by default and can be set from 0 to 730 days (0 disables the warning). Compatibility: additive settings API/UI field; existing installations receive the 90-day default; no schema, role or response-authorization change. Limits: warnings use the reviewed lifecycle catalog only; Ubuntu Pro entitlement and RPM/vendor catalog coverage remain unavailable, and stale or missing inventory does not trigger warnings. Broader lifecycle work remains open in #341.
