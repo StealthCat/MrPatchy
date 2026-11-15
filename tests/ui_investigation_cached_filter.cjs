@@ -8,16 +8,18 @@ module.exports=async(page,capture)=>{
  const rows=route=>{const url=new URL(route.request().url());seen.push(url.search);
   const cached=url.searchParams.get('cached')==='true',offset=Number(url.searchParams.get('offset'));
   if(cached)return route.fulfill({json:cachedRows});
-  return route.fulfill({json:offset?[card('page-two-tool',false)]:Array.from({length:50},(_,i)=>card(i?'tool-'+i:'cached-tool',!i))});};
+  // Full pages at every offset: an earlier module may leave this view on a later page.
+  return route.fulfill({json:Array.from({length:50},(_,i)=>card(i?'tool-'+i:(offset?'page-'+offset+'-tool':'cached-tool'),!i&&!offset))});};
  await page.route('**/api/investigations?*',rows);
  try{
   await page.goto(new URL('/#investigations',page.url()).href);
   const filter=page.locator('#investigation-filter');
   await filter.waitFor();
   assert.equal(await filter.inputValue(),'all');
-  // Move to page 2, then filter: the request must return to offset 0.
+  // Move to a later page, then filter: the request must return to offset 0.
+  const start=Number(new URLSearchParams(seen.at(-1)).get('offset'));
   await page.locator('#content .server-pagination button',{hasText:'Next'}).click();
-  await page.getByText('/usr/bin/page-two-tool',{exact:true}).waitFor();
+  await page.getByText('/usr/bin/page-'+(start+50)+'-tool',{exact:true}).waitFor();
   await filter.selectOption('cached');
   await page.getByText('Showing only verdicts reused from an exact fleet known-good match',{exact:false}).waitFor();
   assert.match(seen.at(-1),/cached=true&offset=0&limit=50/);
