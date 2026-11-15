@@ -3960,6 +3960,31 @@ unchanged. Controller-only and join-worker installer modes, remote-machine worke
 and the dedicated gcp-integration node remain open.
 
 
+### Controller-only GCP installer mode — worker checkpoint #918
+
+`install-gcp.sh --mode controller` installs only the app and Caddy from
+`compose.controller.yaml` and `compose.controller.gcp.yaml`, plus the app-only WIF
+overlay when `--credential-dir` is given. `--mode complete` remains the default and
+its commands are unchanged.
+- **Recorded mode:** `MRPATCHY_GCP_MODE` in `.env.gcp` and `COMPOSE_FILE` in `.env`
+  name the controller files, and `gcp-compose.sh` selects the same files, so the
+  wrapper and plain `docker compose` cannot restart the complete stack.
+- **Checks:** only `app` is built and no worker service is created or run. Sign-in
+  and the gcloud version, token (discarded) and instance-read checks run inside the
+  started app, because a one-off app container would take its fixed control
+  address.
+- **No silent switch:** an installation recorded in the other mode, or a legacy
+  installation (whose `.env.gcp` has no mode), is refused before any file is
+  written. An unrecognized `COMPOSE_FILE` is refused in controller mode.
+- **Validation:** mock-Docker tests cover fresh install and re-run, an already
+  running app, WIF, both mode-switch refusals, legacy and prepared `.env` files and
+  wrapper file selection; a real `docker compose config` render of the recorded
+  controller mode yields exactly app and Caddy.
+
+No runtime code, schema, role or response-authorization change. Join-worker
+installer mode, remote-machine workers with shared secrets/state and the dedicated
+gcp-integration node remain open.
+
 ### Deployment files and runtime roles
 
 | File | Supported deployment |
