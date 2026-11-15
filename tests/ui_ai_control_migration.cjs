@@ -3,7 +3,9 @@ const assert=require('assert/strict');
 module.exports=async(page,capture)=>{
  const saved=async()=>page.evaluate(async()=>(await api('/settings')));
  const original=await saved();
- const put=values=>page.evaluate(async values=>{const current=await api('/settings');await api('/settings/ai','PUT',{...values,expected_ai_controls_revision:current.ai_controls_revision});},values);
+ // Fixture setup and restore act as an administrator who reviewed the preview: they resend with its
+ // confirmation, which #881 requires for any expanding save.
+ const put=values=>page.evaluate(async values=>{const current=await api('/settings');const preview=await api('/settings/ai/preview','POST',values);await api('/settings/ai','PUT',{...values,expected_ai_controls_revision:current.ai_controls_revision,...(preview.expansion_confirmation?{confirm_ai_expansion:preview.expansion_confirmation}:{})});},values);
  const keys=['ai_control_mode','ai_rate_per_hour','ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled'];
  try{
   await put({ai_control_mode:'legacy',ai_hourly_limit:20,ai_update_hourly_limit:20,ai_updates_enabled:true});
