@@ -1,3 +1,7 @@
+## 1.74.0 — 2026-11-15
+
+1. [PR #949](https://github.com/StealthCat/MrPatchy/pull/949): Add an administrator-configurable in-app telemetry-loss notice threshold from 5 to 1440 minutes (default 15), expose its effective value in settings, and audit changes. The default preserves existing notice behavior and text; SMTP/webhook stale alerts (120 seconds) are unchanged. Compatibility: additive optional `telemetry_lost_minutes` API field; no schema change or migration, and clients omitting the field retain stored values. A changed threshold can revise the text of still-qualifying active notices once. Limit: endpoint-agent readiness and alerting remains open (#737).
+
 ## 1.73.1 — 2026-11-15
 
 1. [PR #945](https://github.com/StealthCat/MrPatchy/pull/945): Fix whole-microsecond rounding so scan-coverage `first_seen` and security-policy `enabled_since` markers never land after their observation time; also add deterministic and seeded property regressions. Compatibility: no schema, API, role or authorization change, and already-stored markers remain unchanged. Limits: marker precision remains whole microseconds; the representation may be less than one microsecond earlier than the observation. Resolves [issue #942](https://github.com/StealthCat/MrPatchy/issues/942).
