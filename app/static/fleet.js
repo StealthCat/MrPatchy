@@ -109,7 +109,7 @@ function aiAdmissionControl(status){
 // Shared AI start gates (#727): renders the administrator-only control snapshot
 // from /api/settings/ai-control-status (#546). Display-only; never a promise that
 // a specific call will start.
-const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
+const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',credential:'Saved API key unreadable',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
 function aiControlGates(snapshot){
  const when=value=>Number.isFinite(value)&&value>0?date(value):null;
  const head=state=>`<div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2>${badge(state)}</div>`;
