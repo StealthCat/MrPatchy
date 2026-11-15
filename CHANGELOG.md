@@ -1,3 +1,7 @@
+## 1.71.0 — 2026-11-15
+
+1. [PR #933](https://github.com/StealthCat/MrPatchy/pull/933): Keep an administrator's Re-triage selection across Investigations pages and the All/Cached filters within one view. The client caps selection at the existing 50-item endpoint limit, drops rows whose verdict or revision changes, and includes selected rows across visited pages in the confirmation and submit. Compatibility: frontend-only; the existing endpoint, API/schema, admission, approval and server-side all-or-nothing revision checks remain unchanged. Limits: selecting every matching row still requires visiting its page, and selections above 50 are not supported.
+
 ## 1.70.0 — 2026-11-15
 
 1. [PR #884](https://github.com/StealthCat/MrPatchy/pull/884): Send the existing admin-only overdue security-scan coverage notice for enabled legacy policies that have no scan attempt, starting its clock when the producer first observes the policy after upgrade and waiting through the scan interval plus one-hour grace. Compatibility: adds a server-managed `security-scan-legacy-since:<host>` setting; the administrator policy row, schema, roles, scheduler and response authorization are unchanged. No scan is enqueued. Limits: the historical enablement time is unknown; YARA schedules and configurable grace remain out of scope.
