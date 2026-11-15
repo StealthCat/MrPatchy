@@ -22,6 +22,36 @@ async function requestInvestigationRetriage(id){
  }catch(error){if(view===renderRevision&&session===sessionRevision)toast(error.message);}
 }
 
+const RETRIAGE_COMPLETE=['low','medium','high','unknown'];
+function retriageEligible(row){return RETRIAGE_COMPLETE.includes(row.verdict)&&/^[a-f0-9]{64}$/.test(row.revision||'');}
+function retriageCheckbox(row){return `<label class="check retriage-select"><input type="checkbox" data-retriage-select data-id="${esc(row.id)}" data-revision="${esc(row.revision)}" data-approved="${row.approved?'true':'false'}" data-executable="${esc(row.evidence?.executable||row.id)}" data-host="${esc(row.host_id)}">Select for Re-triage</label>`;}
+function bulkRetriageBar(){return `<div class="actions retriage-bulk" data-admin><button type="button" id="bulk-retriage" disabled aria-describedby="bulk-retriage-help">Re-triage selected (<span id="bulk-retriage-count">0</span>)</button><button type="button" id="bulk-retriage-clear" disabled>Clear selection</button><span class="help" id="bulk-retriage-help">Select completed investigations on this page to request fresh AI triage for all of them at once.</span></div>`;}
+function bindBulkRetriage(root){
+ const button=root.querySelector('#bulk-retriage');if(!button)return;
+ const clear=root.querySelector('#bulk-retriage-clear'),boxes=()=>[...root.querySelectorAll('[data-retriage-select]')];
+ const sync=()=>{const count=boxes().filter(box=>box.checked).length;root.querySelector('#bulk-retriage-count').textContent=count;button.disabled=!count;clear.disabled=!count;};
+ boxes().forEach(box=>{box.onchange=sync;});
+ clear.onclick=()=>{boxes().forEach(box=>{box.checked=false;});sync();};
+ button.onclick=()=>requestBulkRetriage(boxes().filter(box=>box.checked).map(box=>({id:box.dataset.id,expected_revision:box.dataset.revision,approved:box.dataset.approved==='true',executable:box.dataset.executable,host_id:box.dataset.host})));
+ sync();
+}
+function requestBulkRetriage(selected){
+ if(!selected.length)return;
+ const view=renderRevision,session=sessionRevision,approved=selected.filter(item=>item.approved).length;
+ const list=selected.slice(0,10).map(item=>`<li><strong class="assessment-artifact">${esc(item.executable)}</strong> · ${esc(hostName(item.host_id))}${item.approved?' · approved':''}</li>`).join('')+(selected.length>10?`<li>and ${selected.length-10} more</li>`:'');
+ modal('Request fresh AI triage for selected investigations',`<p>Investigate these ${selected.length} selected investigation(s) again? Each saved result stays in its Assessment history. This queues new investigations, may incur provider charges, and does not approve any response.</p><ul class="retriage-bulk-list">${list}</ul><p class="help">All or nothing: if any selected item changed or cannot be re-triaged, nothing is queued. AI pause, data sharing, saved model and admission limits still apply when the work runs. No fleet trust is changed.</p><form id="bulk-retriage-form"><label>Reason<textarea name="reason" minlength="10" maxlength="4000" required></textarea></label>${approved?`<label class="check"><input name="withdraw" type="checkbox" required>I withdraw the current approval of ${approved} selected behavior(s) until they are reviewed again.</label>`:''}<button class="primary">Queue fresh triage for ${selected.length}</button></form>`);
+ const form=$('#bulk-retriage-form'),dialog=modalRevision;
+ const active=()=>form.isConnected&&dialog===modalRevision&&view===renderRevision&&session===sessionRevision;
+ form.onsubmit=async event=>{
+  event.preventDefault();const button=form.querySelector('button');if(button.disabled)return;button.disabled=true;
+  try{
+   const values=new FormData(form);
+   const result=await api('/investigations/retriage','POST',{items:selected.map(({id,expected_revision})=>({id,expected_revision})),reason:values.get('reason'),withdraw_approval:values.has('withdraw')});
+   if(!active())return;$('#modal').close();toast(result.detail);await render();
+  }catch(error){if(active())toast(error.message);}finally{if(active())button.disabled=false;}
+ };
+}
+
 function requestKnownGoodRevocation(fingerprint,version,linked){
  const view=renderRevision,session=sessionRevision;
  modal('Revoke fleet safe candidate',`<p>Stop all future reuse of exact fingerprint <code class="known-good-fingerprint">${esc(fingerprint)}</code>? ${esc(linked)} linked assessment(s) will be marked for review without changing their saved results.</p><p class="help">This does not re-run AI, remove historical evidence, approve a response or suppress deterministic protection. Do not enter credentials or raw endpoint evidence.</p><form id="known-good-revoke-form"><label>Reason<textarea name="reason" minlength="10" maxlength="1000" required></textarea></label><label class="check"><input name="confirm" type="checkbox" required>I understand this invalidates the candidate across the fleet.</label><button class="primary">Revoke fleet candidate</button></form>`);

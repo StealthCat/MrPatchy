@@ -88,12 +88,22 @@ def refresh_info(row):
         'previous':row.previous,'withdrew_approval':row.withdrew_approval,'bypass_cache':True}
 
 
+def refusal(s,row,expected,withdraw_approval):
+    """Return why Re-triage cannot be queued for this exact revision, or ''."""
+    if revision(row)!=expected:return 'Assessment or approval changed; reopen Re-triage before submitting'
+    if row.verdict not in COMPLETE:return 'Re-triage requires a completed assessment; use Retry for failed or pending work'
+    if s.get(Refresh,row.id):return 'A re-triage request already exists'
+    if row.approved and not withdraw_approval:return 'Explicitly confirm withdrawal of the current approval before re-triage'
+    from .ai_retry import TriageRetry
+    retry=s.get(TriageRetry,row.id)
+    if retry and retry.provider_until>time.time():return 'Provider Retry-After is still active; retry after the displayed eligibility time.'
+    return ''
+
+
 def queue(s,row,expected,reason,actor,withdraw_approval):
     from . import ai_retry
-    if revision(row)!=expected:raise ValueError('Assessment or approval changed; reopen Re-triage before submitting')
-    if row.verdict not in COMPLETE:raise ValueError('Re-triage requires a completed assessment; use Retry for failed or pending work')
-    if s.get(Refresh,row.id):raise ValueError('A re-triage request already exists')
-    if row.approved and not withdraw_approval:raise ValueError('Explicitly confirm withdrawal of the current approval before re-triage')
+    problem=refusal(s,row,expected,withdraw_approval)
+    if problem:raise ValueError(problem)
     ai_retry.manual(s,row)
     saved=s.scalar(exact_history_query(row.id,state_hash(row)).limit(1))
     if not saved:
