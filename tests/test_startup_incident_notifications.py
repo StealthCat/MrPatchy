@@ -1,4 +1,5 @@
 """In-app notifications for the startup-change incident lifecycle (#704)."""
+import pytest
 from sqlalchemy import func, select
 
 from app import incidents, notifications, persistence
@@ -75,9 +76,25 @@ def test_new_startup_change_publishes_one_safe_admin_notification(admin):
     assert item['deep_link'] == '#servers/baseline-host/integrity'
     assert 'not a malware verdict' in item['reason']
     text = repr(item)
-    assert 'SECRET' not in text and 'cron.d' not in text and 'aaaa' not in text
+    # Check the full 64-character fixture hash: a short run such as 'aaaa' can occur by chance in
+    # the random hex event/subject IDs and made this assertion flaky (#885).
+    assert 'SECRET' not in text and 'cron.d' not in text and 'a' * 64 not in text
     with Session() as s:
         assert s.get(notifications.NotificationEvent, item['id']).minimum_role == 'admin'
+
+
+def test_redaction_check_ignores_hex_ids_that_contain_fixture_characters(admin, monkeypatch):
+    # Regression for #885: a random event ID containing 'aaaa' is not a leaked fixture hash.
+    original = notifications._event_id
+    monkeypatch.setattr(notifications, '_event_id', lambda *a: 'aaaa' + original(*a)[4:])
+    test_new_startup_change_publishes_one_safe_admin_notification(admin)
+
+
+def test_redaction_check_still_catches_a_leaked_fixture_hash(admin, monkeypatch):
+    leaked = {k: v + ' ' + 'a' * 64 for k, v in persistence.NOTIFICATION_REASONS.items()}
+    monkeypatch.setattr(persistence, 'NOTIFICATION_REASONS', leaked)
+    with pytest.raises(AssertionError):
+        test_new_startup_change_publishes_one_safe_admin_notification(admin)
 
 
 def test_no_incident_recording_means_no_notification(admin):

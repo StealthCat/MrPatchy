@@ -1,9 +1,10 @@
-"""Preview AI admission/spend changes before save and audit any expansion (#871)."""
+"""Preview AI admission/spend changes before save, audit any expansion (#871) and refuse unconfirmed ones (#881)."""
 from sqlalchemy import func, select
 
 from app import ai_control_preview as preview
 from app.db import Audit, Session, Setting, config
 from app.identity import User
+from tests.ai_settings_helpers import confirmed_put
 
 BASE = {'ai_control_mode': 'rate', 'ai_rate_per_hour': 20, 'ai_daily_cap_usd': 10.0,
         'ai_budget_timezone': 'UTC', 'ai_hourly_limit': 20, 'ai_update_hourly_limit': 20,
@@ -70,6 +71,20 @@ def test_enabling_scoring_expands_and_disabling_restricts():
     assert off['changed'] and not off['expands']
 
 
+def test_enabling_ai_expands_and_other_enable_states_do_not():
+    enabling = 'AI is enabled and Mr Patchy starts making paid provider calls within the ceilings below.'
+    on = effects({'ai_enabled': False}, {'ai_enabled': True})
+    assert on['expands'] and on['expansions'] == [enabling]
+    for stored, proposed in (({'ai_enabled': True}, {'ai_enabled': True}), ({'ai_enabled': True}, {'ai_enabled': False}),
+                             ({'ai_enabled': False}, {'ai_enabled': False}), ({'ai_enabled': False}, {}),
+                             ({}, {'ai_enabled': True})):  # controls-only callers (no stored switch) are unaffected
+        assert not effects(stored, proposed)['expands'], (stored, proposed)
+    # Enabling AI and raising a ceiling in one save lists both expansions.
+    both = effects({'ai_enabled': False}, {'ai_enabled': True, 'ai_rate_per_hour': 40})
+    assert both['expansions'][0] == enabling and len(both['expansions']) > 1
+    assert 'ai_enabled' in preview.PREVIEW_FIELDS and 'ai_enabled' not in preview.FIELDS
+
+
 def test_timezone_change_expands_only_while_capped():
     capped = {'ai_control_mode': 'daily_cap'}
     assert effects(capped, {'ai_budget_timezone': 'Asia/Tokyo'})['expands']
@@ -125,13 +140,104 @@ def _last_settings_audit():
 
 
 def test_both_save_paths_audit_expansions(admin):
-    assert admin.put('/api/settings/ai', json={'ai_control_mode': 'rate', 'ai_rate_per_hour': 10}).status_code == 200
-    assert admin.put('/api/settings/ai', json={'ai_rate_per_hour': 40}).status_code == 200
+    assert confirmed_put(admin, '/api/settings/ai', {'ai_control_mode': 'rate', 'ai_rate_per_hour': 10}).status_code == 200
+    assert confirmed_put(admin, '/api/settings/ai', {'ai_rate_per_hour': 40}).status_code == 200
     detail = _last_settings_audit()
     assert '; expands AI admission or spend: ' in detail and 'from 10/hour to 40/hour' in detail
     assert admin.put('/api/settings/ai', json={'ai_rate_per_hour': 5}).status_code == 200
     assert 'expands AI admission' not in _last_settings_audit()
     current = admin.get('/api/settings').json()
     body = {k: current[k] for k in ('repo_minutes', 'deadlines', 'history_days')} | {'ai_control_mode': 'unthrottled'}
-    assert admin.put('/api/settings', json=body).status_code == 200
+    assert confirmed_put(admin, '/api/settings', body).status_code == 200
     assert 'Mr Patchy rate and spend controls are removed' in _last_settings_audit()
+
+
+# --- No silent spend expansion (#881) -------------------------------------------------
+
+
+def _stored_controls():
+    with Session() as s:
+        cfg = config(s)
+        return {key: cfg[key] for key in preview.FIELDS}, _audit_count(s)
+
+
+def test_confirmation_digest_binds_revision_and_expansions():
+    assert preview.expansion_confirmation('a' * 64, []) is None
+    one = preview.expansion_confirmation('a' * 64, ['x'])
+    assert len(one) == 64 and one == preview.expansion_confirmation('a' * 64, ['x'])
+    assert one != preview.expansion_confirmation('b' * 64, ['x'])
+    assert one != preview.expansion_confirmation('a' * 64, ['x', 'y'])
+
+
+def test_unconfirmed_expansion_is_refused_on_both_save_paths(admin):
+    assert admin.put('/api/settings/ai', json={'ai_control_mode': 'unthrottled'}).status_code == 409
+    assert confirmed_put(admin, '/api/settings/ai', {'ai_control_mode': 'rate', 'ai_rate_per_hour': 10}).status_code == 200
+    before, audits = _stored_controls()
+    r = admin.put('/api/settings/ai', json={'ai_rate_per_hour': 40})
+    assert r.status_code == 409 and 'from 10/hour to 40/hour' in r.json()['detail'] and 'Nothing was saved' in r.json()['detail']
+    current = admin.get('/api/settings').json()
+    full = {k: current[k] for k in ('repo_minutes', 'deadlines', 'history_days')} | {'ai_control_mode': 'unthrottled'}
+    r = admin.put('/api/settings', json=full)
+    assert r.status_code == 409 and 'Mr Patchy rate and spend controls are removed' in r.json()['detail']
+    assert admin.put('/api/settings/ai', json={'ai_rate_per_hour': 40, 'confirm_ai_expansion': 'f' * 64}).status_code == 409
+    assert _stored_controls() == (before, audits)  # refusals write no settings and no audit entry
+    assert confirmed_put(admin, '/api/settings', full).status_code == 200
+    assert admin.get('/api/settings').json()['ai_control_mode'] == 'unthrottled'
+
+
+def test_confirmation_cannot_authorize_a_larger_or_later_expansion(admin):
+    assert confirmed_put(admin, '/api/settings/ai', {'ai_control_mode': 'rate', 'ai_rate_per_hour': 10}).status_code == 200
+    token = admin.post('/api/settings/ai/preview', json={'ai_rate_per_hour': 20}).json()['expansion_confirmation']
+    assert token
+    # A different, larger expansion is refused with the confirmation for the smaller one.
+    assert admin.put('/api/settings/ai', json={'ai_rate_per_hour': 30, 'confirm_ai_expansion': token}).status_code == 409
+    assert admin.put('/api/settings/ai', json={'ai_rate_per_hour': 20, 'confirm_ai_expansion': token}).status_code == 200
+    # Lower to a different value, then replay the old confirmation for the same target: the stored revision changed.
+    assert admin.put('/api/settings/ai', json={'ai_rate_per_hour': 5}).status_code == 200
+    assert admin.put('/api/settings/ai', json={'ai_rate_per_hour': 20, 'confirm_ai_expansion': token}).status_code == 409
+    assert admin.get('/api/settings').json()['ai_rate_per_hour'] == 5
+
+
+def test_non_expanding_saves_need_no_confirmation(admin):
+    assert confirmed_put(admin, '/api/settings/ai', {'ai_control_mode': 'rate', 'ai_rate_per_hour': 30}).status_code == 200
+    preview_body = admin.post('/api/settings/ai/preview', json={'ai_rate_per_hour': 5}).json()
+    assert preview_body['expands'] is False and preview_body['expansion_confirmation'] is None
+    for body in ({'ai_rate_per_hour': 5}, {'ai_updates_enabled': False}, {'ai_model': 'other-model'}, {}):
+        assert admin.put('/api/settings/ai', json=body).status_code == 200, body
+    current = admin.get('/api/settings').json()
+    assert admin.put('/api/settings', json={k: current[k] for k in ('repo_minutes', 'deadlines', 'history_days')}).status_code == 200
+
+
+def test_confirmation_field_is_validated(admin):
+    assert admin.put('/api/settings/ai', json={'confirm_ai_expansion': 'not-a-digest'}).status_code == 422
+
+
+def _enable_prerequisites(admin):
+    assert admin.put('/api/settings/ai-key', json={'api_key': 'fixture-key'}).status_code == 200
+    assert admin.put('/api/settings/ai', json={'ai_model': 'fixture-model'}).status_code == 200
+    assert admin.get('/api/settings').json()['ai_enabled'] is False
+
+
+def test_enabling_ai_requires_confirmation_on_both_save_paths(admin):
+    _enable_prerequisites(admin)
+    shown = admin.post('/api/settings/ai/preview', json={'ai_enabled': True}).json()
+    assert shown['expands'] and shown['expansion_confirmation']
+    assert shown['expansions'][0].startswith('AI is enabled and Mr Patchy starts making paid provider calls')
+    before, audits = _stored_controls()
+    r = admin.put('/api/settings/ai', json={'ai_enabled': True})
+    assert r.status_code == 409 and 'AI is enabled' in r.json()['detail'] and 'Nothing was saved' in r.json()['detail']
+    current = admin.get('/api/settings').json()
+    full = {k: current[k] for k in ('repo_minutes', 'deadlines', 'history_days')} | {'ai_enabled': True}
+    assert admin.put('/api/settings', json=full).status_code == 409
+    assert admin.put('/api/settings', json=full | {'confirm_ai_expansion': 'f' * 64}).status_code == 409
+    assert _stored_controls() == (before, audits) and admin.get('/api/settings').json()['ai_enabled'] is False
+    assert admin.put('/api/settings/ai', json={'ai_enabled': True, 'confirm_ai_expansion': shown['expansion_confirmation']}).status_code == 200
+    assert admin.get('/api/settings').json()['ai_enabled'] is True
+    assert 'AI is enabled' in _last_settings_audit()
+    # Keeping AI on, or turning it off, needs no confirmation.
+    assert admin.put('/api/settings/ai', json={'ai_enabled': True}).status_code == 200
+    assert admin.put('/api/settings', json=full | {'ai_enabled': False}).status_code == 200
+    # Turning it back on through the full settings route also needs the preview's confirmation.
+    assert admin.put('/api/settings', json=full).status_code == 409
+    assert confirmed_put(admin, '/api/settings', full).status_code == 200
+    assert admin.get('/api/settings').json()['ai_enabled'] is True
