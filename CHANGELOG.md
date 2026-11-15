@@ -1,3 +1,7 @@
+## 1.70.0 — 2026-11-15
+
+1. [PR #884](https://github.com/StealthCat/MrPatchy/pull/884): Send the existing admin-only overdue security-scan coverage notice for enabled legacy policies that have no scan attempt, starting its clock when the producer first observes the policy after upgrade and waiting through the scan interval plus one-hour grace. Compatibility: adds a server-managed `security-scan-legacy-since:<host>` setting; the administrator policy row, schema, roles, scheduler and response authorization are unchanged. No scan is enqueued. Limits: the historical enablement time is unknown; YARA schedules and configurable grace remain out of scope.
+
 ## 1.69.0 — 2026-11-15
 
 1. [PR #896](https://github.com/StealthCat/MrPatchy/pull/896): Add a pure OpenSSH `authorized_keys` parser that reports per-line acceptance, rejection, expiry and precedence, SHA256 key fingerprints, forced commands and effective restrictions without exposing raw key material. Compatibility: new unimported module and tests only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: account/file enumeration and effective sshd configuration, forwarding-value validation, provenance, AI classification and UI remain out of scope; uncertain cases stay explicit gaps.
