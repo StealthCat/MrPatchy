@@ -7,10 +7,15 @@ one-hour retry after an error, or blocked under the saved model/key (the #815
 predicate), plus the next finite eligibility and the oldest unscored wait.
 
 Each current candidate ``Package`` on an active, unpaused server is classified
-once, using the same skip rules as ``update_scores.run_one``. A package can have
-more than one score row matching its installed/candidate pair, for example after
-an inventory context change. In that case the most advanced class wins, in this
-order: complete, running, blocked, deferred, retry wait, eligible.
+once against the score row with its exact scheduler identity
+(``update_scores.identity``: versions plus held flag, priority, package state
+and OS context), using the same skip rules as ``update_scores.run_one``. Rows
+left from an earlier scoring context therefore never mask a pending rescore.
+
+The pass reads packages in the scheduler's bounded keyset order but keeps its
+version indexes and identity memo local to the request; it never mutates the
+scheduler's shared memo or any score row. It is computed only on request from
+``GET /api/update-scores/status``, not on every Settings load.
 
 The summary returns fixed counts and timestamps only, never package names,
 evidence, explanations, provider text or key material. It sends no provider
@@ -18,21 +23,23 @@ request and changes no schema, admission, reservation, retry or authorization.
 """
 import time
 
-from sqlalchemy import and_, case, func, literal, select
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import load_only
 
-from . import ai_policy, ai_retry, host_lifecycle
-from .db import Package, Setting
+from . import ai_policy, ai_retry, host_lifecycle, update_scores
+from .db import Host, Package, Setting
+from .package_history import version_index
 from .update_scores import UpdateScore
 
 RETRY_SECONDS = 3600
+CHUNK = 200
 CLASSES = ('eligible', 'retry_wait', 'deferred', 'blocked', 'running', 'complete')
 LIMITATIONS = (
     ('Counts cover current pending updates on active, unpaused servers. Shared AI start gates (rate throttle, '
-    'daily cap, provider backoff, legacy hourly allowance) and per-server pause still decide when a batch '
-    'starts, so "eligible now" is not a promise that scoring starts immediately.'),
-    ('A score row is matched to its update by server, package, installed and candidate version. The scheduler '
-    'also binds scoring context such as the OS release, so an update whose context changed may be rescored '
-    'even when it is counted here as complete.'),
+     'daily cap, provider backoff, legacy hourly allowance) and per-server pause still decide when a batch '
+     'starts, so "eligible now" is not a promise that scoring starts immediately.'),
+    ('The summary is a point-in-time read. A scoring pass or inventory refresh that runs at the same time can '
+     'change the counts immediately afterwards.'),
 )
 
 
@@ -53,50 +60,82 @@ def _scheduler_state(session, cfg):
     return 'enabled'
 
 
+def classify(row, signature, now):
+    """Return (class, wait_until) for the exact current row, mirroring ``run_one``'s skip order."""
+    if row is None:
+        return 'eligible', None
+    if row.state == 'complete':
+        return 'complete', None
+    if row.state == 'deferred' and row.next_at > now:
+        return 'deferred', row.next_at
+    if row.state == 'blocked' and signature is not None and row.configuration == signature:
+        return 'blocked', None
+    if row.state not in ('deferred', 'blocked') and row.attempted > now - RETRY_SECONDS:
+        if row.state == 'running':
+            return 'running', None
+        return 'retry_wait', row.attempted + RETRY_SECONDS
+    return 'eligible', None
+
+
+def _current_candidates(session):
+    """Yield (package, exact identity) like ``update_scores.scoring_candidates``, without shared memo writes."""
+    hosts = {}
+    cursor = None
+    while True:
+        query = select(Package).where(Package.candidate != '', Package.host_id.not_in(ai_policy.paused_ids()),
+                                      Package.host_id.in_(host_lifecycle.active_ids()))
+        if cursor is not None:
+            query = query.where(or_(Package.available_since > cursor[0],
+                                    and_(Package.available_since == cursor[0], Package.id > cursor[1])))
+        packages = list(session.scalars(query.order_by(Package.available_since, Package.id).limit(CHUNK)))
+        if not packages:
+            return
+        cursor = (packages[-1].available_since, packages[-1].id)
+        missing = list(dict.fromkeys(p.host_id for p in packages if p.host_id not in hosts))
+        if missing:
+            for host_id, inventory in session.execute(select(Host.id, Host.inventory).where(Host.id.in_(missing))):
+                index = version_index(inventory)
+                context = {key: inventory[key] for key in ('os', 'package_manager') if key in inventory}
+                # Same shape as the scheduler's overflow path: a pass-local index and memo.
+                hosts[host_id] = (update_scores._ScoringHost(host_id, context, index), (None, index, {}))
+        for package in packages:
+            entry = hosts.get(package.host_id)
+            if entry is not None:
+                yield package, update_scores.cached_identity(entry[0], package, entry[1])
+
+
 def status(session, cfg, now=None):
     """Return the scoring queue summary in the caller's session. Read-only."""
     now = time.time() if now is None else now
     signature = _signature(session, cfg)
-    recent = UpdateScore.attempted > now - RETRY_SECONDS
-    blocked = (and_(UpdateScore.state == 'blocked', UpdateScore.configuration == signature)
-               if signature is not None else literal(False))
-    # Mirrors the skip order in update_scores.run_one; a missing row is eligible.
-    rank = case(
-        (UpdateScore.id.is_(None), 0),
-        (UpdateScore.state == 'complete', 5),
-        (and_(UpdateScore.state == 'running', recent), 4),
-        (blocked, 3),
-        (and_(UpdateScore.state == 'deferred', UpdateScore.next_at > now), 2),
-        (and_(UpdateScore.state.not_in(('deferred', 'blocked')), recent), 1),
-        else_=0)
-    deferred_until = case((and_(UpdateScore.state == 'deferred', UpdateScore.next_at > now), UpdateScore.next_at))
-    retry_until = case((and_(UpdateScore.state.not_in(('deferred', 'blocked', 'complete', 'running')), recent),
-                        UpdateScore.attempted + RETRY_SECONDS))
-    current = and_(UpdateScore.host_id == Package.host_id, UpdateScore.name == Package.name,
-                   UpdateScore.installed == Package.installed, UpdateScore.candidate == Package.candidate,
-                   UpdateScore.state != 'superseded')
-    candidates = (Package.candidate != '', Package.host_id.in_(host_lifecycle.active_ids()))
-    per_package = select(Package.id.label('package_id'), func.min(Package.available_since).label('since'),
-                         func.max(rank).label('rank'), func.min(deferred_until).label('deferred_until'),
-                         func.min(retry_until).label('retry_until')).select_from(Package).outerjoin(
-        UpdateScore, current).where(*candidates, Package.host_id.not_in(ai_policy.paused_ids())).group_by(
-        Package.id).subquery()
-    # Per-class wait only counts packages whose winning class is that class.
-    rows = session.execute(select(
-        per_package.c.rank, func.count(), func.min(per_package.c.since),
-        func.min(case((per_package.c.rank == 2, per_package.c.deferred_until))),
-        func.min(case((per_package.c.rank == 1, per_package.c.retry_until)))).group_by(per_package.c.rank)).all()
     counts = dict.fromkeys(CLASSES, 0)
     oldest_waiting = None
     waits = []
-    for rank_value, count, since, deferred_at, retry_at in rows:
-        name = CLASSES[int(rank_value or 0)]
-        counts[name] += count
-        if name != 'complete' and since is not None and (oldest_waiting is None or since < oldest_waiting):
-            oldest_waiting = since
-        waits.extend(float(value) for value in (deferred_at, retry_at) if value is not None)
+    state = select(UpdateScore).options(load_only(UpdateScore.id, UpdateScore.state, UpdateScore.attempted,
+                                                  UpdateScore.next_at, UpdateScore.configuration, raiseload=True))
+    batch = []
+
+    def flush():
+        nonlocal oldest_waiting
+        rows = {row.id: row for row in session.scalars(state.where(UpdateScore.id.in_([key for _, key in batch])))}
+        for package, key in batch:
+            name, wait = classify(rows.get(key), signature, now)
+            counts[name] += 1
+            if name != 'complete' and (oldest_waiting is None or package.available_since < oldest_waiting):
+                oldest_waiting = package.available_since
+            if wait is not None:
+                waits.append(float(wait))
+        batch.clear()
+
+    for package, key in _current_candidates(session):
+        batch.append((package, key))
+        if len(batch) >= CHUNK:
+            flush()
+    if batch:
+        flush()
     paused = session.scalar(select(func.count()).select_from(Package).where(
-        *candidates, Package.host_id.in_(ai_policy.paused_ids()))) or 0
+        Package.candidate != '', Package.host_id.in_(host_lifecycle.active_ids()),
+        Package.host_id.in_(ai_policy.paused_ids()))) or 0
     total = sum(counts.values())
     return {
         'scheduler': _scheduler_state(session, cfg),

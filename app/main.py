@@ -1272,13 +1272,12 @@ def audit_detail(entry_id:int,user=Depends(admin_user)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(admin_user)):
-    from . import ai_budget,ai_control_preview,ai_provider_backoff,scoring_block_notifications,scoring_queue_status
+    from . import ai_budget,ai_control_preview,ai_provider_backoff,scoring_block_notifications
     with Session() as s:
         cfg=config(s)
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
-            'ai_scoring_queue':scoring_queue_status.status(s,cfg),
             'ai_control_migration':ai_control_preview.legacy_migration(cfg)}
 
 @app.get('/api/settings/ai-connections')

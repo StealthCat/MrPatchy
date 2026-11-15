@@ -2605,29 +2605,37 @@ the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protec
 Worker checkpoint #917 adds a read-only update-scoring queue summary. Process
 triage already reported its queue through `/api/investigation-status`. Update
 scoring showed only the blocked count. The admin-only
-`GET /api/update-scores/status` and the `ai_scoring_queue` field of admin
-`GET /api/settings` now classify each current-candidate update on an active,
-unpaused server exactly once. The classes are complete, running, eligible now,
-deferred (shared admission), retry wait (error within the hourly retry) and
-blocked (the #815 predicate).
-- **Classification:** it uses `update_scores.run_one`'s skip rules.
-- **Duplicates:** when more than one non-superseded row matches an update's
-  installed/candidate pair, the most advanced class wins.
+`GET /api/update-scores/status` now classifies each current-candidate update on
+an active, unpaused server exactly once. The classes are complete, running,
+eligible now, deferred (shared admission), retry wait (error within the hourly
+retry) and blocked (the #815 predicate).
+- **Exact identity:** each update is matched to the score row with its exact
+  scheduler identity (`update_scores.identity`: versions, held flag, priority,
+  package state and OS context), and `update_scores.run_one`'s skip rules are
+  applied to it. A held, priority or OS-release change therefore counts as
+  eligible exactly when the scheduler rescores it. An earlier-context `complete`
+  row never masks it; peer review on #920 found that the first version, which
+  matched rows by versions only, did.
+- **Isolation:** the pass reads in the scheduler's bounded keyset order with a
+  request-local version index and identity memo. It never touches the
+  scheduler's shared memo or any score row.
+- **Cost:** it runs only on that endpoint. Settings → AI loads it asynchronously
+  beside the scoring toggle, so a Settings load does not wait for it.
 - **Timestamps:** the summary reports the next finite deferred or retry
   eligibility and the oldest unscored `available_since`.
 - **Other counts:** updates on AI-paused servers are counted separately and never
   as eligible. A scheduler state explains disabled AI, disabled scoring or a
   missing model/key.
-- **Settings → AI:** the summary appears beside the scoring toggle. It states that
-  shared start gates, pause and the daily cap still decide when a batch starts,
-  and that scores are advisory.
+- **Settings → AI:** the notice states that shared start gates, pause and the
+  daily cap still decide when a batch starts, and that scores are advisory. A
+  failed load says so and never implies scoring may start.
 - **Unchanged:** the payload holds only counts, timestamps and fixed text: no
   package names, evidence, explanations, provider text or key material. It sends
   no provider request. Schema, admission, reservations, retries, roles and
   response authorization are unchanged.
-- **Limitation:** rows are matched by server, package and versions. The
-  scheduler also binds scoring context such as the OS release, so an update
-  whose context changed can still be rescored while it is shown as complete.
+- **Limitation:** the summary is a point-in-time read. A concurrent scoring pass
+  or inventory refresh can change it immediately afterwards. Its cost is one
+  identity pass over current candidates per request (compare #436).
   Investigations and worker-health surfaces do not show the scoring queue yet.
 
 

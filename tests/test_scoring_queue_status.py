@@ -43,7 +43,7 @@ def seed():
         score('old-block', 'blocked', configuration='earlier-signature', attempted=now - 60)
         score('running', 'running', attempted=now - 30)
         score('done', 'complete', attempted=now - 60, completed=now - 50)
-        # A stale row for the same versions (another scoring context) never double-counts.
+        # A complete row from an earlier scoring context never masks the exact current row.
         score('dupe', 'complete', key='a' * 64, attempted=now - 60)
         score('dupe', 'error', attempted=now - 300)
         score('fresh', 'superseded', key='b' * 64, attempted=now - 60)
@@ -64,9 +64,9 @@ def test_each_current_update_is_classified_once_like_the_scheduler(admin, monkey
     monkeypatch.setattr(ai.transport, 'post', no_provider)
     now = seed()
     result = summary(now)
-    assert result['counts'] == {'eligible': 4, 'retry_wait': 1, 'deferred': 1, 'blocked': 1,
-                                'running': 1, 'complete': 2}
-    assert result['current_updates'] == 10 and result['unscored'] == 8
+    assert result['counts'] == {'eligible': 4, 'retry_wait': 2, 'deferred': 1, 'blocked': 1,
+                                'running': 1, 'complete': 1}
+    assert result['current_updates'] == 10 and result['unscored'] == 9
     # 'fresh' has only a superseded row and counts as eligible; paused and disabled servers stay out.
     assert result['paused_server_updates'] == 1
     assert result['scheduler'] == 'enabled'
@@ -107,7 +107,51 @@ def test_eligible_updates_are_exactly_the_ones_the_scheduler_sends(admin, monkey
             update_scores.UpdateScore.id.in_([item['id'] for item in sent])))}
     assert hosts == {'ready', 'expired', 'old-block', 'fresh'}
     after = summary(now)['counts']
-    assert after['eligible'] == 0 and after['complete'] == 6
+    assert after['eligible'] == 0 and after['complete'] == 5
+
+
+@pytest.mark.parametrize('change', ['held', 'priority', 'os'])
+def test_context_change_counts_as_eligible_exactly_when_the_scheduler_rescores(admin, monkeypatch, change):
+    # Peer review on #920: a context-only change leaves the old complete row in place,
+    # but the scheduler binds a new identity and rescores the update.
+    now = seed()
+    with Session() as s:
+        package = s.get(Package, 'done:secret-package')
+        if change == 'held':
+            package.held = not package.held
+        elif change == 'priority':
+            package.priority, package.priority_manual = 'security', True
+        else:
+            host = s.get(Host, 'done')
+            host.inventory = {**host.inventory, 'os': 'ID=debian\nVERSION_ID=13'}
+        s.commit()
+    result = summary(now)['counts']
+    assert result['complete'] == 0 and result['eligible'] == 5
+    sent = []
+
+    def capture(*args, **kwargs):
+        sent.extend(item['id'] for item in json.loads(kwargs['json']['input']))
+        raise httpx.ConnectError('fixture stops after capture')
+
+    monkeypatch.setattr(ai.transport, 'post', capture)
+    monkeypatch.setattr(update_scores.time, 'time', lambda: now)
+    update_scores.run_one()
+    with Session() as s:
+        hosts = {row.host_id for row in s.scalars(select(update_scores.UpdateScore).where(
+            update_scores.UpdateScore.id.in_(sent)))}
+    assert len(set(sent)) == 5 and hosts == {'ready', 'expired', 'old-block', 'fresh', 'done'}
+
+
+def test_summary_leaves_the_scheduler_memo_and_score_rows_untouched(admin):
+    now = seed()
+    with Session() as s:
+        before = {row.id: (row.state, row.attempted, row.next_at) for row in s.scalars(select(update_scores.UpdateScore))}
+    memo = dict(update_scores._MEMO)
+    summary(now)
+    assert update_scores._MEMO == memo
+    with Session() as s:
+        assert before == {row.id: (row.state, row.attempted, row.next_at)
+                          for row in s.scalars(select(update_scores.UpdateScore))}
 
 
 def test_payload_is_counts_only_and_admin_only(client):
@@ -119,7 +163,7 @@ def test_payload_is_counts_only_and_admin_only(client):
     assert client.get(STATUS).status_code == 403
 
 
-def test_admin_endpoint_and_settings_field_match(admin):
+def test_admin_endpoint_reports_counts_without_private_data(admin):
     seed()
     reply = admin.get(STATUS)
     assert reply.status_code == 200
@@ -128,8 +172,8 @@ def test_admin_endpoint_and_settings_field_match(admin):
     for private in ('secret-package', 'private provider text', 'private-key', 'ready', 'fixture-model'):
         assert private not in text
     assert body['counts']['eligible'] == 4
-    settings = admin.get('/api/settings').json()['ai_scoring_queue']
-    assert settings['counts'] == body['counts']
+    # The exact-identity pass runs only on this endpoint, not on every Settings load.
+    assert 'ai_scoring_queue' not in admin.get('/api/settings').json()
 
 
 @pytest.mark.parametrize('changes, state', [({'ai_enabled': False}, 'ai_disabled'),
