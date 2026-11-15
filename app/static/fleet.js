@@ -390,7 +390,8 @@ function fleetExposureContent(data){
    const reopened=Number.isSafeInteger(e.reopened)&&e.reopened>0?' · Reopened '+e.reopened.toLocaleString()+' time'+(e.reopened===1?'':'s'):'';
    const disabled=e.enabled===false?' <span class="badge disabled">Management disabled · not refreshed</span>':'';
    return '<li><div>'+host+disabled+'</div><div class="help">Package '+text(e.package)+' · First affected '+esc(time(e.first_affected_at))+' at version '+text(e.first_affected_version)+' · Last affected '+esc(time(e.last_affected_at))+' at version '+text(e.last_affected_version)+fixed+reopened+'</div></li>';}).join('');
-  const more=item.exposures_truncated===true?'<p class="help">More affected servers are not listed. Open each server\'s Patching page for its full history.</p>':'';
+  const listed=Array.isArray(item.exposures)?item.exposures.length:0,total=Number.isSafeInteger(item.exposures_total)&&item.exposures_total>=listed?' of '+item.exposures_total.toLocaleString():'';
+  const more=item.exposures_truncated===true?'<p class="help">Showing '+listed.toLocaleString()+total+' open exposures. Each exposure is one package on one server, so more affected packages or servers are not listed. Open each server\'s Patching page for its full history.</p>':'';
   return '<li><details><summary><span class="badge high">Open</span> <strong>'+text(item.advisory_id)+'</strong>'+(cves.length?' · '+esc(cves.join(', ')):'')+' · '+count(item.servers)+' server'+(item.servers===1?'':'s')+' · '+count(item.packages)+' package'+(item.packages===1?'':'s')+' · Earliest '+esc(time(item.first_affected_at))+'</summary><ul class="fleet-exposure-servers">'+exposures+'</ul>'+more+'</details></li>';
  }).join('');
  return summary+truncated+'<ul class="advisory-applicability fleet-exposure-list">'+rows+'</ul>'+limits+coverage+refresh;
