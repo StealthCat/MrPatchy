@@ -187,33 +187,40 @@ def test_boot_chains_follow_aliases_and_softdeps_in_order():
         'softdep real-mod pre: helper post: after\n'
         'install helper /opt/pre.sh\n'
         'install real_mod /opt/main.sh\n'
-        'install real_mod /opt/second.sh\n'
+        'install helper /opt/pre-second.sh\n'
         'install after /bin/false\n'
         'install unused /opt/never.sh\n'
         'blacklist helper\n'))])
     load = km.resolve_modules_load([f('/etc/modules-load.d/p.conf', 'persist\nplain\n')])
     result = km.boot_commands(modprobe, load)
+    # Matches `modprobe -n -v persist` from kmod 31: a module with softdeps skips its own command.
     assert [(c['module'], c['kind'], c['command']) for c in result['chains']] == [
-        ('helper', 'command', '/opt/pre.sh'), ('real_mod', 'command', '/opt/main.sh'),
-        ('after', 'disable', '/bin/false')]
-    first, main, last = result['chains']
+        ('helper', 'command', '/opt/pre.sh'), ('after', 'disable', '/bin/false')]
+    first, last = result['chains']
     assert first['via'] == [{'relation': 'alias', 'module': 'real_mod'},
                             {'relation': 'softdep_pre', 'module': 'helper'}]
-    assert first['blacklisted'] is True and main['blacklisted'] is False
-    assert main['shadowed_definitions'] == 1 and main['source'] == {'path': '/etc/modprobe.d/p.conf', 'line': 4}
-    assert main['boot_module'] == 'persist'
-    assert main['requested_by'] == {'path': '/etc/modules-load.d/p.conf', 'line': 1}
+    assert first['blacklisted'] is True and last['blacklisted'] is False
+    assert first['shadowed_definitions'] == 1 and first['source'] == {'path': '/etc/modprobe.d/p.conf', 'line': 3}
+    assert first['boot_module'] == 'persist' and 'reason' not in first
+    assert first['requested_by'] == {'path': '/etc/modules-load.d/p.conf', 'line': 1}
     assert last['via'][-1] == {'relation': 'softdep_post', 'module': 'after'}
-    assert result['commands'] == 2 and result['disabled'] == 1 and result['complete'] is True
+    skipped, = result['ignored']
+    assert (skipped['module'], skipped['command'], skipped['reason']) == (
+        'real_mod', '/opt/main.sh', 'module_has_softdep')
+    assert result['commands'] == 1 and result['disabled'] == 1 and result['complete'] is True
     assert 'not a safety verdict' in result['note']
 
 
 def test_boot_chains_bound_loops_depth_and_incomplete_inputs():
     loop = km.resolve_modprobe([f('/etc/modprobe.d/l.conf',
-                                  'softdep a pre: b\nsoftdep b pre: a\ninstall b /opt/b.sh\n')])
-    load = km.resolve_modules_load([f('/etc/modules-load.d/l.conf', 'a\n')])
+                                  'softdep a pre: b\nsoftdep b pre: a c post: c\ninstall c /opt/c.sh\n'
+                                  'softdep empty pre:\ninstall empty /opt/empty.sh\n')])
+    load = km.resolve_modules_load([f('/etc/modules-load.d/l.conf', 'a\nempty\n')])
     result = km.boot_commands(loop, load)
-    assert [c['module'] for c in result['chains']] == ['b'] and result['complete'] is True
+    # c is requested once per probe even though it is both a pre and a post dependency;
+    # an empty softdep does not suppress the module's own command.
+    assert [c['module'] for c in result['chains']] == ['c', 'empty'] and result['ignored'] == []
+    assert loop['gaps'] == [] and result['complete'] is True
     deep_text = ''.join(f'softdep m{i} pre: m{i + 1}\n' for i in range(12)) + 'install m12 /opt/deep.sh\n'
     deep = km.boot_commands(km.resolve_modprobe([f('/etc/modprobe.d/d.conf', deep_text)]),
                             km.resolve_modules_load([f('/etc/modules-load.d/d.conf', 'm0\n')]))

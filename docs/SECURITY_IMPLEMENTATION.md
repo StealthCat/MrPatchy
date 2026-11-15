@@ -3876,7 +3876,10 @@ no I/O.
 - **Boot-time command chains.** `boot_commands()` lists the `install` command
   each boot-requested module would run. It follows configuration aliases and
   `softdep` pre/post modules with depth, chain and step limits, records how each
-  command was reached and flags blacklisted modules without dropping them.
+  command was reached and flags blacklisted modules without dropping them. A
+  module with a non-empty `softdep` does not run its own command, which is
+  listed as ignored. The alias, first-match and softdep rules were checked
+  against `modprobe -n -v` from kmod 31.
 - **Fail closed.** Unreadable files, unfollowed symlinks (other than `/dev/null`
   masks), invalid UTF-8, NUL bytes and over-limit input mark the result
   incomplete. An unreadable winning file still shadows lower-priority files.

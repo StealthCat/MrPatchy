@@ -20,6 +20,9 @@ and libkmod):
   order, and the module name of an entry may be a shell wildcard.
 - A configuration ``alias`` is consulted before the module name itself.
   ``softdep`` ``pre:`` modules are requested before, ``post:`` modules after.
+- A module that has a non-empty ``softdep`` does not run its own ``install``
+  command; only its soft dependencies' commands run. (The alias, first-match
+  and softdep rules were checked against ``modprobe -n -v`` from kmod 31.)
 - ``modules-load.d`` and Debian's ``/etc/modules`` name one module per line;
   ``#`` and ``;`` start comment lines.
 
@@ -424,7 +427,10 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
     For each requested module the resolver applies configuration aliases first, then requests
     ``softdep`` ``pre:`` modules, the module itself and ``post:`` modules, to a bounded depth.
     Every step records how it was reached. Entries for blacklisted modules are kept and flagged,
-    because whether a blacklist applies depends on the requesting tool.
+    because whether a blacklist applies depends on the requesting tool. A module with a non-empty
+    ``softdep`` does not run its own command; that command is listed under ``ignored`` instead.
+    A wildcard ``install`` pattern is matched against every requested name, although kmod applies
+    it only to modules that exist in the unobserved kernel tables, so the list errs toward more.
     """
     gaps: list[dict[str, Any]] = []
     for name, result in (('modprobe', modprobe), ('modules_load', modules_load)):
@@ -437,6 +443,8 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
     softdeps = [s for s in _entries(modprobe, 'softdeps') if isinstance(s.get('module'), str)]
     blacklisted = {b['module'] for b in _entries(modprobe, 'blacklist') if isinstance(b.get('module'), str)}
     chains: list[dict[str, Any]] = []
+    ignored: list[dict[str, Any]] = []
+    listed: set[tuple[int, str]] = set()
     visits = 0
 
     def visit(name: str, via: list[dict[str, str]], active: frozenset[str], request: dict[str, Any]) -> None:
@@ -470,16 +478,19 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
                 if isinstance(pre, str):
                     visit(pre, via + [{'relation': 'softdep_pre', 'module': pre}], active, request)
         found = commands_for(modprobe, name)
-        if found['selected'] is not None:
+        has_softdeps = any(dep.get('pre') or dep.get('post') for dep in deps)
+        if found['selected'] is not None and (id(request), name) not in listed:
+            listed.add((id(request), name))  # one probe requests each module once
             command = found['selected']
-            chains.append({'boot_module': request['module'],
+            (ignored if has_softdeps else chains).append({'boot_module': request['module'],
                            'requested_by': {'path': request['path'], 'line': request.get('line')},
                            'via': via, 'module': name, 'blacklisted': name in blacklisted,
                            'kind': command.get('kind'), 'command': command.get('command'),
                            'command_truncated': command.get('command_truncated'),
                            'command_sha256': command.get('command_sha256'),
                            'source': {'path': command.get('path'), 'line': command.get('line')},
-                           'shadowed_definitions': len(found['shadowed'])})
+                           'shadowed_definitions': len(found['shadowed']),
+                           **({'reason': 'module_has_softdep'} if has_softdeps else {})})
         for dep in deps:
             for post in dep.get('post') or []:
                 if isinstance(post, str):
@@ -489,6 +500,7 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
         if isinstance(request.get('module'), str) and isinstance(request.get('path'), str):
             visit(request['module'], [], frozenset(), request)
     return {'contract_version': CONTRACT_VERSION, 'complete': _complete(gaps), 'chains': chains,
+            'ignored': ignored[:MAX_CHAINS],
             'commands': sum(1 for c in chains if c['kind'] == 'command'),
             'disabled': sum(1 for c in chains if c['kind'] == 'disable'), 'gaps': gaps,
             'unobserved': [dict(u) for u in UNOBSERVED_MODPROBE + UNOBSERVED_MODULES_LOAD],
