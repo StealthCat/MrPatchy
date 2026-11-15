@@ -1,3 +1,15 @@
+## 1.66.0 — 2026-11-15
+
+1. [PR #908](https://github.com/StealthCat/MrPatchy/pull/908): Add Settings → Malware response, where administrators can record and audit one fleet-wide automatic-response policy against the existing eligibility contract. Compare-and-set saves, audit entries and fail-closed handling keep invalid or unconfirmed enforcement disabled. Compatibility: additive administrator-only read/write endpoints and UI; existing installs default to Disabled; no migration, detector, executor, provider call, or response-authorization change. Limits: policy has no runtime effect, Enforce is unavailable, and per-server/group policies and enforcement remain open.
+
+## 1.65.0 — 2026-11-15
+
+1. [PR #920](https://github.com/StealthCat/MrPatchy/pull/920): Add an administrator-only update-scoring queue summary in Settings → AI and `GET /api/update-scores/status`. It reports exact-identity counts for scored, running, eligible, deferred, retry-waiting and blocked updates, the oldest unscored wait, next timed eligibility and paused-server updates. Compatibility: adds one read-only endpoint; `/api/settings`, schema, admission, reservations, retries, roles and response authorization are unchanged. Limits: the summary is a point-in-time view, one identity pass is performed per request, and shared start gates, pause and the daily cap still determine when scoring starts.
+
+## 1.64.2 — 2026-11-15
+
+1. [PR #921](https://github.com/StealthCat/MrPatchy/pull/921): Bound the fleet CVE list to 50 exposure rows per advisory in the database query and report honest truncation as "Showing N of M open exposures". Advisory totals, known fixed versions and CVE identifiers still cover every open ledger row. Compatibility: adds `exposures_total`; `exposures_truncated` retains its meaning; renames the test-only Python keyword from `server_limit` to `exposure_limit`; no schema, role, scan, or response-authorization change. Limits: each server/package row consumes one exposure slot; no index was added without supporting measurements; the view still reflects retained administrator-run scans, not a clean-host verdict.
+
 ## 1.64.1 — 2026-11-15
 
 1. [PR #915](https://github.com/StealthCat/MrPatchy/pull/915): Show administrators the existing Shared AI start gates card on the fleet AI activity page, including why provider calls are held and the next eligible start. The card reuses the Investigations renderer and snapshot route; late responses are discarded and snapshot errors do not block the run list. Compatibility: display-only; no API, schema, role, admission or response-authorization change. Limits: the card does not promise a start, and worker-health surfaces still do not show shared gate state. Correct the worker-template README sentence that had become stale after controller-only GCP installation was added in #919.

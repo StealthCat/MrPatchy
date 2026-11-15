@@ -4,7 +4,7 @@ module.exports=async(page,capture)=>{
  const now=Math.floor(Date.now()/1000),day=86400,originalViewport=page.viewportSize();
  let mode='fail',reads=0,release,started;
  const items=[
-  {advisory_id:'USN-7001-1 <img src=x onerror=window.__fleetExposureInjected=true>',cve_ids:['CVE-2026-0001','CVE-2026-0002'],servers:2,packages:1,first_affected_at:now-9*day,fixed_known:1,exposures_truncated:true,exposures:[
+  {advisory_id:'USN-7001-1 <img src=x onerror=window.__fleetExposureInjected=true>',cve_ids:['CVE-2026-0001','CVE-2026-0002'],servers:2,packages:1,first_affected_at:now-9*day,fixed_known:1,exposures_total:3,exposures_truncated:true,exposures:[
    {host_id:'fleet host/1',host_name:'Alpha <b>bold</b>',enabled:true,package:'openssl',first_affected_at:now-9*day,first_affected_version:'3.0.13-0ubuntu3',last_affected_at:now-day,last_affected_version:'3.0.13-0ubuntu3.1',fixed_version:'3.0.13-0ubuntu3.4',reopened:2},
    {host_id:'fleet-host-2',host_name:'Bravo',enabled:false,package:'openssl',first_affected_at:'yesterday',first_affected_version:'',last_affected_at:-1,last_affected_version:null,fixed_version:null,reopened:'many'}]},
   {advisory_id:'USN-7002-1',cve_ids:[],servers:1,packages:1,first_affected_at:now-2*day,fixed_known:0,exposures_truncated:false,exposures:[
@@ -46,7 +46,7 @@ module.exports=async(page,capture)=>{
   assert.match(second,/Bravo Management disabled · not refreshed/);
   assert.match(second,/First affected Unknown at version Unknown · Last affected Unknown at version Unknown/);
   assert.doesNotMatch(second,/Vendor fix|Reopened/);
-  assert.match(await rows.nth(0).textContent(),/More affected servers are not listed/);
+  assert.match(await rows.nth(0).textContent(),/Showing 2 of 3 open exposures\. Each exposure is one package on one server, so more affected packages or servers are not listed/);
   assert.equal(await card.locator('img,b,script').count(),0);
   assert.equal(await page.evaluate(()=>window.__fleetExposureInjected),undefined);
   const text=await card.textContent();

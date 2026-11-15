@@ -2616,6 +2616,41 @@ the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protec
 - **Unchanged:** schema, roles, response authorization and SMTP/webhook alerts.
   Blocked advisory-plan work is still not covered.
 
+Worker checkpoint #917 adds a read-only update-scoring queue summary. Process
+triage already reported its queue through `/api/investigation-status`. Update
+scoring showed only the blocked count. The admin-only
+`GET /api/update-scores/status` now classifies each current-candidate update on
+an active, unpaused server exactly once. The classes are complete, running,
+eligible now, deferred (shared admission), retry wait (error within the hourly
+retry) and blocked (the #815 predicate).
+- **Exact identity:** each update is matched to the score row with its exact
+  scheduler identity (`update_scores.identity`: versions, held flag, priority,
+  package state and OS context), and `update_scores.run_one`'s skip rules are
+  applied to it. A held, priority or OS-release change therefore counts as
+  eligible exactly when the scheduler rescores it. An earlier-context `complete`
+  row never masks it; peer review on #920 found that the first version, which
+  matched rows by versions only, did.
+- **Isolation:** the pass reads in the scheduler's bounded keyset order with a
+  request-local version index and identity memo. It never touches the
+  scheduler's shared memo or any score row.
+- **Cost:** it runs only on that endpoint. Settings → AI loads it asynchronously
+  beside the scoring toggle, so a Settings load does not wait for it.
+- **Timestamps:** the summary reports the next finite deferred or retry
+  eligibility and the oldest unscored `available_since`.
+- **Other counts:** updates on AI-paused servers are counted separately and never
+  as eligible. A scheduler state explains disabled AI, disabled scoring or a
+  missing model/key.
+- **Settings → AI:** the notice states that shared start gates, pause and the
+  daily cap still decide when a batch starts, and that scores are advisory. A
+  failed load says so and never implies scoring may start.
+- **Unchanged:** the payload holds only counts, timestamps and fixed text: no
+  package names, evidence, explanations, provider text or key material. It sends
+  no provider request. Schema, admission, reservations, retries, roles and
+  response authorization are unchanged.
+- **Limitation:** the summary is a point-in-time read. A concurrent scoring pass
+  or inventory refresh can change it immediately afterwards. Its cost is one
+  identity pass over current candidates per request (compare #436).
+  Investigations and worker-health surfaces do not show the scoring queue.
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
@@ -3278,6 +3313,17 @@ Before this checkpoint the durable `cve_exposure_history` ledger (#858) could be
 - **Validation:** `tests/test_cve_exposure_fleet.py` covers grouping, ordering, deleted and resolved exclusion, reopening, caps with full totals, and the admin-only read-only route. `tests/ui_fleet_exposure.cjs` covers the populated, truncated, empty, malformed, error/retry, injection and stale-reply cases, with no horizontal overflow at 320, 768 and 1440 px.
 - **Remaining in requirement D:** scheduled scans, publication dates in `exposure_window()`, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
 
+#### Fleet CVE exposure bounds and truncation wording — worker checkpoint #913
+
+The #911 view capped 50 rows per advisory but said "More affected servers are not listed". One row is one exposure (server × package), so one server with several affected packages could trigger that text while fewer than 50 servers were shown. The rows query also loaded every open row of the 200 listed advisories and trimmed them in Python.
+
+- **Bounded query:** `fleet_open` ranks rows per advisory in SQL with `ROW_NUMBER() OVER (PARTITION BY advisory_id …)` (SQLite 3.25+, MySQL 8) and loads at most `exposure_limit` (50) rows per advisory, in the same first-affected/server/package order as before.
+- **Summary fields still cover every row:** the group query now counts each advisory's open exposures and the rows naming a vendor fixed version. CVE IDs come from a separate `DISTINCT (advisory_id, cve_ids)` read, so `fixed_known` and `cve_ids` are unchanged by the bound.
+- **API:** each advisory adds `exposures_total`. `exposures_truncated` now compares that total with the listed rows. The keyword argument is now `exposure_limit` (formerly `server_limit`); only tests passed it.
+- **UI:** a truncated advisory says "Showing N of M open exposures. Each exposure is one package on one server, so more affected packages or servers are not listed." It omits "of M" when the total is missing or malformed.
+- **Unchanged:** schema (no index was added, because nothing was measured to justify one), routes, roles and the read-only boundary. There are no scan, advisory-service, AI-provider or SSH calls.
+- **Validation:** `tests/test_cve_exposure_fleet.py` adds a one-server/six-package case and a statement spy showing that no query loads more than advisories × limit rows (main loaded 16 rows in one statement where the bound allows 6). It also proves that output under the limit is identical. `tests/ui_fleet_exposure.cjs` asserts the new wording.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
@@ -3443,6 +3489,39 @@ Remaining for requirement E:
   sharing the CVE containment work in requirement D;
 - alerts and incidents, false-positive recovery, and real-target and
   benign-lookalike acceptance drills.
+
+### Persisted fleet malware response policy — worker checkpoint #898
+
+Status: **bounded slice; requirement E remains planned/incomplete.** Administrators
+can view and save one fleet-wide policy for the #682 contract in Settings →
+Malware response. Nothing evaluates it at runtime: no detector, executor,
+provider call or response authorization was added or changed.
+
+- `app/malware_policy.py` stores the policy in the `Setting` row
+  `malware-response-policy`. There is no schema change.
+  - `GET /api/settings/malware-response` (admin) returns the policy normalized by
+    `malware_response.normalize_policy`, an opaque revision digest, the contract
+    version, the action-effect texts, limits and `enforcement_available: false`.
+  - With no row, the policy is the contract default: `disabled` with empty scopes.
+- `PUT /api/settings/malware-response` (admin, CSRF) validates with the same
+  contract. A malformed policy returns 400 and writes nothing.
+- `enforce` is refused with 409 while no executor exists. A stored `enforce` row
+  is reported as invalid and treated as disabled, so a later executor cannot
+  inherit an enforcement choice nobody confirmed for live use.
+- A save is a compare-and-set on the revision under the cross-worker lock
+  `malware-response-policy`. A stale or concurrent save, or a held lock, returns
+  409. Each successful save writes exactly one audit entry. The entry names the
+  changed fields, any mode transition and the exclusion counts, never the
+  excluded paths or hashes.
+- A stored row that no longer validates is reported as `disabled` with
+  `stored_invalid: true` and a reason, and `malware_policy.current()` returns the
+  disabled default. Saving with the reported revision replaces it.
+- The Settings section shows the mode (Enforce visible but disabled, with an
+  explanation), per-class action scopes with their effect texts, the
+  unknown-malware opt-in, thresholds and exclusions. It keeps entries after a 409.
+
+Remaining for requirement E: per-server and group overrides, plus every item
+listed under #682 apart from this fleet-level storage and UI.
 
 ## Planned: comprehensive startup and scheduled-task awareness
 
