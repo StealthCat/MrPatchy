@@ -3245,6 +3245,25 @@ Before this checkpoint nothing rendered the `exposure_history` ledger from #858,
 - **Validation:** `tests/ui_exposure_history.cjs` covers populated, truncated, empty, malformed, error/retry, injection, stale-reply and viewer cases, with no horizontal overflow at 320, 768 and 1440 px.
 - **Remaining in requirement D:** fleet views, scheduled scans, publication dates in `exposure_window()`, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
 
+#### Fleet-wide open CVE exposure — worker checkpoint #911
+
+Before this checkpoint the durable `cve_exposure_history` ledger (#858) could be read only one server at a time. An administrator could not see which advisories were open on several servers at once.
+
+- **API:** the new admin-only `GET /api/cve-exposure/fleet` (`advisories.fleet_open`) reads only stored ledger rows. It runs no scan and makes no OSV, AI-provider or SSH call.
+- **Grouping:** open rows (`resolved_at == 0`) are grouped by advisory. Each group carries:
+  - the union of its CVE IDs;
+  - its distinct server and package counts;
+  - the earliest first-affected time;
+  - how many rows name a vendor fixed version;
+  - the affected rows (server id and name, management state, package, first/last affected time and version, vendor fix and reopen count).
+- **Scope:** soft-deleted servers are excluded. Disabled servers stay listed and are marked, because nothing refreshes their ledger.
+- **Bounds:** at most 200 advisories, ordered by server count, then by the oldest first-affected time, then by ID, with at most 50 rows each. Both caps set `truncated` flags. Totals (open exposures, exposed servers, advisories) are counted over every open row, not just the returned page.
+- **Honest limits:** the coverage statement says that never-scanned servers and unscanned packages have no rows, so absence is not a clean-host verdict. It also says that times between scans are gaps, that disabled servers are not refreshed, and that applicability is neither exploitation evidence nor verified effective installation.
+- **UI:** the fleet **Security coverage** page has an **Open CVE exposure across the fleet** card for administrators. It shows the totals and expandable advisory rows, each server linking to its Patching page. All stored strings are escaped, and malformed times and versions render as Unknown. A load failure stays inside the card with **Retry fleet exposure**, and a late reply after navigation is discarded.
+- **Unchanged:** schema, roles, notifications, patch selection and response authorization. The view authorizes nothing.
+- **Validation:** `tests/test_cve_exposure_fleet.py` covers grouping, ordering, deleted and resolved exclusion, reopening, caps with full totals, and the admin-only read-only route. `tests/ui_fleet_exposure.cjs` covers the populated, truncated, empty, malformed, error/retry, injection and stale-reply cases, with no horizontal overflow at 320, 768 and 1440 px.
+- **Remaining in requirement D:** scheduled scans, publication dates in `exposure_window()`, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**

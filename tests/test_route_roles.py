@@ -193,6 +193,7 @@ EXPECTED_ROLES = {
     ('POST','/api/operations/workers/control'):'admin',
     ('POST','/api/operations/workers/remove'):'admin',
     ('GET','/api/operations/{host_id}/advisories'):'admin',
+    ('GET','/api/cve-exposure/fleet'):'admin',
     ('POST','/api/operations/{host_id}/advisories'):'admin',
     ('PUT','/api/operations/{host_id}/observability'):'admin',
     ('PUT','/api/operations/{host_id}/recovery'):'admin',

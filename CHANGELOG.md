@@ -1,3 +1,7 @@
+## 1.63.0 — 2026-11-15
+
+1. [PR #912](https://github.com/StealthCat/MrPatchy/pull/912): Add an administrator-only **Open CVE exposure across the fleet** card and read-only API over the durable advisory-scan ledger. It groups open advisories with affected servers and packages, first-affected times and fleet totals. Compatibility: additive route and UI only; no schema, role or response-authorization change, and no scan, OSV, AI-provider or SSH call. Limitations: data freshness depends on retained administrator-run scans; absent or stale rows do not mean a clean host, lack of exploitation or verified installation, and disabled servers are not refreshed. The returned list is capped at 200 advisories and 50 exposure rows per advisory, but the query is not yet bounded per advisory and multi-package truncation wording can mislead; SQL row bounds and clearer wording are tracked in #913.
+
 ## 1.62.2 — 2026-11-15
 
 1. [PR #910](https://github.com/StealthCat/MrPatchy/pull/910): Update FastAPI to 0.162.5, PyMySQL to 1.2.4 and Authlib to 1.9.5, with regenerated wheel and source-distribution hashes in the runtime lock. Compatibility: patch-level dependency updates; no application API, schema, configuration or deployment changes. Limitation: Authlib 1.9.5 emits a non-fatal httpx deprecation warning, and the separate httpx2 migration is not included; local validation used CPython 3.15 beta.
