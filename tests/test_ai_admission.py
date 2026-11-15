@@ -149,10 +149,12 @@ def test_existing_configuration_requires_explicit_migration(admin):
         session.commit()
     state=admin.get('/api/settings').json()
     assert state['ai_control_mode']=='legacy'
-    assert state['ai_control_migration']=={
+    migration=state['ai_control_migration']
+    assert {key:migration[key] for key in ('required','suggested_rate_per_hour',
+        'legacy_investigations_per_hour','legacy_scoring_batches_per_hour','proposal_expands')}=={
         'required': True, 'suggested_rate_per_hour': 7,
         'legacy_investigations_per_hour': 12,
-        'legacy_scoring_batches_per_hour': 7,
+        'legacy_scoring_batches_per_hour': 7, 'proposal_expands': False,
     }
     saved=admin.put('/api/settings/ai', json={
         'ai_model': '', 'ai_enabled': False, 'ai_updates_enabled': True,
