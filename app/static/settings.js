@@ -291,7 +291,7 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
 const MALWARE_ACTION_LABELS={quarantine_file:'Quarantine the verified file',terminate_process:'Terminate the verified process'};
 const MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only (record what would happen)',enforce:'Enforce (unavailable)'};
 function malwarePolicyForm(data){
- const p=data.policy,l=data.limits,actions=(name,chosen)=>data.actions.map(a=>`<label class="check"><input type="checkbox" name="${name}" value="${esc(a)}" ${chosen.includes(a)?'checked':''}> ${esc(MALWARE_ACTION_LABELS[a]||a)}<small class="help"> ${esc(data.effects[a]||'')}</small></label>`).join('');
+ const p=data.policy,l=data.limits,actions=(name,chosen)=>data.actions.map(a=>`<label class="check"><input type="checkbox" name="${name}" value="${esc(a)}" ${chosen.includes(a)?'checked':''}><span>${esc(MALWARE_ACTION_LABELS[a]||a)}<br><small class="help">${esc(data.effects[a]||'')}</small></span></label>`).join('');
  const modes=data.modes.map(m=>{const off=m==='enforce'&&!data.enforcement_available;return `<option value="${esc(m)}" ${m===p.mode?'selected':''} ${off?'disabled':''}>${esc(MALWARE_MODE_LABELS[m]||m)}</option>`;}).join('');
  return `<form id="malware-policy-form" class="card"><h2>Fleet malware automatic response</h2>
 <div class="notice" id="malware-enforcement-notice"><strong>Not enforced.</strong> No containment executor exists yet, so this policy is recorded and audited but never quarantines a file or terminates a process. Enforce stays unavailable until an executor is delivered and reviewed.</div>
