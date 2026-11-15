@@ -8581,3 +8581,28 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
   - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+
+### authorized_keys options contract — worker checkpoint #895 (roadmap F)
+
+The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` as metadata only. Nothing said which keys carry a forced `command=`, which restrictions apply, or whether sshd would accept the line at all.
+
+- **Change:** a new pure module, `app/authorized_keys.py`, follows sshd(8) *AUTHORIZED_KEYS FILE FORMAT* and OpenSSH option parsing.
+  - **Line structure:** the key type is tried first, otherwise the options token runs to the first unquoted whitespace, as `sshkey_advance_past_options` does.
+  - **Options:** comma separated and case-insensitive, with `\"` handled as in `opt_dequote`. Options apply in order, so `restrict` followed by `pty` re-enables a pty.
+  - **Rejected lines:** sshd refuses lines with an unknown option, a missing quote, a duplicate `command`/`principals`, or a malformed `expiry-time`, `tunnel` or `environment`. Such lines are `invalid` with the reason.
+  - **Identity:** each key is bound by its `SHA256:` fingerprint. The embedded type must match the declared type, and raw key material is never returned.
+  - **Forced command:** reported verbatim, with `command_runs_via: account_shell_-c`. No argv is guessed.
+  - **Line precedence:** a later line for the same key is `shadowed`. If the earlier line has `from=`, the later line is `conditional`.
+  - **Expiry:** `expiry-time` is evaluated against a supplied observation time, and the earliest value wins.
+- **Gaps, never reported as covered:**
+  - unreadable, oversized or truncated files;
+  - an unknown key type;
+  - `environment=`, which depends on `PermitUserEnvironment`;
+  - a local-time expiry within the ±14-hour zone range of the observation, or an expiry with no observation time;
+  - the file, line, option, value and comment caps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
+- **Validation:** `tests/test_authorized_keys.py` has 27 tests. They cannot run on main, where the module does not exist, and they pass on the branch. They include a real `cryptography`-generated OpenSSH Ed25519 key.
+- **Remaining:**
+  - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
+  - `permitopen`/`permitlisten` syntax validation;
+  - provenance, AI classification and UI.
