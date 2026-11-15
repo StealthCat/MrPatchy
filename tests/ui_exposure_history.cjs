@@ -1,14 +1,14 @@
 const assert=require('assert/strict');
-// Server Patching page: durable CVE exposure history card (#893). Read-only, admin-only, contained failures.
+// Server Patching page: durable CVE exposure history card (#893), with publication dates (#938). Read-only, admin-only, contained failures.
 module.exports=async(page,capture)=>{
  const host='exposure-host',other='exposure-other',now=Math.floor(Date.now()/1000),day=86400;
  const originalViewport=page.viewportSize();
  let role='admin',mode='fail',advisoryReads=[],release,started;
  const items=[
-  {advisory_id:'DSA-5999-1 <img src=x onerror=window.__exposureInjected=true>',package:'openssl',ecosystem:'Debian:12',cve_ids:['CVE-2026-0001','CVE-2026-0002'],state:'open',first_affected_at:now-9*day,first_affected_version:'3.0.11-1~deb12u1',last_affected_at:now-day,last_affected_version:'3.0.11-1~deb12u2',fixed_version:'3.0.15-1~deb12u1',last_observed_at:now-day,last_status:'affected',resolved_at:null,resolved_version:null,resolved_status:null,reopened:2},
-  {advisory_id:'DSA-5800-1',package:'curl',ecosystem:'Debian:12',cve_ids:['CVE-2026-1000'],state:'resolved',first_affected_at:now-30*day,first_affected_version:'7.88.1-10',last_affected_at:now-20*day,last_affected_version:'7.88.1-10',fixed_version:'7.88.1-10+deb12u5',last_observed_at:now-2*day,last_status:'fixed',resolved_at:now-19*day,resolved_version:'7.88.1-10+deb12u5',resolved_status:'fixed',reopened:0},
-  {advisory_id:'DSA-5700-1',package:'libxml2',ecosystem:'Debian:12',cve_ids:[],state:'resolved',first_affected_at:'yesterday',first_affected_version:'',last_affected_at:-5,last_affected_version:null,fixed_version:null,last_observed_at:now,last_status:'not-listed',resolved_at:now-3*day,resolved_version:'2.9.14',resolved_status:'not-listed',reopened:'many'},
-  {advisory_id:'DSA-5600-1',package:'zlib',cve_ids:['CVE-2026-2000'],state:'resolved',first_affected_at:now-40*day,first_affected_version:'1.2.13',last_affected_at:now-40*day,last_affected_version:'1.2.13',resolved_at:null,resolved_status:'fixed'},
+  {advisory_id:'DSA-5999-1 <img src=x onerror=window.__exposureInjected=true>',package:'openssl',ecosystem:'Debian:12',cve_ids:['CVE-2026-0001','CVE-2026-0002'],state:'open',first_affected_at:now-9*day,first_affected_version:'3.0.11-1~deb12u1',last_affected_at:now-day,last_affected_version:'3.0.11-1~deb12u2',fixed_version:'3.0.15-1~deb12u1',last_observed_at:now-day,last_status:'affected',resolved_at:null,resolved_version:null,resolved_status:null,reopened:2,published_at:now-12*day-3600,unmonitored_before_first_scan:3*day+3600},
+  {advisory_id:'DSA-5800-1',package:'curl',ecosystem:'Debian:12',cve_ids:['CVE-2026-1000'],state:'resolved',first_affected_at:now-30*day,first_affected_version:'7.88.1-10',last_affected_at:now-20*day,last_affected_version:'7.88.1-10',fixed_version:'7.88.1-10+deb12u5',last_observed_at:now-2*day,last_status:'fixed',resolved_at:now-19*day,resolved_version:'7.88.1-10+deb12u5',resolved_status:'fixed',reopened:0,published_at:now-30*day,unmonitored_before_first_scan:600},
+  {advisory_id:'DSA-5700-1',package:'libxml2',ecosystem:'Debian:12',cve_ids:[],state:'resolved',first_affected_at:'yesterday',first_affected_version:'',last_affected_at:-5,last_affected_version:null,fixed_version:null,last_observed_at:now,last_status:'not-listed',resolved_at:now-3*day,resolved_version:'2.9.14',resolved_status:'not-listed',reopened:'many',published_at:'2026-01-01',unmonitored_before_first_scan:day},
+  {advisory_id:'DSA-5600-1',package:'zlib',cve_ids:['CVE-2026-2000'],state:'resolved',first_affected_at:now-40*day,first_affected_version:'1.2.13',last_affected_at:now-40*day,last_affected_version:'1.2.13',resolved_at:null,resolved_status:'fixed',published_at:now-41*day,unmonitored_before_first_scan:-5},
   {advisory_id:'DSA-5500-1',package:'bash',cve_ids:[],state:'mystery',first_affected_at:now-50*day,first_affected_version:'5.2',last_affected_at:now-50*day,last_affected_version:'5.2',resolved_at:now,resolved_status:'other'}
  ];
  const coverage='Exposure history records when a manual advisory scan first and last classified each advisory. <b>This is version applicability, not evidence of exploitation.</b>';
@@ -53,11 +53,18 @@ module.exports=async(page,capture)=>{
   assert.match(first,/Package openssl · Vendor fix 3\.0\.15-1~deb12u1 · Reopened 2 times/);
   assert.match(first,/First affected .+ at version 3\.0\.11-1~deb12u1 · Last affected .+ at version 3\.0\.11-1~deb12u2/);
   assert.doesNotMatch(first,/Resolved/);
+  assert.match(first,/Published \d{4}-\d{2}-\d{2} \(UTC\) · Unmonitored for 3 days before the first affected scan \(a coverage gap, not measured exposure\)/);
+  assert.match(await rows.nth(1).textContent(),/Unmonitored for less than a day before the first affected scan/);
+  const fourth=await rows.nth(3).textContent();
+  assert.match(fourth,/Published \d{4}-\d{2}-\d{2} \(UTC\)/);
+  assert.doesNotMatch(fourth,/Unmonitored/,'a negative gap is never shown');
+  assert.doesNotMatch(await rows.nth(4).textContent(),/Published|Unmonitored/,'a missing date shows nothing');
   assert.match(await rows.nth(1).textContent(),/^Resolved DSA-5800-1 · CVE-2026-1000.*Resolved .+ at version 7\.88\.1-10\+deb12u5: a fixed version was observed\./);
   const third=await rows.nth(2).textContent();
   assert.match(third,/First affected Unknown at version Unknown · Last affected Unknown at version Unknown/);
   assert.match(third,/the advisory was no longer listed for the installed version\./);
   assert.doesNotMatch(third,/Reopened|Vendor fix/);
+  assert.doesNotMatch(third,/Published|Unmonitored/,'a non-numeric publication date is never shown');
   assert.match(await rows.nth(3).textContent(),/^Unknown state DSA-5600-1/,'resolved without a resolution time is not shown as resolved');
   assert.match(await rows.nth(4).textContent(),/^Unknown state DSA-5500-1/,'unrecognised state is not shown as resolved');
   assert.equal(await card.locator('img,b,script').count(),0);

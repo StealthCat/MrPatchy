@@ -3364,6 +3364,20 @@ The #911 view capped 50 rows per advisory but said "More affected servers are no
 - **Unchanged:** schema (no index was added, because nothing was measured to justify one), routes, roles and the read-only boundary. There are no scan, advisory-service, AI-provider or SSH calls.
 - **Validation:** `tests/test_cve_exposure_fleet.py` adds a one-server/six-package case and a statement spy showing that no query loads more than advisories × limit rows (main loaded 16 rows in one statement where the bound allows 6). It also proves that output under the limit is identical. `tests/ui_fleet_exposure.cjs` asserts the new wording.
 
+#### Advisory publication dates in the exposure history — worker checkpoint #938
+
+Before this checkpoint the durable exposure history (#858) and its Patching card (#893) never showed when an advisory was published, although each scan has stored the OSV `published_at` on its latest-scan applicability rows since #862. The coverage text said "advisory publication is not shown here".
+
+- **API:** `GET /api/operations/{host}/advisories` adds two fields to each `exposure_history` item:
+  - `published_at`: taken from the server's latest stored scan (`advisories:<host>`) for that advisory ID, by `advisories.publication_dates`;
+  - `unmonitored_before_first_scan`: `first_affected_at - published_at` in seconds.
+- **Fail closed:** a date is kept only when every applicability row for that advisory in the latest scan carries the same positive, finite epoch number. A missing, malformed or boolean value, or rows that disagree, give `null`. Invalid advisory IDs are ignored. The gap is `null` when either time is unknown or the publication is after the first affected scan (for example a re-issued record).
+- **Honest limits:** the coverage statement says where the date comes from, that it is omitted when the latest scan did not include the advisory, and that the unmonitored period is a coverage gap, not proof the server was exposed for all of it.
+- **UI:** the Patching **CVE exposure history** card adds "Published YYYY-MM-DD (UTC)" to each row with a valid date. Where a gap is known it adds "Unmonitored for N days before the first affected scan (a coverage gap, not measured exposure)". Anything unknown or malformed shows nothing.
+- **Unchanged:** the ledger, schema, routes, roles, scans, notifications, patch selection and response authorization. There are no OSV, AI-provider or SSH calls. The date is read from the stored latest scan, not persisted in the ledger. A resolved exposure whose advisory is absent from the latest scan therefore shows no date.
+- **Validation:** `tests/test_cve_exposure_publication.py` (15 cases) fails on main `3c65842` and passes on the branch. `tests/ui_exposure_history.cjs` adds valid, sub-day, non-numeric, negative-gap and missing cases.
+- **Remaining in requirement D:** scheduled scans, a full `exposure_window()` state per exposure, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**

@@ -2073,7 +2073,7 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
         from .advisories import retained,history
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
-        return {**result,'exposure_history':history(s,host_id)}
+        return {**result,'exposure_history':history(s,host_id,latest=result)}
 
 @app.get('/api/cve-exposure/fleet')
 def fleet_cve_exposure(user=Depends(admin_user)):

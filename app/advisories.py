@@ -1,6 +1,7 @@
 """Opt-in OSV queries using distro-specific source package versions."""
 import concurrent.futures
 import hashlib
+import math
 import re
 import time
 import httpx
@@ -170,8 +171,11 @@ HISTORY_LIMIT=500
 HISTORY_COVERAGE=('Exposure history records when a manual advisory scan first and last classified each advisory as '
     'affecting the installed source version, and when a later scan of the same package first observed a fixed or '
     'unaffected version, or the advisory was no longer listed for the installed version. Times between scans are '
-    'telemetry gaps: exposure may have started before the first affected scan (advisory publication is not shown here) '
-    'and ended at any point before the resolving scan. Version resolution is not verified effective installation: '
+    'telemetry gaps: exposure may have started before the first affected scan and ended at any point before the '
+    'resolving scan. The publication date comes from the advisory record fetched by this server\'s latest scan and is '
+    'omitted when that scan did not include the advisory or its records disagree; the unmonitored period from '
+    'publication to the first affected scan is a gap in coverage, not proof the server was exposed for all of it. '
+    'Version resolution is not verified effective installation: '
     'required service restarts or reboots are not confirmed. "uncertain" never resolves an exposure, and packages not '
     'included in a scan are never resolved by it. This is version applicability, not evidence of exploitation.')
 
@@ -268,7 +272,34 @@ def record_history(session,host_id,result,now=None):
         entry.resolved_at=now;entry.resolved_version=version;entry.resolved_status=NOT_LISTED
 
 
-def history(session,host_id,limit=HISTORY_LIMIT):
+def publication_dates(result):
+    """Map advisory IDs to the publication time recorded by one stored scan.
+
+    A date is kept only when every applicability row for that advisory carries
+    the same positive, finite epoch value; a missing, malformed or conflicting
+    value maps to None rather than a guess.
+    """
+    dates={}
+    results=result.get('results') if isinstance(result,dict) else None
+    for item in results if isinstance(results,list) else ():
+        rows=item.get('applicability') if isinstance(item,dict) else None
+        for row in rows if isinstance(rows,list) else ():
+            if not isinstance(row,dict):continue
+            advisory_id=row.get('advisory_id')
+            if not isinstance(advisory_id,str) or not _ADVISORY_ID.fullmatch(advisory_id):continue
+            value=row.get('published_at')
+            valid=type(value) in (int,float) and math.isfinite(value) and value>0
+            if advisory_id not in dates:dates[advisory_id]=value if valid else None
+            elif dates[advisory_id]!=value or not valid:dates[advisory_id]=None
+    return dates
+
+
+def _unmonitored(published,first_affected):
+    if published is None or not first_affected or published>first_affected:return None
+    return first_affected-published
+
+
+def history(session,host_id,limit=HISTORY_LIMIT,latest=None):
     # Open exposures sort first so the page cap never hides one behind newer
     # resolved pairs, and the open total is counted independently of the cap.
     rows=session.scalars(select(ExposureHistory).where(ExposureHistory.host_id==host_id).order_by(
@@ -276,13 +307,17 @@ def history(session,host_id,limit=HISTORY_LIMIT):
         ExposureHistory.id).limit(limit+1)).all()
     open_count=session.scalar(select(func.count()).select_from(ExposureHistory).where(
         ExposureHistory.host_id==host_id,ExposureHistory.resolved_at==0)) or 0
+    published=publication_dates(latest)
     items=[{'advisory_id':row.advisory_id,'package':row.package,'ecosystem':row.ecosystem,
             'cve_ids':[c for c in (row.cve_ids or '').split(',') if c],'state':'resolved' if row.resolved_at else OPEN,
             'first_affected_at':row.first_affected_at,'first_affected_version':row.first_affected_version,
             'last_affected_at':row.last_affected_at,'last_affected_version':row.last_affected_version,
             'fixed_version':row.fixed_version or None,'last_observed_at':row.last_observed_at,'last_status':row.last_status,
             'resolved_at':row.resolved_at or None,'resolved_version':row.resolved_version or None,
-            'resolved_status':row.resolved_status or None,'reopened':row.reopened or 0} for row in rows[:limit]]
+            'resolved_status':row.resolved_status or None,'reopened':row.reopened or 0,
+            'published_at':published.get(row.advisory_id),
+            'unmonitored_before_first_scan':_unmonitored(published.get(row.advisory_id),row.first_affected_at)}
+            for row in rows[:limit]]
     return {'items':items,'truncated':len(rows)>limit,'open':int(open_count),
             'coverage':HISTORY_COVERAGE}
 
