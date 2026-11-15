@@ -6,12 +6,19 @@ nothing and never contacts a provider. It describes the ceilings Mr Patchy's own
 controls enforce; provider limits, finite concurrency, pause, lifecycle, roles and
 data sharing apply in every mode and are not modelled here.
 """
+import hashlib
+import json
 from decimal import Decimal, InvalidOperation
 
 from .ai_control_status import AUTO_PLAN_HOURLY_LIMIT
 
 FIELDS = ('ai_control_mode', 'ai_rate_per_hour', 'ai_daily_cap_usd', 'ai_budget_timezone',
           'ai_hourly_limit', 'ai_update_hourly_limit', 'ai_updates_enabled')
+# The master AI switch is compared too: turning AI on starts paid provider calls, so it is an
+# expansion. It is kept out of FIELDS because ceilings() and the stored-controls revision model
+# only the admission/spend ceilings, and callers that compare controls alone need not supply it.
+ENABLE_FIELD = 'ai_enabled'
+PREVIEW_FIELDS = FIELDS + (ENABLE_FIELD,)
 RATE_MODES = ('rate', 'rate_and_daily')
 CAP_MODES = ('daily_cap', 'rate_and_daily')
 MODE_LABELS = {
@@ -28,7 +35,7 @@ PURPOSES = (
 )
 LIMITATION = ('Preview compares Mr Patchy rate and spend ceilings only. Provider limits, finite concurrency, '
               'global and per-server pause, lifecycle, roles and data sharing still apply in every mode. '
-              'Saving through the API without previewing is still accepted and audited.')
+              'Saving an expansion requires the confirmation this preview returns.')
 
 
 def _money(value):
@@ -94,6 +101,8 @@ def compare(stored, proposed):
     def add(text, expands):
         effects.append({'text': text, 'expands': bool(expands)})
 
+    if ENABLE_FIELD in stored and not stored[ENABLE_FIELD] and proposed.get(ENABLE_FIELD, stored[ENABLE_FIELD]):
+        add('AI is enabled and Mr Patchy starts making paid provider calls within the ceilings below.', True)
     if before['mode'] != after['mode']:
         expands = after['mode'] == 'unthrottled'
         text = f"Admission mode changes from {before['mode_label']} to {after['mode_label']}."
@@ -135,6 +144,20 @@ def audit_suffix(stored, proposed):
     """Return the audit detail suffix naming every expansion, or an empty string."""
     expansions = compare(stored, proposed)['expansions']
     return ('; expands AI admission or spend: ' + ' '.join(expansions)) if expansions else ''
+
+
+def expansion_confirmation(stored_revision, expansions):
+    """Return the opaque confirmation an expanding save must carry, or ``None``.
+
+    It binds the stored controls revision to the exact expansion list, so it cannot
+    be replayed after the stored controls change or used for a different expansion.
+    It is a digest of non-secret values, not an authorization credential: the save
+    still requires an authenticated administrator and CSRF protection.
+    """
+    if not expansions:
+        return None
+    payload = json.dumps([stored_revision, list(expansions)], separators=(',', ':'), ensure_ascii=True)
+    return hashlib.sha256(('mrpatchy-ai-expansion-v1:' + payload).encode()).hexdigest()
 
 
 def legacy_migration(values):
