@@ -3578,6 +3578,37 @@ provider call or response authorization was added or changed.
 Remaining for requirement E: per-server and group overrides, plus every item
 listed under #682 apart from this fleet-level storage and UI.
 
+### Per-server restrict-only malware response overrides — worker checkpoint #940
+
+Status: **bounded backend and UI slice; requirement E remains planned/incomplete.**
+An administrator can store one override per server in the `Setting` row
+`malware-response-server:<host_id>`. Nothing evaluates it at runtime.
+- **Restrict-only:** an override has a `mode_cap` (`inherit`, `monitor_only`
+  or `disabled`) and extra path/hash exclusions. The effective policy is the
+  fleet policy with its mode lowered to the cap and both sets of exclusions
+  combined. Action scopes, the unknown-malware opt-in and thresholds always
+  come from the fleet policy, so an override never adds authority.
+- **Fail closed:** a stored override that no longer validates resolves to
+  `disabled` for that server. Combined exclusions over the contract limit
+  resolve to the disabled default with a reported reason.
+- **API:** admin-only `GET/PUT /api/hosts/{id}/malware-response`. It returns the
+  override, revision, fleet policy and effective policy. A save is a
+  compare-and-set under the existing `malware-response-policy` lock and writes
+  one audit entry naming the cap change and exclusion counts, never the paths
+  or hashes. An unknown server returns 404.
+- **UI:** administrators see an "Automatic malware response for this server"
+  panel on the server's Security tab. It shows the fleet mode, the effective
+  mode and exclusion counts, offers only the restricting caps, explains invalid
+  stored state and keeps entries in the form after a refused or stale save.
+  `tests/ui_server_malware_override.cjs` covers save, refusal, stale saves,
+  escaping, load failure and 320/768/1440 px widths.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization was added, and `enforce` stays unavailable.
+
+Remaining: group overrides,
+fleet-level visibility of overridden servers, and every runtime item under
+#682.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse

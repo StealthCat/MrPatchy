@@ -110,6 +110,8 @@ EXPECTED_ROLES = {
     ('POST','/api/hosts/{host_id}/security/plans/{plan_id}/approve'):'admin',
     ('GET','/api/hosts/{host_id}/security/policy'):'admin',
     ('PUT','/api/hosts/{host_id}/security/policy'):'admin',
+    ('GET','/api/hosts/{host_id}/malware-response'):'admin',
+    ('PUT','/api/hosts/{host_id}/malware-response'):'admin',
     ('GET','/api/hosts/{host_id}/security/process-responses'):'admin',
     ('POST','/api/hosts/{host_id}/security/process-responses/{process_id}/actions/{action}'):'admin',
     ('GET','/api/hosts/{host_id}/security/process-responses/{process_id}/history'):'admin',
