@@ -8591,14 +8591,15 @@ The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as met
   - **Statuses:** each entry is classified `enabled`, `hidden`, `disabled`, `conditional`, `invalid` or `unknown`.
     - `hidden`: `Hidden=true`, which also suppresses the shadowed system file.
     - `disabled`: `X-GNOME-Autostart-enabled=false`.
-    - `conditional`: `OnlyShowIn`/`NotShowIn`/`TryExec`. These depend on the session and are never guessed.
+    - `conditional`: `OnlyShowIn`/`NotShowIn`/`TryExec`, or GNOME `AutostartCondition`. These depend on the session and are never guessed.
   - **Exec:** the value is tokenized with the spec's quoting rules and expanded with autostart field codes into `argv`/`program`.
 - **Gaps, never reported as covered:**
   - an uncollected higher-precedence directory (`precedence_uncertain`);
   - unreadable or oversized files;
   - malformed lines and duplicate keys;
   - unbalanced `Exec` quoting (no argv is guessed) and unknown or embedded field codes;
+  - reserved characters outside double quotes in `Exec`, such as `'`, `\`, `|`, `;` or `$` (`exec_unquoted_reserved`). The spec leaves these undefined and GIO applies shell quoting to them, so no argv is guessed for `sh -c '…'`;
   - invalid names, and the 512-entry, 64 KiB and 4096-character caps.
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
-- **Validation:** `tests/test_xdg_autostart.py` has 12 tests. They cannot run on main, where the module does not exist, and they pass on the branch.
+- **Validation:** `tests/test_xdg_autostart.py` has 17 tests. They cannot run on main, where the module does not exist, and they pass on the branch. Four review-follow-up regressions fail on the earlier head `78168b5`: `sh -c '…'`, an unquoted backslash, each reserved character, and `AutostartCondition`.
 - **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.

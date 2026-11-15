@@ -18,14 +18,18 @@ and *Desktop Entry Specification*:
 * ``OnlyShowIn``/``NotShowIn`` and ``TryExec`` depend on the login session's
   desktop and ``PATH``, which are not observed here, so such entries are
   ``conditional`` rather than guessed as enabled or disabled.
-* ``X-GNOME-Autostart-enabled=false`` is reported as ``disabled``. It is a
-  GNOME session-manager extension, recorded with that provenance.
+* ``X-GNOME-Autostart-enabled=false`` is reported as ``disabled`` and a GNOME
+  ``AutostartCondition`` makes the entry ``conditional``. Both are GNOME
+  session-manager extensions, recorded with that provenance.
+* Reserved characters (``'``, ``\\``, ``|``, ``;``, ``$`` …) outside double
+  quotes in ``Exec`` are undefined by the specification and interpreted
+  differently by launchers, so they are a gap and no argv is reported.
 
 It performs no I/O, never executes an entry and never authorizes a response
 action. Anything it cannot resolve exactly (an uncollected directory above a
-found file, unreadable or oversized text, malformed lines, unbalanced ``Exec``
-quoting, unknown field codes, over-cap inputs) is an explicit coverage gap and
-is never reported as covered. A ``system`` origin means only "found in a
+found file, unreadable or oversized text, malformed lines, unbalanced or
+unquoted-reserved ``Exec`` quoting, unknown field codes, over-cap inputs)
+is an explicit coverage gap and is never reported as covered. A ``system`` origin means only "found in a
 system configuration directory", never "verified unchanged package default".
 """
 from __future__ import annotations
@@ -47,6 +51,10 @@ _VALUE_ESCAPES = {'s': ' ', 'n': '\n', 't': '\t', 'r': '\r', '\\': '\\'}
 # Field codes with no value at login autostart (no files/URLs are passed) and
 # deprecated codes the spec says to ignore.
 _DROPPED_CODES = set('fFuUdDnNvm')
+# Desktop Entry reserved characters that must appear inside double quotes.
+# Unquoted use is undefined by the specification and launchers disagree (GIO
+# applies shell quoting to ``'`` and ``\\``), so argv is never guessed.
+_RESERVED_UNQUOTED = set("'\\><~|&;$*?#()`")
 
 
 def _gap(kind: str, detail: str, **extra: Any) -> dict[str, Any]:
@@ -185,6 +193,11 @@ def split_exec(value: str, *, icon: str | None = None, name: str | None = None,
             in_quotes = True
             in_token = True
             quoted = True
+        elif ch in _RESERVED_UNQUOTED:
+            gaps.append(_gap('exec_unquoted_reserved',
+                             f'Exec has an unquoted reserved character {ch!r}; launchers interpret it '
+                             'differently, so argv was not guessed.'))
+            return {'argv': None, 'program': None, 'gaps': gaps}
         elif ch in ' \t\n':
             if in_token:
                 tokens.append((''.join(cur), quoted))
@@ -263,6 +276,7 @@ def _classify(path: str, keys: dict[str, str], has_group: bool) -> tuple[str, li
         'not_show_in': _split_list(keys['NotShowIn']) if 'NotShowIn' in keys else [],
         'argv': None,
         'program': None,
+        'autostart_condition': None,
         'exec_gaps': [],
     }
     if not has_group:
@@ -286,6 +300,10 @@ def _classify(path: str, keys: dict[str, str], has_group: bool) -> tuple[str, li
         reasons.append('NotShowIn excludes: ' + ', '.join(details['not_show_in']) + '.')
     if details['try_exec']:
         reasons.append(f"TryExec requires {details['try_exec']} to be executable at login.")
+    if 'AutostartCondition' in keys:
+        details['autostart_condition'] = _unescape(keys['AutostartCondition'])
+        reasons.append(f"AutostartCondition={details['autostart_condition']} "
+                       '(GNOME session manager extension) decides whether it starts.')
     if reasons:
         return 'conditional', reasons, details
     return 'enabled', ['Starts at login for any desktop session that implements XDG autostart.'], details
