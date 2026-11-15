@@ -2602,6 +2602,34 @@ the panel offers **Retry blocked scores**, backed by the admin-only, CSRF-protec
 - **Unchanged:** schema, roles, response authorization and SMTP/webhook alerts.
   Blocked advisory-plan work is still not covered.
 
+Worker checkpoint #917 adds a read-only update-scoring queue summary. Process
+triage already reported its queue through `/api/investigation-status`. Update
+scoring showed only the blocked count. The admin-only
+`GET /api/update-scores/status` and the `ai_scoring_queue` field of admin
+`GET /api/settings` now classify each current-candidate update on an active,
+unpaused server exactly once. The classes are complete, running, eligible now,
+deferred (shared admission), retry wait (error within the hourly retry) and
+blocked (the #815 predicate).
+- **Classification:** it uses `update_scores.run_one`'s skip rules.
+- **Duplicates:** when more than one non-superseded row matches an update's
+  installed/candidate pair, the most advanced class wins.
+- **Timestamps:** the summary reports the next finite deferred or retry
+  eligibility and the oldest unscored `available_since`.
+- **Other counts:** updates on AI-paused servers are counted separately and never
+  as eligible. A scheduler state explains disabled AI, disabled scoring or a
+  missing model/key.
+- **Settings → AI:** the summary appears beside the scoring toggle. It states that
+  shared start gates, pause and the daily cap still decide when a batch starts,
+  and that scores are advisory.
+- **Unchanged:** the payload holds only counts, timestamps and fixed text: no
+  package names, evidence, explanations, provider text or key material. It sends
+  no provider request. Schema, admission, reservations, retries, roles and
+  response authorization are unchanged.
+- **Limitation:** rows are matched by server, package and versions. The
+  scheduler also binds scoring context such as the OS release, so an update
+  whose context changed can still be rescored while it is shown as complete.
+  Investigations and worker-health surfaces do not show the scoring queue yet.
+
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.

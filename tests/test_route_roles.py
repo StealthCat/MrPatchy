@@ -18,6 +18,7 @@ EXPECTED_ROLES = {
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
     ('POST','/api/ai/provider-backoff/clear'):'admin',
     ('GET','/api/update-scores/blocked'):'admin',
+    ('GET','/api/update-scores/status'):'admin',
     ('POST','/api/update-scores/blocked/retry'):'admin',
     ('GET','/api/ai/triage/timings'):'admin',
     ('GET','/api/ai/runs'):'admin',
