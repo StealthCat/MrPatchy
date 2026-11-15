@@ -2406,6 +2406,21 @@ admission/spend controls still apply when they run. This delivers the
 "selected" part of explicit Re-triage only. Fleet-wide selection across pages
 and cache-hit filters remain open.
 
+Worker checkpoint #932 keeps the bulk Re-triage selection across pages and the
+**Show** filter. Each Investigations view (the fleet view, or one server's view)
+has its own in-memory selection, discarded on a session change, a successful
+submit or **Clear selection**. The bar reports how many selected items are on
+other pages or filters. It stays visible while a selection exists, even when the
+current page has nothing selectable. The selection stops at the endpoint's
+existing 50-item limit: further boxes are disabled with an explanation. A
+selected row that returns with a different revision, or that is no longer
+complete, is dropped and shown unchecked rather than resubmitted with a stale or
+swapped revision. Submission still uses `POST /api/investigations/retriage`
+with its all-or-nothing server-side checks. This is frontend-only, with no API,
+schema, admission, spend, pause, approval or authorization change. Selecting
+every matching row server-side without visiting its page, or more than 50 at
+once, remains open.
+
 Worker checkpoint #924 adds a cache-hit filter to the Investigations list. On the
 fleet and per-server Investigations pages, **Show → Cached known good** requests
 `GET /api/investigations?cached=true`. That returns only rows whose current state
