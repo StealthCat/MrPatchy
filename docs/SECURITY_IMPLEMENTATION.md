@@ -3776,6 +3776,33 @@ environment. It can carry `config_home`, `data_home` and `cache_home`, plus
 - **Still open:** manager-environment collection, lingering/runtime state,
   account enumeration, collection wiring, UI and AI classification.
 
+### Effective APT configuration hooks — worker checkpoint #950
+
+Contract-only; roadmap F remains incomplete. `app/apt_hooks.py` resolves the
+effective command-executing APT options from captured `/etc/apt/apt.conf.d`
+entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
+
+- **Files:** APT `Dir::Etc::Parts` rules decide which files are read: hidden and
+  non-regular entries are skipped; a name needs no extension or `.conf` and only
+  `[A-Za-z0-9_.:-]`; default `Dir::Ignore-Files-Silently` patterns are silent.
+  Files are read in byte order and `apt.conf` last. Ignored files are listed.
+- **Syntax:** `//`, `/* */` and `#` comments, scalar and unquoted values, nested
+  blocks, list items, `#clear` and `#include`; keys are case-insensitive. Later
+  scalars and tagged children override; untagged items append.
+- **Reported options:** `command` (Update/DPkg Invoke lists and
+  `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
+  (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
+  `path_override` (`DPkg::Path`) and `dpkg_options`, each with source file and
+  line. `Binary::<program>::` copies carry that scope. A scalar on a hook list
+  node is reported inert because APT never runs it.
+- **Fail closed:** syntax errors (including a quoted value left open at the end
+  of a line), unfollowed `#include`, unreadable or oversized files, directory
+  overrides, over-cap input and uncollected files make APT behavior
+  `undetermined`. Hooks parsed before an error stay visible. The unobservable
+  `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog `entries_parsed` wiring,
+  inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
+
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
 Discovery increment only; the startup-awareness requirement remains incomplete.
