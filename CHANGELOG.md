@@ -1,3 +1,7 @@
+## 1.73.1 — 2026-11-15
+
+1. [PR #945](https://github.com/StealthCat/MrPatchy/pull/945): Fix whole-microsecond rounding so scan-coverage `first_seen` and security-policy `enabled_since` markers never land after their observation time; also add deterministic and seeded property regressions. Compatibility: no schema, API, role or authorization change, and already-stored markers remain unchanged. Limits: marker precision remains whole microseconds; the representation may be less than one microsecond earlier than the observation. Resolves [issue #942](https://github.com/StealthCat/MrPatchy/issues/942).
+
 ## 1.73.0 — 2026-11-15
 
 1. [PR #944](https://github.com/StealthCat/MrPatchy/pull/944): Add a GCP join-worker installer mode for 1–16 replicas on the same Docker host as a controller-only installation. The installer reuses the controller's rendered project, identity, data volume and database; the worker wrapper refuses to target the controller Compose project. Compatibility: additive; complete and controller installation modes remain unchanged, with no application runtime, schema, role or response-authorization change. Limits: same host only; live `docker compose up` was not exercised without a Docker daemon; remote-machine workers and multi-host acceptance remain outside this roadmap slice (#943 remains open).
