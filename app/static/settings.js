@@ -4,7 +4,8 @@ const SETTINGS_SECTIONS={
  patching:['Patch policy','Repository checks and priority deadlines.','repository checks interval deadlines critical high normal low priority overdue'],
  database:['Database','MySQL connection details and offline migrations.','mysql sqlite connection migration host port password'],
  https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
- history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup']
+ history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup'],
+ malware:['Malware response','Fleet automatic-response policy for detected malware. Recorded only; not enforced yet.','malware quarantine terminate containment automatic response exclusions signature unknown policy']
 };
 function settingsMatches(query,sections=SETTINGS_SECTIONS){
  const terms=String(query||'').toLowerCase().split(/\s+/).filter(Boolean);
@@ -32,6 +33,7 @@ async function settings(revision=renderRevision){
   input.oninput=draw;draw();return;
  }
  if(section==='ai'){renderAISettings(data,revision,container);return;}
+ if(section==='malware'){container.innerHTML='<div class="card" id="malware-policy"><p class="help">Loading malware response policy…</p></div>';await malwarePolicySettings(revision);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
  if(section==='https'){
   container.innerHTML=`<div class="card"><h2>HTTPS profiles</h2><p>Configure independent internal and external profiles with uploaded certificates, ACME, or the built-in local CA.</p><p>${Object.entries(data.tls.profiles||{}).filter(([,p])=>p.enabled).map(([name,p])=>esc(name+': '+p.domain+' · browser port '+p.effective_https_port)+' · '+badge(p.mode)).join('<br>')||'Initial HTTPS configured by deployment'}</p><button type="button" id="tls-button">Configure HTTPS →</button></div>`;
@@ -293,4 +295,44 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
    finally{if(button.isConnected)button.disabled=false;}
   };
  }catch(error){if(currentView(revision,'settings')&&container.isConnected)container.innerHTML=PatchyUI.error('Could not load database settings',esc(error.message));}
+}
+const MALWARE_ACTION_LABELS={quarantine_file:'Quarantine the verified file',terminate_process:'Terminate the verified process'};
+const MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only (record what would happen)',enforce:'Enforce (unavailable)'};
+function malwarePolicyForm(data){
+ const p=data.policy,l=data.limits,actions=(name,chosen)=>data.actions.map(a=>`<label class="check"><input type="checkbox" name="${name}" value="${esc(a)}" ${chosen.includes(a)?'checked':''}><span>${esc(MALWARE_ACTION_LABELS[a]||a)}<br><small class="help">${esc(data.effects[a]||'')}</small></span></label>`).join('');
+ const modes=data.modes.map(m=>{const off=m==='enforce'&&!data.enforcement_available;return `<option value="${esc(m)}" ${m===p.mode?'selected':''} ${off?'disabled':''}>${esc(MALWARE_MODE_LABELS[m]||m)}</option>`;}).join('');
+ return `<form id="malware-policy-form" class="card"><h2>Fleet malware automatic response</h2>
+<div class="notice" id="malware-enforcement-notice"><strong>Not enforced.</strong> No containment executor exists yet, so this policy is recorded and audited but never quarantines a file or terminates a process. Enforce stays unavailable until an executor is delivered and reviewed.</div>
+${data.stored_invalid?`<div class="notice" id="malware-invalid-notice" role="alert"><strong>The stored policy is invalid and is treated as Disabled.</strong> ${esc(data.stored_invalid_reason||'')}. Saving replaces it.</div>`:''}
+<p class="help">A detection qualifies only under the contract's checks: authenticated, fresh signatures bound to the artifact hash, or a bound AI malicious verdict with independent corroborating evidence. AI output alone never authorizes an action. Unknown-malware responses also need AI to be available and unpaused for that server; signature matches do not.</p>
+<fieldset><label>Mode<select name="mode">${modes}</select></label>
+<p class="help" id="malware-enforce-help">Enforce is shown for clarity but disabled: saving it is refused while no executor exists.</p>
+<fieldset class="malware-actions"><legend>Known malware (signature or indicator match)</legend>${actions('known_actions',p.known_actions)}</fieldset>
+<fieldset class="malware-actions"><legend>Unknown malware (evidence-supported AI discovery)</legend><label class="check"><input type="checkbox" name="allow_unknown" ${p.allow_unknown?'checked':''}> Allow responses to evidence-supported unknown malware</label>${actions('unknown_actions',p.unknown_actions)}</fieldset>
+<div class="form-grid"><label>Minimum AI confidence<input name="min_ai_confidence" type="number" min="${l.min_ai_confidence}" max="1" step="0.01" value="${esc(p.min_ai_confidence)}" required></label>
+<label>Corroborating evidence kinds<input name="min_corroborating_kinds" type="number" min="${l.min_corroborating_kinds}" max="${l.max_corroborating_kinds}" step="1" value="${esc(p.min_corroborating_kinds)}" required></label>
+<label>Maximum signature age · seconds<input name="max_signature_age_seconds" type="number" min="1" max="${l.max_signature_age_seconds}" step="1" value="${esc(p.max_signature_age_seconds)}" required></label></div>
+<label>Excluded paths · one absolute path per line<textarea name="excluded_paths" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_paths.join('\n'))}</textarea></label>
+<label>Excluded SHA-256 hashes · one per line<textarea name="excluded_sha256" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_sha256.join('\n'))}</textarea></label>
+<p class="help">Path exclusions also match a process's verified executable path. At most ${esc(l.max_exclusions)} of each.</p>
+<button type="submit" class="primary">Save malware response policy</button></fieldset><p class="help" role="status" id="malware-policy-result"></p></form>`;
+}
+async function malwarePolicySettings(revision){
+ const container=$('#malware-policy'),alive=()=>currentView(revision,'settings')&&container.isConnected;
+ try{
+  let data=await api('/settings/malware-response');if(!alive())return;
+  container.outerHTML=malwarePolicyForm(data);
+  const form=$('#malware-policy-form'),result=$('#malware-policy-result'),ok=()=>currentView(revision,'settings')&&result.isConnected;
+  const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  form.onsubmit=async event=>{
+   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
+   const policy={mode:f.get('mode'),known_actions:f.getAll('known_actions'),unknown_actions:f.getAll('unknown_actions'),allow_unknown:f.has('allow_unknown'),
+    min_ai_confidence:+f.get('min_ai_confidence'),min_corroborating_kinds:+f.get('min_corroborating_kinds'),max_signature_age_seconds:+f.get('max_signature_age_seconds'),
+    excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
+   fieldset.disabled=true;result.textContent='Saving…';
+   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();}}
+   catch(error){if(ok())result.textContent='Malware response policy was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload Settings to see the current saved policy.':'');}
+   finally{if(fieldset.isConnected)fieldset.disabled=false;}
+  };
+ }catch(error){if(alive())container.innerHTML=PatchyUI.error('Could not load the malware response policy',esc(error.message));}
 }

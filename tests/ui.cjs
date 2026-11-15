@@ -46,6 +46,7 @@ const assert=require('assert/strict');
     assert.equal(await page.locator('#modal-body a[download]').count(),1);
     await page.locator('#close-modal').click();
     await require('./ui_schedules.cjs')(page,capture);
+    await require('./ui_settings_malware.cjs')(page,capture);
     await page.locator('[data-nav=settings]').click();
     await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
     await capture('settings');
