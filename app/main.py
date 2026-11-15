@@ -3453,6 +3453,27 @@ def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
     except malware_policy.StalePolicy:raise HTTPException(409,'The malware response policy changed; refresh before saving')
     except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
 
+class ServerMalwareOverrideInput(BaseModel):
+    model_config={'extra':'forbid'}
+    override:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/hosts/{host_id}/malware-response')
+def server_malware_policy_read(host_id:str,user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:
+        host_or_404(s,host_id);return malware_policy.server_state(s,host_id)
+
+@app.put('/api/hosts/{host_id}/malware-response')
+def server_malware_policy_update(host_id:str,body:ServerMalwareOverrideInput,user=Depends(admin_user)):
+    """Save a restrict-only server override (#940); it never adds response authority."""
+    from . import malware_policy,malware_response
+    with Session() as s:host_or_404(s,host_id)
+    try:return malware_policy.save_server(host_id,body.override,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid server malware response override: '+str(exc))
+    except malware_policy.StalePolicy:raise HTTPException(409,'The server malware response override changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
+
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
     from . import agent_maintenance
