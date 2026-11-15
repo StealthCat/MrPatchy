@@ -415,6 +415,22 @@ def test_bulk_retriage_refuses_running_investigations(admin):
     assert bulk(admin,items).status_code==200
 
 
+def test_bulk_retriage_names_active_provider_retry_after_as_a_refusal(admin):
+    seed_many()
+    items=selection(admin)
+    with Session() as s:
+        s.add(ai_retry.TriageRetry(subject='subject-1',configuration='c',state='deferred',provider_until=time.time()+600,reason='Provider asked to wait'))
+        s.commit()
+    response=bulk(admin,items)
+    assert response.status_code==409,response.text
+    detail=response.json()['detail']
+    assert detail.startswith('Nothing was queued. 1 selected') and '/srv/fixture-1: Provider Retry-After is still active' in detail
+    assert queued_ids()==[]
+    with Session() as s:assert s.get(Behavior,'subject-0').verdict=='low'
+    with Session() as s:s.get(ai_retry.TriageRetry,'subject-1').provider_until=time.time()-1;s.commit()
+    assert bulk(admin,items).status_code==200 and queued_ids()==['subject-0','subject-1','subject-2']
+
+
 @pytest.mark.parametrize('role',['viewer','operator'])
 def test_bulk_retriage_is_admin_only(admin,role):
     seed_many();items=selection(admin)

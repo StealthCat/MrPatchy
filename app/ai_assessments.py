@@ -94,6 +94,9 @@ def refusal(s,row,expected,withdraw_approval):
     if row.verdict not in COMPLETE:return 'Re-triage requires a completed assessment; use Retry for failed or pending work'
     if s.get(Refresh,row.id):return 'A re-triage request already exists'
     if row.approved and not withdraw_approval:return 'Explicitly confirm withdrawal of the current approval before re-triage'
+    from .ai_retry import TriageRetry
+    retry=s.get(TriageRetry,row.id)
+    if retry and retry.provider_until>time.time():return 'Provider Retry-After is still active; retry after the displayed eligibility time.'
     return ''
 
 
