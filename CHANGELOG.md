@@ -1,3 +1,7 @@
+## 1.62.2 — 2026-11-15
+
+1. [PR #910](https://github.com/StealthCat/MrPatchy/pull/910): Update FastAPI to 0.162.5, PyMySQL to 1.2.4 and Authlib to 1.9.5, with regenerated wheel and source-distribution hashes in the runtime lock. Compatibility: patch-level dependency updates; no application API, schema, configuration or deployment changes. Limitation: Authlib 1.9.5 emits a non-fatal httpx deprecation warning, and the separate httpx2 migration is not included; local validation used CPython 3.15 beta.
+
 ## 1.62.1 — 2026-11-15
 
 1. [PR #899](https://github.com/StealthCat/MrPatchy/pull/899): Investigation cards now identify verdicts reused from the exact-match fleet known-good cache. Administrators get links to the reuse record and source assessment; other roles receive only the cached flag. The additive `known_good_reuse` API field is present only when the newest retained assessment matches the row's exact current state and came from a known-good reuse; later provider results, re-triage or changed evidence clear it. Compatibility: no schema change and no change to approval, trust, role or response authorization. Limitation: source links work only while source records remain retained; production acceptance is not measured. Fixes #897.
