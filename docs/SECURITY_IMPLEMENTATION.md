@@ -8777,6 +8777,14 @@ This delivers the "configurable advance-warning window before an end date" item 
 - **Compatibility:** existing installations get the 90-day default. A server with fewer than 90 days of standard or verified LTS support left receives one low-severity notice after upgrade.
 - **Remaining (#341):** Ubuntu Pro entitlement discovery, RPM/vendor catalog coverage, catalog refresh and signing, the migration queue and plans, fleet filters and reports, and real-target acceptance.
 
+### Shared AI start gates on AI activity — worker checkpoint #914
+
+Roadmap A requires AI activity to show the blocked reason and next eligible start, not only Investigations. Before this checkpoint the admin-only **Shared AI start gates** card (#727) rendered only on `#investigations`. The fleet AI activity page listed deferred runs but did not say why new provider calls were held.
+- **Change:** the fleet `#ai-logs` page adds the same card for administrators, after the AI worker status card and before the timing and known-good panels and run filters. It reuses `GET /api/settings/ai-control-status` and the existing renderer, including legacy per-purpose allowances, the fixed limitations and **Refresh start gates**. `loadAiControlGates` now takes the view it belongs to, so a response that arrives after the administrator leaves either page is discarded.
+- **Unchanged:** the API, schema, roles, admission, reservations and response authorization. Viewers are still routed away from `#ai-logs` and never request the snapshot. Per-server AI tabs do not show the card, because the snapshot is fleet-wide.
+- **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
+
 ### Never-scanned legacy scan policies in coverage notifications — worker checkpoint #883
 
 The first #841 limitation: a policy saved before `enabled_since` existed stayed silent forever while its server had never had a `security-scan` attempt, unless an administrator happened to re-save it.
