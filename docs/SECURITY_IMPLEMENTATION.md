@@ -3358,6 +3358,39 @@ Remaining for requirement E:
 - alerts and incidents, false-positive recovery, and real-target and
   benign-lookalike acceptance drills.
 
+### Persisted fleet malware response policy — worker checkpoint #898
+
+Status: **bounded slice; requirement E remains planned/incomplete.** Administrators
+can view and save one fleet-wide policy for the #682 contract in Settings →
+Malware response. Nothing evaluates it at runtime: no detector, executor,
+provider call or response authorization was added or changed.
+
+- `app/malware_policy.py` stores the policy in the `Setting` row
+  `malware-response-policy`. There is no schema change.
+  - `GET /api/settings/malware-response` (admin) returns the policy normalized by
+    `malware_response.normalize_policy`, an opaque revision digest, the contract
+    version, the action-effect texts, limits and `enforcement_available: false`.
+  - With no row, the policy is the contract default: `disabled` with empty scopes.
+- `PUT /api/settings/malware-response` (admin, CSRF) validates with the same
+  contract. A malformed policy returns 400 and writes nothing.
+- `enforce` is refused with 409 while no executor exists. A stored `enforce` row
+  is reported as invalid and treated as disabled, so a later executor cannot
+  inherit an enforcement choice nobody confirmed for live use.
+- A save is a compare-and-set on the revision under the cross-worker lock
+  `malware-response-policy`. A stale or concurrent save, or a held lock, returns
+  409. Each successful save writes exactly one audit entry. The entry names the
+  changed fields, any mode transition and the exclusion counts, never the
+  excluded paths or hashes.
+- A stored row that no longer validates is reported as `disabled` with
+  `stored_invalid: true` and a reason, and `malware_policy.current()` returns the
+  disabled default. Saving with the reported revision replaces it.
+- The Settings section shows the mode (Enforce visible but disabled, with an
+  explanation), per-class action scopes with their effect texts, the
+  unknown-malware opt-in, thresholds and exclusions. It keeps entries after a 409.
+
+Remaining for requirement E: per-server and group overrides, plus every item
+listed under #682 apart from this fleet-level storage and UI.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse
