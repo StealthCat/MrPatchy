@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.71.0"
+APP_VERSION = "1.72.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2408,6 +2408,40 @@ def ai_run_detail(run_id:str,host_id:str='',user=Depends(admin_user)):
         receipts=ai_runs.call_receipts(s,[row.id])[row.id]
         return object_dict(row)|{'shared_batch':len(ai_runs.run_hosts(s,[row.id])[row.id])>1,'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
             'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
+
+@app.post('/api/investigations/blocked/retry')
+def retry_blocked_investigations(user=Depends(admin_user)):
+    """Re-queue investigations blocked under the current AI configuration (#934).
+
+    Uses the ``ai-triage``/``configuration-blocked`` notification predicate and
+    single-item retry semantics. Sends no provider request: the scheduler still
+    applies enablement, pause, lifecycle, data sharing and shared admission.
+    """
+    from . import triage_block_notifications as blocked
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Retry when it finishes.')
+    try:
+        with Session() as s:
+            now=time.time()
+            candidates=blocked.retry_candidates(s,now) if config(s).get('ai_enabled') else []
+            retried=0
+            if candidates:
+                try:
+                    with host_lifecycle.activity([host for _,host in candidates],'queue'):
+                        # Drop the pre-lock read transaction so MySQL repeatable-read
+                        # cannot hide a concurrent approval or retry.
+                        s.rollback()
+                        retried=blocked.retry(s,[row_id for row_id,_ in candidates],time.time())
+                        if retried:audit(s,'retry blocked AI investigations',user['username']+' re-queued '+str(retried)+' blocked investigation(s)')
+                        s.commit()
+                except (host_lifecycle.Busy,host_lifecycle.Inactive) as error:raise HTTPException(409,str(error)) from None
+            remaining=blocked.blocked_count(s,time.time())[0] if config(s).get('ai_enabled') else 0
+        plural='' if retried==1 else 's'
+        detail=(f'{retried} blocked investigation{plural} queued. AI pause, data sharing, shared rate and daily-cap admission still apply.' if retried
+            else 'No investigation can be retried now under the current AI configuration.')
+        if remaining:detail+=f' {remaining} still blocked (running, waiting for provider Retry-After, or beyond this batch).'
+        return {'retried':retried,'remaining':remaining,'detail':detail}
+    finally:lock.release()
 
 @app.post('/api/investigations/{behavior_id}/retry')
 def retry_investigation(behavior_id:str,user=Depends(admin_user)):

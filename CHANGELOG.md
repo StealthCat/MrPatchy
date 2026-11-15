@@ -1,3 +1,7 @@
+## 1.72.0 — 2026-11-15
+
+1. [PR #935](https://github.com/StealthCat/MrPatchy/pull/935): Add an admin-only fleet action to retry up to 200 process investigations blocked under the current AI configuration, using the existing triage and per-host queue locks, rechecking candidates under lock, and recording one audit event for each non-empty batch. Compatibility: additive route and UI; no schema, authorization, provider-call, pause, data-sharing, reservation, or response-authorization change; normal scheduler admission still governs execution. Limits: Fleet Investigations only; blocked advisory-plan work is excluded; batches are capped at 200, and the displayed blocked count can differ from the eligible retry count.
+
 ## 1.71.0 — 2026-11-15
 
 1. [PR #933](https://github.com/StealthCat/MrPatchy/pull/933): Keep an administrator's Re-triage selection across Investigations pages and the All/Cached filters within one view. The client caps selection at the existing 50-item endpoint limit, drops rows whose verdict or revision changes, and includes selected rows across visited pages in the confirmation and submit. Compatibility: frontend-only; the existing endpoint, API/schema, admission, approval and server-side all-or-nothing revision checks remain unchanged. Limits: selecting every matching row still requires visiting its page, and selections above 50 are not supported.
