@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.64.2"
+APP_VERSION = "1.66.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1507,6 +1507,17 @@ def blocked_update_scores(user=Depends(admin_user)):
     from . import scoring_block_notifications
     with Session() as s:
         return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
+@app.get('/api/update-scores/status')
+def update_score_queue_status(user=Depends(admin_user)):
+    """Summarize the update-importance scoring queue (#917). Read-only.
+
+    Counts and timestamps only; shared AI start gates and pause still decide
+    when a scoring batch starts.
+    """
+    from . import scoring_queue_status
+    with Session() as s:
+        return scoring_queue_status.status(s,config(s))
 
 @app.post('/api/update-scores/blocked/retry')
 def retry_blocked_update_scores(user=Depends(admin_user)):
@@ -3409,6 +3420,26 @@ def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_us
     except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
     if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
     return value
+
+class MalwarePolicyInput(BaseModel):
+    model_config={'extra':'forbid'}
+    policy:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/settings/malware-response')
+def malware_policy_read(user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:return malware_policy.state(s)
+
+@app.put('/api/settings/malware-response')
+def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
+    # Stores policy only: no detector, executor, provider call or response authorization runs here.
+    from . import malware_policy,malware_response
+    try:return malware_policy.save(body.policy,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid malware response policy: '+str(exc))
+    except malware_policy.EnforcementUnavailable:raise HTTPException(409,'Enforce mode is unavailable until a containment executor exists; choose Disabled or Monitor only')
+    except malware_policy.StalePolicy:raise HTTPException(409,'The malware response policy changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
 
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
