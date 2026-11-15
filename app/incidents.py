@@ -287,6 +287,24 @@ def add_note(s,row,note,actor):
     audit(s,'security incident note added',row.id+' '+actor)
 
 
+def awaiting_auto_plan():
+    """SQL conditions for an open incident still owed its one automatic plan attempt.
+
+    Shared by ``auto_plan_tick`` and the read-only status (#922) so both use one predicate.
+    Completed plans are excluded in SQL so old incidents cannot starve new ones.
+    """
+    from .db import Job
+    planned=select(Plan.id).where(Plan.incident_id==Incident.id,Plan.state!='superseded').exists()
+    attempted=select(Job.id).where(Job.action=='security-plan',Job.host_id==Incident.host_id,
+        Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id).exists()
+    return (Incident.state=='open',~planned,~attempted)
+
+
+def automatic_candidate(row):
+    """YARA incidents are never planned automatically."""
+    return row.evidence.get('scan_context',{}).get('engine')!='YARA'
+
+
 def auto_plan_tick(now=None):
     """Opt-in proposals only. One automatic attempt per incident evidence revision."""
     from .coordination import Lock
@@ -306,19 +324,15 @@ def auto_plan_tick(now=None):
             from . import ai_policy
             enabled=[host for host,p in policies.items() if p.get('auto_ai_plan') and not ai_policy.status(s,host)['paused']]
             if not enabled:return
-            # Completed plans are excluded in SQL so old incidents cannot starve new ones.
-            planned=select(Plan.id).where(Plan.incident_id==Incident.id,Plan.state!='superseded').exists()
-            attempted=select(Job.id).where(Job.action=='security-plan',Job.host_id==Incident.host_id,
-                Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id).exists()
             from .operations import host_quarantined
             enabled=[host for host in enabled if not host_quarantined(s,host)]
             if not enabled:return
-            query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),Incident.state=='open',~planned,~attempted).order_by(Incident.updated,Incident.id)
+            query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),*awaiting_auto_plan()).order_by(Incident.updated,Incident.id)
             # YARA incidents are never planned automatically, so page past them instead of letting them fill a fixed window.
             rows=[];offset=0
             while len(rows)<100:
                 batch=list(s.scalars(query.limit(100).offset(offset)))
-                rows+=[r for r in batch if r.evidence.get('scan_context',{}).get('engine')!='YARA']
+                rows+=[r for r in batch if automatic_candidate(r)]
                 if len(batch)<100:break
                 offset+=100
             candidates=rows[:100]

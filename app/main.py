@@ -3216,6 +3216,14 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
             audit(s,'security plan approved for manual response',plan.id+' '+user['username']);s.commit()
             return {'ok':True,'expires':plan.expires,'execution':'manual_only'}
 
+@app.get('/api/hosts/{host_id}/security/auto-plan-status')
+def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
+    """Read-only automatic AI plan status and pacing for this server (#922). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        host_or_404(s,host_id)
+        return auto_plan_status.status(s,host_id)
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
