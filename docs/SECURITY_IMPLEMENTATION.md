@@ -8863,3 +8863,23 @@ Roadmap A requires AI activity to show the blocked reason and next eligible star
 - **Unchanged:** the API, schema, roles, admission, reservations and response authorization. Viewers are still routed away from `#ai-logs` and never request the snapshot. Per-server AI tabs do not show the card, because the snapshot is fleet-wide.
 - **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
+
+### Fleet known-good candidate list — worker checkpoint #928
+
+Roadmap B slice: administrators can now find a candidate without already knowing
+an assessment that links to it. `GET /api/ai/known-good/candidates?state=active|revoked|all`
+(administrator only, read-only, 1–50 per page) returns candidates newest first, with
+a fingerprint tie-break. Each item gives the fingerprint, version, model,
+classification source, origin assessment and subject, and the origin server (with
+whether it is still active). It also gives the revocation time, actor and reason,
+and per-page counts of linked observations and exact-match reuses, using two
+grouped queries. It never returns the canonical contract, saved result, snapshot,
+observation JSON or evidence. It takes no locks, writes nothing and makes no audit
+or provider calls.
+
+The Fleet known-good cache panel in AI activity adds an on-demand **Candidates**
+list with an Active/Revoked/All filter, paging, escaped text, an **Origin
+assessment** link (where Revoke and Linked servers already live), Retry, and a
+stale-response guard. Viewers never request it. Lookup, publication, revocation,
+approval, budget, pause, role and response boundaries are unchanged. Search by
+hash, bulk revocation and matched SQLite/MySQL production acceptance remain open.
