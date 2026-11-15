@@ -2858,6 +2858,45 @@ lifecycle, role and response authorization are unchanged.
 **Compatibility:** API clients that save expanding controls must preview first
 and resend the save with the returned confirmation.
 
+### Per-server automatic AI plan status — worker checkpoint #922
+
+The scan-policy toggle for automatic AI plans always said "at most ten plan
+requests per hour across the fleet". `incidents.auto_plan_tick` and the manual
+plan route enforce that allowance only in `legacy` control mode. In every other
+mode the shared AI start gates pace plans. Administrators also could not see why
+no plan was requested, or how many incidents still waited for one.
+
+The admin-only `GET /api/hosts/{id}/security/auto-plan-status` now reports:
+- **State:** `off`, `ai_disabled`, `not_configured`, `paused`, `held`
+  (server-change hold), `inactive` (disabled or deleted server) or `ready`, in
+  the order the tick's checks apply.
+- **Awaiting:** this server's open incidents still owed their one automatic
+  attempt, with the oldest one's update time. The count uses
+  `incidents.awaiting_auto_plan`, which the tick now shares, and excludes YARA
+  incidents in SQL with `incidents.automatic_candidate_sql` (the SQL form of the
+  tick's `automatic_candidate`; a missing engine is not YARA). Old YARA rows
+  therefore cannot fill the bounded read and hide owed incidents. At most 500
+  candidate rows are read. A larger backlog reports a lower bound with
+  `awaiting_truncated`.
+- **Occupancy:** whether a security or startup plan job is queued or running on
+  the server (that blocks the next plan), and the latest automatic attempt's job
+  state and time.
+- **Pacing:** in `legacy` mode, the fleet allowance used/remaining and when it
+  next frees, using the same sliding window as Settings → AI. Other modes report
+  no plan-specific hourly cap.
+
+The Security tab shows this under the toggle, and the help text now names the
+pacing for each mode. A failed load or an unknown state says the status is
+unavailable and never implies a plan will start.
+
+- **Unchanged:** the payload holds fixed codes, counts, job states and timestamps
+  only: no incident evidence, paths, plan text, job output or key material. It
+  sends no provider request and writes nothing. Tick behavior, admission,
+  schema, roles and response authorization are unchanged, and plans remain
+  manual-only.
+- **Limitations:** this is a point-in-time read for one server. A fleet-wide
+  plan queue view and startup-change plans (never automatic) are not covered.
+
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
 The administrator's Investigations queue notice now names the admission control
@@ -8301,6 +8340,32 @@ program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
 
+### authorized_keys options contract — worker checkpoint #895 (roadmap F)
+
+The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` as metadata only. Nothing said which keys carry a forced `command=`, which restrictions apply, or whether sshd would accept the line at all.
+
+- **Change:** a new pure module, `app/authorized_keys.py`, follows sshd(8) *AUTHORIZED_KEYS FILE FORMAT* and OpenSSH option parsing.
+  - **Line structure:** the key type is tried first, otherwise the options token runs to the first unquoted whitespace, as `sshkey_advance_past_options` does.
+  - **Options:** comma separated and case-insensitive, with `\"` handled as in `opt_dequote`. Options apply in order, so `restrict` followed by `pty` re-enables a pty. The FIDO flags accept both spellings (`touch-required`/`no-touch-required`, `verify-required`/`no-verify-required`) and the last one wins; `tunnel="any"` is case-insensitive and numeric tunnel IDs stop at OpenSSH's `SSH_TUNID_MAX` (2^31 − 3).
+  - **Rejected lines:** sshd refuses lines with an unknown option, a missing quote, a duplicate `command`/`principals`, or a malformed `expiry-time`, `tunnel` or `environment`. Such lines are `invalid` with the reason.
+  - **Identity:** each key is bound by its `SHA256:` fingerprint. The embedded type must match the declared type, and raw key material is never returned.
+  - **Forced command:** reported verbatim, with `command_runs_via: account_shell_-c`. No argv is guessed.
+  - **Line precedence:** a later line for the same key is `shadowed` only by an earlier `accepted` line. As in sshd, `expired` lines never shadow a later line. If the earlier line has `from=`, an uncertain expiry (`expiry_timezone_unknown`/`expiry_unevaluated`) or unvalidated `permitopen`/`permitlisten` values (which make sshd skip the line when malformed), the later line is `conditional` with a `precedence_depends_on_*` gap. `cert-authority` lines only match certificates, so they track precedence separately from plain-key lines for the same key.
+  - **Expiry:** `expiry-time` is evaluated against a supplied observation time, and the earliest value wins.
+- **Gaps, never reported as covered:**
+  - unreadable, oversized or truncated files;
+  - an unknown key type;
+  - `environment=`, which depends on `PermitUserEnvironment`;
+  - `permitopen`/`permitlisten` values, whose host:port syntax is not validated (`forwarding_spec_unvalidated`);
+  - a local-time expiry within the ±14-hour zone range of the observation, or an expiry with no observation time;
+  - the file, line, option, value and comment caps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
+- **Validation:** `tests/test_authorized_keys.py` covers the contract, including regression cases for unvalidated forwarding specs on an earlier line, negatable FIDO flags and the `tunnel` bound. The 52 focused tests passed on the exact handed-off worker head and are included in this integration. They include a real `cryptography`-generated OpenSSH Ed25519 key.
+- **Remaining:**
+  - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
+  - `permitopen`/`permitlisten` syntax validation, which is a gap today;
+  - provenance, AI classification and UI.
+
 ## Ordered file assessment and visibility (#626)
 
 ### Automatic retained file trust (#636)
@@ -8878,6 +8943,18 @@ Roadmap A requires AI activity to show the blocked reason and next eligible star
 - **Unchanged:** the API, schema, roles, admission, reservations and response authorization. Viewers are still routed away from `#ai-logs` and never request the snapshot. Per-server AI tabs do not show the card, because the snapshot is fleet-wide.
 - **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
+
+### Never-scanned legacy scan policies in coverage notifications — worker checkpoint #883
+
+The first #841 limitation: a policy saved before `enabled_since` existed stayed silent forever while its server had never had a `security-scan` attempt, unless an administrator happened to re-save it.
+
+- **Change:** for an enabled policy without a valid `enabled_since` on an active, non-enrolling server with no `security-scan` attempt, the coverage producer records the first tick that saw that state under its own server-managed key, `security-scan-legacy-since:<host>` (`{"first_seen": <epoch>}`, whole microseconds). Classification treats that time as `enabled_since`, so the server becomes `overdue` after the interval plus the one-hour grace period, with the #816 payload, revisions and resolution.
+- **Conservative:** the marker is never earlier than the first observation, so a legacy policy notifies no sooner than a freshly saved one would. An invalid or future marker restarts at the current tick.
+- **No policy rewrite:** the administrator's `security-policy:<host>` row is never written by the producer, so a concurrent policy save cannot be lost. The marker prefix does not start with `security-policy:`, which the scheduler and the coverage page enumerate.
+- **Cleanup:** the marker is deleted once the policy carries its own `enabled_since`, is disabled or removed, the server gets a scan attempt, or the server is disabled, deleted or re-enrolling.
+- **Unchanged:** policies with `enabled_since`, the scheduler, `security_coverage.assessment`, the schema, roles and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `dff91c4` and pass after the change; a behavior-only check (legacy never-scanned policy publishes `overdue` after the interval plus grace) publishes nothing on main. The related SQLite coverage, notification, security, incident, operations and scheduling selection passes (580 passed, 2 skipped).
+- **Remaining:** the window before a legacy policy notifies starts at the upgrade's first coordinator tick, not at its true enablement time, which is unknown. YARA schedules and a configurable grace period remain out of scope.
 
 ### Shared AI start gates on Activity → Workers — worker checkpoint #930
 
