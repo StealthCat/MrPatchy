@@ -1,3 +1,7 @@
+## 1.69.0 — 2026-11-15
+
+1. [PR #896](https://github.com/StealthCat/MrPatchy/pull/896): Add a pure OpenSSH `authorized_keys` parser that reports per-line acceptance, rejection, expiry and precedence, SHA256 key fingerprints, forced commands and effective restrictions without exposing raw key material. Compatibility: new unimported module and tests only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: account/file enumeration and effective sshd configuration, forwarding-value validation, provenance, AI classification and UI remain out of scope; uncertain cases stay explicit gaps.
+
 ## 1.68.0 — 2026-11-15
 
 1. [PR #923](https://github.com/StealthCat/MrPatchy/pull/923): Add an admin-only, read-only per-server automatic AI plan status under Security → Scheduled scanning, including the reason requests are inactive, a bounded count of open non-YARA incidents awaiting an attempt, queued/running and latest-attempt state, and mode-correct pacing. Correct the help text so only legacy mode claims the fleet ten-per-hour limit; other modes use shared AI start gates. Compatibility: adds one read-only route and UI; schema, roles, admission, automatic tick behavior, and response authorization are unchanged. Plans remain manual-only. Limits: point-in-time for one server; counts read at most 500 eligible incidents and report larger backlogs as truncated; startup-change plans and fleet-wide queue view remain out of scope.
