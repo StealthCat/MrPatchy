@@ -9,9 +9,10 @@ module.exports=async(page,capture)=>{
  const identity=async route=>{const response=await route.fetch();return route.fulfill({response,json:{...await response.json(),role}});};
  await page.route('**/api/identity',identity);await page.route('**/api/investigation-status',status);await page.route('**/api/investigations?*',rows);await page.route('**/api/investigations/blocked/retry',retry);
  try{
-  await page.goto(new URL('/#investigations',page.url()).href);
+  await page.goto(new URL('/#investigations',page.url()).href);await page.reload();
   const button=page.getByRole('button',{name:'Retry blocked investigations',exact:true});
-  await button.waitFor();
+  // Wait for this module's fixture, not a render still in flight from an earlier module.
+  await page.locator('#retry-blocked-investigations',{hasText:'2 investigations are blocked'}).waitFor();
   assert.match(await page.locator('#retry-blocked-investigations').textContent(),/2 investigations are blocked .*No provider request is sent now/);
   for(const width of [320,768,1440]){
    await page.setViewportSize({width,height:1000});
@@ -25,8 +26,7 @@ module.exports=async(page,capture)=>{
   await page.locator('#retry-blocked-investigations').waitFor({state:'detached'});
   // A partial batch keeps the action and reports the remainder.
   blocked=3;reply={retried:1,remaining:2,detail:'1 blocked investigation queued. 2 still blocked (running, waiting for provider Retry-After, or beyond this batch).'};
-  await page.reload();await button.waitFor();
-  assert.match(await page.locator('#retry-blocked-investigations').textContent(),/3 investigations are blocked/);
+  await page.reload();await page.locator('#retry-blocked-investigations',{hasText:'3 investigations are blocked'}).waitFor();
   await button.click();
   await page.getByRole('status').filter({hasText:'2 still blocked'}).waitFor();
   await page.locator('#retry-blocked-investigations',{hasText:'2 investigations are blocked'}).waitFor();
