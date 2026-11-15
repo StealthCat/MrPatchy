@@ -56,6 +56,8 @@ Select **Available patches** in the navigation, or the **Updates available** car
 
 Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
 
+Under **Servers → a server → Security → Scheduled scanning**, administrators can inspect a read-only **Automatic AI plans** status for that server: the current policy state, open incidents awaiting an automatic attempt, queued/running plan status, latest automatic attempt, and applicable pacing. Legacy mode shows the fleet ten-per-hour allowance; other modes use the shared AI start gates. This point-in-time view reads at most 500 eligible incidents (and marks a larger backlog as truncated); it does not enqueue or approve plans, which remain manual-only.
+
 Startup → Files also lists individual Debian-family `at` jobs from hashed `/var/spool/cron/atjobs` files, showing the queue, scheduled time, owner and bounded, redacted commands. Older agents show “not reported.” The view does not evaluate whether atd is running, inspect referenced scripts or cover the RHEL-family `/var/spool/at` spool.
 
 Open **Servers → a server name** (or **Open server**) to see everything recorded for that server in one place. Separate tabs cover its overview, packages, patching timeline, investigations, AI activity with estimated costs, history, repositories and maintenance. Switch servers while keeping the same tab, or bookmark a server tab directly. Sensitive tabs and actions retain the existing role permissions.

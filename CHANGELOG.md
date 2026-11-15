@@ -1,3 +1,7 @@
+## 1.68.0 — 2026-11-15
+
+1. [PR #923](https://github.com/StealthCat/MrPatchy/pull/923): Add an admin-only, read-only per-server automatic AI plan status under Security → Scheduled scanning, including the reason requests are inactive, a bounded count of open non-YARA incidents awaiting an attempt, queued/running and latest-attempt state, and mode-correct pacing. Correct the help text so only legacy mode claims the fleet ten-per-hour limit; other modes use shared AI start gates. Compatibility: adds one read-only route and UI; schema, roles, admission, automatic tick behavior, and response authorization are unchanged. Plans remain manual-only. Limits: point-in-time for one server; counts read at most 500 eligible incidents and report larger backlogs as truncated; startup-change plans and fleet-wide queue view remain out of scope.
+
 ## 1.67.0 — 2026-11-15
 
 1. [PR #925](https://github.com/StealthCat/MrPatchy/pull/925): Add **Show → Cached known good** to fleet and per-server Investigations, listing only verdicts whose current state is an exact known-good reuse and allowing review or bulk Re-triage. Compatibility: adds optional `cached=true`; the default response is unchanged, with no schema, role, admission, spend or response-authorization changes. Limits: filter state has no URL deep link, fleet-wide selection across pages remains open, and filtered scans use bounded chunks over retained candidates with the same offset-pagination behavior as the default view.

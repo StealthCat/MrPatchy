@@ -2858,6 +2858,45 @@ lifecycle, role and response authorization are unchanged.
 **Compatibility:** API clients that save expanding controls must preview first
 and resend the save with the returned confirmation.
 
+### Per-server automatic AI plan status — worker checkpoint #922
+
+The scan-policy toggle for automatic AI plans always said "at most ten plan
+requests per hour across the fleet". `incidents.auto_plan_tick` and the manual
+plan route enforce that allowance only in `legacy` control mode. In every other
+mode the shared AI start gates pace plans. Administrators also could not see why
+no plan was requested, or how many incidents still waited for one.
+
+The admin-only `GET /api/hosts/{id}/security/auto-plan-status` now reports:
+- **State:** `off`, `ai_disabled`, `not_configured`, `paused`, `held`
+  (server-change hold), `inactive` (disabled or deleted server) or `ready`, in
+  the order the tick's checks apply.
+- **Awaiting:** this server's open incidents still owed their one automatic
+  attempt, with the oldest one's update time. The count uses
+  `incidents.awaiting_auto_plan`, which the tick now shares, and excludes YARA
+  incidents in SQL with `incidents.automatic_candidate_sql` (the SQL form of the
+  tick's `automatic_candidate`; a missing engine is not YARA). Old YARA rows
+  therefore cannot fill the bounded read and hide owed incidents. At most 500
+  candidate rows are read. A larger backlog reports a lower bound with
+  `awaiting_truncated`.
+- **Occupancy:** whether a security or startup plan job is queued or running on
+  the server (that blocks the next plan), and the latest automatic attempt's job
+  state and time.
+- **Pacing:** in `legacy` mode, the fleet allowance used/remaining and when it
+  next frees, using the same sliding window as Settings → AI. Other modes report
+  no plan-specific hourly cap.
+
+The Security tab shows this under the toggle, and the help text now names the
+pacing for each mode. A failed load or an unknown state says the status is
+unavailable and never implies a plan will start.
+
+- **Unchanged:** the payload holds fixed codes, counts, job states and timestamps
+  only: no incident evidence, paths, plan text, job output or key material. It
+  sends no provider request and writes nothing. Tick behavior, admission,
+  schema, roles and response authorization are unchanged, and plans remain
+  manual-only.
+- **Limitations:** this is a point-in-time read for one server. A fleet-wide
+  plan queue view and startup-change plans (never automatic) are not covered.
+
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
 The administrator's Investigations queue notice now names the admission control
