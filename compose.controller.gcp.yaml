@@ -1,0 +1,14 @@
+# GCP runtime overlay for compose.controller.yaml: adds the gcloud image and environment to the app only.
+# compose.gcp.yaml also defines a worker, so layering it on the controller file would add a partial
+# worker service; use this file instead. tests/test_compose_roles.py keeps the app block in sync.
+#   docker compose -p mrpatchy -f compose.controller.yaml -f compose.controller.gcp.yaml up -d --build --wait
+services:
+  app:
+    image: mrpatchy:gcp
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.gcp
+    environment:
+      CLOUDSDK_CONFIG: /data/gcloud
+      CLOUDSDK_CORE_PROJECT: ${GCP_PROJECT:?Run install-gcp.sh first}
+      CLOUDSDK_COMPUTE_ZONE: ${GCP_ZONE:?Run install-gcp.sh first}

@@ -106,6 +106,9 @@ _NOTIFY_TEXT={
 _RESOLVED_TEXT=('Agent event spool use on this server is back below '+str(WARNING_PERCENT)+
                 '% and no new loss was reported. Earlier cumulative loss stays visible on the server summary.')
 _DELETED_TEXT='The server was deleted; its agent event spool no longer needs attention here.'
+_DISABLED_TEXT=('Server management was disabled, so agent event spool monitoring is paused. If spool pressure '
+                'or new loss is still present after the server is re-enabled, this notification reopens.')
+_ENDED={'server-deleted':_DELETED_TEXT,'server-disabled':_DISABLED_TEXT}
 
 
 def _link(host_id):
@@ -165,11 +168,16 @@ def publish_notification(session,host,new_loss,now=None):
     return action
 
 
-def resolve_host_notification(session,host_id):
-    """Resolve a still-active spool attention event when its server is deleted."""
+def resolve_host_notification(session,host_id,cause='server-deleted'):
+    """Resolve a still-active spool attention event when its server is deleted or disabled.
+
+    Neither a deleted nor a disabled server is polled, so no fresh telemetry could
+    resolve the episode. Returns ``True`` when a resolved revision was added.
+    """
     from . import notifications
+    reason=_ENDED[cause]
     if not _active_state(session,host_id):return False
     notifications.publish(session,source=NOTIFY_SOURCE,kind=NOTIFY_KIND,subject_type=NOTIFY_SUBJECT,
-        subject_id=host_id,host_id=host_id,subject_revision='server-deleted',severity='info',reason=_DELETED_TEXT,
+        subject_id=host_id,host_id=host_id,subject_revision=cause,severity='info',reason=reason,
         deep_link=_link(host_id),minimum_role='admin',lifecycle='resolved')
     return True

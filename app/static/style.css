@@ -451,7 +451,9 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .badge.stopped { color:var(--muted);background:#a7bdc714; }
 .badge.healthy { color:var(--mint);background:#9ee8d114; }
 .badge.degraded { color:var(--amber);background:#f7cf8a14; }
-.endpoint-agent-table { min-width:700px; }
+.endpoint-agent-table { min-width:860px; }
+.agent-resource-flags { display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px; }
+.agent-resource-attention { display:inline-block;padding:1px 8px;border-radius:999px;font-size:.78rem;font-weight:600;background:#f7cf8a14;color:var(--amber);border:1px solid #f7cf8a55; }
 .endpoint-agent-table td { max-width:260px;overflow-wrap:anywhere; }
 .endpoint-agent-table td small { display:block;white-space:normal; }
 /* Long configuration identifiers (e.g. MRPATCHY_EXPECTED_CONTROLLER_IDS) must wrap on phones. */
@@ -461,7 +463,9 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 /* Keep cooperative worker controls beside identity, reachable before horizontal scrolling. */
 .worker-registry-table td:first-child { min-width:180px; }
-.worker-registry-table .worker-control { margin-top:10px; }
+.worker-registry-table .worker-control, .worker-registry-table .worker-remove { margin-top:10px; }
+.worker-registry-table .worker-remove { display:block; }
+button.danger { border-color: var(--red); color: var(--red); }
 .badge.draining { color:var(--amber);background:#f7cf8a14; }
 .badge.drained { color:var(--mint);background:#9ee8d114; }
 
@@ -541,6 +545,7 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .badge.ok,.badge.warning{background:#274a40;color:#a8efd3}
 .badge.warning{background:#4c402a;color:var(--amber)}
 .badge.unavailable{color:var(--muted);background:#a7bdc714}
+.server-card-ai { margin:8px 0 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center; }
 
 /* Shared error artwork retains its proportions on narrow screens. */
 .error-state .empty-mascot { width: 150px; height: auto; max-height: none; object-fit: contain; }
@@ -551,3 +556,14 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 
 .file-status-hash{overflow-wrap:anywhere;word-break:break-all}
 .file-status-panel td{vertical-align:top}
+/* Recorded command output (#753): keep whitespace and columns, scroll inside the block. */
+.command-output { position:relative; min-width:0; max-width:100%; margin:8px 0; }
+.command-output-tools { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:10px; margin-bottom:6px; }
+.command-output-tools button { margin:0; }
+.command-output-status { font-size:12px; color:var(--muted, inherit); }
+.command-output pre { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; line-height:1.55; white-space:pre; overflow-wrap:normal; word-break:normal; tab-size:8; overflow:auto; max-width:100%; margin:0; user-select:text; }
+.command-output pre.command-output-empty { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media(max-width:600px){.command-output pre{font-size:11px;padding:12px}.command-output-tools{justify-content:flex-start}}
+.advisory-applicability { list-style:none; padding:0; margin:0 0 14px; display:grid; gap:10px; } .advisory-applicability .help { margin:2px 0 0; overflow-wrap:anywhere; }
+.exposure-history-list li > div { overflow-wrap:anywhere; }
+.help.warning{color:var(--amber);font-weight:600}

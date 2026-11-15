@@ -10,6 +10,7 @@ import re
 import secrets
 import shlex
 import threading
+import math
 import time
 import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update, case, or_, not_, text, String, LargeBinary, cast
-from sqlalchemy.orm import defer, load_only
+from sqlalchemy.orm import aliased, defer, load_only
 from sqlalchemy.exc import IntegrityError, OperationalError
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
@@ -61,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.59.78"
+APP_VERSION = "1.61.8"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -591,7 +592,14 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             path='$."%s"'%key
             kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
             cols+=[Host.inventory[key].as_string(),kind]
-        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        # Per-server AI policy is administrator-only (see server_ai_policy), so other roles get no field.
+        # It joins the same bounded host query instead of adding a statement (#147 query budget).
+        admin=user['role']=='admin';ai=aliased(Setting)
+        from . import ai_policy
+        extra=(ai.key,ai.value) if admin else ()
+        query=select(Host,*cols,Setting.value,*extra).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        if admin:query=query.outerjoin(ai,ai.key==ai_policy.PREFIX+Host.id)
+        rows=s.execute(query
             .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
             .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
         def meta(value,kind,default):
@@ -599,7 +607,8 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             return None if str(kind).lower()=='null' else value
         return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
-            for h,a,ak,o,ok,m,mk,saved in rows]
+            |({'ai_paused':ai_policy.stored_paused(policy[1],policy[0] is not None)} if admin else {})
+            for h,a,ak,o,ok,m,mk,saved,*policy in rows]
 
 def saved_query_or_404(s,query_id):
     row=s.get(fleet_queries.SavedFleetQuery,query_id)
@@ -1163,6 +1172,15 @@ class WorkerControlInput(BaseModel):
     action:str=Field(pattern=r'^(drain|resume)$')
     reason:str=Field(min_length=10,max_length=1000)
 
+class WorkerRemovalInput(BaseModel):
+    worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
+    boot_id:str=Field(pattern=r'^([0-9a-f]{32})?$')
+
+@app.post('/api/operations/workers/remove')
+def remove_worker_registration(body:WorkerRemovalInput,user=Depends(admin_user)):
+    from .worker_registry import remove_registration
+    return remove_registration(body.worker_id,body.boot_id,user['username'])
+
 @app.post('/api/operations/workers/control')
 def control_worker(body:WorkerControlInput,user=Depends(admin_user)):
     from .worker_registry import request_control
@@ -1193,13 +1211,13 @@ def audit_detail(entry_id:int,user=Depends(admin_user)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(admin_user)):
-    from . import ai_budget,ai_provider_backoff
+    from . import ai_budget,ai_control_preview,ai_provider_backoff,scoring_block_notifications
     with Session() as s:
-        cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
+        cfg=config(s)
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
-            'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
-                'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+            'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
+            'ai_control_migration':ai_control_preview.legacy_migration(cfg)}
 
 @app.get('/api/settings/ai-connections')
 def ai_connection_inventory(user=Depends(admin_user)):
@@ -1216,6 +1234,18 @@ def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)
     if timezone is not None and not ai_budget.valid_timezone(timezone):
         raise HTTPException(400,'Select a valid IANA budget timezone.')
     with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
+
+@app.get('/api/settings/ai-spend-history.csv')
+def ai_spend_history_csv(days:int=30,timezone:str|None=None,user=Depends(admin_user)):
+    from . import ai_budget
+    if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
+    if timezone is not None and not ai_budget.valid_timezone(timezone):
+        raise HTTPException(400,'Select a valid IANA budget timezone.')
+    with Session() as s:result=ai_budget.history(s,days,timezone_name=timezone)
+    return PlainTextResponse(ai_budget.history_csv(result),media_type='text/csv; charset=utf-8',headers={
+        'Content-Disposition':f'attachment; filename="mrpatchy-ai-spend-{days}d.csv"',
+        'Cache-Control':'no-store','X-MrPatchy-Spend-History-Truncated':'true' if result['truncated'] else 'false',
+        'X-MrPatchy-Spend-History-Max-Windows':str(result['max_windows'])})
 
 @app.get('/api/settings/ai-control-status')
 def ai_control_status(user=Depends(admin_user)):
@@ -1237,6 +1267,7 @@ class ConfigInput(BaseModel):
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+    confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 @app.put('/api/settings')
 def settings_save(body:ConfigInput,user=Depends(admin_user)):
     from . import ai_budget
@@ -1247,14 +1278,16 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
-    sent=body.model_dump(exclude={'api_key','expected_ai_controls_revision'},include=supplied)
+    sent=body.model_dump(exclude={'api_key','expected_ai_controls_revision','confirm_ai_expansion'},include=supplied)
     with worker.Lock('settings-config'):
         with Session() as s:
             previous=config(s);check_ai_controls_revision(previous,body.expected_ai_controls_revision);merged=previous|sent
+            check_ai_expansion_confirmed(previous,merged,body.confirm_ai_expansion)
             if merged['ai_enabled'] and (not merged['ai_model'] or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
             raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
             if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
             detail='Patch policy, cadence or AI configuration changed ('+(', '.join(sorted(k for k in sent if previous.get(k)!=sent[k])) or 'no stored values changed')+')'
+            from . import ai_control_preview;detail+=ai_control_preview.audit_suffix(previous,merged)
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
             if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
@@ -1272,6 +1305,16 @@ def check_ai_controls_revision(cfg,expected):
     if expected is not None and expected!=ai_controls_revision(cfg):
         raise HTTPException(409,'AI admission or spend controls changed since you loaded Settings. Reload, review the current values and save again.')
 
+def check_ai_expansion_confirmed(previous,proposed,confirmation):
+    # No silent spend expansion (#881): an expanding save must carry the confirmation the preview returned
+    # for exactly these expansions against the controls stored now. Refusals write nothing.
+    from . import ai_control_preview
+    expansions=ai_control_preview.compare(previous,proposed)['expansions']
+    expected=ai_control_preview.expansion_confirmation(ai_controls_revision(previous),expansions)
+    if expected is not None and confirmation!=expected:
+        raise HTTPException(409,'These AI settings expand admission or spend and were not confirmed: '+' '.join(expansions)+
+            ' Nothing was saved. Preview the change and resend the save with confirm_ai_expansion set to the expansion_confirmation the preview returns.')
+
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
     return hashlib.sha256(secret.value['encrypted'].encode()).hexdigest()[:32] if secret else ''
@@ -1288,6 +1331,7 @@ class AISettingsInput(BaseModel):
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+    confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 
 class AIKeyInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1302,7 +1346,7 @@ class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     history_days:int=Field(ge=1,le=3650)
 
-def save_settings_section(values,section,expected_ai_controls_revision=None):
+def save_settings_section(values,section,expected_ai_controls_revision=None,confirm_ai_expansion=None):
     with worker.Lock('settings-config'):
         with Session() as s:
             previous=config(s)
@@ -1310,11 +1354,13 @@ def save_settings_section(values,section,expected_ai_controls_revision=None):
                 check_ai_controls_revision(previous,expected_ai_controls_revision)
                 # Omitted AI fields keep their stored values instead of silently reverting to defaults (#708).
                 values=previous|values
-                values={key:values[key] for key in AISettingsInput.model_fields if key!='expected_ai_controls_revision'}
+                values={key:values[key] for key in AISettingsInput.model_fields if key not in ('expected_ai_controls_revision','confirm_ai_expansion')}
+                check_ai_expansion_confirmed(previous,values,confirm_ai_expansion)
             if section=='ai' and values['ai_enabled'] and (not values['ai_model'] or not s.get(Setting,'openai_key')):
                 raise HTTPException(400,'Save an API key and select a model before enabling AI. You can save a key independently above.')
             s.merge(Setting(key='config',value=previous|values))
             detail='Saved '+section+' configuration; no provider test was performed'
+            from . import ai_control_preview;detail+=ai_control_preview.audit_suffix(previous,values) if section=='ai' else ''
             if section=='ai' and previous['ai_control_mode']!=values['ai_control_mode']:
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
             if section=='ai' and previous['ai_daily_cap_usd']!=values['ai_daily_cap_usd']:
@@ -1342,12 +1388,23 @@ def ai_key_save(body:AIKeyInput,user=Depends(admin_user)):
 @app.put('/api/settings/ai')
 def ai_settings_save(body:AISettingsInput,user=Depends(admin_user)):
     from . import ai_budget
-    supplied=set(body.model_fields_set)-{'expected_ai_controls_revision'}  # capture before normalizing marks ai_model as sent
+    supplied=set(body.model_fields_set)-{'expected_ai_controls_revision','confirm_ai_expansion'}  # capture before normalizing marks ai_model as sent
     body.ai_model=body.ai_model.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):
         raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision)
+    return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision,body.confirm_ai_expansion)
+
+@app.post('/api/settings/ai/preview')
+def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
+    # Read-only: compares the posted controls with stored values; no settings, audit or provider call.
+    from . import ai_budget,ai_control_preview
+    if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
+    proposed=body.model_dump(include=set(body.model_fields_set)&set(ai_control_preview.PREVIEW_FIELDS))
+    with Session() as s:
+        previous=config(s)
+        result=ai_control_preview.compare(previous,proposed);revision=ai_controls_revision(previous)
+        return result|{'ai_controls_revision':revision,'expansion_confirmation':ai_control_preview.expansion_confirmation(revision,result['expansions'])}
 
 @app.put('/api/settings/patching')
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
@@ -1373,6 +1430,31 @@ def clear_provider_backoff(body:ProviderBackoffClearInput,user=Depends(admin_use
     with Session() as s:
         audit(s,'clear AI provider backoff',user['username']+' cleared reviewed active floor: '+body.reason.strip());s.commit()
     return {'cleared':active}
+
+@app.get('/api/update-scores/blocked')
+def blocked_update_scores(user=Depends(admin_user)):
+    """Count update scores blocked under the current AI configuration (#815).
+
+    Uses the same predicate as the ``ai-scoring``/``configuration-blocked``
+    notification and the retry action. Read-only.
+    """
+    from . import scoring_block_notifications
+    with Session() as s:
+        return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
+@app.post('/api/update-scores/blocked/retry')
+def retry_blocked_update_scores(user=Depends(admin_user)):
+    """Re-queue update scores blocked under the current AI configuration (#815).
+
+    Sends no provider request: the scheduler still applies enablement, pause,
+    lifecycle and shared rate/daily-cap admission to the re-queued scores.
+    """
+    from . import scoring_block_notifications
+    with Session() as s:
+        retried=scoring_block_notifications.retry(s,config(s))
+        if retried:audit(s,'retry blocked AI update scores',user['username']+' re-queued '+str(retried)+' blocked update score(s)')
+        s.commit()
+    return {'retried':retried,'detail':(str(retried)+' blocked update score'+('' if retried==1 else 's')+' queued for the next scoring pass. AI pause, shared rate and daily-cap admission still apply.') if retried else 'No update scores are blocked under the current AI configuration.'}
 
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1714,8 +1796,16 @@ class NotificationInput(BaseModel):
     clear_token:bool=False
 
 def notification_config(s):
+    """Saved alert-delivery settings; ``None`` when a saved value cannot be decrypted or parsed.
+
+    An unreadable value (for example after the encryption key changed) must not lock
+    administrators out of viewing or replacing it, so callers treat it as having no
+    retained values instead of raising."""
     row=s.get(Setting,'notifications')
-    return json.loads(unseal(row.value['encrypted'])) if row else {}
+    if not row:return {}
+    try:value=json.loads(unseal(row.value['encrypted']))
+    except Exception:return None  # Any decryption/format failure: never echo the stored text.
+    return value if isinstance(value,dict) else None
 
 def retain_notification_secret(previous,value,secret,clear,identity):
     if clear:value[secret]=''
@@ -1728,10 +1818,10 @@ def retain_notification_secret(previous,value,secret,clear,identity):
 @app.get('/api/operations/notifications')
 def notification_settings(user=Depends(admin_user)):
     with Session() as s:
-        value=notification_config(s)
+        value=notification_config(s);unreadable=value is None;value=value or {}
         return {k:v for k,v in value.items() if k not in ('password','token')}|{
             'channel':value.get('channel','webhook'),'password_configured':bool(value.get('password')),
-            'token_configured':bool(value.get('token'))}
+            'token_configured':bool(value.get('token')),'unreadable':unreadable}
 
 @app.put('/api/operations/notifications')
 def notifications(body:NotificationInput,user=Depends(admin_user)):
@@ -1740,7 +1830,7 @@ def notifications(body:NotificationInput,user=Depends(admin_user)):
     if body.enabled and (url.scheme!='https' or not url.hostname or url.username or url.password or url.fragment):raise HTTPException(400,'Use an HTTPS webhook URL without embedded credentials')
     if any(c in body.token for c in '\r\n'):raise HTTPException(400,'Invalid token')
     with Session() as s:
-        previous=notification_config(s)
+        previous=notification_config(s) or {}
         value=body.model_dump(exclude={'clear_token'});value['channel']='webhook'
         retain_notification_secret(previous if previous.get('channel','webhook')=='webhook' else {},value,'token',body.clear_token,('url',))
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
@@ -1889,18 +1979,20 @@ def rollout(body:RolloutInput,user=Depends(admin_user)):
 class AdvisoryInput(BaseModel): packages:list[str]=Field(min_length=1,max_length=100)
 @app.post('/api/operations/{host_id}/advisories')
 def scan_advisories(host_id:str,body:AdvisoryInput,user=Depends(admin_user)):
-    from .advisories import scan
+    from .advisories import scan,record_history
     with host_change(host_id),Session() as s:
         h=host_or_404(s,host_id)
         result=scan(h.inventory,body.packages)
         if len(json.dumps(result).encode())>2000000:raise HTTPException(413,'Advisory result too large')
-        s.merge(Setting(key='advisories:'+host_id,value=result));s.commit()
+        s.merge(Setting(key='advisories:'+host_id,value=result));record_history(s,host_id,result);s.commit()
         return result
 @app.get('/api/operations/{host_id}/advisories')
 def get_advisories(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
-        return row.value if row else {'results':[],'coverage':'Not checked'}
+        from .advisories import retained,history
+        result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
+        return {**result,'exposure_history':history(s,host_id)}
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
@@ -1976,7 +2068,7 @@ def smtp_save(body:SMTPInput,user=Depends(admin_user)):
     from .mail import validate
     value=validate(body.model_dump(exclude={'clear_password'}));value['channel']='smtp'
     with Session() as s:
-        previous=notification_config(s)
+        previous=notification_config(s) or {}
         retain_notification_secret(previous if previous.get('channel')=='smtp' else {},value,'password',body.clear_password,('host','port','mode','username'))
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
@@ -3069,9 +3161,20 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
     validate_scan_paths(body.paths)
     with worker.Lock('security-scan-queue'):
         with Session() as s:
-            host_or_404(s,host_id);s.merge(Setting(key='security-policy:'+host_id,value=body.model_dump()))
+            host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
+            value=body.model_dump()
+            # Server-managed enablement time (#841) lets coverage notifications tell a newly enabled policy
+            # from one whose first scheduled scan has never been enqueued. Clients cannot set it.
+            previous=row.value if row and isinstance(row.value,dict) else {}
+            since=previous.get('enabled_since')
+            if value['enabled']:
+                kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
+                # Whole microseconds keep the decimal form at <=16 significant digits (an exact double below 2**53),
+                # so MySQL's JSON parser stores the same double the API returns instead of one bit off.
+                value['enabled_since']=since if kept else math.floor(time.time()*1_000_000)/1_000_000
+            s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
-    return body.model_dump()
+    return value
 
 
 class IncidentReview(BaseModel):
