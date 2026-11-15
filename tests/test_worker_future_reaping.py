@@ -53,7 +53,7 @@ def test_poll_and_notification_failures_are_logged_once_before_shutdown(admin,mo
     monkeypatch.setattr(worker.time,'sleep',lambda *args:None)
     monkeypatch.setattr(worker,'periodic_ticks',lambda *args:None)
     monkeypatch.setattr(worker,'reconcile_interrupted_advisory_jobs',lambda:None)
-    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:None)
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda **_:None)
     monkeypatch.setattr(worker.ai_runs,'heartbeat',lambda:None)
     worker._loop(reporter)
     assert len(pending)==2
