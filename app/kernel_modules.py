@@ -20,7 +20,9 @@ and libkmod):
   order, and the module name of an entry may be a shell wildcard.
 - A configuration ``alias`` is consulted before the module name itself.
   ``softdep`` ``pre:`` modules are requested before, ``post:`` modules after.
-- A module that has a non-empty ``softdep`` does not run its own ``install``
+- Only the first matching ``softdep`` entry for a module is used, and an alias
+  target is treated as a module name, not looked up as an alias again.
+- A module whose ``softdep`` is non-empty does not run its own ``install``
   command; only its soft dependencies' commands run. (The alias, first-match
   and softdep rules were checked against ``modprobe -n -v`` from kmod 31.)
 - ``modules-load.d`` and Debian's ``/etc/modules`` name one module per line;
@@ -71,7 +73,7 @@ DEPRECATED = ('include', 'config')
 # Gaps that can hide a directive the real tools would read.
 BLOCKING = frozenset({'input_malformed', 'too_many_files', 'too_many_entries', 'duplicate_path', 'file_unreadable',
                       'symlink_not_followed', 'invalid_utf8', 'nul_byte', 'text_over_limit', 'field_over_limit',
-                      'chain_depth_exceeded', 'too_many_chains', 'resolution_budget_exceeded',
+                      'pattern_escape_not_interpreted', 'chain_depth_exceeded', 'too_many_chains', 'resolution_budget_exceeded',
                       'dependency_incomplete'})
 UNOBSERVED_MODPROBE = (
     {'code': 'kernel_command_line', 'detail': 'modprobe.blacklist= and module parameters on the kernel command '
@@ -323,6 +325,9 @@ def resolve_modprobe(files: Any) -> dict[str, Any]:
             module = _field(parts[1], path, line, gaps)
             if module is None:
                 continue
+            if '\\' in module and directive in ('install', 'remove', 'alias', 'softdep'):
+                _gap(gaps, 'pattern_escape_not_interpreted', path, line,
+                     'kmod honours backslash escapes in this pattern; this contract does not match them.')
             rest = parts[2].strip() if len(parts) > 2 else ''
             where = {'path': path, 'line': line}
             if directive == 'blacklist':
@@ -447,7 +452,8 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
     listed: set[tuple[int, str]] = set()
     visits = 0
 
-    def visit(name: str, via: list[dict[str, str]], active: frozenset[str], request: dict[str, Any]) -> None:
+    def visit(name: str, via: list[dict[str, str]], active: frozenset[str], request: dict[str, Any],
+              lookup_alias: bool = True) -> None:
         nonlocal visits
         visits += 1
         if visits > MAX_VISITS:
@@ -467,12 +473,15 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
                      f'Resolution stopped {MAX_DEPTH} steps after "{request["module"]}".')
             return
         active = active | {name}
-        targets = [a['module'] for a in aliases if fnmatch.fnmatchcase(name, a['alias'])]
+        targets = [a['module'] for a in aliases if fnmatch.fnmatchcase(name, a['alias'])] if lookup_alias else []
         if targets:
             for target in dict.fromkeys(targets):
-                visit(target, via + [{'relation': 'alias', 'module': target}], active, request)
+                # kmod treats an alias target as a module name; it is not looked up as an alias again.
+                visit(target, via + [{'relation': 'alias', 'module': target}], active - {target}, request,
+                      lookup_alias=False)
             return
-        deps = [s for s in softdeps if fnmatch.fnmatchcase(name, s['module'])]
+        # kmod uses only the first matching softdep entry.
+        deps = [s for s in softdeps if fnmatch.fnmatchcase(name, s['module'])][:1]
         for dep in deps:
             for pre in dep.get('pre') or []:
                 if isinstance(pre, str):

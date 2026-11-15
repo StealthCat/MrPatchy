@@ -246,3 +246,37 @@ def test_results_never_execute_or_import_io():
     source = open(km.__file__, encoding='utf-8').read()
     for forbidden in ('subprocess', 'os.system', 'import os', 'open(', 'socket'):
         assert forbidden not in source
+
+
+def _boot(text, module):
+    modprobe = km.resolve_modprobe([f('/etc/modprobe.d/p.conf', text)])
+    load = km.resolve_modules_load([f('/etc/modules-load.d/p.conf', module + '\n')])
+    return modprobe, km.boot_commands(modprobe, load)
+
+
+def test_alias_target_is_not_resolved_as_an_alias_again():
+    # `modprobe -n -v a` (kmod 31) prints EVIL-b here; review of #954.
+    text = 'alias a b\nalias b c\ninstall b /bin/echo EVIL-b\ninstall c /bin/echo cmd-c\n'
+    assert [c['command'] for c in _boot(text, 'a')[1]['chains']] == ['/bin/echo EVIL-b']
+    assert [c['command'] for c in _boot(text, 'b')[1]['chains']] == ['/bin/echo cmd-c']
+    both = 'alias a b\nalias a c\ninstall b /bin/echo cb\ninstall c /bin/echo cc\n'
+    assert [c['command'] for c in _boot(both, 'a')[1]['chains']] == ['/bin/echo cb', '/bin/echo cc']
+    own = 'alias a a\ninstall a /bin/echo self\n'
+    assert [c['command'] for c in _boot(own, 'a')[1]['chains']] == ['/bin/echo self']
+
+
+def test_only_the_first_matching_softdep_is_used():
+    empty_first = 'softdep m pre:\nsoftdep m pre: p\ninstall m /bin/echo own-m\ninstall p /bin/echo cmd-p\n'
+    result = _boot(empty_first, 'm')[1]
+    assert [c['command'] for c in result['chains']] == ['/bin/echo own-m'] and result['ignored'] == []
+    split = ('softdep m pre: p\nsoftdep m post: q\ninstall m /bin/echo own-m\ninstall p /bin/echo cmd-p\n'
+             'install q /bin/echo cmd-q\n')
+    result = _boot(split, 'm')[1]
+    assert [c['command'] for c in result['chains']] == ['/bin/echo cmd-p']
+    assert [c['command'] for c in result['ignored']] == ['/bin/echo own-m']
+
+
+def test_backslash_pattern_is_a_blocking_gap():
+    modprobe, result = _boot('install b\\* /bin/echo esc\nblacklist c\\d\n', 'b*')
+    assert codes(modprobe) == ['pattern_escape_not_interpreted'] and modprobe['complete'] is False
+    assert codes(result) == ['dependency_incomplete'] and result['complete'] is False
