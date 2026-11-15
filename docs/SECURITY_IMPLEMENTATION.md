@@ -2406,6 +2406,21 @@ admission/spend controls still apply when they run. This delivers the
 "selected" part of explicit Re-triage only. Fleet-wide selection across pages
 and cache-hit filters remain open.
 
+Worker checkpoint #897 marks reused verdicts in the Investigations list.
+`GET /api/investigations` adds `known_good_reuse` to each row. It is set only
+when the newest retained assessment for the row's exact current state
+(`subject` + `state_hash`) came from an exact-match reuse. A later provider
+result, re-triage request or changed evidence, verdict or analysis clears it.
+Administrators get the reuse assessment ID and the source assessment ID,
+subject and time. Other roles get only `{"cached": true}`, so they never see
+another server's identifiers. Each card shows a **Cached known good** badge
+with fixed text saying no provider call was made and reuse grants no approval.
+Administrators also get **Reuse record** and **Source assessment** links to the
+existing Assessment history pages. A page costs one projected assessment query,
+plus one bounded read for administrator source links. Lookup, publication,
+revocation, approval, budget, pause, role, response and schema are unchanged.
+Matched production acceptance remains open.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a

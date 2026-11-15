@@ -148,3 +148,32 @@ def record_reuse(s, row, hit):
         inputs=[],refresh={})
     s.add(saved)
     return saved
+
+
+def current_reuse(s, rows, include_source=False):
+    """Map behavior IDs whose current state came from an exact known-good reuse.
+
+    Only the newest retained assessment for each row's exact current state counts,
+    so a later provider result, re-triage request or changed evidence clears the
+    mark. One column-projected query serves the whole page. Non-administrators
+    receive only the flag: source identifiers may belong to another server.
+    """
+    states={row.id:state_hash(row) for row in rows if row.verdict in COMPLETE}
+    if not states:return {}
+    newest={}
+    query=(select(Assessment.id,Assessment.subject,Assessment.state_hash,Assessment.created,Assessment.source)
+        .where(Assessment.subject.in_(list(states)),Assessment.state_hash.in_(set(states.values())))
+        .order_by(Assessment.created.desc(),Assessment.id.desc()))
+    for item in s.execute(query):
+        if states.get(item.subject)==item.state_hash and item.subject not in newest:newest[item.subject]=item
+    reused={subject:item.id for subject,item in newest.items() if item.source=='known_good'}
+    if not include_source:return {subject:{'cached':True} for subject in reused}
+    result={}
+    for saved in s.scalars(select(Assessment).where(Assessment.id.in_(list(reused.values())))):
+        link=saved.result.get('known_good_reuse') if isinstance(saved.result,dict) else None
+        link=link if isinstance(link,dict) else {}
+        result[saved.subject]={'cached':True,'assessment_id':saved.id,'created':saved.created,
+            'source_assessment_id':link.get('source_assessment_id') if isinstance(link.get('source_assessment_id'),str) else None,
+            'source_subject':link.get('source_subject') if isinstance(link.get('source_subject'),str) else None,
+            'source_created':link.get('source_created') if isinstance(link.get('source_created'),(int,float)) else None}
+    return result
