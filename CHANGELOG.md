@@ -1,3 +1,7 @@
+## 1.75.0 — 2026-11-15
+
+1. [PR #941](https://github.com/StealthCat/MrPatchy/pull/941): Add per-server restrict-only malware automatic-response overrides through Server → Security and admin API. An override can cap a server at Monitor only or Disabled and add path/hash exclusions; it never expands the fleet policy or authorizes response actions. It is recorded and audited but not enforced because no containment executor exists. Compatibility: additive setting rows and API, with no schema change; fleet policy API behavior is unchanged. Limits: group overrides and fleet listing remain open, and requirement E and other #682 runtime items remain incomplete.
+
 ## 1.74.0 — 2026-11-15
 
 1. [PR #949](https://github.com/StealthCat/MrPatchy/pull/949): Add an administrator-configurable in-app telemetry-loss notice threshold from 5 to 1440 minutes (default 15), expose its effective value in settings, and audit changes. The default preserves existing notice behavior and text; SMTP/webhook stale alerts (120 seconds) are unchanged. Compatibility: additive optional `telemetry_lost_minutes` API field; no schema change or migration, and clients omitting the field retain stored values. A changed threshold can revise the text of still-qualifying active notices once. Limit: endpoint-agent readiness and alerting remains open (#737).
