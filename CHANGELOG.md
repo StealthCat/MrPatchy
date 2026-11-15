@@ -1,3 +1,7 @@
+## 1.75.1 — 2026-11-15
+
+1. [PR #954](https://github.com/StealthCat/MrPatchy/pull/954): Add a bounded, pure parser and resolver for captured `modprobe.d`, `modules-load.d` and `/etc/modules` text, including effective-file precedence and potential boot-time install commands. It performs no I/O, runs no commands and authorizes nothing. Compatibility: no schema, API, UI, agent or runtime behavior change; no existing module is modified. Limits: file collection, catalog wiring, persistence, UI and runtime coverage remain out of scope; kernel aliases/dependencies, command-line settings and initramfs copies are unobserved, and requirement F remains incomplete.
+
 ## 1.75.0 — 2026-11-15
 
 1. [PR #941](https://github.com/StealthCat/MrPatchy/pull/941): Add per-server restrict-only malware automatic-response overrides through Server → Security and admin API. An override can cap a server at Monitor only or Disabled and add path/hash exclusions; it never expands the fleet policy or authorizes response actions. It is recorded and audited but not enforced because no containment executor exists. Compatibility: additive setting rows and API, with no schema change; fleet policy API behavior is unchanged. Limits: group overrides and fleet listing remain open, and requirement E and other #682 runtime items remain incomplete.
