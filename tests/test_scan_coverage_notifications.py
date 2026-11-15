@@ -295,6 +295,8 @@ def test_policy_save_records_server_managed_enabled_since(admin):
     saved = put_policy(admin, enabled_since=1.0)  # clients cannot choose the clock
     since = saved['enabled_since']
     assert before <= since <= time.time() and policy_value()['enabled_since'] == since
+    # MySQL JSON parses decimals of 17+ significant digits up to a bit off; the stored clock stays exact.
+    assert since == round(since, 6) and int(repr(since).replace('.', '')) < 2 ** 53
     assert admin.get('/api/hosts/' + HOST + '/security/policy').json()['enabled_since'] == since
     assert put_policy(admin, interval_hours=2)['enabled_since'] == since  # kept while scanning stays enabled
     assert 'enabled_since' not in put_policy(admin, enabled=False)  # removed when disabled

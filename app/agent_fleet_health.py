@@ -24,8 +24,11 @@ GAPS = [
     'Only enabled, non-deleted servers are listed. Disabled servers are not monitored.',
     'Verification is a periodic read-only receipt over the management connection, not independent attestation of a compromised host.',
     'Deployment type is shown only when the retained receipt names the expected systemd unit; otherwise it is not verified.',
-    'Resource metrics, readiness and alerts for endpoint agents are not assessed here.',
+    'Resource metrics are the agent\'s own root file system and memory observations from the retained telemetry; they are advisory, never change the health state and are not shown when telemetry is missing or future-dated.',
+    'Readiness and alerts for endpoint agents are not assessed here.',
 ]
+LOW_AVAILABLE_PERCENT = 10
+_MAX_COUNT = 2 ** 63 - 1
 
 
 def _timestamp(value):
@@ -33,6 +36,72 @@ def _timestamp(value):
         return None
     value = float(value)
     return value if math.isfinite(value) and value > 0 else None
+
+
+def _count(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= _MAX_COUNT:
+        return None
+    return value
+
+
+def _capacity(entry, unit):
+    """Validate one collected capacity record; anything inconsistent is unknown (None)."""
+    if not isinstance(entry, dict) or entry.get('state') != 'collected' or entry.get('unit') != unit:
+        return None
+    total, available = _count(entry.get('total')), _count(entry.get('available'))
+    if total is None or available is None or total == 0 or available > total:
+        return None
+    used = entry.get('used', total - available)
+    used = _count(used)
+    if used is None or used > total:
+        return None
+    return {'total': total, 'available': available,
+            'available_percent': round(available * 100 / total, 1), 'used_percent': round(used * 100 / total, 1)}
+
+
+def _pressure(entry):
+    """Return the validated PSI ``some avg60`` percentage, or None when unknown."""
+    if not isinstance(entry, dict) or entry.get('state') != 'collected' or entry.get('unit') != 'percent-stalled':
+        return None
+    some = entry.get('some')
+    value = some.get('avg60') if isinstance(some, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 100:
+        return None
+    return round(float(value), 2)
+
+
+def _record(telemetry, key):
+    record = telemetry.get(key)
+    return record if isinstance(record, dict) and record.get('version') == 1 else None
+
+
+def resources(telemetry, telemetry_state):
+    """Summarize the agent's retained resource observations. Pure, advisory and redacted.
+
+    Only validated numbers are returned; malformed, inconsistent or agent-reported
+    unknown signals are ``None``. Nothing here changes the health classification.
+    """
+    empty = {'disk': None, 'inodes': None, 'memory': None, 'cpu_pressure_avg60': None,
+             'memory_pressure_avg60': None, 'attention': []}
+    if telemetry_state not in ('fresh', 'stale') or not isinstance(telemetry, dict):
+        return {'state': 'unavailable', **empty}
+    device, pressure = _record(telemetry, 'device_health'), _record(telemetry, 'resource_pressure')
+    if device is None and pressure is None:
+        return {'state': 'absent', **empty}
+    result = {'state': 'present', **empty}
+    if device is not None:
+        result['disk'] = _capacity(device.get('bytes'), 'bytes')
+        result['inodes'] = _capacity(device.get('inodes'), 'inodes')
+    if pressure is not None:
+        memory = _capacity(pressure.get('memory_capacity'), 'bytes')
+        result['memory'] = None if memory is None else {
+            key: memory[key] for key in ('total', 'available', 'available_percent')}
+        result['cpu_pressure_avg60'] = _pressure(pressure.get('cpu'))
+        result['memory_pressure_avg60'] = _pressure(pressure.get('memory'))
+    for key, code in (('disk', 'disk-space-low'), ('inodes', 'disk-inodes-low'), ('memory', 'memory-low')):
+        if result[key] is not None and result[key]['available_percent'] <= LOW_AVAILABLE_PERCENT:
+            result['attention'].append(code)
+    return result
 
 
 def _deployment_type(status):
@@ -64,6 +133,7 @@ def classify(host, status, now):
         'verification': {'state': state, 'checked': checked, 'age_seconds': None if age is None else math.floor(age),
                          'issue_count': issue_count},
         'telemetry': {'state': telemetry, 'collected': collected if telemetry != 'invalid' else None},
+        'resources': resources(host.telemetry, telemetry),
     }
 
     def result(health, reason):
@@ -118,4 +188,5 @@ def page(offset=0, now=None):
     return {'generated_at': now, 'items': items, 'offset': offset, 'limit': PAGE_SIZE, 'total': len(rows),
             'more': offset + PAGE_SIZE < len(rows), 'counts': counts,
             'verification_stale_seconds': VERIFICATION_STALE_SECONDS,
-            'telemetry_stale_seconds': TELEMETRY_STALE_SECONDS, 'gaps': GAPS}
+            'telemetry_stale_seconds': TELEMETRY_STALE_SECONDS,
+            'low_available_percent': LOW_AVAILABLE_PERCENT, 'gaps': GAPS}

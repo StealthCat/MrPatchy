@@ -110,7 +110,7 @@ class Observation(Base):
     observed: Mapped[float] = mapped_column(Double)
     received: Mapped[float] = mapped_column(Double, default=time.time)
     evidence: Mapped[dict] = mapped_column(JSON)
-DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20, 'ai_updates_enabled': True, 'ai_update_hourly_limit': 20, 'ai_control_mode': 'rate', 'ai_rate_per_hour': 20, 'ai_daily_cap_usd': 10.0, 'ai_budget_timezone': 'UTC', 'history_days': 30}
+DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20, 'ai_updates_enabled': True, 'ai_update_hourly_limit': 20, 'ai_control_mode': 'rate', 'ai_rate_per_hour': 20, 'ai_daily_cap_usd': 10.0, 'ai_budget_timezone': 'UTC', 'history_days': 30, 'os_lifecycle_warning_days': 90}
 def config(s):
     item = s.get(Setting, 'config')
     values=item.value if item else {}
@@ -124,7 +124,7 @@ def config(s):
 def audit(s, action, detail): s.add(Audit(action=action, detail=detail))
 def register_models():
     # Imports register mappings only; no DDL or web application bootstrap.
-    from . import identity,operations,notifications,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good,file_trust,fleet_queries  # noqa: F401
+    from . import identity,operations,notifications,scheduling,releases,package_history,incidents,update_scores,ai_runs,ai_retry,ai_assessments,ai_claims,ai_admission,ai_budget,ai_provider_backoff,known_good,file_trust,fleet_queries,advisories  # noqa: F401
     from . import evidence_vault,quarantine,response_monitor,response_processes,process_response,repair_preparation,repair_staging,repair_publication,response_health,service_monitor,execution_scans  # noqa: F401
 
 def init():
