@@ -344,7 +344,7 @@ def collect_alerts(now=None,observing_since=None):
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app scheduled-scan coverage notifications')
         # In-app only: lifecycle text comes from the reviewed catalog, never endpoint text.
         from . import os_lifecycle_notifications
-        try:os_lifecycle_notifications.publish(s,hosts,now,cfg['repo_minutes']*120)
+        try:os_lifecycle_notifications.publish(s,hosts,now,cfg['repo_minutes']*120,cfg.get('os_lifecycle_warning_days',0))
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app OS lifecycle notifications')
         # In-app only: stored advisory applicability; counts only, never advisory or package text.
         from . import advisory_exposure_notifications
