@@ -1105,18 +1105,6 @@ def known_good_summary(user=Depends(admin_user)):
         return known_good.summary(s)
 
 
-@app.get('/api/ai/known-good/{fingerprint}/observations')
-def known_good_observations(fingerprint:str,offset:int=0,limit:int=20,user=Depends(admin_user)):
-    from . import known_good_links
-    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
-        raise HTTPException(400,'Invalid known-good fingerprint')
-    if offset<0 or not 1<=limit<=known_good_links.PAGE_LIMIT:
-        raise HTTPException(400,'Invalid linked-assessment pagination')
-    with Session() as s:
-        try:return known_good_links.page(s,fingerprint,offset,limit)
-        except LookupError as error:raise HTTPException(404,str(error)) from None
-
-
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
@@ -1160,6 +1148,18 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
         if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
         result=object_dict(row);result['known_good']=known_good.assessment(row,s)
         return result
+@app.get('/api/ai/known-good/{fingerprint}/observations')
+def known_good_observations(fingerprint:str,offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_links
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    if offset<0 or not 1<=limit<=known_good_links.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid linked-assessment pagination')
+    with Session() as s:
+        try:return known_good_links.page(s,fingerprint,offset,limit)
+        except LookupError as error:raise HTTPException(404,str(error)) from None
+
+
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page

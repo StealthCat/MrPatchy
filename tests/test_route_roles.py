@@ -15,7 +15,6 @@ PASSWORD = os.environ['ADMIN_PASSWORD']
 EXPECTED_ROLES = {
     ('GET','/'):'public',
     ('GET','/api/ai/known-good/summary'):'admin',
-    ('GET','/api/ai/known-good/{fingerprint}/observations'):'admin',
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
     ('POST','/api/ai/provider-backoff/clear'):'admin',
     ('GET','/api/update-scores/blocked'):'admin',
@@ -23,6 +22,7 @@ EXPECTED_ROLES = {
     ('GET','/api/ai/triage/timings'):'admin',
     ('GET','/api/ai/runs'):'admin',
     ('GET','/api/ai/runs/{run_id}'):'admin',
+    ('GET','/api/ai/known-good/{fingerprint}/observations'):'admin',
     ('GET','/api/audit'):'admin',
     ('GET','/api/audit/entries/{entry_id}'):'admin',
     ('GET','/api/audit/export'):'admin',
