@@ -224,21 +224,30 @@ def _statements(text: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]
                 i += 1
                 continue
             if kind == 'word' and value in ('#clear', '#include'):
+                # APT accepts directives only at the top level and with exactly one argument
+                # ("Directives can only be done at the top level", "Extra junk after value").
+                if stack:
+                    raise _Syntax(line, value + ' is only valid at the top level.')
                 args: list[str] = []
                 i += 1
                 while i < len(tokens) and tokens[i][1] in ('word', 'str'):
                     args.append(tokens[i][2])
                     i += 1
-                if i >= len(tokens) or tokens[i][1] != ';' or not args:
-                    raise _Syntax(line, value + ' needs at least one argument and a terminating semicolon.')
+                if i >= len(tokens) or tokens[i][1] != ';' or len(args) != 1:
+                    raise _Syntax(line, value + ' needs exactly one argument and a terminating semicolon.')
                 i += 1
                 op = 'clear' if value == '#clear' else 'include'
-                for arg in args:
-                    path = key_path(arg, line) if op == 'clear' else arg
-                    if op == 'clear' and not any(path):
-                        raise _Syntax(line, '#clear needs an option name.')
-                    statements.append({'op': op, 'path' if op == 'clear' else 'target':
-                                       [p for p in path if p] if op == 'clear' else path, 'line': line})
+                arg = args[0]
+                if op == 'include':
+                    statements.append({'op': 'include', 'target': arg, 'line': line})
+                    continue
+                path = key_path(arg, line)
+                if not any(path):
+                    raise _Syntax(line, '#clear needs an option name.')
+                if path[-1] == '':
+                    # ``#clear A::;`` names an empty child of A, so APT clears nothing.
+                    continue
+                statements.append({'op': 'clear', 'path': path, 'line': line})
                 continue
             if kind == 'str':
                 # An untagged item inside a block: ``{ "value"; }``.
@@ -267,7 +276,11 @@ def _statements(text: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]
                 i += 3 if after[1] == ';' else 2
                 continue
             if nxt and nxt[1] in (';', '}'):
-                statements.append({'op': 'set', 'path': prefix + path, 'value': '', 'line': line})
+                if stack:
+                    # Inside a block APT reads a bare word as an untagged item: ``{ /tmp/x; }``.
+                    statements.append({'op': 'set', 'path': prefix + [''], 'value': value, 'line': line})
+                else:
+                    statements.append({'op': 'set', 'path': prefix + path, 'value': '', 'line': line})
                 i += 2 if nxt[1] == ';' else 1
                 continue
             raise _Syntax(line, 'An option must end with a semicolon.')
@@ -401,7 +414,7 @@ def resolve(parts: Any, main: Any = None) -> dict[str, Any]:
                         path=path, line=statement['line'])
             _apply(root, statement, (path, statement['line']))
         if error:
-            add_gap('syntax_error', 'APT refuses to run with a configuration file it cannot parse.',
+            add_gap('syntax_error', 'This contract could not parse the file; APT may reject it or read it differently.',
                     path=path, line=error['line'], reason=error['detail'])
             return 'syntax_error'
         return 'parsed'

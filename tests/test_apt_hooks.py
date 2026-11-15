@@ -200,3 +200,36 @@ def test_bounds_on_files_values_and_hooks():
     items = ' '.join(f'"c{i}";' for i in range(apt_hooks.MAX_HOOKS + 1))
     result = resolve(part('10a', f'DPkg::Post-Invoke {{ {items} }};'))
     assert len(result['hooks']) == apt_hooks.MAX_HOOKS and 'hook_limit' in codes(result)
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('DPkg::Post-Invoke { /tmp/evil; };', [('DPkg::Post-Invoke', '/tmp/evil')]),
+    ('DPkg::Post-Invoke { "ok"; evil; "ok2"; };',
+     [('DPkg::Post-Invoke', 'ok'), ('DPkg::Post-Invoke', 'evil'), ('DPkg::Post-Invoke', 'ok2')]),
+    ('APT::Update::Pre-Invoke { evil; };', [('APT::Update::Pre-Invoke', 'evil')]),
+])
+def test_unquoted_word_inside_a_block_is_an_untagged_item(text, expected):
+    # apt-config 2.8.3 dumps a bare word in a block as an untagged list item and runs it.
+    result = resolve(part('10a', text))
+    assert commands(result) == expected
+    assert result['apt_behavior'] == 'determined'
+
+
+def test_clear_with_trailing_separator_clears_nothing():
+    # apt-config 2.8.3 keeps both items after ``#clear DPkg::Post-Invoke::;``.
+    result = resolve(part('10a', 'DPkg::Post-Invoke {"a";};\nDPkg::Post-Invoke::t "t";\n#clear DPkg::Post-Invoke::;'))
+    assert sorted(v for _, v in commands(result, 'DPkg::Post-Invoke')) == ['a', 't']
+    assert result['apt_behavior'] == 'determined'
+
+
+@pytest.mark.parametrize('text', [
+    'DPkg { #clear Post-Invoke; };',
+    'DPkg::Post-Invoke { "a"; #clear DPkg::Post-Invoke; "b"; };',
+    'DPkg { #include "/etc/x"; };',
+    'DPkg::Pre-Invoke { "p"; };\nDPkg::Post-Invoke { "q"; };\n#clear DPkg::Pre-Invoke DPkg::Post-Invoke;',
+])
+def test_directives_apt_rejects_are_syntax_errors(text):
+    # APT fails with "Directives can only be done at the top level" or "Extra junk after value".
+    result = resolve(part('10a', text))
+    assert result['apt_behavior'] == 'undetermined'
+    assert 'syntax_error' in codes(result)

@@ -3789,6 +3789,9 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
 - **Syntax:** `//`, `/* */` and `#` comments, scalar and unquoted values, nested
   blocks, list items, `#clear` and `#include`; keys are case-insensitive. Later
   scalars and tagged children override; untagged items append.
+  Inside a block a bare word is an untagged item (`{ /tmp/x; }`), as in apt
+  2.8.3. `#clear`/`#include` inside a block or with more than one argument are
+  syntax errors, and `#clear A::;` clears nothing.
 - **Reported options:** `command` (Update/DPkg Invoke lists and
   `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
   (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
