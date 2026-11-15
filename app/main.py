@@ -1033,6 +1033,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
         rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
+        reused=ai_assessments.current_reuse(s,rows,include_source=user.get('role')=='admin')
         result=[];now=time.time()
         for row in rows:
             retry=None
@@ -1040,7 +1041,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
                 retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
                 if row.id in claimed:retry={**retry,'state':'running','next_at':0,'reason':'A worker owns this investigation. Its result must still pass ownership and evidence checks.'}
                 if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
-            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row)})
+            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row),'known_good_reuse':reused.get(row.id)})
         return result
 class ApproveInput(BaseModel):
     approved:bool
