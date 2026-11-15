@@ -1282,7 +1282,8 @@ def settings(user=Depends(admin_user)):
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
-            'ai_control_migration':ai_control_preview.legacy_migration(cfg)}
+            'ai_control_migration':ai_control_preview.legacy_migration(cfg),
+            'telemetry_lost_minutes':operations.telemetry_lost_minutes(cfg)}
 
 @app.get('/api/settings/ai-connections')
 def ai_connection_inventory(user=Depends(admin_user)):
@@ -1409,6 +1410,8 @@ class PatchSettingsInput(BaseModel):
     deadlines:dict[str,int]
     # Optional so older clients that omit it keep the stored window.
     os_lifecycle_warning_days:int|None=Field(default=None,ge=0,le=730)
+    # Optional for the same reason; whole minutes before the in-app telemetry-lost notice (#948).
+    telemetry_lost_minutes:int|None=Field(default=None,ge=5,le=1440,strict=True)
 
 class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1435,6 +1438,10 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                 detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
             if section=='patching' and previous['os_lifecycle_warning_days']!=values.get('os_lifecycle_warning_days',previous['os_lifecycle_warning_days']):
                 detail+='; OS lifecycle advance warning changed from '+str(previous['os_lifecycle_warning_days'])+' to '+str(values['os_lifecycle_warning_days'])+' days'
+            if section=='patching' and 'telemetry_lost_minutes' in values:
+                before=operations.telemetry_lost_minutes(previous)
+                if before!=values['telemetry_lost_minutes']:
+                    detail+='; telemetry-loss notification threshold changed from '+str(before)+' to '+str(values['telemetry_lost_minutes'])+' minutes'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             audit(s,'update '+section+' settings',detail)
