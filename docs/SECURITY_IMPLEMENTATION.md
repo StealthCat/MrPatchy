@@ -3279,6 +3279,17 @@ Before this checkpoint the durable `cve_exposure_history` ledger (#858) could be
 - **Validation:** `tests/test_cve_exposure_fleet.py` covers grouping, ordering, deleted and resolved exclusion, reopening, caps with full totals, and the admin-only read-only route. `tests/ui_fleet_exposure.cjs` covers the populated, truncated, empty, malformed, error/retry, injection and stale-reply cases, with no horizontal overflow at 320, 768 and 1440 px.
 - **Remaining in requirement D:** scheduled scans, publication dates in `exposure_window()`, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
 
+#### Fleet CVE exposure bounds and truncation wording — worker checkpoint #913
+
+The #911 view capped 50 rows per advisory but said "More affected servers are not listed". One row is one exposure (server × package), so one server with several affected packages could trigger that text while fewer than 50 servers were shown. The rows query also loaded every open row of the 200 listed advisories and trimmed them in Python.
+
+- **Bounded query:** `fleet_open` ranks rows per advisory in SQL with `ROW_NUMBER() OVER (PARTITION BY advisory_id …)` (SQLite 3.25+, MySQL 8) and loads at most `exposure_limit` (50) rows per advisory, in the same first-affected/server/package order as before.
+- **Summary fields still cover every row:** the group query now counts each advisory's open exposures and the rows naming a vendor fixed version. CVE IDs come from a separate `DISTINCT (advisory_id, cve_ids)` read, so `fixed_known` and `cve_ids` are unchanged by the bound.
+- **API:** each advisory adds `exposures_total`. `exposures_truncated` now compares that total with the listed rows. The keyword argument is now `exposure_limit` (formerly `server_limit`); only tests passed it.
+- **UI:** a truncated advisory says "Showing N of M open exposures. Each exposure is one package on one server, so more affected packages or servers are not listed." It omits "of M" when the total is missing or malformed.
+- **Unchanged:** schema (no index was added, because nothing was measured to justify one), routes, roles and the read-only boundary. There are no scan, advisory-service, AI-provider or SSH calls.
+- **Validation:** `tests/test_cve_exposure_fleet.py` adds a one-server/six-package case and a statement spy showing that no query loads more than advisories × limit rows (main loaded 16 rows in one statement where the bound allows 6). It also proves that output under the limit is identical. `tests/ui_fleet_exposure.cjs` asserts the new wording.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
