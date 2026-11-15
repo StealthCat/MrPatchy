@@ -8730,3 +8730,24 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
   - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+
+### OS support-end advance warning — worker checkpoint #341 (roadmap J)
+
+This delivers the "configurable advance-warning window before an end date" item of #341's remaining scope. Until now, the lifecycle producer `app/os_lifecycle_notifications.py` warned only after a release had already crossed its standard-support end date.
+
+- **Setting:** `os_lifecycle_warning_days`, set under **Settings → Patch policy**. It defaults to 90 days, accepts 0–730, and 0 turns the warning off.
+  - `PUT /api/settings/patching` keeps the stored value when a client omits the field.
+  - A change adds "OS lifecycle advance warning changed from N to M days" to the existing `update patching settings` audit row.
+  - The legacy `PUT /api/settings` accepts the field and merges it only when it is sent.
+  - The coordinator treats an invalid stored value as 0.
+- **Trigger:** a new `ending-soon` category, severity `low`, on the same admin-only `os-lifecycle`/`support-ended` event. It fires for a server with fresh inventory while:
+  - the release is in standard support and its standard end date is within the window;
+  - the release is in verified Debian LTS coverage and the LTS end date is within the window.
+- **Payload:** fixed text built only from catalog labels and dates. It names what follows the boundary: Ubuntu Pro extended coverage that the inventory does not observe, Debian LTS limits on architecture and package scope, or no further reviewed phase. It never includes a day count that changes over time or endpoint text, and it links to `#servers/<host>/overview`.
+- **Revisions:** the revision binds the category, vendor, release and boundary date, so daily ticks add nothing.
+  - Crossing the boundary appends the existing `ended`, `subscription` or `lts-unverified` revision as unread.
+  - Moving into verified Debian LTS resolves the event.
+  - A later LTS-end warning reopens it.
+- **Unchanged:** Ubuntu releases already in Pro-dependent extended coverage keep their existing medium event. Stale or missing inventory holds state and never opens a warning. `os_lifecycle.evaluate`, the catalog, patching, upgrades, the schema, roles and response authorization are unchanged.
+- **Compatibility:** existing installations get the 90-day default. A server with fewer than 90 days of standard or verified LTS support left receives one low-severity notice after upgrade.
+- **Remaining (#341):** Ubuntu Pro entitlement discovery, RPM/vendor catalog coverage, catalog refresh and signing, the migration queue and plans, fleet filters and reports, and real-target acceptance.

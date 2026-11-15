@@ -13,7 +13,14 @@ Debian/Ubuntu release is past standard support and coverage is not verified:
 * ``lts-unverified``: Debian standard support ended and the host is not verified
   as eligible for Debian LTS (medium).
 
-Standard support and verified Debian LTS coverage need no attention. A changed,
+While a release is still covered, an optional advance warning (``ending-soon``,
+low) is published when the next reviewed support boundary falls within the
+administrator-configured ``os_lifecycle_warning_days`` window (0 disables it):
+the end of standard support, or the end of verified Debian LTS coverage. Once
+the boundary passes, the same event moves to the attention category above, or
+resolves if verified coverage continues.
+
+Otherwise standard support and verified Debian LTS coverage need no attention. A changed,
 unknown or unsupported release, or a disabled, deleted or re-enrolling server,
 resolves the event because the earlier claim no longer applies. Stale or missing
 inventory keeps the current state: freshness gaps cannot prove a server was
@@ -24,6 +31,8 @@ controller catalog (label and end dates) and never carries endpoint text. It
 changes no patching, upgrade or subscription state and acknowledges,
 remediates or authorizes nothing.
 """
+from datetime import date, datetime, timezone
+
 from sqlalchemy import select
 
 from . import host_lifecycle, notifications, os_lifecycle
@@ -32,12 +41,38 @@ SOURCE = 'os-lifecycle'
 KIND = 'support-ended'
 SUBJECT = 'server'
 HOLD = object()
-SEVERITY = {'ended': 'high', 'subscription': 'medium', 'lts-unverified': 'medium'}
+SEVERITY = {'ended': 'high', 'subscription': 'medium', 'lts-unverified': 'medium', 'ending-soon': 'low'}
+MAX_WARNING_DAYS = 730
 _HOLD_COVERAGE = {'missing_inventory', 'stale_inventory'}
 RESOLVED = 'The operating-system support lifecycle of this server no longer needs administrator attention.'
 
 
-def classify(host, now, max_age_seconds):
+def warning_days(value):
+    """Return a valid advance-warning window in days; invalid stored values disable the warning."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_WARNING_DAYS:
+        return 0
+    return value
+
+
+def _upcoming(assessment, now, days):
+    """Return the next covered-support end date within ``days``, or ``None``."""
+    if days <= 0:
+        return None
+    if assessment.get('state') == 'standard':
+        boundary = assessment.get('standard_until')
+    elif assessment.get('state') == 'extended' and assessment.get('coverage') == 'debian_lts':
+        boundary = assessment.get('extended_until')
+    else:
+        return None
+    try:
+        end = date.fromisoformat(boundary)
+        today = datetime.fromtimestamp(now, timezone.utc).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    return boundary if 0 <= (end - today).days <= days else None
+
+
+def classify(host, now, max_age_seconds, advance_days=0):
     """Return ``(category, assessment)``, ``(None, None)`` or ``(HOLD, None)`` for one server."""
     if host.deleted_at or not host_lifecycle.active(host) or host.state == 'enrolling':
         return None, None
@@ -51,6 +86,9 @@ def classify(host, now, max_age_seconds):
         return 'lts-unverified', assessment
     if state == 'unknown' and coverage in _HOLD_COVERAGE:
         return HOLD, None
+    boundary = _upcoming(assessment, now, warning_days(advance_days))
+    if boundary:
+        return 'ending-soon', {**assessment, 'boundary': boundary}
     return None, None
 
 
@@ -59,6 +97,21 @@ def message(category, assessment):
     label = assessment['label']
     standard = assessment['standard_until']
     extended = assessment.get('extended_until')
+    if category == 'ending-soon':
+        if assessment.get('state') == 'extended':
+            return (label + ' Debian LTS coverage ends on ' + extended + '. After that date no reviewed vendor '
+                    'support phase remains. Plan an upgrade to a supported release before then. Lifecycle status is '
+                    'not a compromise verdict and changes no patching.')
+        if assessment['vendor'] == 'Ubuntu' and extended:
+            after = ('Extended coverage until ' + extended + ' requires an active Ubuntu Pro entitlement, which '
+                     'this inventory does not observe.')
+        elif extended:
+            after = ('Debian LTS may cover it until ' + extended + ' on supported architectures only, with a '
+                     'reduced package scope.')
+        else:
+            after = 'No further reviewed vendor support phase follows.'
+        return (label + ' standard support ends on ' + standard + '. ' + after + ' Plan an upgrade or confirm '
+                'coverage before then. Lifecycle status is not a compromise verdict and changes no patching.')
     if category == 'ended':
         last = extended or standard
         return (label + ' reached the end of its reviewed vendor support lifecycle on ' + last + '. '
@@ -78,17 +131,19 @@ def _link(host_id):
     return '#servers/' + host_id + '/overview'
 
 
-def publish(session, hosts, now, max_age_seconds):
+def publish(session, hosts, now, max_age_seconds, advance_days=0):
     """Publish or resolve lifecycle events in the caller's transaction. Returns the attention host IDs."""
     attention, held = {}, set()
     for host in hosts:
-        category, assessment = classify(host, now, max_age_seconds)
+        category, assessment = classify(host, now, max_age_seconds, advance_days)
         if category is HOLD:
             held.add(host.id)
         elif category:
             attention[host.id] = (category, assessment)
     for host_id, (category, assessment) in attention.items():
         revision = category + ':' + str(assessment['vendor']) + ':' + str(assessment['release'])
+        if category == 'ending-soon':
+            revision += ':' + assessment['boundary']
         notifications.publish(session, source=SOURCE, kind=KIND, subject_type=SUBJECT, subject_id=host_id,
                               host_id=host_id, subject_revision=revision, severity=SEVERITY[category],
                               reason=message(category, assessment), deep_link=_link(host_id),
