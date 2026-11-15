@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.62.1"
+APP_VERSION = "1.66.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1326,6 +1326,7 @@ class ConfigInput(BaseModel):
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
+    os_lifecycle_warning_days:int=Field(default=90,ge=0,le=730)
     api_key:str=Field(default='',max_length=1000)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
@@ -1402,6 +1403,8 @@ class PatchSettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
+    # Optional so older clients that omit it keep the stored window.
+    os_lifecycle_warning_days:int|None=Field(default=None,ge=0,le=730)
 
 class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1426,6 +1429,8 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
             if section=='ai' and previous['ai_daily_cap_usd']!=values['ai_daily_cap_usd']:
                 detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
+            if section=='patching' and previous['os_lifecycle_warning_days']!=values.get('os_lifecycle_warning_days',previous['os_lifecycle_warning_days']):
+                detail+='; OS lifecycle advance warning changed from '+str(previous['os_lifecycle_warning_days'])+' to '+str(values['os_lifecycle_warning_days'])+' days'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             audit(s,'update '+section+' settings',detail)
@@ -1471,7 +1476,7 @@ def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()):
         raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
-    return save_settings_section(body.model_dump(),'patching')
+    return save_settings_section(body.model_dump(exclude_none=True),'patching')
 
 @app.put('/api/settings/history')
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
@@ -1502,6 +1507,17 @@ def blocked_update_scores(user=Depends(admin_user)):
     from . import scoring_block_notifications
     with Session() as s:
         return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
+@app.get('/api/update-scores/status')
+def update_score_queue_status(user=Depends(admin_user)):
+    """Summarize the update-importance scoring queue (#917). Read-only.
+
+    Counts and timestamps only; shared AI start gates and pause still decide
+    when a scoring batch starts.
+    """
+    from . import scoring_queue_status
+    with Session() as s:
+        return scoring_queue_status.status(s,config(s))
 
 @app.post('/api/update-scores/blocked/retry')
 def retry_blocked_update_scores(user=Depends(admin_user)):
@@ -2054,6 +2070,11 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         from .advisories import retained,history
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
         return {**result,'exposure_history':history(s,host_id)}
+
+@app.get('/api/cve-exposure/fleet')
+def fleet_cve_exposure(user=Depends(admin_user)):
+    from .advisories import fleet_open
+    with Session() as s:return fleet_open(s)
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
@@ -3399,6 +3420,26 @@ def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_us
     except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
     if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
     return value
+
+class MalwarePolicyInput(BaseModel):
+    model_config={'extra':'forbid'}
+    policy:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/settings/malware-response')
+def malware_policy_read(user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:return malware_policy.state(s)
+
+@app.put('/api/settings/malware-response')
+def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
+    # Stores policy only: no detector, executor, provider call or response authorization runs here.
+    from . import malware_policy,malware_response
+    try:return malware_policy.save(body.policy,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid malware response policy: '+str(exc))
+    except malware_policy.EnforcementUnavailable:raise HTTPException(409,'Enforce mode is unavailable until a containment executor exists; choose Disabled or Monitor only')
+    except malware_policy.StalePolicy:raise HTTPException(409,'The malware response policy changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
 
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):

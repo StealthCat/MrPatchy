@@ -5,7 +5,8 @@ const SETTINGS_SECTIONS={
  database:['Database','MySQL connection details and offline migrations.','mysql sqlite connection migration host port password'],
  https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
  history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup'],
- agents:['Agent maintenance','Fleet defaults for automatic agent upgrade and repair.','agent health maintenance automatic upgrade repair helper collector drift default override inherit']
+ agents:['Agent maintenance','Fleet defaults for automatic agent upgrade and repair.','agent health maintenance automatic upgrade repair helper collector drift default override inherit'],
+ malware:['Malware response','Fleet automatic-response policy for detected malware. Recorded only; not enforced yet.','malware quarantine terminate containment automatic response exclusions signature unknown policy']
 };
 function settingsMatches(query,sections=SETTINGS_SECTIONS){
  const terms=String(query||'').toLowerCase().split(/\s+/).filter(Boolean);
@@ -34,17 +35,18 @@ async function settings(revision=renderRevision){
  }
  if(section==='ai'){renderAISettings(data,revision,container);return;}
  if(section==='agents'){container.innerHTML='<div class="card" id="agent-defaults"><p class="help">Loading agent maintenance defaults…</p></div>';await agentMaintenanceDefaults(revision);return;}
+ if(section==='malware'){container.innerHTML='<div class="card" id="malware-policy"><p class="help">Loading malware response policy…</p></div>';await malwarePolicySettings(revision);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
  if(section==='https'){
   container.innerHTML=`<div class="card"><h2>HTTPS profiles</h2><p>Configure independent internal and external profiles with uploaded certificates, ACME, or the built-in local CA.</p><p>${Object.entries(data.tls.profiles||{}).filter(([,p])=>p.enabled).map(([name,p])=>esc(name+': '+p.domain+' · browser port '+p.effective_https_port)+' · '+badge(p.mode)).join('<br>')||'Initial HTTPS configured by deployment'}</p><button type="button" id="tls-button">Configure HTTPS →</button></div>`;
   $('#tls-button').onclick=tlsModal;return;
  }
- if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
+ if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><label>OS support-end advance warning · days<input name="os_lifecycle_warning_days" type="number" min="0" max="730" value="${esc(data.os_lifecycle_warning_days??90)}" required></label><p class="help">Administrators get an in-app notice this many days before a server's verified release leaves standard support or verified Debian LTS coverage. 0 turns the advance notice off; notices after support ends are unchanged.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  if(section==='history')container.innerHTML=`<form id="history-settings-form" class="card"><h2>History retention</h2><fieldset><label>Days to retain observations and inventory revisions<input name="history_days" type="number" min="1" max="3650" value="${data.history_days}" required></label><p class="help">The worker uses this period for observation, inventory revision and completed AI log cleanup. Package change history is retained separately.</p><button type="submit" class="primary">Save history retention</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  const form=container.querySelector('form'),result=$('#section-save-result');
  form.onsubmit=async event=>{
   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
-  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
+  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),os_lifecycle_warning_days:+f.get('os_lifecycle_warning_days'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
   fieldset.disabled=true;result.textContent='Saving…';
   try{await api('/settings/'+section,'PUT',body);if(currentView(revision,'settings')&&result.isConnected)result.textContent=section==='patching'?'Patch policy saved.':'History retention saved.';}
   catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=error.message;}
@@ -76,6 +78,14 @@ function renderAISettings(data,revision,container){
  const keyForm=$('#ai-key-form'),form=$('#ai-settings-form'),select=$('#ai-model'),manual=$('#ai-model-manual');
  const keyResult=$('#ai-key-result'),saveResult=$('#ai-save-result'),testResult=$('#ai-test-result'),status=$('#ai-model-status'),refresh=$('#ai-model-refresh');
  const alive=()=>currentView(revision,'settings')&&container.isConnected;
+ // Read-only scoring queue summary (#917), fetched separately so its exact-identity pass never delays Settings.
+ // Counts and times only; never a promise that a batch starts now.
+ container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend','<div class="notice" id="scoring-queue" role="status" aria-live="polite"><strong>Scoring queue</strong> · Loading…</div>');
+ (async()=>{const target=$('#scoring-queue');if(!target)return;let q;try{q=await api('/update-scores/status');}catch{q=null;}
+  if(!currentView(revision,'settings')||!target.isConnected)return;
+  if(!q||!q.counts){target.innerHTML='<strong>Scoring queue</strong> · Unavailable right now. This never means scoring may start; shared start gates and pause still apply.';return;}
+  const c=q.counts,stopped={ai_disabled:'Central AI provider calls are disabled, so no scoring batch starts.',scoring_disabled:'Automatic update scoring is off, so no scoring batch starts.',not_configured:'A saved model and API key are required before scoring can start.'}[q.scheduler];
+  target.innerHTML=`<strong>Scoring queue</strong> · ${esc(q.current_updates)} current pending update${q.current_updates===1?'':'s'}: ${esc(c.complete)} scored · ${esc(c.running)} running · ${esc(c.eligible)} eligible now · ${esc(c.deferred)} deferred by shared admission · ${esc(c.retry_wait)} waiting for the hourly retry · ${esc(c.blocked)} blocked${q.paused_server_updates?' · '+esc(q.paused_server_updates)+' on AI-paused servers (not queued)':''}.${q.unscored?'<br>Oldest unscored since '+esc(date(q.oldest_waiting_since))+(q.next_eligible_at?' · next timed eligibility '+esc(date(q.next_eligible_at)):''):''}${stopped?'<br>'+esc(stopped):''}<br><span class="help">Shared start gates, per-server pause and the daily cap still decide when a batch starts. Scores are advisory.</span>`;})();
  // Inserted after the budget notice lookup so this notice never receives budget details.
  if(data.ai_scoring_blocked>0)container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend',`<div class="notice" id="scoring-blocked"><strong>${esc(data.ai_scoring_blocked)} update ${data.ai_scoring_blocked===1?'score is':'scores are'} blocked</strong> by a non-transient AI provider failure under the saved model and key. No automatic retry is scheduled. After resolving the cause (for example restored quota or access), retry them; changing the saved model or key also makes them eligible.<br><button type="button" id="scoring-blocked-retry">Retry blocked scores</button><span id="scoring-blocked-result" class="help" role="status"></span></div>`);
  const retryScoring=$('#scoring-blocked-retry');
@@ -314,4 +324,44 @@ async function agentMaintenanceDefaults(revision){
   catch(error){if(live())result.textContent=error.message;}
   finally{if(fieldset.isConnected)fieldset.disabled=false;}
  };
+}
+const MALWARE_ACTION_LABELS={quarantine_file:'Quarantine the verified file',terminate_process:'Terminate the verified process'};
+const MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only (record what would happen)',enforce:'Enforce (unavailable)'};
+function malwarePolicyForm(data){
+ const p=data.policy,l=data.limits,actions=(name,chosen)=>data.actions.map(a=>`<label class="check"><input type="checkbox" name="${name}" value="${esc(a)}" ${chosen.includes(a)?'checked':''}><span>${esc(MALWARE_ACTION_LABELS[a]||a)}<br><small class="help">${esc(data.effects[a]||'')}</small></span></label>`).join('');
+ const modes=data.modes.map(m=>{const off=m==='enforce'&&!data.enforcement_available;return `<option value="${esc(m)}" ${m===p.mode?'selected':''} ${off?'disabled':''}>${esc(MALWARE_MODE_LABELS[m]||m)}</option>`;}).join('');
+ return `<form id="malware-policy-form" class="card"><h2>Fleet malware automatic response</h2>
+<div class="notice" id="malware-enforcement-notice"><strong>Not enforced.</strong> No containment executor exists yet, so this policy is recorded and audited but never quarantines a file or terminates a process. Enforce stays unavailable until an executor is delivered and reviewed.</div>
+${data.stored_invalid?`<div class="notice" id="malware-invalid-notice" role="alert"><strong>The stored policy is invalid and is treated as Disabled.</strong> ${esc(data.stored_invalid_reason||'')}. Saving replaces it.</div>`:''}
+<p class="help">A detection qualifies only under the contract's checks: authenticated, fresh signatures bound to the artifact hash, or a bound AI malicious verdict with independent corroborating evidence. AI output alone never authorizes an action. Unknown-malware responses also need AI to be available and unpaused for that server; signature matches do not.</p>
+<fieldset><label>Mode<select name="mode">${modes}</select></label>
+<p class="help" id="malware-enforce-help">Enforce is shown for clarity but disabled: saving it is refused while no executor exists.</p>
+<fieldset class="malware-actions"><legend>Known malware (signature or indicator match)</legend>${actions('known_actions',p.known_actions)}</fieldset>
+<fieldset class="malware-actions"><legend>Unknown malware (evidence-supported AI discovery)</legend><label class="check"><input type="checkbox" name="allow_unknown" ${p.allow_unknown?'checked':''}> Allow responses to evidence-supported unknown malware</label>${actions('unknown_actions',p.unknown_actions)}</fieldset>
+<div class="form-grid"><label>Minimum AI confidence<input name="min_ai_confidence" type="number" min="${l.min_ai_confidence}" max="1" step="0.01" value="${esc(p.min_ai_confidence)}" required></label>
+<label>Corroborating evidence kinds<input name="min_corroborating_kinds" type="number" min="${l.min_corroborating_kinds}" max="${l.max_corroborating_kinds}" step="1" value="${esc(p.min_corroborating_kinds)}" required></label>
+<label>Maximum signature age · seconds<input name="max_signature_age_seconds" type="number" min="1" max="${l.max_signature_age_seconds}" step="1" value="${esc(p.max_signature_age_seconds)}" required></label></div>
+<label>Excluded paths · one absolute path per line<textarea name="excluded_paths" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_paths.join('\n'))}</textarea></label>
+<label>Excluded SHA-256 hashes · one per line<textarea name="excluded_sha256" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_sha256.join('\n'))}</textarea></label>
+<p class="help">Path exclusions also match a process's verified executable path. At most ${esc(l.max_exclusions)} of each.</p>
+<button type="submit" class="primary">Save malware response policy</button></fieldset><p class="help" role="status" id="malware-policy-result"></p></form>`;
+}
+async function malwarePolicySettings(revision){
+ const container=$('#malware-policy'),alive=()=>currentView(revision,'settings')&&container.isConnected;
+ try{
+  let data=await api('/settings/malware-response');if(!alive())return;
+  container.outerHTML=malwarePolicyForm(data);
+  const form=$('#malware-policy-form'),result=$('#malware-policy-result'),ok=()=>currentView(revision,'settings')&&result.isConnected;
+  const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  form.onsubmit=async event=>{
+   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
+   const policy={mode:f.get('mode'),known_actions:f.getAll('known_actions'),unknown_actions:f.getAll('unknown_actions'),allow_unknown:f.has('allow_unknown'),
+    min_ai_confidence:+f.get('min_ai_confidence'),min_corroborating_kinds:+f.get('min_corroborating_kinds'),max_signature_age_seconds:+f.get('max_signature_age_seconds'),
+    excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
+   fieldset.disabled=true;result.textContent='Saving…';
+   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();}}
+   catch(error){if(ok())result.textContent='Malware response policy was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload Settings to see the current saved policy.':'');}
+   finally{if(fieldset.isConnected)fieldset.disabled=false;}
+  };
+ }catch(error){if(alive())container.innerHTML=PatchyUI.error('Could not load the malware response policy',esc(error.message));}
 }
