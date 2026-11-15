@@ -2734,6 +2734,13 @@ Saves that need no confirmation:
 Settings → AI sends the confirmation only after **Save with these expansions**.
 Cancel and Escape still save nothing.
 
+Turning AI on (`ai_enabled` false → true) is an expansion too, because it starts
+paid provider calls. The preview and both save routes compare the master switch
+alongside the admission/spend ceilings, so enabling AI through either route needs
+the same confirmation, and the live Settings → AI panel flags it. Keeping AI on or
+turning it off needs none. The switch is not part of the stored-controls revision,
+so the content-hash limitation below applies to it in the same way.
+
 A confirmation for one expansion cannot authorize a different or larger one.
 After the stored controls change to different values it no longer matches.
 

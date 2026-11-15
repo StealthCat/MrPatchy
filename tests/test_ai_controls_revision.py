@@ -34,7 +34,7 @@ def test_partial_ai_section_save_keeps_stored_controls(admin):
 def test_partial_save_validates_enable_against_stored_model(admin):
     admin.put('/api/settings/ai-key', json={'api_key': 'fixture-key'})
     assert confirmed_put(admin, '/api/settings/ai', FULL).status_code == 200
-    assert admin.put('/api/settings/ai', json={'ai_enabled': True}).status_code == 200
+    assert confirmed_put(admin, '/api/settings/ai', {'ai_enabled': True}).status_code == 200
     assert saved(admin)['ai_model'] == 'm1' and saved(admin)['ai_enabled']
 
 

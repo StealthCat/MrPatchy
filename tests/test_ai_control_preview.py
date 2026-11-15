@@ -71,6 +71,20 @@ def test_enabling_scoring_expands_and_disabling_restricts():
     assert off['changed'] and not off['expands']
 
 
+def test_enabling_ai_expands_and_other_enable_states_do_not():
+    enabling = 'AI is enabled and Mr Patchy starts making paid provider calls within the ceilings below.'
+    on = effects({'ai_enabled': False}, {'ai_enabled': True})
+    assert on['expands'] and on['expansions'] == [enabling]
+    for stored, proposed in (({'ai_enabled': True}, {'ai_enabled': True}), ({'ai_enabled': True}, {'ai_enabled': False}),
+                             ({'ai_enabled': False}, {'ai_enabled': False}), ({'ai_enabled': False}, {}),
+                             ({}, {'ai_enabled': True})):  # controls-only callers (no stored switch) are unaffected
+        assert not effects(stored, proposed)['expands'], (stored, proposed)
+    # Enabling AI and raising a ceiling in one save lists both expansions.
+    both = effects({'ai_enabled': False}, {'ai_enabled': True, 'ai_rate_per_hour': 40})
+    assert both['expansions'][0] == enabling and len(both['expansions']) > 1
+    assert 'ai_enabled' in preview.PREVIEW_FIELDS and 'ai_enabled' not in preview.FIELDS
+
+
 def test_timezone_change_expands_only_while_capped():
     capped = {'ai_control_mode': 'daily_cap'}
     assert effects(capped, {'ai_budget_timezone': 'Asia/Tokyo'})['expands']
@@ -196,3 +210,34 @@ def test_non_expanding_saves_need_no_confirmation(admin):
 
 def test_confirmation_field_is_validated(admin):
     assert admin.put('/api/settings/ai', json={'confirm_ai_expansion': 'not-a-digest'}).status_code == 422
+
+
+def _enable_prerequisites(admin):
+    assert admin.put('/api/settings/ai-key', json={'api_key': 'fixture-key'}).status_code == 200
+    assert admin.put('/api/settings/ai', json={'ai_model': 'fixture-model'}).status_code == 200
+    assert admin.get('/api/settings').json()['ai_enabled'] is False
+
+
+def test_enabling_ai_requires_confirmation_on_both_save_paths(admin):
+    _enable_prerequisites(admin)
+    shown = admin.post('/api/settings/ai/preview', json={'ai_enabled': True}).json()
+    assert shown['expands'] and shown['expansion_confirmation']
+    assert shown['expansions'][0].startswith('AI is enabled and Mr Patchy starts making paid provider calls')
+    before, audits = _stored_controls()
+    r = admin.put('/api/settings/ai', json={'ai_enabled': True})
+    assert r.status_code == 409 and 'AI is enabled' in r.json()['detail'] and 'Nothing was saved' in r.json()['detail']
+    current = admin.get('/api/settings').json()
+    full = {k: current[k] for k in ('repo_minutes', 'deadlines', 'history_days')} | {'ai_enabled': True}
+    assert admin.put('/api/settings', json=full).status_code == 409
+    assert admin.put('/api/settings', json=full | {'confirm_ai_expansion': 'f' * 64}).status_code == 409
+    assert _stored_controls() == (before, audits) and admin.get('/api/settings').json()['ai_enabled'] is False
+    assert admin.put('/api/settings/ai', json={'ai_enabled': True, 'confirm_ai_expansion': shown['expansion_confirmation']}).status_code == 200
+    assert admin.get('/api/settings').json()['ai_enabled'] is True
+    assert 'AI is enabled' in _last_settings_audit()
+    # Keeping AI on, or turning it off, needs no confirmation.
+    assert admin.put('/api/settings/ai', json={'ai_enabled': True}).status_code == 200
+    assert admin.put('/api/settings', json=full | {'ai_enabled': False}).status_code == 200
+    # Turning it back on through the full settings route also needs the preview's confirmation.
+    assert admin.put('/api/settings', json=full).status_code == 409
+    assert confirmed_put(admin, '/api/settings', full).status_code == 200
+    assert admin.get('/api/settings').json()['ai_enabled'] is True

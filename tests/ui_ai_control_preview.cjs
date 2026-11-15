@@ -16,6 +16,14 @@ module.exports=async(page,capture)=>{
   await page.goto(new URL('/#settings/ai',page.url()).href);await page.reload();
   const form=page.locator('#ai-settings-form'),panel=page.locator('#ai-control-effects'),rate=form.locator('[name=ai_rate_per_hour]');
   await rate.waitFor();assert.equal(await panel.isHidden(),true);
+  // Turning AI on starts paid provider calls, so the live panel flags it as an expansion too; unticking clears it.
+  if(!original.ai_enabled){
+   const enable=form.locator('[name=ai_enabled]');
+   await enable.check();
+   await panel.locator('li.expands').getByText('AI is enabled and Mr Patchy starts making paid provider calls',{exact:false}).waitFor();
+   await enable.uncheck();
+   await panel.getByText('No change to Mr Patchy admission or spend ceilings',{exact:false}).waitFor();
+  }
   // Lowering the rate is reported as a restriction and saves without a confirmation.
   await rate.fill('5');
   await panel.getByText('Combined AI work start ceiling changes from 20/hour to 5/hour',{exact:false}).waitFor();

@@ -1,5 +1,5 @@
 """Shared helper for tests that save expanding AI admission/spend controls (#881)."""
-from app.ai_control_preview import FIELDS
+from app.ai_control_preview import PREVIEW_FIELDS
 
 
 def confirmed_put(client, path, body):
@@ -7,6 +7,6 @@ def confirmed_put(client, path, body):
 
     This is what Settings → AI does after an administrator confirms the listed expansions.
     """
-    controls = {key: body[key] for key in FIELDS if key in body}
+    controls = {key: body[key] for key in PREVIEW_FIELDS if key in body}
     confirmation = client.post('/api/settings/ai/preview', json=controls).json()['expansion_confirmation']
     return client.put(path, json=body | ({'confirm_ai_expansion': confirmation} if confirmation else {}))

@@ -1313,7 +1313,7 @@ def check_ai_expansion_confirmed(previous,proposed,confirmation):
     expected=ai_control_preview.expansion_confirmation(ai_controls_revision(previous),expansions)
     if expected is not None and confirmation!=expected:
         raise HTTPException(409,'These AI settings expand admission or spend and were not confirmed: '+' '.join(expansions)+
-            ' Nothing was saved. Preview the change and resend the save with the expansion_confirmation the preview returns.')
+            ' Nothing was saved. Preview the change and resend the save with confirm_ai_expansion set to the expansion_confirmation the preview returns.')
 
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
@@ -1400,7 +1400,7 @@ def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
     # Read-only: compares the posted controls with stored values; no settings, audit or provider call.
     from . import ai_budget,ai_control_preview
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    proposed=body.model_dump(include=set(body.model_fields_set)&set(ai_control_preview.FIELDS))
+    proposed=body.model_dump(include=set(body.model_fields_set)&set(ai_control_preview.PREVIEW_FIELDS))
     with Session() as s:
         previous=config(s)
         result=ai_control_preview.compare(previous,proposed);revision=ai_controls_revision(previous)
