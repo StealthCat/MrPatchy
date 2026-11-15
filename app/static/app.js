@@ -491,6 +491,17 @@ async function workerRegistrations(revision,offset=0){
   };
  });
  for(const [selector,next] of [['#worker-prev',Math.max(0,offset-50)],['#worker-next',offset+50]])$(selector).onclick=async()=>{const buttons=[$('#worker-prev'),$('#worker-next')];buttons.forEach(button=>button.disabled=true);try{await workerRegistrations(revision,next);}catch(error){if(currentView(revision,'activity')){toast(error.message);buttons[0].disabled=!offset;buttons[1].disabled=!data.more;}}};
+ bindWorkerAiControlGates(root,revision);
+}
+// Activity → Workers shows the fleet-wide shared AI start gates (#930) after the
+// registered runtimes, so idle AI task capacity is not mistaken for a worker
+// fault. Display-only: it grants no admission and loads independently, so a slow
+// or failed snapshot never blocks the worker, controller or agent sections.
+function bindWorkerAiControlGates(root,revision){
+ if(!isAdmin()||root.querySelector('#ai-control-gates'))return;
+ const controllers=root.querySelector('#controller-registrations');if(!controllers)return;
+ controllers.insertAdjacentHTML('beforebegin','<section class="card" id="ai-control-gates" aria-labelledby="ai-control-gates-title" aria-live="polite"><div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2></div><p class="help" role="status">Loading shared AI start gates…</p></section>');
+ loadAiControlGates(root,revision,'activity');
 }
 async function tlsModal(){
  const revision=modalRevision;let state;
