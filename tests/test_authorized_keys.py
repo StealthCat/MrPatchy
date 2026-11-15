@@ -270,3 +270,29 @@ def test_tunnel_any_is_case_insensitive_and_id_bound_matches_openssh(value, ok):
         assert rec['status'] == 'accepted' and rec['tunnel'] == value
     else:
         assert rec['reject_kind'] == 'invalid_tunnel'
+
+
+@pytest.mark.parametrize('value', ['\u00b2', '\u0663', '\uff11', '1\u0663'])
+def test_tunnel_rejects_non_ascii_digits_like_strtonum(value):
+    # str.isdigit() is true for superscripts and non-Latin digits; sshd's
+    # a2tun/strtonum only accepts ASCII decimal digits.
+    rec = one(f'tunnel="{value}" ' + key())
+    assert rec['status'] == 'invalid' and rec['reject_kind'] == 'invalid_tunnel'
+
+
+def test_one_bad_tunnel_line_does_not_abort_the_file():
+    parsed = ak.parse_text(f'tunnel="\u00b2" {key()}\ncommand="/bin/b" {key()}\n')
+    first, second = parsed['entries']
+    assert first['status'] == 'invalid' and first['reject_kind'] == 'invalid_tunnel'
+    assert second['status'] == 'accepted' and second['precedence'] == 'first'
+    assert second['command'] == '/bin/b'
+
+
+def test_unexpected_value_error_marks_line_unknown_not_file_abort(monkeypatch):
+    def boom(_text):
+        raise ValueError('unexpected')
+
+    monkeypatch.setattr(ak, '_parse_options', boom)
+    parsed = ak.parse_text(f'command="/bin/a" {key()}\n{key()}\n')
+    assert [entry['status'] for entry in parsed['entries']] == ['unknown', 'unknown']
+    assert all(any(gap['kind'] == 'line_unparsed' for gap in entry['gaps']) for entry in parsed['entries'])

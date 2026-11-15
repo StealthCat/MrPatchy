@@ -191,7 +191,7 @@ def _parse_options(text: str) -> dict[str, Any]:
                     opts['expiry'] = expiry  # sshd keeps the earliest expiry.
             elif name == 'tunnel':
                 # ``a2tun`` compares "any" case-insensitively.
-                if not (value.lower() == 'any' or (value.isdigit() and int(value) <= _TUNNEL_ID_MAX)):
+                if not (value.lower() == 'any' or (value.isascii() and value.isdigit() and int(value) <= _TUNNEL_ID_MAX)):
                     raise _Reject('invalid_tunnel', 'tunnel must be a device number or "any".')
                 opts['tunnel'] = value
             else:
@@ -275,6 +275,13 @@ def parse_line(line: str, *, now: float | None = None) -> dict[str, Any]:
     except _Reject as reject:
         record['reason'] = reject.reason
         record['reject_kind'] = reject.kind
+        return record
+    except (ValueError, OverflowError, UnicodeError):
+        # Defensive: one malformed line must never abort the whole file. The
+        # outcome sshd would reach is not known here, so the line is reported
+        # as unknown with a gap rather than as refused.
+        record['status'] = 'unknown'
+        record['gaps'].append(_gap('line_unparsed', 'This line could not be assessed; sshd may still accept it.'))
         return record
     record['options'] = opts['order']
     record['command'] = opts['command']
