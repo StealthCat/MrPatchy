@@ -3,6 +3,7 @@ import pytest
 from app import ai
 from app.db import Session, Setting, config
 from app.security import unseal
+from tests.ai_settings_helpers import confirmed_put
 
 
 def no_provider(monkeypatch):
@@ -27,7 +28,7 @@ def test_key_can_be_saved_with_no_model_even_if_ai_configuration_is_broken(admin
 def test_model_save_independent_of_discovery_and_provider_404(admin,monkeypatch):
     no_provider(monkeypatch)
     admin.put('/api/settings/ai-key',json={'api_key':'fixture-key'})
-    assert admin.put('/api/settings/ai',json={'ai_model':'missing-model','ai_enabled':True}).status_code==200
+    assert confirmed_put(admin,'/api/settings/ai',{'ai_model':'missing-model','ai_enabled':True}).status_code==200
     r=admin.put('/api/settings/ai',json={'ai_model':'  selected-model  ','ai_enabled':True})
     assert r.status_code==200 and r.json()['ai_model']=='selected-model'
     calls=[]

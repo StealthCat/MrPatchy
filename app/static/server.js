@@ -100,7 +100,7 @@ async function serverOverview(revision,{root,hostId}){
 async function serverPatching(revision,context){
  if(location.hash.slice(1).split('/')[3]==='jobs')return operationDetail(revision,context,location.hash.slice(1).split('/')[4]||'');
  const {root,hostId}=context;let cursor=new Date();cursor.setHours(0,0,0,0);
- root.innerHTML=`<section class="card"><div class="toolbar"><div><h3>Scheduled start windows</h3><p class="help">Times use ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. These are allowed start windows, not promised completion times.</p></div><div class="actions"><button id="server-period-prev">← Previous month</button><button id="server-period-today">Today</button><button id="server-period-next">Next month →</button></div></div><p id="server-period" class="help"></p><div id="server-calendar"></div></section><div id="server-patch-policies"></div><section class="card"><h3>Pending updates &amp; expected installation</h3><div id="server-patch-forecast"></div></section><section id="server-operations"><h3>Operations for this server</h3><div id="server-job-list"></div></section>`;
+ root.innerHTML=`<section class="card"><div class="toolbar"><div><h3>Scheduled start windows</h3><p class="help">Times use ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. These are allowed start windows, not promised completion times.</p></div><div class="actions"><button id="server-period-prev">← Previous month</button><button id="server-period-today">Today</button><button id="server-period-next">Next month →</button></div></div><p id="server-period" class="help"></p><div id="server-calendar"></div></section><div id="server-patch-policies"></div><section class="card"><h3>Pending updates &amp; expected installation</h3><div id="server-patch-forecast"></div></section>${isAdmin()?'<section class="card" id="server-exposure-history" aria-labelledby="server-exposure-history-title"><h3 id="server-exposure-history-title">CVE exposure history</h3><div class="exposure-history-body"></div></section>':''}<section id="server-operations"><h3>Operations for this server</h3><div id="server-job-list"></div></section>`;
  const calendar=$('#server-calendar'),policies=$('#server-patch-policies'),forecast=$('#server-patch-forecast'),jobsRoot=$('#server-job-list');let ticket=0;
  const load=async()=>{
   const turn=++ticket,start=new Date(cursor.getFullYear(),cursor.getMonth(),1),end=new Date(cursor.getFullYear(),cursor.getMonth()+1,1);
@@ -115,7 +115,53 @@ async function serverPatching(revision,context){
  };
  $('#server-period-prev').onclick=()=>{cursor=new Date(cursor.getFullYear(),cursor.getMonth()-1,1);load();};$('#server-period-next').onclick=()=>{cursor=new Date(cursor.getFullYear(),cursor.getMonth()+1,1);load();};$('#server-period-today').onclick=()=>{cursor=new Date();load();};
  const pending=async()=>{try{const rows=await api('/hosts/'+hostId+'/packages?updates=true');if(!root.isConnected)return;forecast.innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>Package</th><th>Candidate</th><th>Priority / deadline</th><th>Expected installation</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.name)}${p.held?'<small>Held by target policy</small>':''}</td><td>${esc(p.candidate)}</td><td>${badge(p.priority)}<small>${date(p.due)}</small></td><td>${installationCell(p.installation)}</td></tr>`).join('')}</tbody></table></div><a href="${serverLink(hostId,'packages')}" class="button">Review &amp; install updates</a>`:'<p class="help">No pending updates in the latest repository results.</p>';}catch(error){if(root.isConnected)forecast.innerHTML=PatchyUI.error('Unable to load forecast',esc(error.message));}};
- await Promise.all([load(),pending(),activity(revision,{hostId,root:jobsRoot})]);
+ await Promise.all([load(),pending(),exposureHistory(revision,root,hostId),activity(revision,{hostId,root:jobsRoot})]);
+}
+
+// Stored advisory-scan ledger only (#858): version applicability, never exploitation evidence, a clean-host verdict
+// or verified patch activation. Administrators only; the endpoint is admin-only and the card makes no outbound call.
+async function exposureHistory(revision,root,hostId){
+ const card=root.querySelector('#server-exposure-history');if(!card)return;
+ const body=card.querySelector('.exposure-history-body');let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&body.isConnected&&currentView(revision,'servers');
+  body.innerHTML='<p role="status">Loading exposure history…</p>';
+  try{
+   const data=await api('/operations/'+encodeURIComponent(hostId)+'/advisories');
+   if(!current())return;
+   body.innerHTML=exposureHistoryContent(data?.exposure_history);
+  }catch(error){
+   if(!current())return;
+   body.innerHTML='<div class="notice" role="alert"><p>Exposure history is unavailable. The rest of this page is unaffected.</p><button type="button" class="exposure-history-retry">Retry exposure history</button></div>';
+  }
+  const retry=body.querySelector('.exposure-history-retry');if(retry)retry.onclick=load;
+  const refresh=body.querySelector('.exposure-history-refresh');if(refresh)refresh.onclick=load;
+ };
+ await load();
+}
+
+function exposureHistoryContent(history){
+ const time=value=>typeof value==='number'&&Number.isFinite(value)&&value>0?date(value):'Unknown';
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unknown';
+ const text=value=>typeof value==='string'&&value?esc(value):'Unknown';
+ const reasons={fixed:'a fixed version was observed',unaffected:'an unaffected version was observed','not-listed':'the advisory was no longer listed for the installed version'};
+ const limits='<p class="help">This is version applicability recorded by administrator-run advisory scans. It is not exploitation evidence, not a clean-host verdict and does not verify that a patch took effect: required restarts and reboots are not confirmed.</p>';
+ const refresh='<div class="actions"><button type="button" class="exposure-history-refresh">Refresh exposure history</button></div>';
+ if(!history||typeof history!=='object'||!Array.isArray(history.items))return '<div class="notice" role="status"><p>Exposure history is unavailable in this response.</p></div>'+limits+refresh;
+ const items=history.items,coverage=typeof history.coverage==='string'?'<p class="help exposure-history-coverage">'+esc(history.coverage)+'</p>':'';
+ const summary='<div class="status-facts" role="status"><span><strong>'+count(history.open)+'</strong>Open exposures</span><span><strong>'+count(items.length)+'</strong>Records shown</span></div>';
+ const truncated=history.truncated===true?'<div class="notice">Only the first '+count(items.length)+' records are shown. Open exposures are listed first, and the open total above counts every record for this server.</div>':'';
+ if(!items.length)return summary+'<p>No affected advisory has been recorded for this server. A server that has never had an advisory scan also shows no records, so this is not a clean-host verdict.</p>'+limits+coverage+refresh;
+ const rows=items.map(item=>{
+  const row=item&&typeof item==='object'?item:{},open=row.state==='open',resolved=row.state==='resolved'&&typeof row.resolved_at==='number'&&Number.isFinite(row.resolved_at)&&row.resolved_at>0;
+  const state=open?'<span class="badge high">Open</span>':resolved?'<span class="badge complete">Resolved</span>':'<span class="badge pending">Unknown state</span>';
+  const cves=Array.isArray(row.cve_ids)&&row.cve_ids.length?' · '+esc(row.cve_ids.filter(c=>typeof c==='string').join(', ')):'';
+  const fixed=typeof row.fixed_version==='string'&&row.fixed_version?' · Vendor fix '+esc(row.fixed_version):'';
+  const reopened=Number.isSafeInteger(row.reopened)&&row.reopened>0?' · Reopened '+row.reopened.toLocaleString()+' time'+(row.reopened===1?'':'s'):'';
+  const resolution=resolved?'<div>Resolved '+esc(time(row.resolved_at))+' at version '+text(row.resolved_version)+': '+esc(reasons[row.resolved_status]||'unknown reason')+'.</div>':'';
+  return '<li><div>'+state+' <strong>'+text(row.advisory_id)+'</strong>'+cves+'</div><div class="help">Package '+text(row.package)+fixed+reopened+'</div><div class="help">First affected '+esc(time(row.first_affected_at))+' at version '+text(row.first_affected_version)+' · Last affected '+esc(time(row.last_affected_at))+' at version '+text(row.last_affected_version)+'</div>'+resolution+'</li>';
+ }).join('');
+ return summary+truncated+'<ul class="advisory-applicability exposure-history-list">'+rows+'</ul>'+limits+coverage+refresh;
 }
 
 function serverWindowText(windows){

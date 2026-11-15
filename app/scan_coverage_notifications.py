@@ -18,8 +18,18 @@ coverage page uses:
 - ``overdue``: no scan has completed for longer than the configured interval
   plus a one-hour grace period, for example because the scheduler is paused by
   a response hold, a recovery-required operation or a full queue.
+- ``stalled``: the latest scan job has been queued or running for longer than
+  the configured interval plus the grace period (#839). The scheduler does not
+  enqueue another scan while one is pending, so a stuck job would otherwise
+  hold the event silent indefinitely.
+- A server that has never been scanned is ``overdue`` once scheduled scanning has
+  been enabled (``enabled_since``, recorded when the policy is saved) for longer
+  than the interval plus the grace period (#841). Otherwise a scheduler blocker
+  present from enablement onward, such as a quarantine, a recovery-required job
+  or a full queue, would leave the server silent. Legacy policies saved before
+  ``enabled_since`` existed stay silent until the policy is saved again.
 
-A pending scan leaves an existing event unchanged. Recorded scans resolve it,
+A younger pending scan leaves an existing event unchanged. Recorded scans resolve it,
 and so do scans with findings, because the ``malware-detection`` incident
 producer owns those. Disabling scheduled scanning, or disabling, deleting or
 re-enrolling the server, also resolves the event.
@@ -29,6 +39,8 @@ rule names, engine output, errors or timestamps. It never enqueues, retries or
 cancels scans, changes patching state, or acknowledges, remediates or
 authorizes anything.
 """
+import math
+
 from sqlalchemy import func, select
 
 from . import host_lifecycle, notifications
@@ -39,7 +51,6 @@ from .security_coverage import assessment
 SOURCE = 'security-scan'
 KIND = 'scheduled-scan-coverage'
 SUBJECT = 'server'
-ENGINE = 'ClamAV'
 GRACE_SECONDS = 3600
 DEFAULT_INTERVAL_HOURS = 24
 CHUNK = 500
@@ -51,6 +62,10 @@ MESSAGES = {
                    'is missing or reports skipped paths, an unavailable scanner, stale signatures or invalid coverage '
                    'metadata. Review Security scan coverage. Missing coverage is not a clean-host or compromise '
                    'verdict.'),
+    'stalled': ('A scheduled malware scan on this server has been queued or running for longer than its configured '
+                'interval plus one hour, and no new scheduled scan starts while it is pending. Workers may be '
+                'unavailable or the operation may need recovery. Review Activity and Security. Missing coverage is '
+                'not a clean-host or compromise verdict.'),
     'overdue': ('Scheduled malware scanning on this server has not completed a scan within its configured interval '
                 'plus one hour. Response holds, operations awaiting recovery or a full queue can pause the scheduler. '
                 'Review Security and Activity. Missing coverage is not a clean-host or compromise verdict.'),
@@ -67,18 +82,29 @@ def _interval_hours(policy):
 
 
 def classify(scan, attempt, policy, now):
-    """Return ``'failed'``, ``'incomplete'``, ``'overdue'``, ``'pending'`` or ``None``."""
+    """Return ``'failed'``, ``'incomplete'``, ``'overdue'``, ``'stalled'``, ``'pending'`` or ``None``."""
     hours = _interval_hours(policy)
+    limit = hours * 3600 + GRACE_SECONDS
     result = assessment(scan, attempt, now, hours * 3600)
     state = result['state']
     if state in WAITING:
-        return 'pending'
+        return 'stalled' if now - attempt.created > limit else 'pending'
     if state in CATEGORIES:
         return CATEGORIES[state]
-    if state == 'overdue' and result['age_seconds'] is not None and result['age_seconds'] > hours * 3600 + GRACE_SECONDS:
+    if state == 'overdue' and result['age_seconds'] is not None and result['age_seconds'] > limit:
         return 'overdue'
-    # never_scanned (the scheduler has not started yet), recorded and findings need no coverage event.
+    if state == 'never_scanned' and _enabled_age(policy, now) > limit:
+        return 'overdue'
+    # A recently enabled never_scanned policy (the scheduler has not started yet), legacy policies without
+    # ``enabled_since``, recorded scans and findings need no coverage event.
     return None
+
+
+def _enabled_age(policy, now):
+    since = policy.get('enabled_since')
+    if type(since) not in (int, float) or not math.isfinite(since) or since > now:
+        return -1
+    return now - since
 
 
 def _enabled_policies(session, hosts):

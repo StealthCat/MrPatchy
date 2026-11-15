@@ -1,3 +1,91 @@
+## 1.62.1 — 2026-11-15
+
+1. [PR #899](https://github.com/StealthCat/MrPatchy/pull/899): Investigation cards now identify verdicts reused from the exact-match fleet known-good cache. Administrators get links to the reuse record and source assessment; other roles receive only the cached flag. The additive `known_good_reuse` API field is present only when the newest retained assessment matches the row's exact current state and came from a known-good reuse; later provider results, re-triage or changed evidence clear it. Compatibility: no schema change and no change to approval, trust, role or response authorization. Limitation: source links work only while source records remain retained; production acceptance is not measured. Fixes #897.
+
+## 1.62.0 — 2026-11-15
+
+1. [PR #888](https://github.com/StealthCat/MrPatchy/pull/888): Administrators can select 1–50 completed investigations on the current page and request fresh AI triage in one all-or-nothing operation. Each item receives revision, completion, running-request, active-server and approval-withdrawal checks; refused selections queue nothing and identify blocked items. Queued items retain their prior results, receive per-item audit records and bypass the known-good cache, with no provider call at queue time. Compatibility: additive API and UI; the existing single-item route and payload are unchanged, with no schema or configuration change. AI pause, data-sharing and shared admission/spend limits still apply when queued work runs, and response authorization is unchanged. Limitation: there is no fleet-wide select-all or cross-page selection. Fixes #887.
+
+## 1.61.9 — 2026-11-15
+
+1. [PR #766](https://github.com/StealthCat/MrPatchy/pull/766): Administrators now receive a fixed-text, high-severity in-app `telemetry-lost` notice when an enabled, non-deleted, non-enrolling server has sent no telemetry for 15 minutes of scheduler-leader observation. It links to Agent health, resolves on fresh telemetry or when the server is disabled/deleted, and reopens on a later outage; the existing 120-second stale SMTP/webhook alert is unchanged. Compatibility: no schema, API, configuration, role or outbox change. The notice is attention-only and grants no response/remediation authority; the threshold is fixed, endpoint-agent health remains separate (#737/#738), and a scheduler leader suspended without losing leadership can briefly over-report stale servers when it resumes. Fixes #765.
+
+## 1.61.8 — 2026-11-15
+
+1. [PR #770](https://github.com/StealthCat/MrPatchy/pull/770): When AI is enabled but its saved API key is missing, malformed or cannot be decrypted locally, administrators receive a fixed-text in-app alert and the shared AI start gates expose an additive `credential` blocker. Re-saving the key or restoring the matching encryption key resolves the alert. Compatibility: no schema or configuration change; clients may see the new blocker code. The producer only checks local decryption and never calls a provider, reserves spend, retries, unblocks work or sends email/webhooks. Existing triage remains blocked and may still show its configuration notification; blocked update-scoring and advisory-plan work remains uncovered. Fixes #769.
+
+## 1.61.7 — 2026-11-15
+
+1. [PR #894](https://github.com/StealthCat/MrPatchy/pull/894): Administrators can now review the durable per-server CVE exposure history on the server Patching timeline, including open and resolved records, affected versions and resolution details. This is historical version applicability from stored administrator-run scans; it is not exploitation evidence, a clean-host verdict or verified patch activation. Frontend-only; no schema, route, role, scan, patch-selection or response-authorization change. Fixes #893.
+
+## 1.61.6 — 2026-11-15
+
+1. [PR #882](https://github.com/StealthCat/MrPatchy/pull/882): AI settings saves that expand admission or spend—including turning AI on—now require the confirmation returned by `POST /api/settings/ai/preview`. Both save routes refuse unconfirmed expansions with HTTP 409 before writing settings or audit entries; Settings → AI sends the confirmation only after the administrator accepts the preview. API clients must preview, then send the returned `expansion_confirmation` as `confirm_ai_expansion`; non-expanding saves need no confirmation. Compatibility: API clients that save expansions must add this preview/confirmation step. The content-derived confirmation matches again if stored controls return to exactly their preview values; it is an acknowledgement for an authenticated, CSRF-protected administrator, not a credential. No schema change or runtime response-authorization change. Fixes #881.
+
+## 1.61.5 — 2026-11-14
+
+1. [PR #886](https://github.com/StealthCat/MrPatchy/pull/886): Made the startup-change notification redaction regression test deterministic: it checks the complete fixture hash, so random event or subject IDs containing a short repeated substring no longer cause false failures. A separate leak-injection regression keeps the full-hash redaction check. Test-only change; no runtime or compatibility impact. Fixes #885.
+
+## 1.61.4 — 2026-11-14
+
+1. [PR #880](https://github.com/StealthCat/MrPatchy/pull/880): Settings → AI now proposes a shared rate no higher than any enabled legacy per-purpose hourly allowance, including the fixed 10/hour automatic incident/startup-plan ceiling. Administrators can apply the suggestion to the form; the existing preview, confirmation, revision check and audit flow controls saving. Compatibility: additive fields in the admin-only settings response; no schema, admission, reservation, pause, lifecycle, role or response-authorization change. Saving the conservative proposal can lower throughput for purposes with higher legacy limits; raising the shared rate remains subject to the existing expansion preview and confirmation. Migration remains explicit; no unattended migration is added. Fixes #878 and completes #879.
+
+## 1.61.3 — 2026-11-14
+
+1. [PR #865](https://github.com/StealthCat/MrPatchy/pull/865): The Servers directory now shows administrators a per-server **AI paused** badge and a Server AI filter. The admin-only `GET /api/hosts` response adds `ai_paused`, applying the provider gate's fail-closed stored-policy rule in the existing bounded query (no extra statement). Compatibility: additive admin-only response field; viewers/operators receive no field. No schema, migration, admission, pause/resume, audit or response-authorization changes; rebuild the controller. The badge reports only the stored per-server setting—not global AI enablement/configuration—and older controller replies without the field are treated as not paused.
+
+## 1.61.2 — 2026-11-14
+
+1. [PR #875](https://github.com/StealthCat/MrPatchy/pull/875): Settings → AI → Retained spend history now offers administrators a CSV download of the same bounded aggregate windows for the selected period and applied timezone. Formula-leading text is neutralized and truncation is disclosed. Compatibility: an additive read-only endpoint and UI; no schema, budget-accounting, scheduling, settings or response-authorization changes. Amounts remain local public-price estimates, not provider invoices; provider reconciliation and reports beyond 90 days remain out of scope.
+
+## 1.61.1 — 2026-11-14
+
+1. [PR #872](https://github.com/StealthCat/MrPatchy/pull/872): Activity → Workers → Endpoint agents now shows validated root-filesystem space and inode use, available memory, and CPU/memory pressure from retained telemetry, with advisory low-resource flags. The existing agents API gains an additive `resources` object; no schema or agent change is required. Older or incomplete telemetry remains unknown, and stale data is labelled. The flags do not change health classification, alerts, repairs or authorization. Endpoint-agent readiness, low-resource notifications, history, time-sync and certificate-expiry signals remain outside this change.
+
+## 1.61.0 — 2026-11-14
+
+1. [PR #873](https://github.com/StealthCat/MrPatchy/pull/873): Settings → AI now previews the effects of rate, cap, timezone, admission-mode and update-scoring changes; expansion of admission or spend prompts for administrator confirmation in the UI and is recorded in the audit entry. Adds an admin-only, read-only `POST /api/settings/ai/preview`. Compatibility: the endpoint is additive and no schema changes; API saves that bypass the UI preview remain accepted but expansions are audited. The comparison covers Mr Patchy's configured ceilings, not provider limits, concurrency or data sharing; AI admission and response authorization are unchanged.
+
+## 1.60.2 — 2026-11-14
+
+1. [PR #869](https://github.com/StealthCat/MrPatchy/pull/869): Administrators now receive an admin-only in-app notice while a server's AI integration is paused; resuming or deleting the server resolves it, and a later pause reopens it. The notice uses fixed text, adds no schema, and changes no AI policy or response authorization. Existing paused servers are notified on their next saved pause; there is no startup backfill or SMTP/webhook delivery. MySQL behavior is covered by hosted CI shards; focused local suite evidence uses SQLite.
+
+## 1.60.1 — 2026-11-14
+
+1. [PR #867](https://github.com/StealthCat/MrPatchy/pull/867): WIF installations using the split controller/worker Compose files can now generate role-specific credential overlays with the same validated read-only `/gcp` bind mount. The generated files are mode 0600 and excluded from Git and Docker builds; the complete install and sign-in/check flow are unchanged. This is additive and changes no runtime authorization. Existing installations receive the files when the installer is rerun with `--credential-dir`; role-specific overlays do not add standalone controller-only or join-worker installer modes, remote-host workers or a dedicated GCP integration node.
+
+## 1.60.0 — 2026-11-14
+
+1. [PR #859](https://github.com/StealthCat/MrPatchy/pull/859): Advisory scans now retain durable per-server CVE exposure history, with first/last affected observations, resolution and reopening records. The admin advisory response adds up to 500 history items, open exposures first, an accurate total open count and coverage limits. This adds a database table and response key; existing records are not backfilled and history starts with the next scan. Scan intervals remain telemetry gaps, uncertain or unscanned packages do not resolve exposure, and a version-based resolution does not verify restart or reboot. This does not change response authorization or trigger any response action.
+
+## 1.59.110 — 2026-11-14
+
+1. [PR #863](https://github.com/StealthCat/MrPatchy/pull/863): Advisory scans now retain matching OSV records' published and modified dates, and the applicability panel shows a valid publication date in UTC. Missing, invalid or unfetched dates remain null and do not change applicability status. This adds response metadata and display only, with no schema, route, role, patch-selection or response-authorization change. Dates describe the advisory record, not the vendor fix time or exposure start. Using publication dates in exposure windows/history, verified restart, scheduled scans, fleet views, RPM updateinfo and exploitation monitoring remain incomplete.
+
+## 1.59.109 — 2026-11-14
+
+1. [PR #861](https://github.com/StealthCat/MrPatchy/pull/861): Shows legacy per-purpose hourly allowances for process triage, update scoring and automatic incident/startup plans in the shared AI start-gates status and Investigations card, including prior-hour usage and next eligibility when exhausted. This adds a response field and UI only; admission behavior, shared gates, schema and response authorization are unchanged. The displayed plan allowance mirrors the existing fixed scheduler limit, and legacy-mode migration remains an operator decision.
+
+## 1.59.108 — 2026-11-14
+
+1. [PR #855](https://github.com/StealthCat/MrPatchy/pull/855): Adds `.env.controller.example` for the split controller role, listing app, Caddy and GCP controller settings while leaving out worker-only pools, IDs, drain settings and data-volume configuration. The example renders the same controller configuration as the complete `.env.example`; `MRPATCHY_EXPECTED_WORKER_IDS` is empty for role-file replicas. This is additive and leaves existing complete-installation settings unchanged. It is a template only: remote-machine secret provisioning, controller-only/join-worker installer modes and multi-host acceptance remain open. No schema, API, role or response-authorization changes.
+
+## 1.59.107 — 2026-11-14
+
+1. [PR #853](https://github.com/StealthCat/MrPatchy/pull/853): Adds `.env.worker.example` and worker-only Compose startup instructions. The template lists worker-role settings, is ignored by Git and Docker builds, and CI renders it; tests check the template against the worker Compose variables. Additive only: Compose files, installers and application behavior are unchanged, the existing inline volume override continues to work, and an explicit `--env-file` prevents a controller `.env` in the same checkout from leaking into the worker project. This template does not provision remote-machine secrets or shared state, add controller-only/join-worker installer modes, or validate multi-host deployment. No schema, API, role or response-authorization change.
+
+## 1.59.106 — 2026-11-14
+
+1. [PR #851](https://github.com/StealthCat/MrPatchy/pull/851): Added role-specific GCP runtime Compose overlays for controller and worker deployments, allowing the existing gcloud/IAP runtime with the split role files. The overlays are additive; attached service accounts use the role files, while WIF credentials stay on the full-installation path. Scan-policy enablement timestamps are now persisted at microsecond precision so MySQL JSON round-trips to the value returned by the API. No schema, route, role or response-authorization changes. Controller-only/join-worker installer modes and remote-machine workers remain out of scope.
+
+## 1.59.105 — 2026-11-14
+
+1. [PR #842](https://github.com/StealthCat/MrPatchy/pull/842): Scheduled-scan coverage notifications now flag an enabled policy whose first scan has not been enqueued after the interval plus one-hour grace. The timestamp is server-managed in the existing policy JSON; no schema, route, role or response-authorization change. Existing enabled policies without the timestamp remain silent until saved, and re-enabling may notify before the next scheduler tick queues a scan.
+
+## 1.59.104 — 2026-11-14
+
+1. [PR #840](https://github.com/StealthCat/MrPatchy/pull/840): Scheduled malware-scan coverage notifications now flag a queued or running scan that remains pending longer than its configured interval plus one hour, instead of leaving the coverage notice silent. Existing stuck episodes can receive one `stalled` revision; this adds no schema, API, role or authorization change. It does not cancel, retry or recover jobs. A policy with no first scan attempt remains silent; YARA schedules and configurable grace periods are out of scope.
+
 ## 1.59.103 — 2026-11-14
 
 1. [PR #832](https://github.com/StealthCat/MrPatchy/pull/832): Adds individual Debian-family `at` job details to Startup → Files and Coverage, parsed only from already-hashed `/var/spool/cron/atjobs` bytes when parsed-job collection is requested. Shows queue, scheduled time, owner and bounded commands with the existing best-effort redaction; counts exported environment assignments without storing values, and reports unrecognized layouts as unparsed. Only atd’s reserved `=` queue is marked running; uppercase batch queues retain their letter. Older agents show “not reported.” No schema, auth, scope-root, baseline or response-authorization change. Material limits: atd status is not evaluated, the RHEL-family `/var/spool/at` spool and referenced scripts are outside scope, and no AI classification is made.

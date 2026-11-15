@@ -2,7 +2,7 @@
 import time
 from decimal import Decimal, InvalidOperation
 
-from . import ai_admission, ai_budget, ai_pricing, ai_provider_backoff
+from . import ai_admission, ai_budget, ai_credential_notifications, ai_pricing, ai_provider_backoff
 from .db import Setting, config
 
 
@@ -10,13 +10,22 @@ LIMITATIONS = [
     'A call-specific conservative price quote can still refuse capped admission.',
     'Provider policy, finite concurrency, per-server pause and lifecycle checks still apply.',
 ]
-LEGACY_LIMITATION = ('Legacy per-purpose hourly limits (triage and update scoring) are enforced separately and are '
-                     'not reflected in this snapshot; switch to an explicit control mode for an authoritative status.')
+LEGACY_LIMITATION = ('Legacy per-purpose hourly allowances (triage, update scoring and automatic plans) are listed '
+                     'separately below. Each holds only its own purpose and does not change the shared gates above; '
+                     'switch to an explicit control mode for one authoritative shared throttle.')
+# Fixed legacy allowance for automatic incident/startup plans; mirrors
+# incidents.auto_plan_tick, which counts both plan actions together.
+AUTO_PLAN_HOURLY_LIMIT = 10
+WINDOW_SECONDS = 3600
+
 
 PRICING_MESSAGES = {
     'catalog': 'The bundled public-price catalog is not currently valid, so capped admission cannot reserve spend for any call.',
     'model': 'The saved model has no verified catalog price, so capped admission cannot reserve spend for it.',
 }
+
+CREDENTIAL_MESSAGE = ('The saved API key cannot be decrypted with this controller\'s encryption key. Restore the '
+                      'matching encryption key or save the API key again before provider calls can start.')
 
 
 def _money_exhausted(value):
@@ -25,6 +34,58 @@ def _money_exhausted(value):
     except (InvalidOperation, TypeError, ValueError):
         # Malformed status must never be presented as permission to start a paid call.
         return True
+
+
+def _window(session, column, conditions, limit, now):
+    """Count one legacy sliding window and when it next drops below ``limit``.
+
+    Admission counts entries with ``column > now - 3600``. Once ``count >= limit``
+    the gate reopens only after the oldest ``count - limit + 1`` entries leave
+    the window, so the opening time is that entry plus one hour, not merely the
+    oldest entry plus one hour.
+    """
+    from sqlalchemy import func, select
+    start = now - WINDOW_SECONDS
+    where = (column > start, *conditions)
+    used = session.scalar(select(func.count()).where(*where)) or 0
+    if used < limit:
+        return used, False, None
+    if limit < 1:
+        return used, True, None
+    pivot = session.scalar(select(column).where(*where).order_by(column).offset(used - limit).limit(1))
+    return used, True, None if pivot is None else float(pivot) + WINDOW_SECONDS
+
+
+def _legacy_purpose_limits(session, settings, now):
+    """Return the hidden legacy hourly allowances as counts and timestamps only."""
+    from .ai_runs import AIRun
+    from .db import Behavior, Job
+
+    def entry(purpose, limit, used, blocked, next_at, state=None):
+        return {'purpose': purpose, 'limit': limit, 'used': used,
+                'state': state or ('exhausted' if blocked else 'available'),
+                'next_at': next_at if blocked else None}
+
+    limit = settings['ai_hourly_limit']
+    # ai_claims.acquire refuses while either counter has reached the limit.
+    attempts = _window(session, Behavior.attempted, (), limit, now)
+    runs = _window(session, AIRun.started, (AIRun.purpose == 'triage',), limit, now)
+    blocked = attempts[1] or runs[1]
+    opens = [item[2] for item in (attempts, runs) if item[1]]
+    triage_next = None if not blocked or None in opens else max(opens)
+    limits = [entry('triage', limit, max(attempts[0], runs[0]), blocked, triage_next)]
+
+    limit = settings['ai_update_hourly_limit']
+    used, blocked, next_at = _window(session, AIRun.started, (AIRun.purpose == 'update_scoring',), limit, now)
+    if settings['ai_updates_enabled']:
+        limits.append(entry('update_scoring', limit, used, blocked, next_at))
+    else:
+        limits.append(entry('update_scoring', limit, used, False, None, state='disabled'))
+
+    used, blocked, next_at = _window(session, Job.created, (Job.action.in_(('security-plan', 'startup-plan')),),
+                                     AUTO_PLAN_HOURLY_LIMIT, now)
+    limits.append(entry('automatic_plans', AUTO_PLAN_HOURLY_LIMIT, used, blocked, next_at))
+    return limits
 
 
 def snapshot(session, now=None):
@@ -43,6 +104,8 @@ def snapshot(session, now=None):
         add('disabled', 'Central AI provider calls are disabled by an administrator.')
     if not settings['ai_model'] or session.get(Setting, 'openai_key') is None:
         add('configuration', 'A saved model and API key are required before provider calls can start.')
+    elif ai_credential_notifications.state(session)[0] == 'unreadable':
+        add('credential', CREDENTIAL_MESSAGE)
     if settings['ai_enabled'] and budget['enabled'] and settings['ai_model']:
         # Disabled AI is already explained by the `disabled` gate (#735 criterion 2).
         # Capped admission must quote every paid call from the bundled catalog;
@@ -69,5 +132,7 @@ def snapshot(session, now=None):
         'can_start_now': not blockers,
         'next_start_at': None if indefinite or not finite else max(finite),
         'blockers': blockers,
+        # Per-purpose holds only; they never widen or narrow the global gates.
+        'purpose_limits': _legacy_purpose_limits(session, settings, now) if admission['mode'] == 'legacy' else [],
         'limitations': LIMITATIONS + ([LEGACY_LIMITATION] if admission['mode'] == 'legacy' else []),
     }
