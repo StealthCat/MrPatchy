@@ -1,3 +1,11 @@
+## 1.64.2 — 2026-11-15
+
+1. [PR #921](https://github.com/StealthCat/MrPatchy/pull/921): Bound the fleet CVE list to 50 exposure rows per advisory in the database query and report honest truncation as "Showing N of M open exposures". Advisory totals, known fixed versions and CVE identifiers still cover every open ledger row. Compatibility: adds `exposures_total`; `exposures_truncated` retains its meaning; renames the test-only Python keyword from `server_limit` to `exposure_limit`; no schema, role, scan, or response-authorization change. Limits: each server/package row consumes one exposure slot; no index was added without supporting measurements; the view still reflects retained administrator-run scans, not a clean-host verdict.
+
+## 1.64.1 — 2026-11-15
+
+1. [PR #915](https://github.com/StealthCat/MrPatchy/pull/915): Show administrators the existing Shared AI start gates card on the fleet AI activity page, including why provider calls are held and the next eligible start. The card reuses the Investigations renderer and snapshot route; late responses are discarded and snapshot errors do not block the run list. Compatibility: display-only; no API, schema, role, admission or response-authorization change. Limits: the card does not promise a start, and worker-health surfaces still do not show shared gate state. Correct the worker-template README sentence that had become stale after controller-only GCP installation was added in #919.
+
 ## 1.64.0 — 2026-11-15
 
 1. [PR #919](https://github.com/StealthCat/MrPatchy/pull/919): Add an optional controller-only GCP installer mode that configures the app and Caddy with the split role Compose files, records the selected mode, runs gcloud checks inside the app and leaves the existing complete mode as the default. Compatibility: complete-mode commands remain unchanged; `.env.gcp` records the selected mode; no schema, API, role or response-authorization change. Limits: no live GCP/WIF acceptance; join-worker mode and remote-machine workers remain open. A pre-existing complete Compose stack without recorded mode must be inspected before switching because its running worker may remain orphaned.

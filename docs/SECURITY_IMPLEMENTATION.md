@@ -3303,6 +3303,17 @@ Before this checkpoint the durable `cve_exposure_history` ledger (#858) could be
 - **Validation:** `tests/test_cve_exposure_fleet.py` covers grouping, ordering, deleted and resolved exclusion, reopening, caps with full totals, and the admin-only read-only route. `tests/ui_fleet_exposure.cjs` covers the populated, truncated, empty, malformed, error/retry, injection and stale-reply cases, with no horizontal overflow at 320, 768 and 1440 px.
 - **Remaining in requirement D:** scheduled scans, publication dates in `exposure_window()`, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
 
+#### Fleet CVE exposure bounds and truncation wording — worker checkpoint #913
+
+The #911 view capped 50 rows per advisory but said "More affected servers are not listed". One row is one exposure (server × package), so one server with several affected packages could trigger that text while fewer than 50 servers were shown. The rows query also loaded every open row of the 200 listed advisories and trimmed them in Python.
+
+- **Bounded query:** `fleet_open` ranks rows per advisory in SQL with `ROW_NUMBER() OVER (PARTITION BY advisory_id …)` (SQLite 3.25+, MySQL 8) and loads at most `exposure_limit` (50) rows per advisory, in the same first-affected/server/package order as before.
+- **Summary fields still cover every row:** the group query now counts each advisory's open exposures and the rows naming a vendor fixed version. CVE IDs come from a separate `DISTINCT (advisory_id, cve_ids)` read, so `fixed_known` and `cve_ids` are unchanged by the bound.
+- **API:** each advisory adds `exposures_total`. `exposures_truncated` now compares that total with the listed rows. The keyword argument is now `exposure_limit` (formerly `server_limit`); only tests passed it.
+- **UI:** a truncated advisory says "Showing N of M open exposures. Each exposure is one package on one server, so more affected packages or servers are not listed." It omits "of M" when the total is missing or malformed.
+- **Unchanged:** schema (no index was added, because nothing was measured to justify one), routes, roles and the read-only boundary. There are no scan, advisory-service, AI-provider or SSH calls.
+- **Validation:** `tests/test_cve_exposure_fleet.py` adds a one-server/six-package case and a statement spy showing that no query loads more than advisories × limit rows (main loaded 16 rows in one statement where the bound allows 6). It also proves that output under the limit is identical. `tests/ui_fleet_exposure.cjs` asserts the new wording.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**
@@ -8815,3 +8826,11 @@ This delivers the "configurable advance-warning window before an end date" item 
 - **Unchanged:** Ubuntu releases already in Pro-dependent extended coverage keep their existing medium event. Stale or missing inventory holds state and never opens a warning. `os_lifecycle.evaluate`, the catalog, patching, upgrades, the schema, roles and response authorization are unchanged.
 - **Compatibility:** existing installations get the 90-day default. A server with fewer than 90 days of standard or verified LTS support left receives one low-severity notice after upgrade.
 - **Remaining (#341):** Ubuntu Pro entitlement discovery, RPM/vendor catalog coverage, catalog refresh and signing, the migration queue and plans, fleet filters and reports, and real-target acceptance.
+
+### Shared AI start gates on AI activity — worker checkpoint #914
+
+Roadmap A requires AI activity to show the blocked reason and next eligible start, not only Investigations. Before this checkpoint the admin-only **Shared AI start gates** card (#727) rendered only on `#investigations`. The fleet AI activity page listed deferred runs but did not say why new provider calls were held.
+- **Change:** the fleet `#ai-logs` page adds the same card for administrators, after the AI worker status card and before the timing and known-good panels and run filters. It reuses `GET /api/settings/ai-control-status` and the existing renderer, including legacy per-purpose allowances, the fixed limitations and **Refresh start gates**. `loadAiControlGates` now takes the view it belongs to, so a response that arrives after the administrator leaves either page is discarded.
+- **Unchanged:** the API, schema, roles, admission, reservations and response authorization. Viewers are still routed away from `#ai-logs` and never request the snapshot. Per-server AI tabs do not show the card, because the snapshot is fleet-wide.
+- **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.

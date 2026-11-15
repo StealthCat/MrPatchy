@@ -179,14 +179,27 @@ function aiPurposeLimits(limits,when){
  }).join('');
  return `<h3>Legacy hourly allowances</h3><p class="help">This installation still uses the legacy per-purpose hourly limits. Each one holds only its own purpose and is not one of the shared gates above.</p><ul data-ai-purpose-limits>${rows}</ul>`;
 }
-async function loadAiControlGates(root,revision){
+async function loadAiControlGates(root,revision,view='investigations'){
  const section=root.querySelector('#ai-control-gates');if(!section)return;
  const token=(Number(section.dataset.request)||0)+1;section.dataset.request=String(token);
  section.setAttribute('aria-busy','true');
  let snapshot;try{snapshot=await api('/settings/ai-control-status');}catch{snapshot={unavailable:true};}
- if(!currentView(revision,'investigations')||!section.isConnected||section.dataset.request!==String(token))return;
+ if(!currentView(revision,view)||!section.isConnected||section.dataset.request!==String(token))return;
  section.innerHTML=aiControlGates(snapshot);section.removeAttribute('aria-busy');
- section.querySelectorAll('[data-ai-control-retry]').forEach(button=>button.onclick=()=>loadAiControlGates(root,revision));
+ section.querySelectorAll('[data-ai-control-retry]').forEach(button=>button.onclick=()=>loadAiControlGates(root,revision,view));
+}
+
+// The fleet AI activity page shows the same admin-only start-gate snapshot as
+// Investigations, so blocked reasons and the next eligible start are visible
+// where deferred runs are listed. Display-only; it grants no admission.
+function bindAiControlGates(root,revision){
+ const toolbar=root.querySelector('.toolbar');if(!toolbar||root.querySelector('#ai-control-gates'))return;
+ const section=document.createElement('section');
+ section.className='card';section.id='ai-control-gates';
+ section.setAttribute('aria-labelledby','ai-control-gates-title');section.setAttribute('aria-live','polite');
+ section.innerHTML='<div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2></div><p class="help" role="status">Loading shared AI start gates…</p>';
+ toolbar.before(section);
+ loadAiControlGates(root,revision,'ai-logs');
 }
 function triageStatus(status){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value:'Unavailable';
@@ -230,7 +243,7 @@ async function aiDiagnostics(revision=renderRevision,context=null){
  const key=context?.hostId||'fleet',saved=aiListContext.get(key)||{purpose:'',state:'',offset:0};
  const status=context?null:await api('/investigation-status');if(!currentView(revision,context?'servers':'ai-logs')||!root.isConnected)return;
  root.innerHTML=(context?'<p class="help">AI activity linked to this server. Shared scoring batches show the whole batch cost, not a per-server charge. Older runs without a server association remain in fleet AI logs.</p>':heading('Know what Mr Patchy is thinking.','Persistent run stages, provider errors, retries, and worker health.')+triageStatus(status))+`<div class="toolbar"><label>Purpose<select id="ai-log-purpose"><option value="">All logged AI activity</option><option value="triage">Process triage</option><option value="update_scoring">Update importance</option><option value="connection_test">Connection tests</option><option value="release_configuration">Release configuration</option><option value="security_plan">Security response plans</option><option value="worker">Worker failures</option></select></label><label>State<select id="ai-log-state"><option value="">All run states</option><option value="running">Running</option><option value="complete">Complete</option><option value="error">Failed</option><option value="deferred">Deferred</option><option value="interrupted">Interrupted</option></select></label><p class="help">API keys, raw prompts and provider bodies are excluded.</p></div><p class="help">Costs are estimated in USD from returned token usage and saved public rates. Older activity and calls without usage or known pricing show Unavailable.</p><div class="card" id="ai-log-table"></div><div class="actions"><button id="ai-log-prev">Previous</button><button id="ai-log-next">Next</button></div>`;
- if(!context&&isAdmin()){bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);}
+ if(!context&&isAdmin()){bindAiControlGates(root,revision);bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);}
  let offset=saved.offset,ticket=0;
  const table=$('#ai-log-table'),purposeFilter=$('#ai-log-purpose'),stateFilter=$('#ai-log-state');
  purposeFilter.value=saved.purpose;stateFilter.value=saved.state;
@@ -390,7 +403,8 @@ function fleetExposureContent(data){
    const reopened=Number.isSafeInteger(e.reopened)&&e.reopened>0?' · Reopened '+e.reopened.toLocaleString()+' time'+(e.reopened===1?'':'s'):'';
    const disabled=e.enabled===false?' <span class="badge disabled">Management disabled · not refreshed</span>':'';
    return '<li><div>'+host+disabled+'</div><div class="help">Package '+text(e.package)+' · First affected '+esc(time(e.first_affected_at))+' at version '+text(e.first_affected_version)+' · Last affected '+esc(time(e.last_affected_at))+' at version '+text(e.last_affected_version)+fixed+reopened+'</div></li>';}).join('');
-  const more=item.exposures_truncated===true?'<p class="help">More affected servers are not listed. Open each server\'s Patching page for its full history.</p>':'';
+  const listed=Array.isArray(item.exposures)?item.exposures.length:0,total=Number.isSafeInteger(item.exposures_total)&&item.exposures_total>=listed?' of '+item.exposures_total.toLocaleString():'';
+  const more=item.exposures_truncated===true?'<p class="help">Showing '+listed.toLocaleString()+total+' open exposures. Each exposure is one package on one server, so more affected packages or servers are not listed. Open each server\'s Patching page for its full history.</p>':'';
   return '<li><details><summary><span class="badge high">Open</span> <strong>'+text(item.advisory_id)+'</strong>'+(cves.length?' · '+esc(cves.join(', ')):'')+' · '+count(item.servers)+' server'+(item.servers===1?'':'s')+' · '+count(item.packages)+' package'+(item.packages===1?'':'s')+' · Earliest '+esc(time(item.first_affected_at))+'</summary><ul class="fleet-exposure-servers">'+exposures+'</ul>'+more+'</details></li>';
  }).join('');
  return summary+truncated+'<ul class="advisory-applicability fleet-exposure-list">'+rows+'</ul>'+limits+coverage+refresh;
