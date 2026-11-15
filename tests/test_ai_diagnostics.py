@@ -5,6 +5,7 @@ from app import ai, worker
 from app.db import Session, Setting, Behavior, Host
 from app.identity import User
 from app.security import seal
+from tests.ai_settings_helpers import confirmed_put
 
 
 def setup_ai():
@@ -105,7 +106,7 @@ def test_failed_probe_releases_lock_and_returns_diagnostic(admin,monkeypatch):
 
 def test_settings_strip_pasted_whitespace_without_losing_saved_key(admin):
     body={'repo_minutes':60,'deadlines':{'critical':24,'high':72,'normal':168,'low':720},'ai_enabled':True,'ai_model':'  fixture-model  ','api_key':' secret-test-key\n'}
-    assert admin.put('/api/settings',json=body).status_code==200
+    assert confirmed_put(admin,'/api/settings',body).status_code==200
     assert admin.get('/api/settings').json()['ai_model']=='fixture-model'
     body['ai_model']='ChatGPT display label'
     assert admin.put('/api/settings',json=body).status_code==400

@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
+from . import ai_budget,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -232,6 +232,8 @@ def collect_alerts(now=None):
                 # leaves the session untouched and never blocks SMTP/webhook alerts.
                 try:_operational_notification(s,host_id,kind,message,now)
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
+        # In-app only: an unusable saved key stops every paid AI path before sending.
+        ai_credential_notifications.publish(s,cfg,now)
         ai_budget.publish_unpriced_model_notification(s,cfg,now)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
@@ -320,6 +322,18 @@ def collect_alerts(now=None):
         from . import integrity_sweep_notifications
         try:integrity_sweep_notifications.publish(s,hosts,now)
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
+        # In-app only: scheduled malware-scan coverage has no SMTP/webhook alert.
+        from . import scan_coverage_notifications
+        try:scan_coverage_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app scheduled-scan coverage notifications')
+        # In-app only: lifecycle text comes from the reviewed catalog, never endpoint text.
+        from . import os_lifecycle_notifications
+        try:os_lifecycle_notifications.publish(s,hosts,now,cfg['repo_minutes']*120)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app OS lifecycle notifications')
+        # In-app only: stored advisory applicability; counts only, never advisory or package text.
+        from . import advisory_exposure_notifications
+        try:advisory_exposure_notifications.publish(s,hosts,now)
+        except ValueError:logging.getLogger(__name__).warning('Skipped in-app advisory exposure notifications')
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)
@@ -345,8 +359,11 @@ def deliver_one():
     with Session() as s:
         setting=s.get(Setting,'notifications')
         if not setting:return
-        cfg=json.loads(unseal(setting.value['encrypted']))
-        if not cfg.get('enabled'):return
+        # An unreadable configuration cannot be delivered; alert_delivery_notifications
+        # raises the in-app notice. Count no attempt and never raise into the poll executor.
+        try:cfg=json.loads(unseal(setting.value['encrypted']))
+        except Exception:return
+        if not isinstance(cfg,dict) or not cfg.get('enabled'):return
         alert=next((row for row in s.scalars(select(Alert).where(Alert.state=='open',Alert.notified==0).order_by(Alert.attempted).limit(200)) if time.time()-row.attempted>=min(3600,30*2**min(row.attempts,7))),None)
         if not alert:return
         alert.attempted=time.time();alert.attempts+=1;s.commit()
