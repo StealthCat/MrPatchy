@@ -425,7 +425,7 @@ docker compose up -d --build --scale worker=3
 
 For a controller with separately scaled workers on the same Docker host, use the fixed `compose.controller.yaml` (app and Caddy) and `compose.worker.yaml` (workers on the controller's existing data volume) files. See *Fixed controller and worker files* in [Compose configuration](docs/COMPOSE_CONFIGURATION.md).
 
-For the worker project, copy `.env.worker.example` to `.env.worker`, review it, and pass it with `--env-file` when starting `compose.worker.yaml`. The template contains only worker-role settings and is ignored by Git and Docker builds; it also prevents a controller `.env` in the same checkout from supplying variables to the worker project. It does not provision remote-host secrets or shared state, or add controller-only/join-worker installer modes.
+For the worker project, copy `.env.worker.example` to `.env.worker`, review it, and pass it with `--env-file` when starting `compose.worker.yaml`. The template contains only worker-role settings and is ignored by Git and Docker builds; it also prevents a controller `.env` in the same checkout from supplying variables to the worker project. It does not provision remote-host secrets or shared state; controller-only GCP installation is available as described below, while join-worker installer mode remains open.
 
 For a controller-only project, copy `.env.controller.example` to `.env`, review it, and set the administrator password, domain and public URL before starting `compose.controller.yaml`.
 
