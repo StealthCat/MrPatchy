@@ -161,6 +161,7 @@ EXPECTED_ROLES = {
     ('PUT','/api/investigations/{behavior_id}'):'admin',
     ('GET','/api/investigations/{behavior_id}/history'):'admin',
     ('GET','/api/investigations/{behavior_id}/history/{assessment_id}'):'admin',
+    ('POST','/api/investigations/retriage'):'admin',
     ('POST','/api/investigations/{behavior_id}/retriage'):'admin',
     ('POST','/api/investigations/{behavior_id}/retry'):'admin',
     ('GET','/api/jobs'):'viewer',

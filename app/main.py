@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.61.9"
+APP_VERSION = "1.62.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1066,6 +1066,22 @@ class RetriageInput(BaseModel):
     withdraw_approval:bool=False
 
 
+class RetriageItem(BaseModel):
+    id:str=Field(min_length=1,max_length=64)
+    expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class BulkRetriageInput(BaseModel):
+    items:list[RetriageItem]=Field(min_length=1,max_length=50)
+    reason:str=Field(min_length=10,max_length=4000)
+    withdraw_approval:bool=False
+
+
+def _retriage_refused(problems):
+    shown='; '.join(f'{label}: {problem}' for label,problem in problems[:5])
+    more=f'; and {len(problems)-5} more' if len(problems)>5 else ''
+    return HTTPException(409,f'Nothing was queued. {len(problems)} selected investigation(s) cannot be re-triaged — {shown}{more}. Refresh the list and select again.')
+
 class RevokeKnownGoodInput(BaseModel):
     expected_version:int=Field(ge=1,le=1_000_000,strict=True)
     reason:str=Field(min_length=10,max_length=1000)
@@ -1097,6 +1113,50 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin
                 return {'ok':True,'request_id':refresh.id,'detail':'Fresh triage queued. Prior assessment retained; AI pause, model settings and admission limits still apply.'}
     finally:lock.release()
 
+
+@app.post('/api/investigations/retriage')
+def retriage_investigations(body:BulkRetriageInput,user=Depends(admin_user)):
+    """Queue fresh triage for several completed investigations, all or nothing."""
+    from . import ai_assessments,ai_claims
+    reason=body.reason.strip()
+    if len(reason)<10:raise HTTPException(400,'Provide a meaningful re-triage reason')
+    ids=[item.id for item in body.items]
+    if len(set(ids))!=len(ids):raise HTTPException(400,'Each investigation can be selected only once')
+    expected={item.id:item.expected_revision for item in body.items}
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Select again when it finishes.')
+    try:
+        with Session() as s:
+            rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(ids)))}
+            missing=[id for id in ids if id not in rows]
+            if missing:raise HTTPException(404,f'{len(missing)} selected investigation(s) were not found. Refresh the list and select again.')
+            host_ids={id:rows[id].host_id for id in ids}
+            hosts={host.id:host for host in s.scalars(select(Host).where(Host.id.in_(set(host_ids.values()))))}
+            problems=[]
+            for id in ids:
+                claim=s.get(ai_claims.Claim,id)
+                label=rows[id].evidence.get('executable') or id
+                if claim and claim.expires>time.time():problems.append((label,'investigation is running'))
+                elif not host_lifecycle.active(hosts.get(host_ids[id])):problems.append((label,'server management is unavailable'))
+            if problems:raise _retriage_refused(problems)
+            with host_lifecycle.activity(list(host_ids.values()),'queue'):
+                # Approval mutations use these host locks. Drop the pre-lock
+                # read transaction so MySQL repeatable-read cannot hide them.
+                s.rollback()
+                rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(ids)))}
+                for id in ids:
+                    row=rows.get(id)
+                    if not row or row.host_id!=host_ids[id]:problems.append((id,'investigation identity changed'))
+                    else:
+                        problem=ai_assessments.refusal(s,row,expected[id],body.withdraw_approval)
+                        if problem:problems.append((row.evidence.get('executable') or id,problem))
+                if problems:raise _retriage_refused(problems)
+                requests=[ai_assessments.queue(s,rows[id],expected[id],reason,user['username'],body.withdraw_approval) for id in ids]
+                audit(s,'request bulk AI re-triage',f"{user['username']} {len(requests)} investigation(s) "+' '.join(request.id for request in requests))
+                s.commit()
+            return {'ok':True,'queued':len(requests),'request_ids':[request.id for request in requests],
+                'detail':f'Fresh triage queued for {len(requests)} investigation(s). Prior assessments retained; AI pause, model settings and admission limits still apply.'}
+    finally:lock.release()
 
 @app.get('/api/ai/known-good/summary')
 def known_good_summary(user=Depends(admin_user)):
