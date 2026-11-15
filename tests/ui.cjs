@@ -212,6 +212,7 @@ const assert=require('assert/strict');
     await require('./ui_known_good_summary.cjs')(page,capture);
     await require('./ui_assessments.cjs')(page,capture);
     await require('./ui_bulk_retriage.cjs')(page,capture);
+    await require('./ui_bulk_retriage_pages.cjs')(page,capture);
     await require('./ui_workers.cjs')(page,capture);
     await require('./ui_worker_ai_control_gates.cjs')(page,capture);
     await require('./ui_endpoint_agents.cjs')(page,capture);
