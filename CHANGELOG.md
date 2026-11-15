@@ -1,3 +1,7 @@
+## 1.73.0 — 2026-11-15
+
+1. [PR #944](https://github.com/StealthCat/MrPatchy/pull/944): Add a GCP join-worker installer mode for 1–16 replicas on the same Docker host as a controller-only installation. The installer reuses the controller's rendered project, identity, data volume and database; the worker wrapper refuses to target the controller Compose project. Compatibility: additive; complete and controller installation modes remain unchanged, with no application runtime, schema, role or response-authorization change. Limits: same host only; live `docker compose up` was not exercised without a Docker daemon; remote-machine workers and multi-host acceptance remain outside this roadmap slice (#943 remains open).
+
 ## 1.72.0 — 2026-11-15
 
 1. [PR #935](https://github.com/StealthCat/MrPatchy/pull/935): Add an admin-only fleet action to retry up to 200 process investigations blocked under the current AI configuration, using the existing triage and per-host queue locks, rechecking candidates under lock, and recording one audit event for each non-empty batch. Compatibility: additive route and UI; no schema, authorization, provider-call, pause, data-sharing, reservation, or response-authorization change; normal scheduler admission still governs execution. Limits: Fleet Investigations only; blocked advisory-plan work is excluded; batches are capped at 200, and the displayed blocked count can differ from the eligible retry count.
