@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.66.0"
+APP_VERSION = "1.70.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1021,16 +1021,20 @@ def key_upload(host_id:str,body:KeyInput,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'key',body.model_dump())}
 @app.get('/api/investigations')
-def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer_user)):
+def investigations(host_id:str='',offset:int=0,limit:int=500,cached:bool=False,user=Depends(viewer_user)):
     if offset<0 or not 1<=limit<=500:raise HTTPException(400,'Invalid investigation pagination')
     with Session() as s:
-        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
+        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id)
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
         from . import ai_retry,ai_policy,ai_claims,ai_assessments
-        rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
+        # cached=true lists only rows whose current state is an exact known-good reuse:
+        # the same rows that carry the list badge. Pagination counts filtered rows.
+        if cached:rows=ai_assessments.reused_page(s,stmt.where(Behavior.verdict.in_(ai_assessments.COMPLETE)),Behavior.id,offset,limit)
+        else:rows=list(s.scalars(stmt.offset(offset).limit(limit)))
+        signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
         reused=ai_assessments.current_reuse(s,rows,include_source=user.get('role')=='admin')
@@ -3237,6 +3241,14 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
             incidents.event(s,row.id,user['username'],'plan_approved',{'plan_id':plan.id,'expires':plan.expires,'execution':'manual_only'})
             audit(s,'security plan approved for manual response',plan.id+' '+user['username']);s.commit()
             return {'ok':True,'expires':plan.expires,'execution':'manual_only'}
+
+@app.get('/api/hosts/{host_id}/security/auto-plan-status')
+def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
+    """Read-only automatic AI plan status and pacing for this server (#922). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        host_or_404(s,host_id)
+        return auto_plan_status.status(s,host_id)
 
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
