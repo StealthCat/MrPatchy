@@ -194,6 +194,42 @@ them on the same Docker host with the worker commands above. The controller's da
 volume is `<project>_app-data`, where the project is the checkout directory name
 unless `.env` sets `COMPOSE_PROJECT_NAME`; `docker volume ls` lists it.
 
+### Join-worker installer mode
+
+`./install-gcp.sh --mode worker [--workers N]` starts `N` worker replicas (1–16, default
+1) on the same Docker host and joins them to the controller installed in the same
+checkout with `--mode controller`. Pass the same `--project`, `--zone` and
+`--instance` that you used for the controller.
+
+- **Joins only a recorded controller:** the installer refuses a fresh checkout, a
+  complete or legacy installation (it already runs its bundled worker), a different
+  project or zone, `--public-url` and `--credential-dir`. The worker reuses the
+  controller's identity: with WIF it adds `compose.worker.gcp-auth.json`, and the
+  sign-in stored in `/data/gcloud` on the shared volume. To change the identity,
+  re-run `--mode controller --credential-dir`. `.env`, `.env.gcp` and the controller
+  project are never changed, stopped or recreated.
+- **Shared state from the rendered controller:** it renders the controller with
+  `./gcp-compose.sh config`, reads its `app-data` volume name and effective
+  `DATABASE_URL`, and requires the volume to exist. Start the controller first.
+- **`.env.worker`:** when absent, it is created from `.env.worker.example` with
+  `COMPOSE_PROJECT_NAME=<controller project>-workers`, the controller volume and the
+  controller's `DATABASE_URL` (single-quoted, so `$` stays literal). It is mode 0600
+  and git- and docker-ignored. An existing `.env.worker` is kept. The run is refused
+  if the file has no `COMPOSE_PROJECT_NAME`, reuses the controller project name, or
+  renders a different volume or `DATABASE_URL` than the controller. A newly written
+  file that fails this check is removed.
+- **Builds, checks and starts only workers:** it builds `worker`. It then runs the
+  gcloud version, access-token (discarded) and instance-read checks in one-off worker
+  containers, which take a dynamic management address rather than the app's control
+  IP. Finally it runs `up -d --wait --scale worker=N` in the worker project.
+  Re-running with another `--workers` value rescales the same project.
+
+Use `./gcp-compose.sh --workers …` for later worker operations, for example
+`./gcp-compose.sh --workers ps` or `./gcp-compose.sh --workers up -d --scale worker=4`.
+Plain `./gcp-compose.sh` keeps operating the controller. Drain workers in the UI
+before planned maintenance, as above. This mode does not provision workers on
+another machine.
+
 ### Unsupported in this increment
 
 - Workers on another machine: a Docker volume name doesn't share the encryption key, SSH identities, artifacts or locking state across hosts.
