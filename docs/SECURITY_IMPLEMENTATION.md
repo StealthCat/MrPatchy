@@ -3580,7 +3580,7 @@ listed under #682 apart from this fleet-level storage and UI.
 
 ### Per-server restrict-only malware response overrides — worker checkpoint #940
 
-Status: **bounded backend slice; requirement E remains planned/incomplete.**
+Status: **bounded backend and UI slice; requirement E remains planned/incomplete.**
 An administrator can store one override per server in the `Setting` row
 `malware-response-server:<host_id>`. Nothing evaluates it at runtime.
 - **Restrict-only:** an override has a `mode_cap` (`inherit`, `monitor_only`
@@ -3596,10 +3596,16 @@ An administrator can store one override per server in the `Setting` row
   compare-and-set under the existing `malware-response-policy` lock and writes
   one audit entry naming the cap change and exclusion counts, never the paths
   or hashes. An unknown server returns 404.
+- **UI:** administrators see an "Automatic malware response for this server"
+  panel on the server's Security tab. It shows the fleet mode, the effective
+  mode and exclusion counts, offers only the restricting caps, explains invalid
+  stored state and keeps entries in the form after a refused or stale save.
+  `tests/ui_server_malware_override.cjs` covers save, refusal, stale saves,
+  escaping, load failure and 320/768/1440 px widths.
 - **Unchanged:** no executor, detector, provider call, schema change or response
   authorization was added, and `enforce` stays unavailable.
 
-Remaining: the server Security tab UI for this override, group overrides,
+Remaining: group overrides,
 fleet-level visibility of overridden servers, and every runtime item under
 #682.
 
