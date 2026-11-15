@@ -11,6 +11,11 @@ module.exports=async(page,capture)=>{
   indefinite:{generated_at:now,mode:'daily_cap',can_start_now:false,next_start_at:null,blockers:[
    {code:'disabled',message:'Central AI provider calls are disabled by an administrator.',next_at:null,recheck_at:null},
    {code:'daily_cap',message:'The daily spend cap has no remaining recorded headroom; retained prior windows make the configured reset a recheck boundary only.',next_at:null,recheck_at:now+7200}],limitations},
+  legacy:{generated_at:now,mode:'legacy',can_start_now:true,next_start_at:null,blockers:[],limitations,purpose_limits:[
+   {purpose:'triage',limit:20,used:20,state:'exhausted',next_at:now+900},
+   {purpose:'update_scoring',limit:20,used:3,state:'disabled',next_at:null},
+   {purpose:'automatic_plans',limit:10,used:2,state:'available',next_at:null},
+   {purpose:'<img src=x onerror=window.__gateInjected=true>',limit:'x',used:-1,state:'exhausted',next_at:'soon'}]},
   malformed:{can_start_now:false,next_start_at:'<b>x</b>',blockers:[{code:'<img src=x onerror=window.__gateInjected=true>',message:'<img src=x onerror=window.__gateInjected=true>',next_at:'soon'}],limitations:['<img src=x onerror=window.__gateInjected=true>']},
  };
  const status={pending:2,active:0,queued:2,reported_capacity:2,ready:2,blocked:0,paused:0,hourly_limit:20,recent_attempts:0,worker_seen:now,enabled:true,reason:'ready',message:'Waiting for shared admission.',retry_at:null,last_error:'',admission:{mode:'rate',rate_per_hour:12}};
@@ -39,6 +44,29 @@ module.exports=async(page,capture)=>{
    await capture('ai-control-gates-'+width);
   }
   await page.setViewportSize({width:1440,height:1000});
+
+  // Legacy per-purpose allowances (#860) are listed apart from the shared gates.
+  mode='legacy';await page.reload();
+  await card.getByText('Legacy hourly allowances',{exact:false}).waitFor();
+  assert.equal(await card.locator('.badge').innerText(),'open');
+  const legacy=await card.locator('[data-ai-purpose-limits]').innerText();
+  assert.match(legacy,/Process triage · 20 of 20 in the last hour/);
+  assert.match(legacy,/Allowance used up\. Next eligible /);
+  assert.match(legacy,/Update scoring · 3 of 20 in the last hour\s+Disabled in Settings/);
+  assert.match(legacy,/Automatic incident and startup plans · 2 of 10 in the last hour\s+Allowance available/);
+  assert.match(legacy,/Unavailable of Unavailable in the last hour\s+Allowance used up\. No scheduled reopening/);
+  assert.equal(await page.locator('#content img[src=x]').count(),0);
+  assert.equal(await page.evaluate(()=>window.__gateInjected),undefined);
+  for(const width of [320,1440]){
+   await page.setViewportSize({width,height:1000});
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+   await card.scrollIntoViewIfNeeded();
+   await capture('ai-control-legacy-allowances-'+width);
+  }
+  await page.setViewportSize({width:1440,height:1000});
+  mode='open';await page.reload();
+  await card.getByText('All shared global gates are open now.',{exact:false}).waitFor();
+  assert.equal(await card.locator('[data-ai-purpose-limits]').count(),0);
 
   mode='indefinite';await page.reload();
   await card.getByText('No automatic next start.',{exact:false}).waitFor();

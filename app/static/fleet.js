@@ -22,6 +22,36 @@ async function requestInvestigationRetriage(id){
  }catch(error){if(view===renderRevision&&session===sessionRevision)toast(error.message);}
 }
 
+const RETRIAGE_COMPLETE=['low','medium','high','unknown'];
+function retriageEligible(row){return RETRIAGE_COMPLETE.includes(row.verdict)&&/^[a-f0-9]{64}$/.test(row.revision||'');}
+function retriageCheckbox(row){return `<label class="check retriage-select"><input type="checkbox" data-retriage-select data-id="${esc(row.id)}" data-revision="${esc(row.revision)}" data-approved="${row.approved?'true':'false'}" data-executable="${esc(row.evidence?.executable||row.id)}" data-host="${esc(row.host_id)}">Select for Re-triage</label>`;}
+function bulkRetriageBar(){return `<div class="actions retriage-bulk" data-admin><button type="button" id="bulk-retriage" disabled aria-describedby="bulk-retriage-help">Re-triage selected (<span id="bulk-retriage-count">0</span>)</button><button type="button" id="bulk-retriage-clear" disabled>Clear selection</button><span class="help" id="bulk-retriage-help">Select completed investigations on this page to request fresh AI triage for all of them at once.</span></div>`;}
+function bindBulkRetriage(root){
+ const button=root.querySelector('#bulk-retriage');if(!button)return;
+ const clear=root.querySelector('#bulk-retriage-clear'),boxes=()=>[...root.querySelectorAll('[data-retriage-select]')];
+ const sync=()=>{const count=boxes().filter(box=>box.checked).length;root.querySelector('#bulk-retriage-count').textContent=count;button.disabled=!count;clear.disabled=!count;};
+ boxes().forEach(box=>{box.onchange=sync;});
+ clear.onclick=()=>{boxes().forEach(box=>{box.checked=false;});sync();};
+ button.onclick=()=>requestBulkRetriage(boxes().filter(box=>box.checked).map(box=>({id:box.dataset.id,expected_revision:box.dataset.revision,approved:box.dataset.approved==='true',executable:box.dataset.executable,host_id:box.dataset.host})));
+ sync();
+}
+function requestBulkRetriage(selected){
+ if(!selected.length)return;
+ const view=renderRevision,session=sessionRevision,approved=selected.filter(item=>item.approved).length;
+ const list=selected.slice(0,10).map(item=>`<li><strong class="assessment-artifact">${esc(item.executable)}</strong> · ${esc(hostName(item.host_id))}${item.approved?' · approved':''}</li>`).join('')+(selected.length>10?`<li>and ${selected.length-10} more</li>`:'');
+ modal('Request fresh AI triage for selected investigations',`<p>Investigate these ${selected.length} selected investigation(s) again? Each saved result stays in its Assessment history. This queues new investigations, may incur provider charges, and does not approve any response.</p><ul class="retriage-bulk-list">${list}</ul><p class="help">All or nothing: if any selected item changed or cannot be re-triaged, nothing is queued. AI pause, data sharing, saved model and admission limits still apply when the work runs. No fleet trust is changed.</p><form id="bulk-retriage-form"><label>Reason<textarea name="reason" minlength="10" maxlength="4000" required></textarea></label>${approved?`<label class="check"><input name="withdraw" type="checkbox" required>I withdraw the current approval of ${approved} selected behavior(s) until they are reviewed again.</label>`:''}<button class="primary">Queue fresh triage for ${selected.length}</button></form>`);
+ const form=$('#bulk-retriage-form'),dialog=modalRevision;
+ const active=()=>form.isConnected&&dialog===modalRevision&&view===renderRevision&&session===sessionRevision;
+ form.onsubmit=async event=>{
+  event.preventDefault();const button=form.querySelector('button');if(button.disabled)return;button.disabled=true;
+  try{
+   const values=new FormData(form);
+   const result=await api('/investigations/retriage','POST',{items:selected.map(({id,expected_revision})=>({id,expected_revision})),reason:values.get('reason'),withdraw_approval:values.has('withdraw')});
+   if(!active())return;$('#modal').close();toast(result.detail);await render();
+  }catch(error){if(active())toast(error.message);}finally{if(active())button.disabled=false;}
+ };
+}
+
 function requestKnownGoodRevocation(fingerprint,version,linked){
  const view=renderRevision,session=sessionRevision;
  modal('Revoke fleet safe candidate',`<p>Stop all future reuse of exact fingerprint <code class="known-good-fingerprint">${esc(fingerprint)}</code>? ${esc(linked)} linked assessment(s) will be marked for review without changing their saved results.</p><p class="help">This does not re-run AI, remove historical evidence, approve a response or suppress deterministic protection. Do not enter credentials or raw endpoint evidence.</p><form id="known-good-revoke-form"><label>Reason<textarea name="reason" minlength="10" maxlength="1000" required></textarea></label><label class="check"><input name="confirm" type="checkbox" required>I understand this invalidates the candidate across the fleet.</label><button class="primary">Revoke fleet candidate</button></form>`);
@@ -109,7 +139,7 @@ function aiAdmissionControl(status){
 // Shared AI start gates (#727): renders the administrator-only control snapshot
 // from /api/settings/ai-control-status (#546). Display-only; never a promise that
 // a specific call will start.
-const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
+const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',credential:'Saved API key unreadable',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
 function aiControlGates(snapshot){
  const when=value=>Number.isFinite(value)&&value>0?date(value):null;
  const head=state=>`<div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2>${badge(state)}</div>`;
@@ -118,8 +148,9 @@ function aiControlGates(snapshot){
  }
  const limitations=Array.isArray(snapshot.limitations)&&snapshot.limitations.length?`<ul class="help">${snapshot.limitations.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'';
  const refresh=`<div class="actions"><button type="button" data-ai-control-retry>Refresh start gates</button></div>`;
+ const purposes=aiPurposeLimits(snapshot.purpose_limits,when);
  if(snapshot.can_start_now&&!snapshot.blockers.length){
-  return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${limitations}${refresh}`;
+  return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${purposes}${limitations}${refresh}`;
  }
  const items=snapshot.blockers.map(blocker=>{
   const code=typeof blocker?.code==='string'?blocker.code:'unknown';
@@ -129,7 +160,24 @@ function aiControlGates(snapshot){
  }).join('');
  const nextStart=when(snapshot.next_start_at);
  const summary=nextStart?`<p><strong>Next eligible start:</strong> ${nextStart}. This is the latest time among the blocking gates. Work may still wait after it.</p>`:`<p><strong>No automatic next start.</strong> At least one hold has no scheduled end, or its time is only a recheck boundary.</p>`;
- return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${limitations}${refresh}`;
+ return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${purposes}${limitations}${refresh}`;
+}
+// Legacy per-purpose hourly allowances (#860). Each holds only its own purpose.
+const AI_PURPOSE_LABELS={triage:'Process triage',update_scoring:'Update scoring',automatic_plans:'Automatic incident and startup plans'};
+function aiPurposeLimits(limits,when){
+ if(!Array.isArray(limits)||!limits.length)return '';
+ const count=value=>Number.isSafeInteger(value)&&value>=0?String(value):'Unavailable';
+ const rows=limits.map(item=>{
+  const purpose=typeof item?.purpose==='string'?item.purpose:'unknown';
+  const label=AI_PURPOSE_LABELS[purpose]||purpose.replaceAll('_',' ');
+  const used=`${count(item?.used)} of ${count(item?.limit)} in the last hour`;
+  let state;
+  if(item?.state==='disabled')state='Disabled in Settings, so this allowance is not in use';
+  else if(item?.state==='available')state='Allowance available';
+  else{const next=when(item?.next_at);state=next?`Allowance used up. Next eligible ${next}`:'Allowance used up. No scheduled reopening';}
+  return `<li><strong>${esc(label)}</strong> · ${esc(used)}<br><small>${esc(state)}.</small></li>`;
+ }).join('');
+ return `<h3>Legacy hourly allowances</h3><p class="help">This installation still uses the legacy per-purpose hourly limits. Each one holds only its own purpose and is not one of the shared gates above.</p><ul data-ai-purpose-limits>${rows}</ul>`;
 }
 async function loadAiControlGates(root,revision){
  const section=root.querySelector('#ai-control-gates');if(!section)return;
@@ -280,7 +328,7 @@ async function packageHistory(revision=renderRevision,context=null){
  const load=async()=>{const turn=++ticket;try{const data=await api('/package-history?host_id='+encodeURIComponent(context?.hostId||$('#history-host').value)+'&q='+encodeURIComponent($('#history-search').value)+'&offset='+offset);if(turn!==ticket||!currentView(revision,context?'servers':'history')||!table.isConnected)return;
  table.innerHTML=data.items.length?`<div class="table-wrap"><table><thead><tr><th>Observed</th><th>Server / package</th><th>Change</th><th>Before → after</th><th>Origin</th><th>Historical AI importance</th></tr></thead><tbody>${data.items.map(r=>`<tr><td>${date(r.observed)}<small>Recorded ${date(r.recorded)}</small></td><td>${esc(r.name)}<small>${esc(hostName(r.host_id))}</small></td><td>${badge(r.action)}</td><td>${esc(r.before.join(', ')||'—')} → ${esc(r.after.join(', ')||'—')}${r.state_before!==r.state_after?`<small>${esc(r.state_before||'—')} → ${esc(r.state_after||'—')}</small>`:''}</td><td>${esc(r.source)}<small>${esc(r.actor||'Observed; actor unknown')}</small>${r.job_id?`<button data-history-job="${r.job_id}">View operation</button>`:''}</td><td>${r.assessment?assessmentCell(r.assessment):'No saved assessment'}</td></tr>`).join('')}</tbody></table></div>`:empty('No package changes recorded','History begins with the next inventory collected after this version is deployed.');
  $('#package-history-prev').disabled=offset===0;$('#package-history-next').disabled=!data.more;
- table.querySelectorAll('[data-history-job]').forEach(button=>button.onclick=async()=>{const rev=modalRevision;try{const j=await api('/jobs/'+button.dataset.historyJob);if(rev!==modalRevision||!table.isConnected)return;modal('Package operation',`<p>${esc(j.action)} · ${badge(j.state)} · ${date(j.created)}</p><pre>${esc(j.output||'Awaiting execution')}</pre>`);}catch(e){toast(e.message);}});
+ table.querySelectorAll('[data-history-job]').forEach(button=>button.onclick=async()=>{const rev=modalRevision;try{const j=await api('/jobs/'+button.dataset.historyJob);if(rev!==modalRevision||!table.isConnected)return;modal('Package operation',`<p>${esc(j.action)} · ${badge(j.state)} · ${date(j.created)}</p>${PatchyUI.commandOutput(j.output,'Package operation output','Awaiting execution')}`);}catch(e){toast(e.message);}});
  }catch(e){if(table.isConnected)toast(e.message);}};
  if(!context)$('#history-host').onchange=()=>{offset=0;load();};$('#history-search').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{if(table.isConnected){offset=0;load();}},250);};$('#package-history-prev').onclick=()=>{offset=Math.max(0,offset-100);load();};$('#package-history-next').onclick=()=>{offset+=100;load();};await load();
 }

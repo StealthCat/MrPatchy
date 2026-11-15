@@ -61,7 +61,7 @@ def native_compare(left, right):
     report UNCERTAIN instead of trusting dpkg's warn-and-continue ordering.
     """
     if not valid_debian_version(left) or not valid_debian_version(right):
-        raise ValueError('version does not have valid Debian version syntax')
+        raise ValueError(_INVALID_SYNTAX)
     if left == right:
         return 0
     greater, lesser = newer_flags([(left, right), (right, left)])
@@ -85,24 +85,61 @@ def _result(vuln, status, reason, fixed_version=None):
     }
 
 
+# Fixed, user-facing reasons for an unevaluable range. Range problems are
+# reported only from this closed set: raw exception text (dpkg OSError paths,
+# interpreter messages) never reaches stored or returned results (#798).
+_EVENTS_MALFORMED = 'range events are missing, malformed or exceed the bound'
+_EVENT_NOT_SINGLE = 'range event must contain exactly one key'
+_EVENT_UNKNOWN = 'range event has an unknown key or a non-string version'
+_EVENT_LIMIT = 'limit events are not supported for ecosystem ranges'
+_EVENT_ZERO = 'only introduced events may use the zero version'
+_EVENT_NO_INTRODUCED = 'range has no introduced event'
+_INVALID_SYNTAX = 'version does not have valid Debian version syntax'
+_COMPARISON_FAILED = 'version comparison failed'
+_UNCERTAIN_PREFIX = 'Applicability could not be established: '
+_RANGE_PROBLEMS = frozenset({
+    'explicit version list is malformed', 'explicit version list contains non-string entries',
+    'range list is malformed', 'vendor entry lists no versions or ranges',
+    'unsupported range type for distribution version ordering',
+    _EVENTS_MALFORMED, _EVENT_NOT_SINGLE, _EVENT_UNKNOWN, _EVENT_LIMIT, _EVENT_ZERO,
+    _EVENT_NO_INTRODUCED, _INVALID_SYNTAX, _COMPARISON_FAILED,
+})
+
+
 def _parse_events(events):
+    """Return ``(parsed, problem)``; ``problem`` is a fixed reason or None."""
     if not isinstance(events, list) or not events or len(events) > MAX_RANGE_EVENTS:
-        raise ValueError('range events are missing, malformed or exceed the bound')
+        return None, _EVENTS_MALFORMED
     parsed = []
     for event in events:
         if not isinstance(event, dict) or len(event) != 1:
-            raise ValueError('range event must contain exactly one key')
+            return None, _EVENT_NOT_SINGLE
         (key, value), = event.items()
         if key not in _RANGE_EVENT_KEYS or not isinstance(value, str) or not value:
-            raise ValueError('range event has an unknown key or a non-string version')
+            return None, _EVENT_UNKNOWN
         if key == 'limit':
-            raise ValueError('limit events are not supported for ecosystem ranges')
+            return None, _EVENT_LIMIT
         if key != 'introduced' and value == '0':
-            raise ValueError('only introduced events may use the zero version')
+            return None, _EVENT_ZERO
         parsed.append((key, value))
     if not any(key == 'introduced' for key, _ in parsed):
-        raise ValueError('range has no introduced event')
-    return parsed
+        return None, _EVENT_NO_INTRODUCED
+    return parsed, None
+
+
+def sanitize_reason(reason):
+    """Return ``reason`` with any unknown uncertainty detail replaced by a fixed reason.
+
+    Results retained before #798 may carry raw comparator exception text inside
+    an ``Applicability could not be established: ...`` reason. Only problems from
+    the closed ``_RANGE_PROBLEMS`` set survive; anything else is reported as a
+    failed version comparison. Other reasons are returned unchanged.
+    """
+    if not isinstance(reason, str) or not reason.startswith(_UNCERTAIN_PREFIX):
+        return reason
+    parts = reason[len(_UNCERTAIN_PREFIX):].split('; ')
+    safe = sorted({part if part in _RANGE_PROBLEMS else _COMPARISON_FAILED for part in parts})
+    return _UNCERTAIN_PREFIX + '; '.join(safe)
 
 
 def _evaluate_range(parsed, installed, compare):
@@ -200,15 +237,20 @@ def _classify(vuln, ecosystem, package, installed_version, compare, resolve_fix)
             if not isinstance(item, dict) or item.get('type') != 'ECOSYSTEM':
                 problems.append('unsupported range type for distribution version ordering')
                 continue
+            parsed, problem = _parse_events(item.get('events'))
+            if problem is None and compare is native_compare and not all(
+                    valid_debian_version(value) for value in
+                    [installed_version, *(value for _key, value in parsed if value != '0')]):
+                problem = _INVALID_SYNTAX
+            if problem is not None:
+                problems.append(problem)
+                continue
             try:
-                parsed = _parse_events(item.get('events'))
                 status, fixed_version = _evaluate_range(parsed, installed_version, compare)
                 later_fixes = [value for key, value in parsed if key == 'fixed' and compare(value, installed_version) > 0]
-            except (ValueError, TypeError, OSError) as exc:
-                problems.append(str(exc) or 'version comparison failed')
-                continue
-            except Exception:  # noqa: BLE001 - an unknown comparator failure is uncertainty, never safety
-                problems.append('version comparison failed')
+            except Exception:  # noqa: BLE001 - any comparator failure is uncertainty, never safety
+                # Never report the exception text: it can carry paths or internals (#798).
+                problems.append(_COMPARISON_FAILED)
                 continue
             fix_candidates.extend(later_fixes)
             if status == AFFECTED:
@@ -225,12 +267,12 @@ def _classify(vuln, ecosystem, package, installed_version, compare, resolve_fix)
                 reason += '; no fixed version is published for this release'
         return _result(vuln, AFFECTED, reason, fix)
     if problems:
-        return _result(vuln, UNCERTAIN, 'Applicability could not be established: ' + '; '.join(sorted(set(problems))))
+        return _result(vuln, UNCERTAIN, _UNCERTAIN_PREFIX + '; '.join(sorted(set(problems))))
     if fixed_by:
         try:
             fix = sorted(fixed_by, key=cmp_to_key(compare))[-1]
         except Exception:  # noqa: BLE001
-            return _result(vuln, UNCERTAIN, 'Applicability could not be established: version comparison failed')
+            return _result(vuln, UNCERTAIN, _UNCERTAIN_PREFIX + _COMPARISON_FAILED)
         return _result(vuln, FIXED, 'Installed version is at or beyond the vendor fix', fix)
     return _result(vuln, UNAFFECTED, 'Installed version is outside every vendor-listed affected range')
 

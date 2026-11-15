@@ -267,6 +267,8 @@ def ingest(s,h,snapshot,include_inventory=True):
     if snapshot.get('ebpf-status',{}).get('state') in ('error','warning','unavailable'):issues.append({'path':'eBPF','issue':str(snapshot['ebpf-status'])})
     if snapshot.get('collector-error'): issues.append({'path':'collector','issue':str(snapshot['collector-error'])})
     h.integrity=issues; h.telemetry=t; h.last_seen=time.time(); h.state='attention' if issues else 'online'; h.error=''
+    from .agent_spool_health import publish_notification as publish_spool_notification
+    publish_spool_notification(s,h,bool(spool_issue))
     from .file_trust import record_snapshot
     record_snapshot(s,h)
     s.commit()
@@ -774,6 +776,18 @@ def _assess_behavior(s,row,cfg,secret):
     with host_lifecycle.activity([row.host_id],'ai'):
         return _assess_active_behavior(s,row,cfg,secret)
 
+def _explain_known_good_miss(missed,model,policy_hashes):
+    """Record why the known-good cache missed; advisory diagnostics only."""
+    if not missed:return
+    from . import known_good
+    try:
+        with Session() as read:
+            explained=known_good.explain_miss(read,missed['evidence'],model,policy_hashes,
+                refresh=missed['refresh'],changed=missed['changed'])
+    except Exception:
+        log.warning('Known-good miss diagnostic unavailable',exc_info=True);return
+    ai_runs.event('known_good_lookup',explained['message'])
+
 def _assess_active_behavior(s,row,cfg,secret):
     from . import ai_assessments,ai_claims,known_good,triage_notifications
     lease=ai_claims.current.get()
@@ -791,11 +805,15 @@ def _assess_active_behavior(s,row,cfg,secret):
         row.evidence=file_status.before_ai(s,row)
         s.commit()
 
+    missed={}
     def reuse(write,saved):
+        refresh=bool(write.get(ai_assessments.Refresh,saved.id))
+        changed=saved.evidence.get('file_assessment',{}).get('status')=='changed'
         hit=known_good.lookup(write,saved.evidence,cfg['ai_model'],policy_hashes,
-            bypass=bool(write.get(ai_assessments.Refresh,saved.id)) or
-                saved.evidence.get('file_assessment',{}).get('status')=='changed')
-        if not hit:return False
+            bypass=refresh or changed)
+        if not hit:
+            missed.update(evidence=copy.deepcopy(saved.evidence),refresh=refresh,changed=changed)
+            return False
         result=hit['result']
         saved.verdict='low'
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
@@ -813,6 +831,7 @@ def _assess_active_behavior(s,row,cfg,secret):
                 if reuse(write,saved):return
         elif reuse(s,row):
             s.commit();return
+    _explain_known_good_miss(missed,cfg['ai_model'],policy_hashes)
     inputs=[]
     def assess(evidence):
         prepared=ai.investigation_input(evidence)
@@ -904,7 +923,7 @@ def _loop(reporter):
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
+        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; leader_since=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
@@ -934,7 +953,10 @@ def _loop(reporter):
                 draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
                 worker_health.touch()
                 if draining and is_leader:leader.release();is_leader=False
-                if not draining and not is_leader:is_leader=leader.acquire(False)
+                if not draining and not is_leader:
+                    is_leader=leader.acquire(False)
+                    # Telemetry silence before this point is the coordinator's own gap, not the servers'.
+                    if is_leader:leader_since=now
                 if is_leader:
                     ai_runs.heartbeat()
                     if now-last_advisory_reconcile>=5:
@@ -970,12 +992,16 @@ def _loop(reporter):
                                     try:enqueue(s,h.id,'refresh')
                                     except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
-                        operations.collect_alerts()
+                        operations.collect_alerts(observing_since=leader_since)
                         # In-app only; a failure must not stop the coordinator tick.
                         try:
                             from . import worker_registry
                             worker_registry.publish_notifications()
                         except Exception:log.exception('Expected-worker notifications failed')
+                        try:
+                            from . import controller_registry
+                            controller_registry.publish_notifications()
+                        except Exception:log.exception('Expected-controller notifications failed')
                     # Resume observation, never the package transaction, after worker loss.
                     resume_busy={host_id for _,host_id in active_jobs.values()}
                     for j in s.scalars(select(Job).where(Job.state=='running',Job.action=='release-upgrade',Job.host_id.in_(host_lifecycle.active_ids()))):
@@ -1016,6 +1042,8 @@ def _loop(reporter):
                     last_cleanup=now
                 if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
                 if now-last_ai>=5:
+                    try:notifications.prune_resolved(cutoff)
+                    except Exception:log.exception('Resolved notification pruning failed')
                     # No executor backlog: release slots while quota/retry work
                     # waits. Alternate purposes even with a serial pool. Only the
                     # coordinator scores; any supported worker may claim triage.

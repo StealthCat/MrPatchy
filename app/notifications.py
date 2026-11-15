@@ -624,3 +624,68 @@ def prune_arrivals(cutoff, *, factory=Session, batch=ARRIVAL_PRUNE_BATCH):
             deleted += result.rowcount or 0
             if upper >= limit:
                 return deleted
+
+
+RESOLVED_PRUNE_BATCH = 500
+
+
+def prune_resolved(cutoff, *, factory=Session, batch=RESOLVED_PRUNE_BATCH):
+    """Delete retained history of events resolved before ``cutoff``.
+
+    Only events whose *current* revision is ``resolved`` and whose last update
+    precedes ``cutoff`` qualify; active events keep every revision at any age.
+    Their revisions and per-user read/dismiss rows are deleted, which hides the
+    event from lists, counts and arrivals.  The identity row stays so a recurring
+    subject continues the revision sequence: the new active revision is unread
+    and never reuses a pruned revision number, keeping replay cursors, exact-
+    revision read/dismiss and cross-tab toast keys collision-free.  Rows written
+    at or after ``cutoff`` (a racing publish, read or dismiss) are never deleted.
+    Each batch commits separately.  Returns ``(events, revisions)`` pruned.
+    """
+    if type(batch) is not int or batch < 1:
+        raise ValueError('Notification resolved prune batch must be positive')
+    eligible = (
+        select(NotificationEvent.id)
+        .join(NotificationRevision, and_(
+            NotificationRevision.event_id == NotificationEvent.id,
+            NotificationRevision.revision == NotificationEvent.revision))
+        .where(NotificationRevision.lifecycle == 'resolved',
+               NotificationEvent.updated < cutoff))
+    events = revisions = 0
+    after = ''
+    while True:
+        with factory() as session:
+            candidates = session.scalars(
+                eligible.where(NotificationEvent.id > after)
+                .order_by(NotificationEvent.id).limit(batch)).all()
+            if not candidates:
+                return events, revisions
+            # Revalidate under the event row locks before deleting.  A publisher
+            # may reopen or change a candidate after the non-locking selection;
+            # the locking read sees its committed revision (and waits for an
+            # uncommitted one), so a now-active event keeps all of its history.
+            # Publishers update the event row, so they serialize behind these
+            # locks until this batch commits.
+            ids = session.scalars(
+                eligible.where(NotificationEvent.id.in_(candidates))
+                .order_by(NotificationEvent.id)
+                .with_for_update(of=NotificationEvent)).all()
+            if not ids:
+                session.rollback()
+            else:
+                result = session.execute(
+                    delete(NotificationRevision)
+                    .where(NotificationRevision.event_id.in_(ids),
+                           NotificationRevision.created < cutoff)
+                    .execution_options(synchronize_session=False))
+                session.execute(
+                    delete(NotificationUserState)
+                    .where(NotificationUserState.event_id.in_(ids),
+                           NotificationUserState.updated < cutoff)
+                    .execution_options(synchronize_session=False))
+                session.commit()
+                events += len(ids)
+                revisions += result.rowcount or 0
+            after = candidates[-1]
+            if len(candidates) < batch:
+                return events, revisions
