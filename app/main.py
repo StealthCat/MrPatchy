@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.63.0"
+APP_VERSION = "1.63.1"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1326,6 +1326,7 @@ class ConfigInput(BaseModel):
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
+    os_lifecycle_warning_days:int=Field(default=90,ge=0,le=730)
     api_key:str=Field(default='',max_length=1000)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
@@ -1402,6 +1403,8 @@ class PatchSettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
+    # Optional so older clients that omit it keep the stored window.
+    os_lifecycle_warning_days:int|None=Field(default=None,ge=0,le=730)
 
 class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1426,6 +1429,8 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
             if section=='ai' and previous['ai_daily_cap_usd']!=values['ai_daily_cap_usd']:
                 detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
+            if section=='patching' and previous['os_lifecycle_warning_days']!=values.get('os_lifecycle_warning_days',previous['os_lifecycle_warning_days']):
+                detail+='; OS lifecycle advance warning changed from '+str(previous['os_lifecycle_warning_days'])+' to '+str(values['os_lifecycle_warning_days'])+' days'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             audit(s,'update '+section+' settings',detail)
@@ -1471,7 +1476,7 @@ def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()):
         raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
-    return save_settings_section(body.model_dump(),'patching')
+    return save_settings_section(body.model_dump(exclude_none=True),'patching')
 
 @app.put('/api/settings/history')
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
