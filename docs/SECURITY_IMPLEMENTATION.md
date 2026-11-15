@@ -8581,3 +8581,21 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
   - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+
+### Linked servers for a fleet known-good candidate — worker checkpoint #891
+
+Roadmap B slice: explain cache hits and retain visible per-host observations.
+`GET /api/ai/known-good/{fingerprint}/observations` (administrator only, read-only)
+pages the retained observations bound to one durable candidate, newest first with
+an assessment-ID tie-break. Each item has a role: `origin` (the assessment that
+published the candidate), `reuse` (exact-match reuse with no provider call) or `linked`
+(an independent AI assessment with the same fingerprint), plus the server, whether
+that server is still active, and links. It returns identifiers and timestamps only,
+never observation JSON, snapshots, evidence or results. It takes no locks, writes
+nothing and makes no audit or provider calls.
+
+On the assessment page, a "Linked servers" section loads lazily below published,
+reused or revoked candidates. It has escaped names, paging, Retry and a stale-response
+guard, and states that linkage grants no approval and authorizes no response. This
+does not complete roadmap B: complete context collection, the canonical fingerprint
+over full evidence and SQLite/MySQL runtime acceptance remain open.

@@ -1105,6 +1105,18 @@ def known_good_summary(user=Depends(admin_user)):
         return known_good.summary(s)
 
 
+@app.get('/api/ai/known-good/{fingerprint}/observations')
+def known_good_observations(fingerprint:str,offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_links
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    if offset<0 or not 1<=limit<=known_good_links.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid linked-assessment pagination')
+    with Session() as s:
+        try:return known_good_links.page(s,fingerprint,offset,limit)
+        except LookupError as error:raise HTTPException(404,str(error)) from None
+
+
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
