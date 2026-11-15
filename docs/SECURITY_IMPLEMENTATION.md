@@ -4161,6 +4161,32 @@ No runtime code, schema, role or response-authorization change. Join-worker
 installer mode, remote-machine workers with shared secrets/state and the dedicated
 gcp-integration node remain open.
 
+### Same-host join-worker GCP installer mode — worker checkpoint #943
+
+`install-gcp.sh --mode worker [--workers N]` (1–16, default 1) joins worker replicas
+on the same Docker host to a controller installed with `--mode controller` in the
+same checkout.
+- **Refusals before writing:** a fresh checkout, complete or legacy installations, a
+  different project or zone, `--public-url` and `--credential-dir`. A controller
+  using WIF without `compose.worker.gcp-auth.json` is also refused.
+- **Shared state:** the controller's `app-data` volume name and effective
+  `DATABASE_URL` come from `./gcp-compose.sh config`. The volume must exist.
+- **`.env.worker`:** a new file (mode 0600) records `<controller project>-workers`,
+  the volume and the single-quoted literal `DATABASE_URL`. An existing file is kept,
+  but it must name a different project and render the same volume and database as
+  the controller.
+- **Run:** it builds only `worker`, runs the gcloud checks in one-off worker
+  containers (token discarded) and runs `up -d --wait --scale worker=N` in the worker
+  project. `.env`, `.env.gcp` and the controller project are never modified, stopped
+  or recreated.
+- **Wrapper:** `gcp-compose.sh --workers` selects the worker project and files.
+- **Validation:** mock-Docker tests and a real `docker compose config` render of the
+  recorded worker files.
+
+No runtime code, schema, role or response-authorization change. Remote-machine
+workers with provisioned keys, SSH identities and locking state, non-GCP installer
+modes, the dedicated gcp-integration node and multi-host acceptance remain open.
+
 ### Deployment files and runtime roles
 
 | File | Supported deployment |
