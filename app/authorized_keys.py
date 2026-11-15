@@ -294,11 +294,15 @@ def parse_line(line: str, *, now: float | None = None) -> dict[str, Any]:
     return record
 
 
+def _expiry_uncertain(record: dict[str, Any]) -> bool:
+    return any(gap['kind'] in ('expiry_timezone_unknown', 'expiry_unevaluated') for gap in record['gaps'])
+
+
 def parse_text(text: str, *, now: float | None = None) -> dict[str, Any]:
     """Assess every line of one ``authorized_keys`` file's text."""
     entries: list[dict[str, Any]] = []
     gaps: list[dict[str, Any]] = []
-    first_valid: dict[str, dict[str, Any]] = {}
+    first_valid: dict[tuple[str, bool], dict[str, Any]] = {}
     lines = text.split('\n')
     for number, raw in enumerate(lines, 1):
         line = raw.rstrip('\r').lstrip(' \t')
@@ -310,17 +314,27 @@ def parse_text(text: str, *, now: float | None = None) -> dict[str, Any]:
         record = parse_line(line, now=now)
         record['line'] = number
         fingerprint = record['fingerprint']
-        if record['status'] in ('accepted', 'expired') and fingerprint:
-            earlier = first_valid.get(fingerprint)
+        # sshd skips a matching line whose options fail (expired, from=
+        # mismatch) and keeps reading, so only accepted lines can shadow.
+        # A cert-authority line only matches certificates signed by that CA,
+        # so the CA role and the raw-key role have separate precedence.
+        if record['status'] == 'accepted' and fingerprint:
+            role = (fingerprint, bool(record.get('cert_authority')))
+            earlier = first_valid.get(role)
             if earlier is None:
-                first_valid[fingerprint] = record
+                first_valid[role] = record
                 record['precedence'] = 'first'
-            elif earlier['from']:
+            elif earlier['from'] or _expiry_uncertain(earlier):
                 record['precedence'] = 'conditional'
                 record['shadowed_by_line'] = earlier['line']
-                record['gaps'].append(_gap('precedence_depends_on_source',
-                                           'An earlier line for this key applies only to some sources (from=).',
-                                           line=earlier['line']))
+                if earlier['from']:
+                    record['gaps'].append(_gap('precedence_depends_on_source',
+                                               'An earlier line for this key applies only to some sources (from=).',
+                                               line=earlier['line']))
+                if _expiry_uncertain(earlier):
+                    record['gaps'].append(_gap('precedence_depends_on_expiry',
+                                               'An earlier line for this key may already have expired.',
+                                               line=earlier['line']))
             else:
                 record['precedence'] = 'shadowed'
                 record['shadowed_by_line'] = earlier['line']

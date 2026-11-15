@@ -199,3 +199,33 @@ def test_real_openssh_public_key_from_cryptography_matches_fingerprint():
 def test_environment_name_follows_openssh_alnum_underscore_rule():
     assert one('environment="1X=y" ' + key())['environment'] == ['1X=y']
     assert one('environment="A-B=y" ' + key())['reject_kind'] == 'invalid_environment'
+
+
+def test_expired_earlier_line_does_not_shadow_a_later_line():
+    now = calendar.timegm((2026, 11, 15, 12, 0, 0))
+    text = 'expiry-time="20200101Z",command="/bin/old" ' + key() + '\ncommand="/bin/new" ' + key()
+    expired, later = ak.parse_text(text, now=now)['entries']
+    assert expired['status'] == 'expired' and 'precedence' not in expired
+    assert later['status'] == 'accepted' and later['precedence'] == 'first'
+    assert ak.assess([{'path': 'p', 'account': 'a', 'text': text}], now=now)['summary']['forced_commands'] == 1
+
+
+@pytest.mark.parametrize('expiry, now', [
+    ('20261115', calendar.timegm((2026, 11, 15, 12, 0, 0))),   # local time, zone unknown
+    ('20261115Z', None),                                       # no observation time
+])
+def test_uncertain_expiry_on_earlier_line_makes_later_conditional(expiry, now):
+    text = f'expiry-time="{expiry}" ' + key() + '\ncommand="/bin/new" ' + key()
+    first, later = ak.parse_text(text, now=now)['entries']
+    assert first['status'] == 'accepted' and first['precedence'] == 'first'
+    assert later['status'] == 'accepted' and later['precedence'] == 'conditional'
+    assert later['shadowed_by_line'] == 1
+    assert [g['kind'] for g in later['gaps']] == ['precedence_depends_on_expiry']
+
+
+def test_cert_authority_line_does_not_shadow_plain_key_line():
+    text = 'cert-authority ' + key() + ' ca\n' + key() + ' plain\n' + key() + ' again'
+    ca, plain, again = ak.parse_text(text)['entries']
+    assert ca['cert_authority'] and ca['precedence'] == 'first'
+    assert plain['status'] == 'accepted' and plain['precedence'] == 'first'
+    assert again['status'] == 'shadowed' and again['shadowed_by_line'] == 2

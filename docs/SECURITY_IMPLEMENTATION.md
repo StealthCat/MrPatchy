@@ -8592,7 +8592,7 @@ The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` a
   - **Rejected lines:** sshd refuses lines with an unknown option, a missing quote, a duplicate `command`/`principals`, or a malformed `expiry-time`, `tunnel` or `environment`. Such lines are `invalid` with the reason.
   - **Identity:** each key is bound by its `SHA256:` fingerprint. The embedded type must match the declared type, and raw key material is never returned.
   - **Forced command:** reported verbatim, with `command_runs_via: account_shell_-c`. No argv is guessed.
-  - **Line precedence:** a later line for the same key is `shadowed`. If the earlier line has `from=`, the later line is `conditional`.
+  - **Line precedence:** a later line for the same key is `shadowed` only by an earlier `accepted` line. As in sshd, `expired` lines never shadow a later line. If the earlier line has `from=` or an uncertain expiry (`expiry_timezone_unknown`/`expiry_unevaluated`), the later line is `conditional`. `cert-authority` lines only match certificates, so they track precedence separately from plain-key lines for the same key.
   - **Expiry:** `expiry-time` is evaluated against a supplied observation time, and the earliest value wins.
 - **Gaps, never reported as covered:**
   - unreadable, oversized or truncated files;
