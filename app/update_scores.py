@@ -8,7 +8,7 @@ from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple
 from sqlalchemy.orm import Mapped, load_only, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
-from . import ai, ai_runs, ai_policy
+from . import ai, ai_runs, ai_policy, ai_retry
 from .coordination import Lock
 from .security import unseal
 from .package_history import versions, version_index
@@ -30,6 +30,24 @@ class UpdateScore(Base):
     next_at: Mapped[float]=mapped_column(Double,default=0,server_default='0')
     completed: Mapped[float]=mapped_column(Double,default=0)
     run_id: Mapped[str]=mapped_column(String(36),default='')
+    # Model/key signature a non-transient failure blocked this score under.
+    configuration: Mapped[str]=mapped_column(String(64),default='',server_default='')
+
+
+BLOCKED_SUFFIX=(' No automatic retry is scheduled until the saved AI model or API key changes; '
+    'the exact package evidence remains queued.')
+
+
+def blocked_by(error):
+    """True for a non-transient, non-policy AI failure (#790 AC1).
+
+    Matches process triage (`ai_retry.failed`): a rejected key, denied access,
+    unavailable quota, an unsupported model and declined, incomplete or invalid
+    structured results all stay blocked under the current model/key signature.
+    Transient failures, policy waits and exceptions that are not `AIError` keep
+    the existing hourly error retry or deferral.
+    """
+    return isinstance(error,ai.AIError) and not error.transient and not error.policy_wait
 
 
 SCORE_HISTORY_INDEX = Index('ix_update_scores_host_name_state_candidate',
@@ -160,7 +178,7 @@ def scoring_candidates(s):
                 current.append((package, host, cached_identity(host, package, memo)))
         if not current:continue
         score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
-            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,raiseload=True))
+            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,UpdateScore.configuration,raiseload=True))
         scores={r.id:r for r in s.scalars(score_state.where(UpdateScore.id.in_([key for _,_,key in current])))}
         scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
         for row in s.scalars(score_state.where(UpdateScore.state=='deferred',
@@ -182,6 +200,7 @@ def run_one():
         with Session() as s:
             cfg=config(s);secret=s.get(Setting,'openai_key');now=time.time()
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
+            signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             if cfg['ai_control_mode']=='legacy':
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
                 if count>=cfg['ai_update_hourly_limit']:return
@@ -193,10 +212,12 @@ def run_one():
                     stale.explanation='Package evidence changed while scoring was deferred; a new assessment will be requested.'
                 if row and row.state=='complete':continue
                 if row and row.state=='deferred' and row.next_at>now:continue
-                if row and row.state!='deferred' and row.attempted>now-3600:continue
+                # A non-transient failure stays blocked until the saved model or key changes.
+                if row and row.state=='blocked' and row.configuration==signature:continue
+                if row and row.state not in ('deferred','blocked') and row.attempted>now-3600:continue
                 if not row:
                     row=UpdateScore(id=key,host_id=host.id,name=package.name,installed=package.installed,candidate=package.candidate);s.add(row)
-                row.state='running';row.attempted=now;row.next_at=0;row.model=cfg['ai_model'];row.score=None
+                row.state='running';row.attempted=now;row.next_at=0;row.model=cfg['ai_model'];row.score=None;row.configuration=''
                 batch.append({'id':key,**evidence(host,package)})
                 if len(batch)>=5:break
             if not batch:
@@ -239,12 +260,15 @@ def run_one():
             deferred=(isinstance(delay,(int,float)) and math.isfinite(delay) and delay>0 and
                 (error.policy_wait or error.transient))
             next_at=time.time()+delay if deferred else 0
+            blocked=not deferred and blocked_by(error)
             with Session() as s:
                 scores=_batch_scores(s,ids)
                 for identifier in ids:
                     row=scores[identifier]
-                    row.state='deferred' if deferred else 'error';row.next_at=next_at
-                    row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else ai_runs.safe_error(error))
+                    row.state='deferred' if deferred else 'blocked' if blocked else 'error';row.next_at=next_at
+                    row.configuration=signature if blocked else ''
+                    row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else
+                        ai_runs.safe_error(error)+(BLOCKED_SUFFIX if blocked else ''))
                 s.commit()
             if deferred:ai_runs.defer(run_id,next_at)
     finally:lock.release()

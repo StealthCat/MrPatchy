@@ -32,6 +32,17 @@ def paused_ids():
     return select(Host.id).join(Setting,Setting.key==PREFIX+Host.id).where(Setting.value['paused'].as_boolean()==True)
 
 
+def stored_paused(value,present=True):
+    """Return whether a stored policy value would make the provider gate refuse.
+
+    Mirrors `require`: a missing policy is resumed, while a non-dict value or a
+    `paused` field that is not exactly False is treated as paused (fail closed).
+    Display only, never admission.
+    """
+    if not present:return False
+    return not isinstance(value,dict) or value.get('paused',False) is not False
+
+
 def status(s,host_id):
     row=s.get(Setting,PREFIX+host_id);value=row.value if row else {}
     paused=value.get('paused',False) is not False
@@ -97,5 +108,7 @@ def save(s,host,paused,expected,reason,actor,concurrency_limit=None):
     if paused!=current['paused']:action='server AI paused' if paused else 'server AI resumed'
     elif concurrency_limit!=current['concurrency_limit']:action='server AI concurrency changed'
     else:action='server AI policy reaffirmed'
+    from . import ai_pause_notifications
+    ai_pause_notifications.sync(s,host.id,paused,value['revision'])
     audit(s,action,host.id+' '+actor+' '+str(concurrency_limit)+' slot(s) '+reason.strip());s.commit()
     return status(s,host.id)

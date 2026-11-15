@@ -428,6 +428,57 @@ def lookup(s, snapshot, model, policy_hashes, bypass=False):
     return None
 
 
+MISS_TEXT = {
+    'bypassed_refresh': 'Administrator re-triage bypassed the fleet known-good cache.',
+    'bypassed_changed': 'Authenticated artifact change bypassed the fleet known-good cache.',
+    # No trailing period: explain_miss appends '.' or ': <reason details>'.
+    'context_ineligible': 'Exact verified context is incomplete, so no cache lookup was possible',
+    'no_candidate': 'No fleet known-good candidate exists for this exact fingerprint.',
+    'candidate_revoked': 'The matching fleet known-good candidate is revoked.',
+    'candidate_unverified': ('A matching fleet known-good candidate exists now but was not '
+        'reusable at lookup time: it was unavailable or failed provenance revalidation.'),
+}
+MISS_REASON_LIMIT = 3
+
+
+def explain_miss(s, snapshot, model, policy_hashes, refresh=False, changed=False):
+    """Classify why ``lookup`` returned no hit, as fixed diagnostic text.
+
+    Read-only and advisory: it never grants reuse or alters lookup results. The
+    message contains only fixed labels, never evidence values or identifiers.
+    """
+    if refresh:
+        code, details = 'bypassed_refresh', []
+    elif changed:
+        code, details = 'bypassed_changed', []
+    else:
+        statuses = [_safe_probe(snapshot, model, policy_hash)
+            for policy_hash in dict.fromkeys(policy_hashes or [])]
+        fingerprints = [status['fingerprint'] for status in statuses if status['eligible']]
+        if not fingerprints:
+            details = []
+            for status in statuses:
+                for reason in status['reasons']:
+                    if reason['detail'] not in details:
+                        details.append(reason['detail'])
+            code, details = 'context_ineligible', details[:MISS_REASON_LIMIT]
+        else:
+            # Read after lookup, so states reflect now, not lookup time. An active
+            # row here means lookup refused it (provenance revalidation is its only
+            # rejection of an active entry) or another worker stored it after the
+            # lookup; the candidate_unverified text covers both without implying
+            # tampering. Update this if lookup gains other rejection reasons.
+            states = set(s.scalars(select(Entry.active).where(
+                Entry.fingerprint.in_(fingerprints))))
+            code = ('candidate_unverified' if True in states else
+                'candidate_revoked' if False in states else 'no_candidate')
+            details = []
+    message = MISS_TEXT[code]
+    if code == 'context_ineligible':
+        message += (': ' + ' '.join(details)) if details else '.'
+    return {'code': code, 'message': message}
+
+
 def link_reuse(s, row, hit):
     """Link a retained cache-sourced assessment to its current observation."""
     metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None
@@ -620,9 +671,18 @@ def invalidate_contradiction(s, row, revoked_at=None):
     # Idempotent under the row lock: the exact fingerprint is contradicted
     # whatever version is current, and an already revoked candidate is left
     # untouched (its first contradiction or revocation remains the record).
-    return _invalidate(s, hit['fingerprint'], hit['version'],
+    revoked = _invalidate(s, hit['fingerprint'], hit['version'],
         'assessment:'+row.id, reason, revoked_at,
         'invalidate contradicted known-good candidate', strict=False)
+    if revoked is None:
+        # Nothing changed in this save, so there is nothing new to announce.
+        return None
+    revoked = {**revoked, 'source_assessment_id': hit['assessment_id'],
+        'source_subject': hit['source_subject']}
+    # Same transaction as the revocation: a rolled-back save announces nothing.
+    from . import known_good_notifications
+    known_good_notifications.publish_contradiction(s, revoked, risk, now=revoked_at)
+    return revoked
 
 
 def _contradiction(s, saved):

@@ -46,5 +46,12 @@ window.PatchyUI=(()=>{
  const endpoint=(address,port)=>{const a=String(address??'');return (a.includes(':')&&!a.startsWith('[')?'['+a+']':a)+(port===undefined||port===null||port===''?'':':'+port);};
  function upgradeLabel(h){const u=h&&h.os_upgrade;return u&&u.status==='available'?`Distribution upgrade available: ${u.distribution} ${u.from_version} to ${u.to_version}`:'';}
  function upgradeBadge(h){const label=upgradeLabel(h);return label?` <span class="upgrade-badge" role="img" aria-label="${esc(label)}" title="${esc(label)}">⬆</span>`:'';}
- return {esc,icon,mascot,portrait,heading,empty,error,loading,enrollment,pages,sectionNavigation,endpoint,upgradeBadge,upgradeLabel};
+ // Recorded command output: plain text in a scrollable monospace block that keeps
+ // whitespace and column alignment. The leading newline protects output that starts
+ // with a line break from the HTML parser's first-newline removal inside <pre>.
+ function commandOutput(text,label,fallback){const value=String(text??'');const shown=value||String(fallback??'');return '<div class="command-output">'+(value?'<div class="command-output-tools"><button type="button" class="command-output-copy" data-copy-output>Copy output</button><span class="command-output-status" role="status" aria-live="polite"></span></div>':'')+'<pre tabindex="0" aria-label="'+esc(label||'Command output')+'"'+(value?'':' class="command-output-empty"')+'>\n'+esc(shown)+'</pre></div>';}
+ // The textarea fallback (non-secure origins) is appended inside the output block: content outside an open modal dialog is inert and cannot be selected.
+ async function copyText(text,host){if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return;}const area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';(host||document.body).append(area);area.select();try{if(!document.execCommand('copy'))throw Error('Copy unavailable');}finally{area.remove();}}
+ document.addEventListener('click',async event=>{const button=event.target.closest&&event.target.closest('[data-copy-output]');if(!button)return;const box=button.closest('.command-output');const pre=box&&box.querySelector('pre');const status=box&&box.querySelector('.command-output-status');if(!pre)return;try{await copyText(pre.textContent,box);if(status)status.textContent='Output copied.';}catch(error){if(status)status.textContent='Copy failed. Select the output and copy it manually.';}});
+ return {esc,icon,mascot,portrait,heading,empty,error,loading,enrollment,pages,sectionNavigation,endpoint,upgradeBadge,upgradeLabel,commandOutput};
 })();

@@ -241,7 +241,7 @@ def test_full_server_queue_does_not_abort_scheduler_tick(admin,monkeypatch):
     alerts=[];waits=iter([False,False,True])
     monkeypatch.setattr(worker.stop,'wait',lambda _:next(waits,True))
     monkeypatch.setattr(worker,'poll_host',lambda *a:None)
-    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:alerts.append(1))
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda **_:alerts.append(1))
     monkeypatch.setattr(worker.log,'exception',lambda *a,**k:pytest.fail('scheduler tick failed'))
     worker.loop()
     assert alerts

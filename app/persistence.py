@@ -33,9 +33,33 @@ def validate_cron(cron):
     return len(jobs)
 
 
+AT_SPOOL_DIR='/var/spool/cron/atjobs'
+AT_COMMAND_LINES=32
+AT_KEYS={'queue','job','scheduled_at','running','uid','gid','account','commands','environment','parsed','truncated','redacted'}
+
+
+def validate_at(at,path):
+    """Strictly validate an optional parsed at job reported by newer agents for a spool file."""
+    name=path.rsplit('/',1)
+    if len(name)!=2 or name[0]!=AT_SPOOL_DIR or not re.fullmatch(r'[a-zA-Z=][0-9a-f]{5}[0-9a-f]{8}',name[1]):raise ValueError('At job outside the at spool')
+    if not isinstance(at,dict) or set(at)!=AT_KEYS:raise ValueError('Invalid at job')
+    letter=name[1][0]
+    if at['queue']!=letter or at['running'] is not (letter=='=') or at['job']!=int(name[1][1:6],16) or at['scheduled_at']!=int(name[1][6:],16)*60:
+        raise ValueError('At job does not match its spool file name')
+    if any(type(at[k]) is not bool for k in ('running','parsed','truncated','redacted')) or type(at['environment']) is not int or not 0<=at['environment']<=1000000:
+        raise ValueError('Invalid at job')
+    for key in ('uid','gid'):
+        if at[key] is not None and (type(at[key]) is not int or not 0<=at[key]<2**32):raise ValueError('Invalid at job')
+    if at['account'] is not None and (not isinstance(at['account'],str) or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]{0,31}\$?',at['account'])):raise ValueError('Invalid at job')
+    commands=at['commands']
+    if not isinstance(commands,list) or len(commands)>AT_COMMAND_LINES or (commands and not at['parsed']) or (at['parsed'] and at['uid'] is None):
+        raise ValueError('Invalid at job')
+    if any(not isinstance(c,str) or not 1<=len(c)<=CRON_COMMAND_LIMIT or '\x00' in c for c in commands):raise ValueError('Invalid at job')
+
+
 def metadata(row):
-    """Entry metadata without parsed job detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k!='cron'} if row is not None else None
+    """Entry metadata without parsed cron/at job detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at')} if row is not None else None
 
 
 def validate(inventory):
@@ -65,6 +89,9 @@ def validate(inventory):
         if 'cron' in row:
             if row['kind']!='regular':raise ValueError('Cron jobs require a regular file')
             jobs+=validate_cron(row['cron'])
+        if 'at' in row:
+            if row['kind']!='regular':raise ValueError('At jobs require a regular file')
+            validate_at(row['at'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
