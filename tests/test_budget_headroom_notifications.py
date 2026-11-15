@@ -6,6 +6,7 @@ import pytest
 
 from app import ai, ai_budget, ai_pricing, budget_headroom_notifications as headroom, notifications, operations
 from app.db import Session, Setting, config
+from app.security import seal
 
 DAY = 1793404800.0  # 2026-10-31T00:00:00Z, inside the bundled catalog window
 MODEL = 'gpt-6-astra'  # $50/M output: the 1600-token floor is just over $0.08
@@ -16,6 +17,8 @@ def configure(mode='daily_cap', cap='0.1', model=MODEL, enabled=True):
         session.merge(Setting(key='config', value={
             'ai_enabled': enabled, 'ai_model': model, 'ai_control_mode': mode, 'ai_rate_per_hour': 20,
             'ai_daily_cap_usd': float(Decimal(cap)), 'ai_budget_timezone': 'UTC'}))
+        # A readable saved key keeps the separate missing-key notice (#770) out of these counts.
+        session.merge(Setting(key='openai_key', value={'encrypted': seal('fixture')}))
         session.commit()
 
 
