@@ -3239,6 +3239,13 @@ def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id)
         return auto_plan_status.status(s,host_id)
 
+@app.get('/api/security/auto-plan-status')
+def fleet_security_auto_plan_status(user=Depends(admin_user)):
+    """Read-only automatic AI plan status for opted-in servers (#936). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        return auto_plan_status.fleet(s)
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False

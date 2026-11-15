@@ -8917,3 +8917,14 @@ Roadmap A requires AI activity to show the blocked reason and next eligible star
 - **Unchanged:** the API, schema, roles, admission, reservations and response authorization. Viewers are still routed away from `#ai-logs` and never request the snapshot. Per-server AI tabs do not show the card, because the snapshot is fleet-wide.
 - **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
+
+### Fleet automatic AI plan status — worker checkpoint #936
+
+This closes the #922 limitation that automatic AI plan status was readable only one server at a time.
+
+- **API:** admin-only `GET /api/security/auto-plan-status` (`auto_plan_status.fleet()`). It lists every non-deleted server whose scan policy enables automatic AI plans, ordered by name then ID. Each row has the same fields as the per-server status: state, awaiting count, truncation, oldest awaiting time, active plan job and latest automatic attempt. Disabled servers stay listed as `inactive`. Opted-out servers, deleted servers and malformed policies are omitted.
+- **Totals:** listed servers, ready servers, the awaiting count (marked as a lower bound when any row is truncated) and plan jobs queued or running. Pacing is reported once, using the per-server rules: the legacy fleet allowance, or no plan-specific cap in other modes.
+- **Bounds:** at most `FLEET_LIMIT` (100) servers, with `truncated` set when more opted-in servers exist. Totals count only the listed rows. Each row keeps the per-server `AWAITING_LIMIT` window.
+- **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
+- **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
+- **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
