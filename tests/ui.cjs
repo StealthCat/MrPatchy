@@ -229,6 +229,7 @@ const assert=require('assert/strict');
     await require('./ui_scanner_records.cjs')(page,capture);
     await require('./ui_ai_policy.cjs')(page,capture);
     await require('./ui_security_coverage.cjs')(page,capture);
+    await require('./ui_fleet_exposure.cjs')(page,capture);
     await require('./ui_security_correlation.cjs')(page,capture);
     await require('./ui_execution_scans.cjs')(page);
     await require('./ui_panel_isolation.cjs')(page);

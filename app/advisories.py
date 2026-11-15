@@ -285,3 +285,51 @@ def history(session,host_id,limit=HISTORY_LIMIT):
             'resolved_status':row.resolved_status or None,'reopened':row.reopened or 0} for row in rows[:limit]]
     return {'items':items,'truncated':len(rows)>limit,'open':int(open_count),
             'coverage':HISTORY_COVERAGE}
+
+
+# Fleet view of the same ledger (roadmap D, #911). It reads only stored rows:
+# no scan, advisory-service, AI-provider or SSH call. Soft-deleted servers are
+# excluded; disabled servers stay listed but are marked because nothing
+# refreshes their ledger.
+FLEET_ADVISORY_LIMIT=200
+FLEET_SERVER_LIMIT=50
+FLEET_COVERAGE=('Open exposures come from the durable ledger of administrator-run advisory scans on each server. '
+    'A server that was never scanned, or a package a scan did not include, has no row here, so an absent server is not '
+    'a clean-host verdict. Times between scans are telemetry gaps. Exposures on disabled servers are not refreshed. '
+    'Version applicability is not evidence of exploitation, and a later fixed version is not verified effective '
+    'installation until restarts or reboots are confirmed.')
+
+
+def fleet_open(session,advisory_limit=FLEET_ADVISORY_LIMIT,server_limit=FLEET_SERVER_LIMIT):
+    from .db import Host
+    live=select(Host.id).where(Host.deleted_at==0)
+    base=(ExposureHistory.resolved_at==0,ExposureHistory.host_id.in_(live))
+    totals=session.execute(select(func.count(),func.count(func.distinct(ExposureHistory.host_id)),
+        func.count(func.distinct(ExposureHistory.advisory_id))).where(*base)).one()
+    servers=func.count(func.distinct(ExposureHistory.host_id))
+    groups=session.execute(select(ExposureHistory.advisory_id,servers,
+        func.count(func.distinct(ExposureHistory.package)),func.min(ExposureHistory.first_affected_at))
+        .where(*base).group_by(ExposureHistory.advisory_id)
+        .order_by(servers.desc(),func.min(ExposureHistory.first_affected_at),ExposureHistory.advisory_id)
+        .limit(advisory_limit+1)).all()
+    shown=groups[:advisory_limit];ids=[g[0] for g in shown]
+    rows=session.execute(select(ExposureHistory,Host.name,Host.enabled).join(Host,Host.id==ExposureHistory.host_id)
+        .where(*base,ExposureHistory.advisory_id.in_(ids)).order_by(ExposureHistory.advisory_id,
+        ExposureHistory.first_affected_at,Host.name,ExposureHistory.package)).all() if ids else []
+    by={}
+    for row,name,enabled in rows:by.setdefault(row.advisory_id,[]).append((row,name,enabled))
+    items=[]
+    for advisory_id,server_count,package_count,first in shown:
+        entries=by.get(advisory_id,[]);cves=set()
+        for row,_,_ in entries:cves.update(c for c in (row.cve_ids or '').split(',') if c)
+        listed=entries[:server_limit]
+        items.append({'advisory_id':advisory_id,'cve_ids':sorted(cves),'servers':int(server_count),
+            'packages':int(package_count),'first_affected_at':first,'fixed_known':sum(1 for r,_,_ in entries if r.fixed_version),
+            'exposures':[{'host_id':row.host_id,'host_name':name,'enabled':bool(enabled),'package':row.package,
+                'first_affected_at':row.first_affected_at,'first_affected_version':row.first_affected_version,
+                'last_affected_at':row.last_affected_at,'last_affected_version':row.last_affected_version,
+                'fixed_version':row.fixed_version or None,'reopened':row.reopened or 0} for row,name,enabled in listed],
+            'exposures_truncated':len(entries)>server_limit})
+    return {'items':items,'truncated':len(groups)>advisory_limit,
+            'totals':{'open_exposures':int(totals[0]),'servers':int(totals[1]),'advisories':int(totals[2])},
+            'coverage':FLEET_COVERAGE}

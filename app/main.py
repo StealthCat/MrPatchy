@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.62.2"
+APP_VERSION = "1.63.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2054,6 +2054,11 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         from .advisories import retained,history
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
         return {**result,'exposure_history':history(s,host_id)}
+
+@app.get('/api/cve-exposure/fleet')
+def fleet_cve_exposure(user=Depends(admin_user)):
+    from .advisories import fleet_open
+    with Session() as s:return fleet_open(s)
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
