@@ -235,6 +235,8 @@ def _statements(text: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]
                 op = 'clear' if value == '#clear' else 'include'
                 for arg in args:
                     path = key_path(arg, line) if op == 'clear' else arg
+                    if op == 'clear' and not any(path):
+                        raise _Syntax(line, '#clear needs an option name.')
                     statements.append({'op': op, 'path' if op == 'clear' else 'target':
                                        [p for p in path if p] if op == 'clear' else path, 'line': line})
                 continue

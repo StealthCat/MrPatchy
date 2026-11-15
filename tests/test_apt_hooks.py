@@ -151,6 +151,8 @@ def test_unquoted_values_and_empty_assignment():
     ('DPkg::Post-Invoke { "visible"; };\n};', 2),
     ('DPkg::Post-Invoke { "visible"; };\n/* never closed', 2),
     ('DPkg::Post-Invoke { "visible"; };\nA::::B "x";', 2),
+    ('DPkg::Post-Invoke { "visible"; };\n#clear "";', 2),
+    ('DPkg::Post-Invoke { "visible"; };\n#include;', 2),
 ])
 def test_syntax_errors_make_behavior_undetermined_but_keep_earlier_hooks(text, line):
     result = resolve(part('10a', text))
