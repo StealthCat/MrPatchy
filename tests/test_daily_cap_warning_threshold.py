@@ -6,6 +6,7 @@ import pytest
 
 from app import ai_budget, notifications, operations
 from app.db import Audit, Session, Setting
+from tests.ai_settings_helpers import confirmed_put
 
 
 DAY=1793404800.0  # 2026-10-31T00:00:00Z
@@ -126,7 +127,7 @@ def test_settings_endpoints_save_validate_and_audit_the_threshold(admin, endpoin
     # A stored explicit mode, so the first save does not apply the legacy migration default.
     configure(mode='rate', ai_enabled=False)
     before=admin.get('/api/settings').json()['ai_controls_revision']
-    r=admin.put(endpoint, json=extra|{'ai_daily_cap_warning_percent': 65})
+    r=confirmed_put(admin, endpoint, extra|{'ai_daily_cap_warning_percent': 65})
     assert r.status_code==200, r.text
     state=admin.get('/api/settings').json()
     assert state['ai_daily_cap_warning_percent']==65
@@ -134,11 +135,12 @@ def test_settings_endpoints_save_validate_and_audit_the_threshold(admin, endpoin
     assert state['ai_controls_revision']==before
     with Session() as session:
         assert any('daily AI cap warning changed from 80% to 65%' in row.detail for row in session.query(Audit))
-    assert admin.put(endpoint, json=extra|{'ai_daily_cap_warning_percent': 0}).status_code==200
+    assert confirmed_put(admin, endpoint, extra|{'ai_daily_cap_warning_percent': 0}).status_code==200
     with Session() as session:
         assert any('from 65% to off' in row.detail for row in session.query(Audit))
-    # Omitting the field keeps the stored value.
-    assert admin.put(endpoint, json=extra|{'ai_rate_per_hour': 21}).status_code==200
+    # Omitting the field keeps the stored value. Raising the rate is an expansion, so the
+    # save carries the preview confirmation #882 requires.
+    assert confirmed_put(admin, endpoint, extra|{'ai_rate_per_hour': 21}).status_code==200
     assert admin.get('/api/settings').json()['ai_daily_cap_warning_percent']==0
     for bad in (-1, 100, 50.5, '60', True, None):
         assert admin.put(endpoint, json=extra|{'ai_daily_cap_warning_percent': bad}).status_code==422, bad

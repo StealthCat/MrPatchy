@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.61.4"
+APP_VERSION = "1.61.6"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1269,6 +1269,7 @@ class ConfigInput(BaseModel):
     history_days:int=Field(default=30,ge=1,le=3650)
     api_key:str=Field(default='',max_length=1000)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+    confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 @app.put('/api/settings')
 def settings_save(body:ConfigInput,user=Depends(admin_user)):
     from . import ai_budget
@@ -1279,10 +1280,11 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
-    sent=body.model_dump(exclude={'api_key','expected_ai_controls_revision'},include=supplied)
+    sent=body.model_dump(exclude={'api_key','expected_ai_controls_revision','confirm_ai_expansion'},include=supplied)
     with worker.Lock('settings-config'):
         with Session() as s:
             previous=config(s);check_ai_controls_revision(previous,body.expected_ai_controls_revision);merged=previous|sent
+            check_ai_expansion_confirmed(previous,merged,body.confirm_ai_expansion)
             if merged['ai_enabled'] and (not merged['ai_model'] or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
             raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
             if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
@@ -1309,6 +1311,16 @@ def check_ai_controls_revision(cfg,expected):
     if expected is not None and expected!=ai_controls_revision(cfg):
         raise HTTPException(409,'AI admission or spend controls changed since you loaded Settings. Reload, review the current values and save again.')
 
+def check_ai_expansion_confirmed(previous,proposed,confirmation):
+    # No silent spend expansion (#881): an expanding save must carry the confirmation the preview returned
+    # for exactly these expansions against the controls stored now. Refusals write nothing.
+    from . import ai_control_preview
+    expansions=ai_control_preview.compare(previous,proposed)['expansions']
+    expected=ai_control_preview.expansion_confirmation(ai_controls_revision(previous),expansions)
+    if expected is not None and confirmation!=expected:
+        raise HTTPException(409,'These AI settings expand admission or spend and were not confirmed: '+' '.join(expansions)+
+            ' Nothing was saved. Preview the change and resend the save with confirm_ai_expansion set to the expansion_confirmation the preview returns.')
+
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
     return hashlib.sha256(secret.value['encrypted'].encode()).hexdigest()[:32] if secret else ''
@@ -1327,6 +1339,7 @@ class AISettingsInput(BaseModel):
     # Notification-only advance warning for the daily cap; 0 turns it off (#810).
     ai_daily_cap_warning_percent:int=Field(default=80,ge=0,le=99,strict=True)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+    confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 
 class AIKeyInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1341,7 +1354,7 @@ class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     history_days:int=Field(ge=1,le=3650)
 
-def save_settings_section(values,section,expected_ai_controls_revision=None):
+def save_settings_section(values,section,expected_ai_controls_revision=None,confirm_ai_expansion=None):
     with worker.Lock('settings-config'):
         with Session() as s:
             previous=config(s)
@@ -1349,7 +1362,8 @@ def save_settings_section(values,section,expected_ai_controls_revision=None):
                 check_ai_controls_revision(previous,expected_ai_controls_revision)
                 # Omitted AI fields keep their stored values instead of silently reverting to defaults (#708).
                 values=previous|values
-                values={key:values[key] for key in AISettingsInput.model_fields if key!='expected_ai_controls_revision'}
+                values={key:values[key] for key in AISettingsInput.model_fields if key not in ('expected_ai_controls_revision','confirm_ai_expansion')}
+                check_ai_expansion_confirmed(previous,values,confirm_ai_expansion)
             if section=='ai' and values['ai_enabled'] and (not values['ai_model'] or not s.get(Setting,'openai_key')):
                 raise HTTPException(400,'Save an API key and select a model before enabling AI. You can save a key independently above.')
             s.merge(Setting(key='config',value=previous|values))
@@ -1384,22 +1398,23 @@ def ai_key_save(body:AIKeyInput,user=Depends(admin_user)):
 @app.put('/api/settings/ai')
 def ai_settings_save(body:AISettingsInput,user=Depends(admin_user)):
     from . import ai_budget
-    supplied=set(body.model_fields_set)-{'expected_ai_controls_revision'}  # capture before normalizing marks ai_model as sent
+    supplied=set(body.model_fields_set)-{'expected_ai_controls_revision','confirm_ai_expansion'}  # capture before normalizing marks ai_model as sent
     body.ai_model=body.ai_model.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):
         raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision)
+    return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision,body.confirm_ai_expansion)
 
 @app.post('/api/settings/ai/preview')
 def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
     # Read-only: compares the posted controls with stored values; no settings, audit or provider call.
     from . import ai_budget,ai_control_preview
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    proposed=body.model_dump(include=set(body.model_fields_set)&set(ai_control_preview.FIELDS))
+    proposed=body.model_dump(include=set(body.model_fields_set)&set(ai_control_preview.PREVIEW_FIELDS))
     with Session() as s:
         previous=config(s)
-        return ai_control_preview.compare(previous,proposed)|{'ai_controls_revision':ai_controls_revision(previous)}
+        result=ai_control_preview.compare(previous,proposed);revision=ai_controls_revision(previous)
+        return result|{'ai_controls_revision':revision,'expansion_confirmation':ai_control_preview.expansion_confirmation(revision,result['expansions'])}
 
 @app.put('/api/settings/patching')
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):

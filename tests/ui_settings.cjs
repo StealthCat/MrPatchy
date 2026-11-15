@@ -100,7 +100,9 @@ module.exports=async(page,capture)=>{
  await budgetTimezone.fill(savedTimezone);
  // Exercise the omitted-cap API default and its real rendered budget summary.
  const defaultCap=await page.evaluate(async()=>{
-  const response=await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_control_mode:'daily_cap'})});
+  // Leaving the rate throttle expands admission, so confirm it as the preview requires (#881).
+  const {expansion_confirmation}=await api('/settings/ai/preview','POST',{ai_control_mode:'daily_cap'});
+  const response=await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_control_mode:'daily_cap',confirm_ai_expansion:expansion_confirmation})});
   return response.status;
  });
  assert.equal(defaultCap,200);
@@ -126,7 +128,7 @@ module.exports=async(page,capture)=>{
  assert.equal(aiState.ai_control_mode,'rate_and_daily');assert.equal(aiState.ai_daily_cap_usd,12.5);
  assert.equal(aiState.ai_budget_timezone,'America/New_York');assert.equal(aiState.ai_daily_cap_warning_percent,65);
  // A concurrent control change makes this open form stale: saving it must be refused, not overwrite (#709).
- const concurrent=await page.evaluate(async()=>(await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_daily_cap_usd:20})})).status);
+ const concurrent=await page.evaluate(async()=>{const {expansion_confirmation}=await api('/settings/ai/preview','POST',{ai_daily_cap_usd:20});return (await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_daily_cap_usd:20,confirm_ai_expansion:expansion_confirmation})})).status;});
  assert.equal(concurrent,200);
  await page.locator('[name=ai_daily_cap_usd]').fill('15');
  await page.getByRole('button',{name:'Save AI settings',exact:true}).click();
