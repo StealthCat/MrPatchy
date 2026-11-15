@@ -6,6 +6,9 @@ module.exports=async(page,capture)=>{
  await page.locator('#patch-settings-form').waitFor();
  assert.equal(await page.locator('#ai-model').count(),0);
  await page.locator('[name=repo_minutes]').fill('35');
+ assert.equal(await page.locator('[name=os_lifecycle_warning_days]').inputValue(),'90');
+ await page.getByLabel('OS support-end advance warning · days').fill('30');
+ await capture?.('settings-patching');
  await page.getByRole('button',{name:'Save patch policy'}).click();
  await page.locator('#section-save-result').filter({hasText:'Patch policy saved'}).waitFor();
  await page.locator('[href="#settings/history"]').first().click();
@@ -13,12 +16,13 @@ module.exports=async(page,capture)=>{
  await page.getByRole('button',{name:'Save history retention'}).click();
  await page.locator('#section-save-result').filter({hasText:'History retention saved'}).waitFor();
  const data=await (await page.request.get(new URL('/api/settings',page.url()).href)).json();
- assert.equal(data.repo_minutes,35);assert.equal(data.history_days,45);
+ assert.equal(data.repo_minutes,35);assert.equal(data.history_days,45);assert.equal(data.os_lifecycle_warning_days,30);
  // Deep links, reload, and browser back retain the section route.
  await page.reload();await page.locator('#history-settings-form').waitFor();
  assert.equal(await page.locator('[name=history_days]').inputValue(),'45');
  await page.locator('[href="#settings/patching"]').first().click();await page.locator('#patch-settings-form').waitFor();
  assert.equal(await page.locator('[name=repo_minutes]').inputValue(),'35');
+ assert.equal(await page.locator('[name=os_lifecycle_warning_days]').inputValue(),'30');
  await page.goBack();await page.locator('#history-settings-form').waitFor();
  const providerRevision='a'.repeat(64);let providerActive=true,clearRequest=null;
  const settingsHandler=async route=>{

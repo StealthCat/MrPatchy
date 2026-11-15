@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.61.6"
+APP_VERSION = "1.64.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1033,6 +1033,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
         rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
+        reused=ai_assessments.current_reuse(s,rows,include_source=user.get('role')=='admin')
         result=[];now=time.time()
         for row in rows:
             retry=None
@@ -1040,7 +1041,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
                 retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
                 if row.id in claimed:retry={**retry,'state':'running','next_at':0,'reason':'A worker owns this investigation. Its result must still pass ownership and evidence checks.'}
                 if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
-            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row)})
+            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row),'known_good_reuse':reused.get(row.id)})
         return result
 class ApproveInput(BaseModel):
     approved:bool
@@ -1065,6 +1066,22 @@ class RetriageInput(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
     withdraw_approval:bool=False
 
+
+class RetriageItem(BaseModel):
+    id:str=Field(min_length=1,max_length=64)
+    expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class BulkRetriageInput(BaseModel):
+    items:list[RetriageItem]=Field(min_length=1,max_length=50)
+    reason:str=Field(min_length=10,max_length=4000)
+    withdraw_approval:bool=False
+
+
+def _retriage_refused(problems):
+    shown='; '.join(f'{label}: {problem}' for label,problem in problems[:5])
+    more=f'; and {len(problems)-5} more' if len(problems)>5 else ''
+    return HTTPException(409,f'Nothing was queued. {len(problems)} selected investigation(s) cannot be re-triaged — {shown}{more}. Refresh the list and select again.')
 
 class RevokeKnownGoodInput(BaseModel):
     expected_version:int=Field(ge=1,le=1_000_000,strict=True)
@@ -1097,6 +1114,50 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin
                 return {'ok':True,'request_id':refresh.id,'detail':'Fresh triage queued. Prior assessment retained; AI pause, model settings and admission limits still apply.'}
     finally:lock.release()
 
+
+@app.post('/api/investigations/retriage')
+def retriage_investigations(body:BulkRetriageInput,user=Depends(admin_user)):
+    """Queue fresh triage for several completed investigations, all or nothing."""
+    from . import ai_assessments,ai_claims
+    reason=body.reason.strip()
+    if len(reason)<10:raise HTTPException(400,'Provide a meaningful re-triage reason')
+    ids=[item.id for item in body.items]
+    if len(set(ids))!=len(ids):raise HTTPException(400,'Each investigation can be selected only once')
+    expected={item.id:item.expected_revision for item in body.items}
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Select again when it finishes.')
+    try:
+        with Session() as s:
+            rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(ids)))}
+            missing=[id for id in ids if id not in rows]
+            if missing:raise HTTPException(404,f'{len(missing)} selected investigation(s) were not found. Refresh the list and select again.')
+            host_ids={id:rows[id].host_id for id in ids}
+            hosts={host.id:host for host in s.scalars(select(Host).where(Host.id.in_(set(host_ids.values()))))}
+            problems=[]
+            for id in ids:
+                claim=s.get(ai_claims.Claim,id)
+                label=rows[id].evidence.get('executable') or id
+                if claim and claim.expires>time.time():problems.append((label,'investigation is running'))
+                elif not host_lifecycle.active(hosts.get(host_ids[id])):problems.append((label,'server management is unavailable'))
+            if problems:raise _retriage_refused(problems)
+            with host_lifecycle.activity(list(host_ids.values()),'queue'):
+                # Approval mutations use these host locks. Drop the pre-lock
+                # read transaction so MySQL repeatable-read cannot hide them.
+                s.rollback()
+                rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(ids)))}
+                for id in ids:
+                    row=rows.get(id)
+                    if not row or row.host_id!=host_ids[id]:problems.append((id,'investigation identity changed'))
+                    else:
+                        problem=ai_assessments.refusal(s,row,expected[id],body.withdraw_approval)
+                        if problem:problems.append((row.evidence.get('executable') or id,problem))
+                if problems:raise _retriage_refused(problems)
+                requests=[ai_assessments.queue(s,rows[id],expected[id],reason,user['username'],body.withdraw_approval) for id in ids]
+                audit(s,'request bulk AI re-triage',f"{user['username']} {len(requests)} investigation(s) "+' '.join(request.id for request in requests))
+                s.commit()
+            return {'ok':True,'queued':len(requests),'request_ids':[request.id for request in requests],
+                'detail':f'Fresh triage queued for {len(requests)} investigation(s). Prior assessments retained; AI pause, model settings and admission limits still apply.'}
+    finally:lock.release()
 
 @app.get('/api/ai/known-good/summary')
 def known_good_summary(user=Depends(admin_user)):
@@ -1265,6 +1326,7 @@ class ConfigInput(BaseModel):
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
+    os_lifecycle_warning_days:int=Field(default=90,ge=0,le=730)
     api_key:str=Field(default='',max_length=1000)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
@@ -1341,6 +1403,8 @@ class PatchSettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
+    # Optional so older clients that omit it keep the stored window.
+    os_lifecycle_warning_days:int|None=Field(default=None,ge=0,le=730)
 
 class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1365,6 +1429,8 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
             if section=='ai' and previous['ai_daily_cap_usd']!=values['ai_daily_cap_usd']:
                 detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
+            if section=='patching' and previous['os_lifecycle_warning_days']!=values.get('os_lifecycle_warning_days',previous['os_lifecycle_warning_days']):
+                detail+='; OS lifecycle advance warning changed from '+str(previous['os_lifecycle_warning_days'])+' to '+str(values['os_lifecycle_warning_days'])+' days'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             audit(s,'update '+section+' settings',detail)
@@ -1410,7 +1476,7 @@ def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()):
         raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
-    return save_settings_section(body.model_dump(),'patching')
+    return save_settings_section(body.model_dump(exclude_none=True),'patching')
 
 @app.put('/api/settings/history')
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
@@ -1993,6 +2059,11 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         from .advisories import retained,history
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
         return {**result,'exposure_history':history(s,host_id)}
+
+@app.get('/api/cve-exposure/fleet')
+def fleet_cve_exposure(user=Depends(admin_user)):
+    from .advisories import fleet_open
+    with Session() as s:return fleet_open(s)
 
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)

@@ -81,8 +81,9 @@ controller data-volume name. It leaves `MRPATCHY_EXPECTED_WORKER_IDS` empty,
 because role-file worker replicas do not take fixed IDs. `.env.example` remains
 the template for the complete installation. Tests check its variables and values,
 ensure no worker-only keys or credentials appear, and compare rendered
-configuration. This is a template only; remote-machine provisioning and
-controller-only/join-worker installer modes remain open.
+configuration. This is a template only. `install-gcp.sh --mode controller` (below)
+sets up a GCP controller-only installation; remote-machine provisioning and a
+join-worker installer mode remain open.
 
 The worker file requires `MRPATCHY_CONTROLLER_DATA_VOLUME`. Compose refuses to render
 without it and marks the volume external, so it never creates an empty replacement.
@@ -159,11 +160,39 @@ MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data docker compose --env-file .env
   -f compose.worker.yaml -f compose.worker.gcp.yaml -f compose.worker.gcp-auth.json up -d --build --scale worker=3
 ```
 
-The installer still signs in and checks access through the complete installation
-(`./gcp-compose.sh`), which stores the gcloud configuration in `/data/gcloud` for
-both roles. The role overlays only mount the referenced credential files, so every
+In the default complete mode the installer signs in and checks access through the
+complete installation (`./gcp-compose.sh`), which stores the gcloud configuration in
+`/data/gcloud` for both roles. The role overlays only mount the referenced credential files, so every
 role keeps reading them on the same host. Re-run the installer with
 `--credential-dir` to regenerate all three files.
+
+### Controller-only installer mode
+
+`./install-gcp.sh --mode controller` sets up only the app and Caddy, using
+`compose.controller.yaml` and `compose.controller.gcp.yaml` (plus
+`compose.controller.gcp-auth.json` with `--credential-dir`). The default is
+`--mode complete`, which is unchanged.
+
+- **Recorded mode:** the installer writes `MRPATCHY_GCP_MODE=controller` to
+  `.env.gcp` and the controller files to `COMPOSE_FILE` in `.env`. `./gcp-compose.sh`
+  and plain `docker compose` then both select the controller files, so a later
+  command cannot start the complete installation again.
+- **Builds and checks:** it builds only `app`, never creates a worker service, and
+  runs no one-off `app` container (it would take the running app's fixed control
+  address). It starts the controller, then signs in (WIF only) and checks the gcloud
+  version, an access token (discarded) and instance-read access inside the running
+  `app` as the service user. A failed check exits non-zero with the controller left
+  running for diagnosis.
+- **No mode switching:** an installation recorded in the other mode is refused
+  before any file is written. Installations from releases before `--mode` count as
+  complete. A `.env` prepared from `.env.controller.example` without `COMPOSE_FILE`
+  is accepted; an unrecognized `COMPOSE_FILE` is refused in controller mode. To move
+  an existing complete installation, follow the migration steps above instead.
+
+No worker runs in this mode, and background jobs wait until you start workers. Start
+them on the same Docker host with the worker commands above. The controller's data
+volume is `<project>_app-data`, where the project is the checkout directory name
+unless `.env` sets `COMPOSE_PROJECT_NAME`; `docker volume ls` lists it.
 
 ### Unsupported in this increment
 

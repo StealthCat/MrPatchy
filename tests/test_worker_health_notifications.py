@@ -139,7 +139,7 @@ def test_coordinator_tick_failure_is_contained(admin, monkeypatch):
     from app import worker
     source = inspect.getsource(worker)
     call = source.index('worker_registry.publish_notifications()')
-    assert source.index('operations.collect_alerts()') < call
+    assert source.index('operations.collect_alerts(observing_since=leader_since)') < call
     assert 'except Exception:log.exception' in source[call:call + 200]
 
 
