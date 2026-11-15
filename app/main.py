@@ -1994,6 +1994,11 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
         return {**result,'exposure_history':history(s,host_id)}
 
+@app.get('/api/cve-exposure/fleet')
+def fleet_cve_exposure(user=Depends(admin_user)):
+    from .advisories import fleet_open
+    with Session() as s:return fleet_open(s)
+
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
     username:str=Field(min_length=1,max_length=64)
