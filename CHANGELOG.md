@@ -1,3 +1,19 @@
+## 1.71.0 — 2026-11-15
+
+1. [PR #933](https://github.com/StealthCat/MrPatchy/pull/933): Keep an administrator's Re-triage selection across Investigations pages and the All/Cached filters within one view. The client caps selection at the existing 50-item endpoint limit, drops rows whose verdict or revision changes, and includes selected rows across visited pages in the confirmation and submit. Compatibility: frontend-only; the existing endpoint, API/schema, admission, approval and server-side all-or-nothing revision checks remain unchanged. Limits: selecting every matching row still requires visiting its page, and selections above 50 are not supported.
+
+## 1.70.0 — 2026-11-15
+
+1. [PR #884](https://github.com/StealthCat/MrPatchy/pull/884): Send the existing admin-only overdue security-scan coverage notice for enabled legacy policies that have no scan attempt, starting its clock when the producer first observes the policy after upgrade and waiting through the scan interval plus one-hour grace. Compatibility: adds a server-managed `security-scan-legacy-since:<host>` setting; the administrator policy row, schema, roles, scheduler and response authorization are unchanged. No scan is enqueued. Limits: the historical enablement time is unknown; YARA schedules and configurable grace remain out of scope.
+
+## 1.69.0 — 2026-11-15
+
+1. [PR #896](https://github.com/StealthCat/MrPatchy/pull/896): Add a pure OpenSSH `authorized_keys` parser that reports per-line acceptance, rejection, expiry and precedence, SHA256 key fingerprints, forced commands and effective restrictions without exposing raw key material. Compatibility: new unimported module and tests only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: account/file enumeration and effective sshd configuration, forwarding-value validation, provenance, AI classification and UI remain out of scope; uncertain cases stay explicit gaps.
+
+## 1.68.0 — 2026-11-15
+
+1. [PR #923](https://github.com/StealthCat/MrPatchy/pull/923): Add an admin-only, read-only per-server automatic AI plan status under Security → Scheduled scanning, including the reason requests are inactive, a bounded count of open non-YARA incidents awaiting an attempt, queued/running and latest-attempt state, and mode-correct pacing. Correct the help text so only legacy mode claims the fleet ten-per-hour limit; other modes use shared AI start gates. Compatibility: adds one read-only route and UI; schema, roles, admission, automatic tick behavior, and response authorization are unchanged. Plans remain manual-only. Limits: point-in-time for one server; counts read at most 500 eligible incidents and report larger backlogs as truncated; startup-change plans and fleet-wide queue view remain out of scope.
+
 ## 1.67.0 — 2026-11-15
 
 1. [PR #925](https://github.com/StealthCat/MrPatchy/pull/925): Add **Show → Cached known good** to fleet and per-server Investigations, listing only verdicts whose current state is an exact known-good reuse and allowing review or bulk Re-triage. Compatibility: adds optional `cached=true`; the default response is unchanged, with no schema, role, admission, spend or response-authorization changes. Limits: filter state has no URL deep link, fleet-wide selection across pages remains open, and filtered scans use bounded chunks over retained candidates with the same offset-pagination behavior as the default view.
