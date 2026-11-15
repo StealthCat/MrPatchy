@@ -8631,11 +8631,11 @@ The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` a
 
 - **Change:** a new pure module, `app/authorized_keys.py`, follows sshd(8) *AUTHORIZED_KEYS FILE FORMAT* and OpenSSH option parsing.
   - **Line structure:** the key type is tried first, otherwise the options token runs to the first unquoted whitespace, as `sshkey_advance_past_options` does.
-  - **Options:** comma separated and case-insensitive, with `\"` handled as in `opt_dequote`. Options apply in order, so `restrict` followed by `pty` re-enables a pty.
+  - **Options:** comma separated and case-insensitive, with `\"` handled as in `opt_dequote`. Options apply in order, so `restrict` followed by `pty` re-enables a pty. The FIDO flags accept both spellings (`touch-required`/`no-touch-required`, `verify-required`/`no-verify-required`) and the last one wins; `tunnel="any"` is case-insensitive and numeric tunnel IDs stop at OpenSSH's `SSH_TUNID_MAX` (2^31 − 3).
   - **Rejected lines:** sshd refuses lines with an unknown option, a missing quote, a duplicate `command`/`principals`, or a malformed `expiry-time`, `tunnel` or `environment`. Such lines are `invalid` with the reason.
   - **Identity:** each key is bound by its `SHA256:` fingerprint. The embedded type must match the declared type, and raw key material is never returned.
   - **Forced command:** reported verbatim, with `command_runs_via: account_shell_-c`. No argv is guessed.
-  - **Line precedence:** a later line for the same key is `shadowed` only by an earlier `accepted` line. As in sshd, `expired` lines never shadow a later line. If the earlier line has `from=` or an uncertain expiry (`expiry_timezone_unknown`/`expiry_unevaluated`), the later line is `conditional`. `cert-authority` lines only match certificates, so they track precedence separately from plain-key lines for the same key.
+  - **Line precedence:** a later line for the same key is `shadowed` only by an earlier `accepted` line. As in sshd, `expired` lines never shadow a later line. If the earlier line has `from=`, an uncertain expiry (`expiry_timezone_unknown`/`expiry_unevaluated`) or unvalidated `permitopen`/`permitlisten` values (which make sshd skip the line when malformed), the later line is `conditional` with a `precedence_depends_on_*` gap. `cert-authority` lines only match certificates, so they track precedence separately from plain-key lines for the same key.
   - **Expiry:** `expiry-time` is evaluated against a supplied observation time, and the earliest value wins.
 - **Gaps, never reported as covered:**
   - unreadable, oversized or truncated files;
@@ -8645,7 +8645,7 @@ The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` a
   - a local-time expiry within the ±14-hour zone range of the observation, or an expiry with no observation time;
   - the file, line, option, value and comment caps.
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
-- **Validation:** `tests/test_authorized_keys.py` has 27 tests. They cannot run on main, where the module does not exist, and they pass on the branch. They include a real `cryptography`-generated OpenSSH Ed25519 key.
+- **Validation:** `tests/test_authorized_keys.py` covers the contract, including regression cases for unvalidated forwarding specs on an earlier line, negatable FIDO flags and the `tunnel` bound. They cannot run on main, where the module does not exist, and they pass on the branch. They include a real `cryptography`-generated OpenSSH Ed25519 key.
 - **Remaining:**
   - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
   - `permitopen`/`permitlisten` syntax validation, which is a gap today;

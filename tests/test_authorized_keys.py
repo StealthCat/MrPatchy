@@ -229,3 +229,44 @@ def test_cert_authority_line_does_not_shadow_plain_key_line():
     assert ca['cert_authority'] and ca['precedence'] == 'first'
     assert plain['status'] == 'accepted' and plain['precedence'] == 'first'
     assert again['status'] == 'shadowed' and again['shadowed_by_line'] == 2
+
+
+@pytest.mark.parametrize('option', ['permitopen="no-colon"', 'permitlisten="8080"'])
+def test_unvalidated_forwarding_spec_on_earlier_line_makes_later_conditional(option):
+    # sshd refuses a line with a malformed permitopen/permitlisten value and
+    # keeps reading, so the later line's forced command may be the one that runs.
+    text = f'{option},command="/bin/a" ' + key() + '\ncommand="/bin/b" ' + key()
+    first, later = ak.parse_text(text)['entries']
+    assert first['precedence'] == 'first'
+    assert later['status'] == 'accepted' and later['precedence'] == 'conditional'
+    assert later['shadowed_by_line'] == 1 and later['command'] == '/bin/b'
+    assert [g['kind'] for g in later['gaps']] == ['precedence_depends_on_forwarding_spec']
+    summary = ak.assess([{'path': 'p', 'account': 'a', 'text': text}])['summary']
+    assert summary['shadowed'] == 0 and summary['forced_commands'] == 2
+
+
+@pytest.mark.parametrize('options, no_touch, verify', [
+    ('touch-required', False, False),
+    ('no-touch-required', True, False),
+    ('no-touch-required,touch-required', False, False),
+    ('verify-required', False, True),
+    ('no-verify-required', False, False),
+    ('verify-required,no-verify-required', False, False),
+    ('NO-VERIFY-REQUIRED,Verify-Required', False, True),
+])
+def test_fido_flags_accept_both_spellings_and_last_wins(options, no_touch, verify):
+    rec = one(f'{options} ' + key())
+    assert rec['status'] == 'accepted'
+    assert rec['no_touch_required'] is no_touch and rec['verify_required'] is verify
+
+
+@pytest.mark.parametrize('value, ok', [
+    ('any', True), ('ANY', True), ('Any', True),
+    (str(0x7fffffff - 2), True), (str(0x7fffffff - 1), False), (str(2 ** 31 - 1), False),
+])
+def test_tunnel_any_is_case_insensitive_and_id_bound_matches_openssh(value, ok):
+    rec = one(f'tunnel="{value}" ' + key())
+    if ok:
+        assert rec['status'] == 'accepted' and rec['tunnel'] == value
+    else:
+        assert rec['reject_kind'] == 'invalid_tunnel'

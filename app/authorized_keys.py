@@ -26,7 +26,8 @@ parser (``auth-options.c``):
 * sshd uses the first line that parses and matches the presented key. A later
   line for the same key is ``shadowed``; when the earlier line carries a
   ``from=`` restriction the later line may still apply to other sources and is
-  reported as ``conditional`` precedence instead.
+  reported as ``conditional`` precedence instead, as it is when the earlier
+  line's expiry or ``permitopen``/``permitlisten`` syntax is uncertain.
 
 It performs no I/O, never runs a command and never authorizes a response
 action. Anything it cannot resolve exactly (unreadable, oversized or over-cap
@@ -80,6 +81,14 @@ _FLAGS = {
 }
 _MARKERS = {'cert-authority': 'cert_authority', 'no-touch-required': 'no_touch_required',
             'verify-required': 'verify_required'}
+# sshd's ``opt_flag(name, allow_negate=1)`` accepts both spellings of these
+# FIDO flags; the last one on the line wins.
+_NEGATABLE_MARKERS = {'touch-required': ('no_touch_required', False),
+                      'no-touch-required': ('no_touch_required', True),
+                      'verify-required': ('verify_required', True),
+                      'no-verify-required': ('verify_required', False)}
+# OpenSSH ``SSH_TUNID_MAX`` is ``0x7fffffff - 2``.
+_TUNNEL_ID_MAX = 0x7fffffff - 2
 _SINGLE_VALUES = ('command', 'principals')
 _LIST_VALUES = ('environment', 'from', 'permitopen', 'permitlisten')
 _VALUE_OPTIONS = frozenset(_SINGLE_VALUES + _LIST_VALUES + ('expiry-time', 'tunnel'))
@@ -181,7 +190,8 @@ def _parse_options(text: str) -> dict[str, Any]:
                 if opts['expiry'] is None or expiry['epoch'] < opts['expiry']['epoch']:
                     opts['expiry'] = expiry  # sshd keeps the earliest expiry.
             elif name == 'tunnel':
-                if not (value == 'any' or (value.isdigit() and int(value) < 2 ** 31)):
+                # ``a2tun`` compares "any" case-insensitively.
+                if not (value.lower() == 'any' or (value.isdigit() and int(value) <= _TUNNEL_ID_MAX)):
                     raise _Reject('invalid_tunnel', 'tunnel must be a device number or "any".')
                 opts['tunnel'] = value
             else:
@@ -194,6 +204,9 @@ def _parse_options(text: str) -> dict[str, Any]:
         elif name in _FLAGS:
             perm, allowed = _FLAGS[name]
             perms[perm] = allowed
+        elif name in _NEGATABLE_MARKERS:
+            marker, enabled = _NEGATABLE_MARKERS[name]
+            opts[marker] = enabled
         elif name in _MARKERS:
             opts[_MARKERS[name]] = True
         else:
@@ -298,6 +311,12 @@ def _expiry_uncertain(record: dict[str, Any]) -> bool:
     return any(gap['kind'] in ('expiry_timezone_unknown', 'expiry_unevaluated') for gap in record['gaps'])
 
 
+def _forwarding_spec_uncertain(record: dict[str, Any]) -> bool:
+    # sshd refuses the whole line (and keeps reading) when a permitopen or
+    # permitlisten value is malformed, so such a line may not shadow at all.
+    return any(gap['kind'] == 'forwarding_spec_unvalidated' for gap in record['gaps'])
+
+
 def parse_text(text: str, *, now: float | None = None) -> dict[str, Any]:
     """Assess every line of one ``authorized_keys`` file's text."""
     entries: list[dict[str, Any]] = []
@@ -324,7 +343,7 @@ def parse_text(text: str, *, now: float | None = None) -> dict[str, Any]:
             if earlier is None:
                 first_valid[role] = record
                 record['precedence'] = 'first'
-            elif earlier['from'] or _expiry_uncertain(earlier):
+            elif earlier['from'] or _expiry_uncertain(earlier) or _forwarding_spec_uncertain(earlier):
                 record['precedence'] = 'conditional'
                 record['shadowed_by_line'] = earlier['line']
                 if earlier['from']:
@@ -334,6 +353,11 @@ def parse_text(text: str, *, now: float | None = None) -> dict[str, Any]:
                 if _expiry_uncertain(earlier):
                     record['gaps'].append(_gap('precedence_depends_on_expiry',
                                                'An earlier line for this key may already have expired.',
+                                               line=earlier['line']))
+                if _forwarding_spec_uncertain(earlier):
+                    record['gaps'].append(_gap('precedence_depends_on_forwarding_spec',
+                                               'An earlier line for this key has unvalidated permitopen/'
+                                               'permitlisten values; sshd skips it if one is malformed.',
                                                line=earlier['line']))
             else:
                 record['precedence'] = 'shadowed'
