@@ -3180,6 +3180,18 @@ Before this checkpoint an `affected` result from an administrator-run advisory s
 - **Unchanged:** the producer only reads. It runs no scan, contacts no advisory service or AI provider, selects no patches and authorizes no containment or response. No SMTP/webhook alert, schema, route or role change.
 - **Limitations:** results are only as fresh as the last administrator-run scan; scheduled scans, per-CVE incidents, fleet views and RPM updateinfo remain open in requirement D.
 
+#### Exposure history on the server Patching page — worker checkpoint #893
+
+Before this checkpoint nothing rendered the `exposure_history` ledger from #858, and the #822 notification's `#servers/<host>/patching` deep link led to a page with no advisory information. The server Patching timeline now has a **CVE exposure history** card for administrators.
+
+- **Shown:** the API's open-exposure total (counted over every record, not just the returned page) and the number of records shown. Records appear in API order, open first. Each shows the advisory ID, CVE IDs, package, the vendor fixed version when known, the reopen count, and the first and last affected scan times with versions. Resolved rows also show the resolving time and version and a fixed reason: fixed version observed, unaffected version observed, or advisory no longer listed.
+- **Fail closed:** malformed times, counts and versions render as Unknown. A row that is neither `open` nor `resolved` with a valid resolution time renders as **Unknown state**, never as Resolved. All stored strings, including the coverage statement, are escaped.
+- **Honest limits:** the card always shows the API coverage statement. Fixed text adds that the history is version applicability from administrator-run scans: it is not exploitation evidence, not a clean-host verdict and not verified patch activation. An empty ledger says that a never-scanned server looks the same. Truncation at 500 records is stated.
+- **Isolation:** only administrators render the card or call the admin-only endpoint. A failure shows a contained alert with **Retry exposure history**, without server error details, and the rest of the page keeps working. Replies that arrive after navigating to another view or server are discarded.
+- **Unchanged:** this is a frontend-only change, reading the existing `GET /api/operations/{host}/advisories`. It runs no scan and contacts no OSV, AI provider or SSH target. There is no schema, route, role, notification, patch-selection or response-authorization change.
+- **Validation:** `tests/ui_exposure_history.cjs` covers populated, truncated, empty, malformed, error/retry, injection, stale-reply and viewer cases, with no horizontal overflow at 320, 768 and 1440 px.
+- **Remaining in requirement D:** fleet views, scheduled scans, publication dates in `exposure_window()`, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
+
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
 Status: **bounded slice; requirement D remains planned/incomplete.**

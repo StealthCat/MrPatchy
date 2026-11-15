@@ -1,3 +1,7 @@
+## 1.61.7 — 2026-11-15
+
+1. [PR #894](https://github.com/StealthCat/MrPatchy/pull/894): Administrators can now review the durable per-server CVE exposure history on the server Patching timeline, including open and resolved records, affected versions and resolution details. This is historical version applicability from stored administrator-run scans; it is not exploitation evidence, a clean-host verdict or verified patch activation. Frontend-only; no schema, route, role, scan, patch-selection or response-authorization change. Fixes #893.
+
 ## 1.61.6 — 2026-11-15
 
 1. [PR #882](https://github.com/StealthCat/MrPatchy/pull/882): AI settings saves that expand admission or spend—including turning AI on—now require the confirmation returned by `POST /api/settings/ai/preview`. Both save routes refuse unconfirmed expansions with HTTP 409 before writing settings or audit entries; Settings → AI sends the confirmation only after the administrator accepts the preview. API clients must preview, then send the returned `expansion_confirmation` as `confirm_ai_expansion`; non-expanding saves need no confirmation. Compatibility: API clients that save expansions must add this preview/confirmation step. The content-derived confirmation matches again if stored controls return to exactly their preview values; it is an acknowledgement for an authenticated, CSRF-protected administrator, not a credential. No schema change or runtime response-authorization change. Fixes #881.

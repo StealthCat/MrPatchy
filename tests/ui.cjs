@@ -221,6 +221,7 @@ const assert=require('assert/strict');
     await require('./ui_server_directory.cjs')(page,capture);
     await require('./ui_server_directory_ai.cjs')(page,capture);
     await require('./ui_servers.cjs')(page,capture);
+    await require('./ui_exposure_history.cjs')(page,capture);
     await require('./ui_snapshot_pages.cjs')(page,capture);
     await require('./ui_security.cjs')(page,capture);
     await require('./ui_scanner_records.cjs')(page,capture);
