@@ -2638,6 +2638,20 @@ retry) and blocked (the #815 predicate).
   identity pass over current candidates per request (compare #436).
   Investigations and worker-health surfaces do not show the scoring queue.
 
+Worker checkpoint #926 shows the same summary on the fleet AI activity page
+(`#ai-logs`), below the process-triage worker status, for administrators.
+- **One renderer:** `scoringQueueSummary()` in `fleet.js` produces the text for
+  both Settings → AI and AI activity, so the two cannot drift. The Settings
+  output is unchanged.
+- **Loading:** the region is fetched separately from `GET /api/update-scores/status`
+  and never delays the run table. A reply that arrives after navigation is
+  ignored. A failed load says the queue is unavailable and never implies that
+  scoring may start. Values are escaped.
+- **Scope:** non-administrators and the per-server AI tab neither render nor
+  fetch it. Backend, schema, roles and admission are unchanged.
+- **Limitation:** Investigations and worker-health surfaces still do not show
+  the scoring queue.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.

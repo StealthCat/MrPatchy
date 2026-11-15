@@ -206,6 +206,7 @@ const assert=require('assert/strict');
     await require('./ui_ai_control_preview.cjs')(page,capture);
     await require('./ui_ai_control_migration.cjs')(page,capture);
     await require('./ui_scoring_queue.cjs')(page,capture);
+    await require('./ui_ai_activity_scoring_queue.cjs')(page,capture);
     await require('./ui_ai_timing_summary.cjs')(page,capture);
     await require('./ui_known_good_summary.cjs')(page,capture);
     await require('./ui_assessments.cjs')(page,capture);
