@@ -1,3 +1,19 @@
+## 1.69.0 — 2026-11-15
+
+1. [PR #896](https://github.com/StealthCat/MrPatchy/pull/896): Add a pure OpenSSH `authorized_keys` parser that reports per-line acceptance, rejection, expiry and precedence, SHA256 key fingerprints, forced commands and effective restrictions without exposing raw key material. Compatibility: new unimported module and tests only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: account/file enumeration and effective sshd configuration, forwarding-value validation, provenance, AI classification and UI remain out of scope; uncertain cases stay explicit gaps.
+
+## 1.68.0 — 2026-11-15
+
+1. [PR #923](https://github.com/StealthCat/MrPatchy/pull/923): Add an admin-only, read-only per-server automatic AI plan status under Security → Scheduled scanning, including the reason requests are inactive, a bounded count of open non-YARA incidents awaiting an attempt, queued/running and latest-attempt state, and mode-correct pacing. Correct the help text so only legacy mode claims the fleet ten-per-hour limit; other modes use shared AI start gates. Compatibility: adds one read-only route and UI; schema, roles, admission, automatic tick behavior, and response authorization are unchanged. Plans remain manual-only. Limits: point-in-time for one server; counts read at most 500 eligible incidents and report larger backlogs as truncated; startup-change plans and fleet-wide queue view remain out of scope.
+
+## 1.67.0 — 2026-11-15
+
+1. [PR #925](https://github.com/StealthCat/MrPatchy/pull/925): Add **Show → Cached known good** to fleet and per-server Investigations, listing only verdicts whose current state is an exact known-good reuse and allowing review or bulk Re-triage. Compatibility: adds optional `cached=true`; the default response is unchanged, with no schema, role, admission, spend or response-authorization changes. Limits: filter state has no URL deep link, fleet-wide selection across pages remains open, and filtered scans use bounded chunks over retained candidates with the same offset-pagination behavior as the default view.
+
+## 1.66.0 — 2026-11-15
+
+1. [PR #908](https://github.com/StealthCat/MrPatchy/pull/908): Add Settings → Malware response, where administrators can record and audit one fleet-wide automatic-response policy against the existing eligibility contract. Compare-and-set saves, audit entries and fail-closed handling keep invalid or unconfirmed enforcement disabled. Compatibility: additive administrator-only read/write endpoints and UI; existing installs default to Disabled; no migration, detector, executor, provider call, or response-authorization change. Limits: policy has no runtime effect, Enforce is unavailable, and per-server/group policies and enforcement remain open.
+
 ## 1.65.0 — 2026-11-15
 
 1. [PR #920](https://github.com/StealthCat/MrPatchy/pull/920): Add an administrator-only update-scoring queue summary in Settings → AI and `GET /api/update-scores/status`. It reports exact-identity counts for scored, running, eligible, deferred, retry-waiting and blocked updates, the oldest unscored wait, next timed eligibility and paused-server updates. Compatibility: adds one read-only endpoint; `/api/settings`, schema, admission, reservations, retries, roles and response authorization are unchanged. Limits: the summary is a point-in-time view, one identity pass is performed per request, and shared start gates, pause and the daily cap still determine when scoring starts.
