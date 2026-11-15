@@ -1,3 +1,51 @@
+## 1.66.0 — 2026-11-15
+
+1. [PR #908](https://github.com/StealthCat/MrPatchy/pull/908): Add Settings → Malware response, where administrators can record and audit one fleet-wide automatic-response policy against the existing eligibility contract. Compare-and-set saves, audit entries and fail-closed handling keep invalid or unconfirmed enforcement disabled. Compatibility: additive administrator-only read/write endpoints and UI; existing installs default to Disabled; no migration, detector, executor, provider call, or response-authorization change. Limits: policy has no runtime effect, Enforce is unavailable, and per-server/group policies and enforcement remain open.
+
+## 1.65.0 — 2026-11-15
+
+1. [PR #920](https://github.com/StealthCat/MrPatchy/pull/920): Add an administrator-only update-scoring queue summary in Settings → AI and `GET /api/update-scores/status`. It reports exact-identity counts for scored, running, eligible, deferred, retry-waiting and blocked updates, the oldest unscored wait, next timed eligibility and paused-server updates. Compatibility: adds one read-only endpoint; `/api/settings`, schema, admission, reservations, retries, roles and response authorization are unchanged. Limits: the summary is a point-in-time view, one identity pass is performed per request, and shared start gates, pause and the daily cap still determine when scoring starts.
+
+## 1.64.2 — 2026-11-15
+
+1. [PR #921](https://github.com/StealthCat/MrPatchy/pull/921): Bound the fleet CVE list to 50 exposure rows per advisory in the database query and report honest truncation as "Showing N of M open exposures". Advisory totals, known fixed versions and CVE identifiers still cover every open ledger row. Compatibility: adds `exposures_total`; `exposures_truncated` retains its meaning; renames the test-only Python keyword from `server_limit` to `exposure_limit`; no schema, role, scan, or response-authorization change. Limits: each server/package row consumes one exposure slot; no index was added without supporting measurements; the view still reflects retained administrator-run scans, not a clean-host verdict.
+
+## 1.64.1 — 2026-11-15
+
+1. [PR #915](https://github.com/StealthCat/MrPatchy/pull/915): Show administrators the existing Shared AI start gates card on the fleet AI activity page, including why provider calls are held and the next eligible start. The card reuses the Investigations renderer and snapshot route; late responses are discarded and snapshot errors do not block the run list. Compatibility: display-only; no API, schema, role, admission or response-authorization change. Limits: the card does not promise a start, and worker-health surfaces still do not show shared gate state. Correct the worker-template README sentence that had become stale after controller-only GCP installation was added in #919.
+
+## 1.64.0 — 2026-11-15
+
+1. [PR #919](https://github.com/StealthCat/MrPatchy/pull/919): Add an optional controller-only GCP installer mode that configures the app and Caddy with the split role Compose files, records the selected mode, runs gcloud checks inside the app and leaves the existing complete mode as the default. Compatibility: complete-mode commands remain unchanged; `.env.gcp` records the selected mode; no schema, API, role or response-authorization change. Limits: no live GCP/WIF acceptance; join-worker mode and remote-machine workers remain open. A pre-existing complete Compose stack without recorded mode must be inspected before switching because its running worker may remain orphaned.
+
+## 1.63.1 — 2026-11-15
+
+1. [PR #916](https://github.com/StealthCat/MrPatchy/pull/916): Administrators can configure a low-severity, admin-only in-app warning before a verified release reaches its standard-support or verified Debian LTS end date. The advance window is 90 days by default and can be set from 0 to 730 days (0 disables the warning). Compatibility: additive settings API/UI field; existing installations receive the 90-day default; no schema, role or response-authorization change. Limits: warnings use the reviewed lifecycle catalog only; Ubuntu Pro entitlement and RPM/vendor catalog coverage remain unavailable, and stale or missing inventory does not trigger warnings. Broader lifecycle work remains open in #341.
+
+## 1.63.0 — 2026-11-15
+
+1. [PR #912](https://github.com/StealthCat/MrPatchy/pull/912): Add an administrator-only **Open CVE exposure across the fleet** card and read-only API over the durable advisory-scan ledger. It groups open advisories with affected servers and packages, first-affected times and fleet totals. Compatibility: additive route and UI only; no schema, role or response-authorization change, and no scan, OSV, AI-provider or SSH call. Limitations: data freshness depends on retained administrator-run scans; absent or stale rows do not mean a clean host, lack of exploitation or verified installation, and disabled servers are not refreshed. The returned list is capped at 200 advisories and 50 exposure rows per advisory, but the query is not yet bounded per advisory and multi-package truncation wording can mislead; SQL row bounds and clearer wording are tracked in #913.
+
+## 1.62.2 — 2026-11-15
+
+1. [PR #910](https://github.com/StealthCat/MrPatchy/pull/910): Update FastAPI to 0.162.5, PyMySQL to 1.2.4 and Authlib to 1.9.5, with regenerated wheel and source-distribution hashes in the runtime lock. Compatibility: patch-level dependency updates; no application API, schema, configuration or deployment changes. Limitation: Authlib 1.9.5 emits a non-fatal httpx deprecation warning, and the separate httpx2 migration is not included; local validation used CPython 3.15 beta.
+
+## 1.62.1 — 2026-11-15
+
+1. [PR #899](https://github.com/StealthCat/MrPatchy/pull/899): Investigation cards now identify verdicts reused from the exact-match fleet known-good cache. Administrators get links to the reuse record and source assessment; other roles receive only the cached flag. The additive `known_good_reuse` API field is present only when the newest retained assessment matches the row's exact current state and came from a known-good reuse; later provider results, re-triage or changed evidence clear it. Compatibility: no schema change and no change to approval, trust, role or response authorization. Limitation: source links work only while source records remain retained; production acceptance is not measured. Fixes #897.
+
+## 1.62.0 — 2026-11-15
+
+1. [PR #888](https://github.com/StealthCat/MrPatchy/pull/888): Administrators can select 1–50 completed investigations on the current page and request fresh AI triage in one all-or-nothing operation. Each item receives revision, completion, running-request, active-server and approval-withdrawal checks; refused selections queue nothing and identify blocked items. Queued items retain their prior results, receive per-item audit records and bypass the known-good cache, with no provider call at queue time. Compatibility: additive API and UI; the existing single-item route and payload are unchanged, with no schema or configuration change. AI pause, data-sharing and shared admission/spend limits still apply when queued work runs, and response authorization is unchanged. Limitation: there is no fleet-wide select-all or cross-page selection. Fixes #887.
+
+## 1.61.9 — 2026-11-15
+
+1. [PR #766](https://github.com/StealthCat/MrPatchy/pull/766): Administrators now receive a fixed-text, high-severity in-app `telemetry-lost` notice when an enabled, non-deleted, non-enrolling server has sent no telemetry for 15 minutes of scheduler-leader observation. It links to Agent health, resolves on fresh telemetry or when the server is disabled/deleted, and reopens on a later outage; the existing 120-second stale SMTP/webhook alert is unchanged. Compatibility: no schema, API, configuration, role or outbox change. The notice is attention-only and grants no response/remediation authority; the threshold is fixed, endpoint-agent health remains separate (#737/#738), and a scheduler leader suspended without losing leadership can briefly over-report stale servers when it resumes. Fixes #765.
+
+## 1.61.8 — 2026-11-15
+
+1. [PR #770](https://github.com/StealthCat/MrPatchy/pull/770): When AI is enabled but its saved API key is missing, malformed or cannot be decrypted locally, administrators receive a fixed-text in-app alert and the shared AI start gates expose an additive `credential` blocker. Re-saving the key or restoring the matching encryption key resolves the alert. Compatibility: no schema or configuration change; clients may see the new blocker code. The producer only checks local decryption and never calls a provider, reserves spend, retries, unblocks work or sends email/webhooks. Existing triage remains blocked and may still show its configuration notification; blocked update-scoring and advisory-plan work remains uncovered. Fixes #769.
+
 ## 1.61.7 — 2026-11-15
 
 1. [PR #894](https://github.com/StealthCat/MrPatchy/pull/894): Administrators can now review the durable per-server CVE exposure history on the server Patching timeline, including open and resolved records, affected versions and resolution details. This is historical version applicability from stored administrator-run scans; it is not exploitation evidence, a clean-host verdict or verified patch activation. Frontend-only; no schema, route, role, scan, patch-selection or response-authorization change. Fixes #893.

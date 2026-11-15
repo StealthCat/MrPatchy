@@ -7,6 +7,7 @@ usage() {
   cat <<'USAGE'
 Usage: ./install-gcp.sh --project PROJECT --zone ZONE --instance INSTANCE
        [--public-url https://patchy.example.com:8443] [--credential-dir DIRECTORY]
+       [--mode complete|controller]
 Requires Docker with Compose v2, Python 3, and access to the Docker daemon.
 Run from the checked-out Mr Patchy repository on the controller host.
 An attached GCE service account is used by default. For WIF, provide a directory
@@ -14,35 +15,65 @@ containing credentials.json and its referenced token files (mounted at /gcp).
 Existing .env is preserved; --public-url is required for a fresh installation.
 The script builds the gcloud image, configures both runtimes, checks instance-read
 access, and starts Mr Patchy. IAM, APIs and SSH firewall setup are prerequisites.
+--mode complete (default) runs the app, Caddy and the bundled worker (compose.yaml).
+--mode controller runs only the app and Caddy (compose.controller.yaml); background
+jobs wait until workers are started separately with compose.worker.yaml.
+An installation is never switched between modes; see docs/COMPOSE_CONFIGURATION.md.
 USAGE
 }
-project='';zone='';instance='';url='';credentials=''
+project='';zone='';instance='';url='';credentials='';mode=complete
 while (($#)); do
   case "$1" in
     --help|-h) usage; exit 0;;
-    --project|--zone|--instance|--public-url|--credential-dir)
+    --project|--zone|--instance|--public-url|--credential-dir|--mode)
       (($#>=2)) || { usage >&2; exit 2; }
       case "$1" in
         --project) project=$2;; --zone) zone=$2;; --instance) instance=$2;;
-        --public-url) url=$2;; --credential-dir) credentials=$2;;
+        --public-url) url=$2;; --credential-dir) credentials=$2;; --mode) mode=$2;;
       esac; shift 2;;
     *) usage >&2; exit 2;;
   esac
 done
+[[ "$mode" == complete || "$mode" == controller ]] || { usage >&2; exit 2; }
 [[ "$project" =~ ^[a-z][a-z0-9-]{4,61}[a-z0-9]$ && "$zone" =~ ^[a-z][a-z0-9-]{1,61}[a-z0-9]$ && "$instance" =~ ^[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]] || { usage >&2; exit 2; }
 command -v docker >/dev/null; command -v python3 >/dev/null
 docker compose version >/dev/null
 docker info >/dev/null
-python3 - "$project" "$zone" "$url" "$credentials" <<'PY'
+python3 - "$project" "$zone" "$url" "$credentials" "$mode" <<'PY'
 import json,os,re,secrets,sys
 from pathlib import Path
 from urllib.parse import urlsplit
-project,zone,url,credentials=sys.argv[1:]
+project,zone,url,credentials,mode=sys.argv[1:]
 # Role-specific WIF overlays for compose.controller.yaml and compose.worker.yaml; the combined
 # compose.gcp-auth.json names both services and would add a partial service to a role file.
 ROLE_AUTH={'compose.controller.gcp-auth.json':'app','compose.worker.gcp-auth.json':'worker'}
+# Each mode's Compose files; the WIF overlay is appended when one is in use.
+MODES={'complete':('compose.yaml:compose.gcp.yaml','compose.gcp-auth.json'),
+       'controller':('compose.controller.yaml:compose.controller.gcp.yaml','compose.controller.gcp-auth.json')}
+base_files,auth_file=MODES[mode]
 for name in ('.env','.env.gcp','compose.gcp-auth.json',*ROLE_AUTH):
     if Path(name).is_symlink():raise SystemExit('Refusing symlink: '+name)
+def recorded_mode(values):
+    for key,(files,_) in MODES.items():
+        if values==files or values.startswith(files+':'):return key
+    return None
+# Never switch an existing installation between modes: the bundled worker would be
+# orphaned (complete -> controller) or a second worker set added (controller -> complete).
+recorded={}
+for name in ('.env','.env.gcp'):
+    if Path(name).exists():
+        for line in Path(name).read_text().splitlines():
+            key,sep,value=line.partition('=')
+            if sep and key.strip() in ('COMPOSE_FILE','MRPATCHY_GCP_MODE'):recorded[key.strip()]=value.strip()
+# Releases before --mode wrote .env.gcp without a mode, and only installed the complete stack.
+existing=recorded.get('MRPATCHY_GCP_MODE') or ('complete' if Path('.env.gcp').exists() else None)
+if not existing and 'COMPOSE_FILE' in recorded:
+    existing=recorded_mode(recorded['COMPOSE_FILE'])
+    # Complete mode keeps its earlier behavior of replacing a custom COMPOSE_FILE.
+    if existing is None and mode=='controller':
+        raise SystemExit('Existing .env sets an unrecognized COMPOSE_FILE; review it before using --mode controller')
+if existing and existing!=mode:
+    raise SystemExit('This installation uses --mode '+existing+'; refusing to switch to --mode '+mode+'. Follow the migration steps in docs/COMPOSE_CONFIGURATION.md instead.')
 # Validate before writing any deployment settings.
 if not Path('.env').exists():
     parsed=urlsplit(url)
@@ -64,15 +95,15 @@ if credentials:
     override={'services':{service:{'volumes':[{'type':'bind','source':str(directory).replace('$','$$'),'target':'/gcp','read_only':True}]} for service in ('app','worker')}}
 else:
     override=None
-    if Path('compose.gcp-auth.json').exists():
-        raise SystemExit('Existing WIF mount retained. Re-run with --credential-dir or review/remove compose.gcp-auth.json to switch identity.')
+    if Path(auth_file).exists():
+        raise SystemExit('Existing WIF mount retained. Re-run with --credential-dir or review/remove '+auth_file+' to switch identity.')
 if not Path('.env').exists():
     with open('.env','x') as f:
         f.write('ADMIN_PASSWORD='+secrets.token_hex(24)+'\nDOMAIN='+parsed.hostname+'\nPUBLIC_URL='+url+'\nHTTPS_PORT='+str(port)+'\n')
     os.chmod('.env',0o600)
 # Plain `docker compose` reads .env from this directory: persist the GCP overrides there
 # so upgrades and migrations that skip ./gcp-compose.sh cannot silently drop the gcloud runtime.
-compose_files='compose.yaml:compose.gcp.yaml'+(':compose.gcp-auth.json' if override or Path('compose.gcp-auth.json').exists() else '')
+compose_files=base_files+(':'+auth_file if override or Path(auth_file).exists() else '')
 wanted={'COMPOSE_FILE':compose_files,'GCP_PROJECT':project,'GCP_ZONE':zone}
 lines=Path('.env').read_text().splitlines()
 seen=set()
@@ -83,7 +114,7 @@ for i,line in enumerate(lines):
 lines+=[k+'='+v for k,v in wanted.items() if k not in seen]
 Path('.env').write_text('\n'.join(lines)+'\n')
 os.chmod('.env',0o600)
-Path('.env.gcp').write_text('GCP_PROJECT='+project+'\nGCP_ZONE='+zone+'\n')
+Path('.env.gcp').write_text('GCP_PROJECT='+project+'\nGCP_ZONE='+zone+'\nMRPATCHY_GCP_MODE='+mode+'\n')
 os.chmod('.env.gcp',0o600)
 if override:
     Path('compose.gcp-auth.json').write_text(json.dumps(override));os.chmod('compose.gcp-auth.json',0o600)
@@ -91,6 +122,24 @@ if override:
         Path(name).write_text(json.dumps({'services':{service:override['services'][service]}}));os.chmod(name,0o600)
 PY
 docker build -t mrpatchy:base .
+if [[ "$mode" == controller ]]; then
+  # Controller only: no worker service exists. A one-off app container would take the
+  # running app's fixed control IP, so sign in and check inside the started app instead.
+  # Token output is discarded, never printed or stored in a deployment file.
+  bash ./gcp-compose.sh build app
+  bash ./gcp-compose.sh up -d --wait
+  as_app=(exec -T --user mrpatchy -e HOME=/home/mrpatchy app)
+  if [[ -n "$credentials" ]]; then
+    bash ./gcp-compose.sh "${as_app[@]}" gcloud auth login --cred-file=/gcp/credentials.json --quiet
+  fi
+  bash ./gcp-compose.sh "${as_app[@]}" gcloud version
+  bash ./gcp-compose.sh "${as_app[@]}" gcloud auth print-access-token >/dev/null
+  bash ./gcp-compose.sh "${as_app[@]}" gcloud compute instances describe "$instance" --project="$project" --zone="$zone" --format='value(status)'
+  printf '%s\n' 'Mr Patchy GCP controller is ready. The initial admin password is in .env.' \
+    'No worker runs in this mode: background jobs wait until you start workers with compose.worker.yaml and compose.worker.gcp.yaml (see docs/COMPOSE_CONFIGURATION.md).' \
+    'Use ./gcp-compose.sh for future controller compose operations. Instance-read success does not prove IAP tunnel or guest SSH access.'
+  exit 0
+fi
 bash ./gcp-compose.sh build app worker
 if [[ -n "$credentials" ]]; then
   bash ./gcp-compose.sh run --rm --no-deps worker gcloud auth login --cred-file=/gcp/credentials.json --quiet
