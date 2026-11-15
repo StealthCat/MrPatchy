@@ -1,3 +1,7 @@
+## 1.65.0 — 2026-11-15
+
+1. [PR #920](https://github.com/StealthCat/MrPatchy/pull/920): Add an administrator-only update-scoring queue summary in Settings → AI and `GET /api/update-scores/status`. It reports exact-identity counts for scored, running, eligible, deferred, retry-waiting and blocked updates, the oldest unscored wait, next timed eligibility and paused-server updates. Compatibility: adds one read-only endpoint; `/api/settings`, schema, admission, reservations, retries, roles and response authorization are unchanged. Limits: the summary is a point-in-time view, one identity pass is performed per request, and shared start gates, pause and the daily cap still determine when scoring starts.
+
 ## 1.64.2 — 2026-11-15
 
 1. [PR #921](https://github.com/StealthCat/MrPatchy/pull/921): Bound the fleet CVE list to 50 exposure rows per advisory in the database query and report honest truncation as "Showing N of M open exposures". Advisory totals, known fixed versions and CVE identifiers still cover every open ledger row. Compatibility: adds `exposures_total`; `exposures_truncated` retains its meaning; renames the test-only Python keyword from `server_limit` to `exposure_limit`; no schema, role, scan, or response-authorization change. Limits: each server/package row consumes one exposure slot; no index was added without supporting measurements; the view still reflects retained administrator-run scans, not a clean-host verdict.
