@@ -23,7 +23,7 @@ module.exports=async(page,capture)=>{
  };
  await page.route('**/api/cve-exposure/fleet',handler);
  const card=page.locator('#fleet-exposure');
- const open=async()=>{await page.goto(new URL('/#security',page.url()).href);await page.getByRole('heading',{name:'Open CVE exposure across the fleet'}).waitFor();};
+ const open=async()=>{await page.goto(new URL('/#overview',page.url()).href);await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();await page.goto(new URL('/#security',page.url()).href);await page.getByRole('heading',{name:'Open CVE exposure across the fleet'}).waitFor();};
  try{
   await open();
   await card.getByRole('alert').filter({hasText:'Fleet exposure is unavailable'}).waitFor();
@@ -72,7 +72,7 @@ module.exports=async(page,capture)=>{
   await page.goto(new URL('/#overview',page.url()).href);await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
   mode='populated';release();await page.waitForTimeout(300);
   assert.equal(await page.locator('.fleet-exposure-list').count(),0,'stale reply must not render elsewhere');
-  assert.ok(reads>=7);
+  assert.equal(reads,6,'each load and refresh reads the endpoint once');
  }finally{
   if(release)release();
   await page.unroute('**/api/cve-exposure/fleet',handler);await page.setViewportSize(originalViewport);
