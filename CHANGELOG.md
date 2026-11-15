@@ -1,3 +1,7 @@
+## 1.61.8 — 2026-11-15
+
+1. [PR #770](https://github.com/StealthCat/MrPatchy/pull/770): When AI is enabled but its saved API key is missing, malformed or cannot be decrypted locally, administrators receive a fixed-text in-app alert and the shared AI start gates expose an additive `credential` blocker. Re-saving the key or restoring the matching encryption key resolves the alert. Compatibility: no schema or configuration change; clients may see the new blocker code. The producer only checks local decryption and never calls a provider, reserves spend, retries, unblocks work or sends email/webhooks. Existing triage remains blocked and may still show its configuration notification; blocked update-scoring and advisory-plan work remains uncovered. Fixes #769.
+
 ## 1.61.7 — 2026-11-15
 
 1. [PR #894](https://github.com/StealthCat/MrPatchy/pull/894): Administrators can now review the durable per-server CVE exposure history on the server Patching timeline, including open and resolved records, affected versions and resolution details. This is historical version applicability from stored administrator-run scans; it is not exploitation evidence, a clean-host verdict or verified patch activation. Frontend-only; no schema, route, role, scan, patch-selection or response-authorization change. Fixes #893.
