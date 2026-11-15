@@ -11,4 +11,6 @@ node_modules/
 .env.ci
 .env.gcp
 compose.gcp-auth.json
+compose.controller.gcp-auth.json
+compose.worker.gcp-auth.json
 .env.worker

@@ -121,3 +121,97 @@ def test_non_administrators_are_refused(admin, role):
         s.get(User, 'admin').role = role
         s.commit()
     assert admin.get('/api/operations/agents').status_code == 403
+
+
+def device(total=1000, available=50, used=900, inodes=(100, 60, 40)):
+    record = {'version': 1, 'collected': NOW - 30, 'source': 'statvfs', 'scope': {'kind': 'filesystem', 'path': '/'},
+              'applicability': 'supported', 'gaps': [],
+              'bytes': {'state': 'collected', 'unit': 'bytes', 'total': total, 'available': available, 'used': used}}
+    if inodes is None:
+        record['inodes'] = {'state': 'unknown', 'unit': 'inodes'}
+    else:
+        record['inodes'] = {'state': 'collected', 'unit': 'inodes', 'total': inodes[0], 'available': inodes[1], 'used': inodes[2]}
+    return record
+
+
+def pressure(total=8 * 2 ** 30, available=6 * 2 ** 30, cpu=1.25, memory=0.0):
+    psi = lambda value: {'state': 'collected', 'unit': 'percent-stalled',  # noqa: E731
+                         'some': {'avg10': 0.0, 'avg60': value, 'avg300': 0.0}}
+    return {'version': 1, 'collected': NOW - 30, 'source': 'procfs', 'scope': {'kind': 'host'}, 'gaps': [],
+            'applicability': 'supported', 'cpu': psi(cpu), 'memory': psi(memory),
+            'memory_capacity': {'state': 'collected', 'unit': 'bytes', 'total': total, 'available': available}}
+
+
+def test_resources_report_validated_metrics_and_advisory_attention():
+    result = fleet.resources({'collected': NOW, 'device_health': device(), 'resource_pressure': pressure()}, 'fresh')
+    assert result['state'] == 'present'
+    assert result['disk'] == {'total': 1000, 'available': 50, 'available_percent': 5.0, 'used_percent': 90.0}
+    assert result['inodes'] == {'total': 100, 'available': 60, 'available_percent': 60.0, 'used_percent': 40.0}
+    assert result['memory'] == {'total': 8 * 2 ** 30, 'available': 6 * 2 ** 30, 'available_percent': 75.0}
+    assert result['cpu_pressure_avg60'] == 1.25 and result['memory_pressure_avg60'] == 0.0
+    assert result['attention'] == ['disk-space-low']
+    low = fleet.resources({'device_health': device(available=500, inodes=(100, 10, 90)),
+                           'resource_pressure': pressure(available=2 ** 29)}, 'stale')
+    assert low['attention'] == ['disk-inodes-low', 'memory-low']
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda t: t['device_health']['bytes'].update(available=2000),
+    lambda t: t['device_health']['bytes'].update(total=0),
+    lambda t: t['device_health']['bytes'].update(total=True),
+    lambda t: t['device_health']['bytes'].update(available=-1),
+    lambda t: t['device_health']['bytes'].update(available=1.5),
+    lambda t: t['device_health']['bytes'].update(used=5000),
+    lambda t: t['device_health']['bytes'].update(state='unknown'),
+    lambda t: t['device_health']['bytes'].update(unit='inodes'),
+    lambda t: t['device_health'].update(bytes='full'),
+])
+def test_malformed_disk_signals_are_unknown_not_guessed(mutate):
+    telemetry = {'device_health': device(), 'resource_pressure': pressure()}
+    mutate(telemetry)
+    result = fleet.resources(telemetry, 'fresh')
+    assert result['state'] == 'present' and result['disk'] is None and 'disk-space-low' not in result['attention']
+    assert result['memory'] is not None
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), -1, 101, True, '5', None])
+def test_malformed_pressure_values_are_unknown(value):
+    record = pressure()
+    record['cpu']['some']['avg60'] = value
+    assert fleet.resources({'resource_pressure': record}, 'fresh')['cpu_pressure_avg60'] is None
+
+
+def test_unknown_states_versions_and_telemetry_withhold_metrics():
+    record = pressure()
+    record['memory_capacity'] = {'state': 'unknown', 'unit': 'bytes'}
+    record['memory'] = {'state': 'unknown', 'unit': 'percent-stalled'}
+    result = fleet.resources({'device_health': device(inodes=None), 'resource_pressure': record}, 'fresh')
+    assert result['inodes'] is None and result['memory'] is None and result['memory_pressure_avg60'] is None
+    assert fleet.resources({'collected': NOW}, 'fresh')['state'] == 'absent'
+    assert fleet.resources({'device_health': {**device(), 'version': 2}}, 'fresh')['state'] == 'absent'
+    for state in ('missing', 'invalid'):
+        hidden = fleet.resources({'device_health': device(), 'resource_pressure': pressure()}, state)
+        assert hidden['state'] == 'unavailable' and hidden['disk'] is None and hidden['attention'] == []
+    assert fleet.resources('bad', 'fresh')['state'] == 'unavailable'
+
+
+def test_resources_never_change_health_and_reach_the_api(admin):
+    healthy = host(collected=NOW - 30)
+    healthy.telemetry.update(device_health=device(), resource_pressure=pressure(available=1))
+    row = fleet.classify(healthy, receipt(), NOW)
+    assert row['health'] == 'healthy' and row['resources']['attention'] == ['disk-space-low', 'memory-low']
+    future = host(collected=NOW + 3600)
+    future.telemetry.update(device_health=device())
+    assert fleet.classify(future, receipt(), NOW)['resources']['state'] == 'unavailable'
+    add('res', receipt(checked=time.time() - 10), collected=time.time())
+    with Session() as s:
+        stored = s.get(Host, 'res')
+        stored.telemetry = {**stored.telemetry, 'device_health': device(), 'resource_pressure': pressure()}
+        s.commit()
+    data = admin.get('/api/operations/agents').json()
+    assert data['low_available_percent'] == 10
+    resources = data['items'][0]['resources']
+    assert resources['state'] == 'present' and resources['disk']['used_percent'] == 90.0
+    text = json.dumps(data)
+    for secret in ('statvfs', 'procfs', 'scope', 'secret-arg'):
+        assert secret not in text, secret

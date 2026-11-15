@@ -378,3 +378,34 @@ def history(session,days=30,now=None,*,timezone_name=None):
             'counted_usd':_money(row['counted_usd'])})
     return {'days':days,'generated_at':now,'cutoff':cutoff,'max_windows':max_windows,
         'truncated':truncated,'windows':windows}
+
+
+HISTORY_CSV_COLUMNS=('window_start_utc','reset_at_utc','timezone','calls','settled_usd','reserved_usd',
+    'sent_usd','uncertain_usd','other_usd','counted_usd')
+
+
+def _csv_time(value):
+    if value is None:return ''
+    try:return datetime.fromtimestamp(value,timezone.utc).isoformat().replace('+00:00','Z')
+    except (ValueError,OverflowError,OSError):return ''
+
+
+def _csv_cell(value):
+    text='' if value is None else str(value)
+    # Retained timezone names are persisted text. Neutralise spreadsheet formulas.
+    if text and text[0] in '=+-@\t\r':text="'"+text
+    return text
+
+
+def history_csv(result):
+    """Serialize a history() result without reading the ledger again."""
+    import csv
+    import io
+    buffer=io.StringIO()
+    writer=csv.writer(buffer,lineterminator='\r\n')
+    writer.writerow(HISTORY_CSV_COLUMNS)
+    for row in result['windows']:
+        writer.writerow([_csv_cell(value) for value in (_csv_time(row['window_start']),_csv_time(row['reset_at']),
+            row['timezone'],row['call_count'],row['settled_usd'],row['reserved_usd'],row['sent_usd'],
+            row['uncertain_usd'],row['other_usd'],row['counted_usd'])])
+    return buffer.getvalue()
