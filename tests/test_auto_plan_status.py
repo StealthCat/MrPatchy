@@ -131,12 +131,39 @@ def test_held_server_reports_held(admin, monkeypatch):
 
 def test_awaiting_is_bounded_and_reports_truncation(admin, monkeypatch):
     now = seed()
-    # Only the oldest AWAITING_LIMIT owed rows are read; YARA rows among them are not counted,
-    # so a truncated count is a lower bound and says so.
-    monkeypatch.setattr(auto_plan_status, 'AWAITING_LIMIT', 2)
+    # Only the oldest AWAITING_LIMIT owed candidates are read, so a truncated count is a lower bound and says so.
+    monkeypatch.setattr(auto_plan_status, 'AWAITING_LIMIT', 1)
     result = status(now)
     assert result['awaiting'] == 1 and result['awaiting_truncated'] is True
     assert result['oldest_awaiting_since'] == pytest.approx(now - 900)
+    monkeypatch.setattr(auto_plan_status, 'AWAITING_LIMIT', 2)
+    assert status(now)['awaiting'] == 2 and status(now)['awaiting_truncated'] is False
+
+
+def test_leading_yara_incidents_do_not_hide_owed_incidents(admin, monkeypatch):
+    # Review finding on #923: YARA rows older than every owed incident used to fill the bounded
+    # window, reporting "0 or more" with no oldest time while the tick still planned owed-old.
+    now = seed()
+    with Session() as s:
+        s.add_all(incidents.Incident(id=f'y{n}', host_id='web', scan_id='s1', updated=now - 5000 + n,
+                                     evidence={'scan_context': {'engine': 'YARA'}})
+                  for n in range(auto_plan_status.AWAITING_LIMIT + 1))
+        # Missing or other engines stay candidates, exactly as automatic_candidate() treats them.
+        s.add(incidents.Incident(id='clamav', host_id='web', scan_id='s1', updated=now - 30,
+                                 evidence={'scan_context': {'engine': 'ClamAV'}}))
+        s.add(incidents.Incident(id='no-engine', host_id='web', scan_id='s1', updated=now - 20,
+                                 evidence={'scan_context': {}}))
+        s.commit()
+    result = status(now)
+    assert result['awaiting'] == 4 and result['awaiting_truncated'] is False
+    assert result['oldest_awaiting_since'] == pytest.approx(now - 900)
+    with Session() as s:
+        owed = list(s.scalars(select(incidents.Incident).where(*incidents.awaiting_auto_plan())))
+    assert sum(map(incidents.automatic_candidate, owed)) == result['awaiting']
+    queued = []
+    monkeypatch.setattr('app.worker.enqueue', lambda s, host, action, payload: queued.append(payload['incident_id']))
+    incidents.auto_plan_tick(now)
+    assert queued == ['owed-old']
 
 
 def test_endpoint_is_admin_only_and_redacted(client, admin, monkeypatch):

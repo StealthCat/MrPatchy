@@ -5,7 +5,7 @@ import json
 import math
 import time
 import uuid
-from sqlalchemy import String, JSON, Double, Text, select, func
+from sqlalchemy import String, JSON, Double, Text, select, func, or_
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Setting, audit
 
@@ -303,6 +303,12 @@ def awaiting_auto_plan():
 def automatic_candidate(row):
     """YARA incidents are never planned automatically."""
     return row.evidence.get('scan_context',{}).get('engine')!='YARA'
+
+
+def automatic_candidate_sql():
+    """SQL form of ``automatic_candidate`` for bounded reads (#922): a missing engine is not YARA."""
+    engine=Incident.evidence[('scan_context','engine')].as_string()
+    return or_(engine.is_(None),engine!='YARA')
 
 
 def auto_plan_tick(now=None):

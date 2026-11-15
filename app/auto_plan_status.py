@@ -11,10 +11,11 @@ occupies the server, the latest automatic attempt, and which pacing applies:
 - every other mode has no plan-specific hourly cap. The shared AI start gates
   (rate throttle, daily cap, provider backoff) pace the provider call instead.
 
-The ``awaiting`` count uses ``incidents.awaiting_auto_plan`` and
-``incidents.automatic_candidate``, the same predicates the tick uses. It reads at
-most ``AWAITING_LIMIT + 1`` rows and reports truncation instead of loading an
-unbounded history.
+The ``awaiting`` count uses ``incidents.awaiting_auto_plan``, the predicate the tick
+uses, and excludes YARA incidents in SQL with ``incidents.automatic_candidate_sql``
+(the SQL form of the tick's ``automatic_candidate``), so YARA rows can never fill the
+bounded window and hide owed incidents. It reads at most ``AWAITING_LIMIT + 1`` rows
+and reports truncation instead of loading an unbounded history.
 
 The payload contains fixed codes, counts, job states and timestamps only: no
 incident evidence, paths, plan text, job output or key material. It sends no
@@ -24,7 +25,6 @@ authorization are unchanged and plans remain manual-only.
 import time
 
 from sqlalchemy import select
-from sqlalchemy.orm import load_only
 
 from . import ai_control_status, ai_policy, host_lifecycle, incidents
 from .db import Host, Job, Setting, config
@@ -52,15 +52,15 @@ def _state(session, host_id, policy, cfg):
 
 
 def _awaiting(session, host_id):
-    query = (select(incidents.Incident)
-             .options(load_only(incidents.Incident.id, incidents.Incident.updated, incidents.Incident.evidence))
-             .where(incidents.Incident.host_id == host_id, *incidents.awaiting_auto_plan())
+    query = (select(incidents.Incident.updated)
+             .where(incidents.Incident.host_id == host_id, *incidents.awaiting_auto_plan(),
+                    incidents.automatic_candidate_sql())
              .order_by(incidents.Incident.updated, incidents.Incident.id)
              .limit(AWAITING_LIMIT + 1))
     rows = list(session.scalars(query))
     truncated = len(rows) > AWAITING_LIMIT
-    rows = [row for row in rows[:AWAITING_LIMIT] if incidents.automatic_candidate(row)]
-    return len(rows), truncated, (float(rows[0].updated) if rows else None)
+    rows = rows[:AWAITING_LIMIT]
+    return len(rows), truncated, (float(rows[0]) if rows else None)
 
 
 def _job(row):

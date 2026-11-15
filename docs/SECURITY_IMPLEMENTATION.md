@@ -2822,9 +2822,12 @@ The admin-only `GET /api/hosts/{id}/security/auto-plan-status` now reports:
   the order the tick's checks apply.
 - **Awaiting:** this server's open incidents still owed their one automatic
   attempt, with the oldest one's update time. The count uses
-  `incidents.awaiting_auto_plan` and `incidents.automatic_candidate`, which the
-  tick now shares, so the two never drift. At most 500 rows are read. A larger
-  backlog reports a lower bound with `awaiting_truncated`.
+  `incidents.awaiting_auto_plan`, which the tick now shares, and excludes YARA
+  incidents in SQL with `incidents.automatic_candidate_sql` (the SQL form of the
+  tick's `automatic_candidate`; a missing engine is not YARA). Old YARA rows
+  therefore cannot fill the bounded read and hide owed incidents. At most 500
+  candidate rows are read. A larger backlog reports a lower bound with
+  `awaiting_truncated`.
 - **Occupancy:** whether a security or startup plan job is queued or running on
   the server (that blocks the next plan), and the latest automatic attempt's job
   state and time.

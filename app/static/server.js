@@ -250,7 +250,7 @@ async function serverSecurity(revision,context){
  // and never implies one will start; shared start gates, pause and holds still decide.
  const autoPlanStates={off:'Automatic AI plans are off for this server.',ai_disabled:'Central AI provider calls are disabled, so no automatic plan is requested.',
   not_configured:'A saved model and API key are required before automatic plans can be requested.',paused:'AI is paused for this server, so no automatic plan is requested.',
-  held:'A server-change hold is active, so no automatic plan is requested.',inactive:'This server is disabled or removed, so no automatic plan is requested.',
+  held:'A response or quarantine hold is active on this server, so no automatic plan is requested.',inactive:'This server is disabled or removed, so no automatic plan is requested.',
   ready:'Automatic plans can be requested for new detections on this server.'};
  const loadAutoPlanStatus=async request=>{const target=policyForm.querySelector('#auto-plan-status');if(!target)return;let q;
   try{q=await api('/hosts/'+hostId+'/security/auto-plan-status');}catch{q=null;}
