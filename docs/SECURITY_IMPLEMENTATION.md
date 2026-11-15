@@ -8786,6 +8786,26 @@ would run before the asynchronous polls refresh `last_seen` and would flag every
 server. An already-active event stays active across a leader change, without a
 new revision, until telemetry resumes.
 
+### Configurable telemetry-loss threshold — worker checkpoint #948
+
+Closes the open item from checkpoint #765: the in-app `telemetry-lost` notice no longer has a fixed 15-minute threshold.
+
+- **Setting:** Settings → Patch policy adds **Telemetry-loss notice after · minutes**, with whole minutes from 5 to 1440 and a default of 15.
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `telemetry_lost_minutes`. Out-of-range or non-integer values return 422, and older clients that omit the field keep the stored value.
+  - A change appends `telemetry-loss notification threshold changed from A to B minutes` to the existing admin-only settings audit row.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 15 (`operations.telemetry_lost_minutes`).
+  - The value lives in the existing `config` setting, so there is no schema change. The legacy `PUT /api/settings` neither sets nor resets it.
+- **Producer:** `operations.collect_alerts` uses the configured threshold for both the silence check and the coordinator-observation guard. A new leader therefore waits a full configured threshold before publishing.
+  - The fixed reason text names the configured minutes. At 15 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of still-qualifying active events once.
+  - Raising the threshold above a server's current silence resolves its active notice through the existing operational resolution path. The notice reopens if the silence later exceeds the new threshold.
+- **Unchanged:** the 120-second `stale` SMTP/webhook alert, the outbox, roles, CSRF, the admin-only audience and response authorization. The notice remains attention-only.
+- **Validation:**
+  - `tests/test_telemetry_lost_threshold.py`: 7 tests, all failing on main `0842ba4` and passing after. They cover the default text, invalid stored values, a shorter threshold, resolution after a raise and reopening, the observation guard, API validation and omission, and audit.
+  - The existing telemetry-loss tests in `tests/test_operational_notifications.py` pass unchanged.
+  - `tests/ui_settings_telemetry.cjs` fails on main and passes after. It covers the settings-finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** deployment-type endpoint-agent readiness and alerting (#737) remain open.
+
 ### Agent event-spool attention notifications — worker checkpoint #108
 
 This adds a roadmap J health/coverage producer and closes the alerting gap left open in #108. Each time the controller ingests a fresh telemetry snapshot from an enabled server, it publishes one admin-only in-app event per server (`agent-spool` / `spool-health`) in either case:
