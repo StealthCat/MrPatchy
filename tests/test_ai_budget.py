@@ -8,6 +8,8 @@ import pytest
 
 from app import ai, ai_admission, ai_budget, ai_pricing, ai_provider_backoff, notifications, operations
 from app.db import Session, Setting
+from app.security import seal
+from tests.ai_settings_helpers import confirmed_put
 
 
 def configure(mode='daily_cap', cap=Decimal('0.01'), timezone='UTC', rate=20):
@@ -17,6 +19,8 @@ def configure(mode='daily_cap', cap=Decimal('0.01'), timezone='UTC', rate=20):
             'ai_control_mode': mode, 'ai_rate_per_hour': rate,
             'ai_daily_cap_usd': float(cap), 'ai_budget_timezone': timezone,
         }))
+        # A readable saved key, as required to enable AI (#769 reports an unusable one).
+        session.merge(Setting(key='openai_key', value={'encrypted': seal('fixture')}))
         session.commit()
 
 
@@ -44,7 +48,7 @@ def test_default_cap_is_normalized_and_matches_budget_summary(admin, endpoint):
         body.update(repo_minutes=60, deadlines={'critical':24,'high':72,'normal':168,'low':720})
     model=AISettingsInput if endpoint.endswith('/ai') else ConfigInput
     assert type(model(**body).ai_daily_cap_usd) is float
-    assert admin.put(endpoint, json=body).status_code == 200
+    assert confirmed_put(admin, endpoint, body).status_code == 200
     state=admin.get('/api/settings').json()
     assert state['ai_daily_cap_usd'] == 10
     assert state['ai_budget']['cap_usd'] == '10'
@@ -340,7 +344,7 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
           'ai_hourly_limit':20,'ai_update_hourly_limit':20,
           'ai_control_mode':'rate_and_daily','ai_rate_per_hour':30,
           'ai_daily_cap_usd':12.5,'ai_budget_timezone':'America/New_York'}
-    result=admin.put('/api/settings/ai',json=body)
+    result=confirmed_put(admin,'/api/settings/ai',body)
     assert result.status_code==200
     state=admin.get('/api/settings').json()
     assert state['ai_control_mode']=='rate_and_daily'

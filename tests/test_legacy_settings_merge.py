@@ -1,4 +1,5 @@
 from app.db import Audit, Session, Setting, config
+from tests.ai_settings_helpers import confirmed_put
 
 DEADLINES={'critical':24,'high':72,'normal':168,'low':720}
 
@@ -20,7 +21,7 @@ def test_legacy_put_settings_keeps_omitted_fields(admin):
 
 
 def test_legacy_put_settings_applies_sent_fields(admin):
-    r=admin.put('/api/settings', json={'repo_minutes': 60, 'deadlines': DEADLINES, 'history_days': 10, 'ai_control_mode': 'daily_cap', 'ai_daily_cap_usd': 5, 'ai_budget_timezone': 'America/New_York'})
+    r=confirmed_put(admin, '/api/settings', {'repo_minutes': 60, 'deadlines': DEADLINES, 'history_days': 10, 'ai_control_mode': 'daily_cap', 'ai_daily_cap_usd': 5, 'ai_budget_timezone': 'America/New_York'})
     assert r.status_code == 200
     with Session() as s:
         cfg=config(s)

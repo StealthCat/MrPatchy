@@ -126,3 +126,126 @@ def test_installer_persists_gcp_compose_files_for_plain_compose(installer):
     assert config['ADMIN_PASSWORD']=='x'
     before=(root/'.env').read_text()
     assert run().returncode==0 and (root/'.env').read_text()==before
+
+
+def _commands(root):
+    return [json.loads(line) for line in (root/'commands').read_text().splitlines()]
+
+
+def _config(root,name='.env'):
+    return dict(line.split('=',1) for line in (root/name).read_text().splitlines())
+
+
+def test_controller_mode_starts_only_the_controller_and_checks_inside_app(installer):
+    root,run=installer
+    result=run('--mode','controller','--public-url','https://patchy.example.test')
+    assert result.returncode==0,result.stderr
+    assert 'DISPOSABLE_SECRET' not in result.stdout+result.stderr
+    assert 'background jobs wait' in result.stdout
+    assert _config(root)['COMPOSE_FILE']=='compose.controller.yaml:compose.controller.gcp.yaml'
+    assert _config(root,'.env.gcp')['MRPATCHY_GCP_MODE']=='controller'
+    assert (root/'.env.gcp').stat().st_mode&0o777==0o600
+    commands=[row for row in _commands(root) if '--env-file' in row]
+    for row in commands:
+        files=[row[i+1] for i,arg in enumerate(row) if arg=='-f']
+        assert files==['compose.controller.yaml','compose.controller.gcp.yaml']
+    assert not any('worker' in row for row in commands)
+    assert not any('run' in row for row in commands)
+    build=next(row for row in commands if 'build' in row)
+    assert build[-2:]==['build','app']
+    startup=next(i for i,row in enumerate(commands) if row[-3:]==['up','-d','--wait'])
+    checks=[(i,row) for i,row in enumerate(commands) if 'gcloud' in row]
+    assert checks and all(i>startup for i,_ in checks)
+    for i,row in checks:
+        assert row[row.index('exec'):row.index('exec')+7]==['exec','-T','--user','mrpatchy','-e','HOME=/home/mrpatchy','app']
+    assert any('print-access-token' in row for _,row in checks)
+    assert any('describe' in row and '--project=test-project' in row for _,row in checks)
+    config=(root/'.env').read_text()
+    again=run('--mode','controller')
+    assert again.returncode==0,again.stderr
+    assert (root/'.env').read_text()==config
+
+
+def test_controller_mode_runs_while_app_is_already_running(installer):
+    root,run=installer
+    (root/'app-running').touch()
+    result=run('--mode','controller','--public-url','https://patchy.example.test')
+    assert result.returncode==0,result.stderr
+    assert not any('down' in row or 'stop' in row for row in _commands(root))
+
+
+def test_controller_mode_wif_signs_in_inside_app_with_controller_overlay(installer):
+    root,run=installer
+    credentials=root.parent/(root.name+'-identity');credentials.mkdir()
+    (credentials/'credentials.json').write_text(json.dumps({'type':'external_account','credential_source':{'file':'/gcp/token'}}))
+    result=run('--mode','controller','--public-url','https://patchy.example.test','--credential-dir',str(credentials))
+    assert result.returncode==0,result.stderr
+    assert _config(root)['COMPOSE_FILE']=='compose.controller.yaml:compose.controller.gcp.yaml:compose.controller.gcp-auth.json'
+    overlay=json.loads((root/'compose.controller.gcp-auth.json').read_text())
+    assert list(overlay['services'])==['app']
+    commands=_commands(root)
+    login=next(row for row in commands if 'login' in row)
+    assert 'exec' in login and login[login.index('exec')+6]=='app' and 'worker' not in login
+    assert login[login.index('-f',login.index('compose.controller.gcp.yaml'))+1]=='compose.controller.gcp-auth.json'
+    assert commands.index(login)>next(i for i,row in enumerate(commands) if row[-3:]==['up','-d','--wait'])
+    # The retained controller mount must not be dropped by a run without --credential-dir.
+    assert run('--mode','controller').returncode!=0
+
+
+@pytest.mark.parametrize('first,second',[('complete','controller'),('controller','complete')])
+def test_installer_refuses_to_switch_modes_before_writing(installer,first,second):
+    root,run=installer
+    assert run('--mode',first,'--public-url','https://patchy.example.test').returncode==0
+    before={name:(root/name).read_text() for name in ('.env','.env.gcp')}
+    calls=len(_commands(root))
+    result=run('--mode',second)
+    assert result.returncode!=0
+    assert 'refusing to switch' in result.stderr and 'Traceback' not in result.stderr
+    assert {name:(root/name).read_text() for name in before}==before
+    assert not any('build' in row or 'up' in row for row in _commands(root)[calls:])
+
+
+def test_controller_mode_refuses_legacy_complete_installation(installer):
+    root,run=installer
+    # Releases before --mode wrote .env.gcp without a mode for the complete stack only.
+    (root/'.env').write_text('ADMIN_PASSWORD=x\n')
+    (root/'.env.gcp').write_text('GCP_PROJECT=test-project\nGCP_ZONE=us-central1-a\n')
+    result=run('--mode','controller')
+    assert result.returncode!=0 and 'uses --mode complete' in result.stderr
+    assert (root/'.env').read_text()=='ADMIN_PASSWORD=x\n'
+    assert run().returncode==0
+    assert _config(root,'.env.gcp')['MRPATCHY_GCP_MODE']=='complete'
+
+
+def test_controller_mode_accepts_prepared_controller_env(installer):
+    root,run=installer
+    (root/'.env').write_text('ADMIN_PASSWORD=x\nMRPATCHY_EXPECTED_WORKER_IDS=\n')
+    assert run('--mode','controller').returncode==0
+    assert _config(root)['ADMIN_PASSWORD']=='x'
+    (root/'.env').write_text('ADMIN_PASSWORD=x\nCOMPOSE_FILE=compose.custom.yaml\n')
+    (root/'.env.gcp').unlink()
+    result=run('--mode','controller')
+    assert result.returncode!=0 and 'unrecognized COMPOSE_FILE' in result.stderr
+
+
+def test_installer_rejects_unknown_mode(installer):
+    root,run=installer
+    result=run('--mode','worker','--public-url','https://patchy.example.test')
+    assert result.returncode==2 and not (root/'.env').exists()
+
+
+def test_compose_wrapper_follows_recorded_mode(installer):
+    root,_=installer
+    env={**os.environ,'PATH':str(root/'bin')+':'+os.environ['PATH'],'MOCK_LOG':str(root/'commands')}
+    def files():
+        subprocess.run(['bash',str(root/'gcp-compose.sh'),'ps'],env=env,check=True)
+        row=_commands(root)[-1]
+        return [row[i+1] for i,arg in enumerate(row) if arg=='-f']
+    (root/'.env.gcp').write_text('GCP_PROJECT=p\nGCP_ZONE=z\n')
+    assert files()==['compose.yaml','compose.gcp.yaml']
+    (root/'.env.gcp').write_text('GCP_PROJECT=p\nGCP_ZONE=z\nMRPATCHY_GCP_MODE=controller\n')
+    assert files()==['compose.controller.yaml','compose.controller.gcp.yaml']
+    (root/'compose.gcp-auth.json').write_text('{}')
+    assert files()==['compose.controller.yaml','compose.controller.gcp.yaml']
+    (root/'compose.controller.gcp-auth.json').write_text('{}')
+    assert files()==['compose.controller.yaml','compose.controller.gcp.yaml','compose.controller.gcp-auth.json']

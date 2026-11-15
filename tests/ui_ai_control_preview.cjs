@@ -1,14 +1,29 @@
 const assert=require('assert/strict');
-// Settings → AI previews admission/spend effects and confirms expansions before saving (#871).
+// Settings → AI previews admission/spend effects and confirms expansions before saving (#871);
+// the server refuses an expanding save that lacks the preview's confirmation (#881).
 module.exports=async(page,capture)=>{
+ // Direct API save as an administrator who reviewed the preview: resend with its confirmation.
+ const confirmedSave=async body=>page.evaluate(async body=>{const current=await api('/settings');const controls={ai_control_mode:body.ai_control_mode,ai_rate_per_hour:body.ai_rate_per_hour};const preview=await api('/settings/ai/preview','POST',controls);return api('/settings/ai','PUT',{...controls,expected_ai_controls_revision:current.ai_controls_revision,...(preview.expansion_confirmation?{confirm_ai_expansion:preview.expansion_confirmation}:{})});},body);
  const saved=async()=>page.evaluate(async()=>(await api('/settings')));
  const original=await saved();
- const restore=async()=>page.evaluate(async values=>{const current=await api('/settings');await api('/settings/ai','PUT',{ai_control_mode:values.ai_control_mode,ai_rate_per_hour:values.ai_rate_per_hour,expected_ai_controls_revision:current.ai_controls_revision});},original);
+ const restore=async()=>confirmedSave({ai_control_mode:original.ai_control_mode,ai_rate_per_hour:original.ai_rate_per_hour});
  try{
-  await page.evaluate(async()=>{const current=await api('/settings');await api('/settings/ai','PUT',{ai_control_mode:'rate',ai_rate_per_hour:20,expected_ai_controls_revision:current.ai_controls_revision});});
+  await confirmedSave({ai_control_mode:'rate',ai_rate_per_hour:20});
+  // An API save that expands admission without the preview's confirmation is refused and writes nothing (#881).
+  const refused=await page.evaluate(async()=>{const r=await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_rate_per_hour:60})});return {status:r.status,detail:(await r.json()).detail};});
+  assert.equal(refused.status,409);assert.match(refused.detail,/were not confirmed: .*20\/hour to 60\/hour/);
+  assert.equal((await saved()).ai_rate_per_hour,20);
   await page.goto(new URL('/#settings/ai',page.url()).href);await page.reload();
   const form=page.locator('#ai-settings-form'),panel=page.locator('#ai-control-effects'),rate=form.locator('[name=ai_rate_per_hour]');
   await rate.waitFor();assert.equal(await panel.isHidden(),true);
+  // Turning AI on starts paid provider calls, so the live panel flags it as an expansion too; unticking clears it.
+  if(!original.ai_enabled){
+   const enable=form.locator('[name=ai_enabled]');
+   await enable.check();
+   await panel.locator('li.expands').getByText('AI is enabled and Mr Patchy starts making paid provider calls',{exact:false}).waitFor();
+   await enable.uncheck();
+   await panel.getByText('No change to Mr Patchy admission or spend ceilings',{exact:false}).waitFor();
+  }
   // Lowering the rate is reported as a restriction and saves without a confirmation.
   await rate.fill('5');
   await panel.getByText('Combined AI work start ceiling changes from 20/hour to 5/hour',{exact:false}).waitFor();

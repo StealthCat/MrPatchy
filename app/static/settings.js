@@ -37,12 +37,12 @@ async function settings(revision=renderRevision){
   container.innerHTML=`<div class="card"><h2>HTTPS profiles</h2><p>Configure independent internal and external profiles with uploaded certificates, ACME, or the built-in local CA.</p><p>${Object.entries(data.tls.profiles||{}).filter(([,p])=>p.enabled).map(([name,p])=>esc(name+': '+p.domain+' · browser port '+p.effective_https_port)+' · '+badge(p.mode)).join('<br>')||'Initial HTTPS configured by deployment'}</p><button type="button" id="tls-button">Configure HTTPS →</button></div>`;
   $('#tls-button').onclick=tlsModal;return;
  }
- if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
+ if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><label>OS support-end advance warning · days<input name="os_lifecycle_warning_days" type="number" min="0" max="730" value="${esc(data.os_lifecycle_warning_days??90)}" required></label><p class="help">Administrators get an in-app notice this many days before a server's verified release leaves standard support or verified Debian LTS coverage. 0 turns the advance notice off; notices after support ends are unchanged.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  if(section==='history')container.innerHTML=`<form id="history-settings-form" class="card"><h2>History retention</h2><fieldset><label>Days to retain observations and inventory revisions<input name="history_days" type="number" min="1" max="3650" value="${data.history_days}" required></label><p class="help">The worker uses this period for observation, inventory revision and completed AI log cleanup. Package change history is retained separately.</p><button type="submit" class="primary">Save history retention</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  const form=container.querySelector('form'),result=$('#section-save-result');
  form.onsubmit=async event=>{
   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
-  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
+  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),os_lifecycle_warning_days:+f.get('os_lifecycle_warning_days'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
   fieldset.disabled=true;result.textContent='Saving…';
   try{await api('/settings/'+section,'PUT',body);if(currentView(revision,'settings')&&result.isConnected)result.textContent=section==='patching'?'Patch policy saved.':'History retention saved.';}
   catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=error.message;}
@@ -146,8 +146,8 @@ function renderAISettings(data,revision,container){
  const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
  // Effects of this change (#871): read-only preview of admission/spend ceilings before save.
  $('#ai-test-result').insertAdjacentHTML('afterend','<div class="notice ai-control-effects" id="ai-control-effects" role="status" aria-live="polite" hidden></div>');
- const effectsPanel=$('#ai-control-effects'),CONTROL_KEYS=['ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone','ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled'];
- const controlBody=()=>{const f=new FormData(form);return {ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:String(f.get('ai_budget_timezone')||'').trim(),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled')};};
+ const effectsPanel=$('#ai-control-effects'),CONTROL_KEYS=['ai_enabled','ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone','ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled'];
+ const controlBody=()=>{const f=new FormData(form);return {ai_enabled:f.has('ai_enabled'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:String(f.get('ai_budget_timezone')||'').trim(),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled')};};
  const controlsValid=()=>CONTROL_KEYS.every(name=>{const field=form.elements[name];return !field||field.checkValidity();});
  const effectsHtml=result=>result.changed?`<strong>Effects of this change</strong><ul class="ai-control-effects-list">${result.effects.map(item=>`<li${item.expands?' class="expands"':''}>${item.expands?'<strong>Expands:</strong> ':''}${esc(item.text)}</li>`).join('')}</ul><small>${esc(result.limitation)}</small>`:'<strong>Effects of this change</strong><br>No change to Mr Patchy admission or spend ceilings.';
  let effectsGeneration=0,effectsTimer=0;
@@ -168,13 +168,15 @@ function renderAISettings(data,revision,container){
   try{result=await api('/settings/ai/preview','POST',controls);}
   catch(error){if(alive())saveResult.textContent='AI settings were not saved. Effects could not be previewed: '+error.message;return false;}
   if(!alive())return false;
-  if(!result.expands)return true;
+  if(!result.expands)return {};
+  // The server refuses an unconfirmed expansion (#881); send back the confirmation bound to what was shown.
+  const confirmation={confirm_ai_expansion:result.expansion_confirmation};
   return new Promise(resolve=>{
    modal('Confirm expanded AI admission or spend',`<p>Saving these AI settings lets Mr Patchy start more AI work or spend more than the saved controls allow:</p><ul id="ai-expansion-list">${result.expansions.map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p class="help">${esc(result.limitation)}</p><div class="actions"><button type="button" class="primary" id="ai-expansion-confirm">Save with these expansions</button><button type="button" id="ai-expansion-cancel">Cancel</button></div>`);
    const dialog=$('#modal'),dialogRevision=modalRevision;let settled=false;
    const finish=value=>{if(settled)return;settled=true;dialog.removeEventListener('close',onClose);if(dialog.open&&dialogRevision===modalRevision)dialog.close();resolve(value);};
    const onClose=()=>finish(false);dialog.addEventListener('close',onClose);
-   $('#ai-expansion-confirm').onclick=()=>finish(true);$('#ai-expansion-cancel').onclick=()=>finish(false);
+   $('#ai-expansion-confirm').onclick=()=>finish(confirmation);$('#ai-expansion-cancel').onclick=()=>finish(false);
    $('#ai-expansion-cancel').focus();
   });
  };
@@ -212,7 +214,9 @@ function renderAISettings(data,revision,container){
   if(test&&!model){saveResult.textContent='Select or enter a model to test.';return;}
   const body={ai_model:model,ai_enabled:f.has('ai_enabled'),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:f.get('ai_budget_timezone').trim()};
   if(controlsRevision)body.expected_ai_controls_revision=controlsRevision;
-  if(!await confirmExpansion(body)){if(alive()&&!saveResult.textContent.startsWith('AI settings were not saved'))saveResult.textContent='Save cancelled. Nothing was saved; your entries are still in the form.';return;}
+  const confirmed=await confirmExpansion(body);
+  if(!confirmed){if(alive()&&!saveResult.textContent.startsWith('AI settings were not saved'))saveResult.textContent='Save cancelled. Nothing was saved; your entries are still in the form.';return;}
+  Object.assign(body,confirmed);
   ++listGeneration;refresh.disabled=false;setBusy(true);saveResult.textContent='Saving AI settings…';testResult.textContent='';
   try{
    const response=await api('/settings/ai','PUT',body);if(!alive())return;
