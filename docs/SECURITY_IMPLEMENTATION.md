@@ -2121,6 +2121,23 @@ checks carry no server data and remain available. No target helper or schema upg
 is required; rebuild the controller. Broader correlation, retention and other major
 work above remain unfinished.
 
+Worker checkpoint #864 shows the per-server pause fleet-wide in **Servers**.
+- **API:** for administrators only, `GET /api/hosts` adds `ai_paused` to each row.
+  The policy row is outer-joined into the existing bounded host query, so the
+  listing keeps its #147 statement budget, and `ai_policy.stored_paused` applies
+  the provider gate's own rule. A missing
+  policy is resumed. A non-dict value, or a `paused` field that is not exactly
+  `False`, is paused, so corrupt policy is displayed fail-closed.
+- **Roles:** viewers and operators get no field, matching the admin-only
+  per-server policy endpoint.
+- **Directory:** each paused card shows an **AI paused** badge. An administrator
+  **Server AI** filter offers All, AI paused and AI not paused; Reset and logout
+  clear it.
+- **Meaning:** the help text says the badge is the stored setting only. A server
+  that is not paused still needs global AI to be enabled and configured.
+- **Unchanged:** pause/resume semantics, admission, schema, audit and response
+  authorization.
+
 
 ## Planned: faster parallel AI triage and configurable spending controls
 
@@ -2599,6 +2616,22 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Retained spend history CSV download — worker checkpoint #874
+
+Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
+`GET /api/settings/ai-spend-history.csv` takes the same `days` (1–90) and optional
+IANA `timezone` filter as the JSON history and serializes the same bounded SQL
+aggregation without loading ledger rows. Columns are UTC window start/reset, the
+recorded timezone, call count and settled/reserved/sent/uncertain/other/counted
+USD. No model names, pricing sources, run/call identifiers or evidence are
+exported. Retained text cells starting with `=`, `+`, `-`, `@`, tab or CR are
+prefixed with `'` against spreadsheet formula injection. Truncation to the newest
+windows is disclosed in `X-MrPatchy-Spend-History-Truncated`/`-Max-Windows` headers
+and in the panel. The download uses the applied filter, not unapplied typed text.
+Amounts remain local public-price estimates for comparison with provider billing
+records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
+and the wider roadmap A acceptance remain planned.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
@@ -2651,6 +2684,33 @@ Admission, budget reservation, pause, lifecycle, role and response authorization
 behavior are unchanged. API clients that saved without previewing were accepted
 and audited at this checkpoint. #881 now refuses unconfirmed expansions.
 Automatic migration of legacy installations remains open.
+
+### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
+
+`ai_control_preview.legacy_migration()` derives the suggested move from legacy
+mode to the shared smooth rate throttle. The suggested rate is the lowest enabled
+legacy per-purpose hourly ceiling: process triage, update scoring (only while
+enabled) and the fixed 10/hour automatic incident/startup plan allowance. Because
+every purpose shares the one rate afterwards, no purpose can start more work per
+hour than before, and the combined ceiling falls. The proposal is checked with the
+same `compare()` used by the Settings preview and audit; it reports no expansion.
+Previously the suggestion was `min(triage, scoring)`, which ignored the
+automatic-plan allowance. With the 20/20 defaults it proposed 20/hour, doubling
+that allowance (#878).
+
+`GET /api/settings` → `ai_control_migration` keeps its earlier keys. It adds
+`legacy_hourly_starts`, `proposal`, `proposal_expands` and `proposal_expansions`.
+In legacy mode, Settings → AI lists the current hidden allowances and offers
+**Use suggested shared rate**. That button only fills the mode and rate fields. The
+live effects preview, expansion confirmation, revision check and audit then apply
+unchanged. Nothing is saved or switched automatically.
+- **Unchanged:** admission, reservations, pause, lifecycle, roles and response
+  authorization.
+- **Throughput:** the proposal is conservative. Purposes that had higher legacy
+  allowances get a lower ceiling until an administrator raises the shared rate,
+  and that increase is previewed and confirmed as an expansion.
+- **Still open:** automatic, unattended migration of legacy installations, and the
+  broader shared-controls acceptance.
 
 ### Refuse unconfirmed AI admission/spend expansions on save — worker checkpoint #881
 

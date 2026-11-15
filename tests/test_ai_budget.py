@@ -534,6 +534,84 @@ def test_spend_history_validates_range_role_and_bounds_group_rows(admin):
     assert admin.get(base+'&timezone=America%2FNew_York').status_code==403
 
 
+def test_spend_history_csv_matches_windows_filters_and_neutralises_formulas(admin):
+    import csv
+    import io
+    from sqlalchemy import event
+    from app.identity import User
+    import time
+    now=time.time()
+    current=ai_budget._window(now,'UTC')[1]
+    def entry(identifier,zone,reset,status,reserve,actual=None):
+        created=min(reset-3600,now-60)
+        return ai_budget.BudgetEntry(id=identifier,created=created,updated=created+30,reset_at=reset,timezone=zone,
+            model='private-model-name',status=status,reservation_usd=Decimal(reserve),actual_usd=actual,
+            pricing_version='catalog-test',pricing_source='https://pricing.example.test/private')
+    with Session() as session:
+        session.add_all([
+            entry('csv-settled','UTC',current,'settled','9',Decimal('0.125')),
+            entry('csv-uncertain','UTC',current,'uncertain','0.4'),
+            entry('csv-released','UTC',current,'released','99'),
+            # Retained text is not trusted to be a valid zone; it must not become a formula.
+            entry('csv-formula','=HYPERLINK("http://x.test")',current-1,'reserved','0.2'),
+        ])
+        session.commit()
+    loaded=[]
+    def on_load(*args):loaded.append(1)
+    event.listen(ai_budget.BudgetEntry,'load',on_load)
+    try:response=admin.get('/api/settings/ai-spend-history.csv?days=30')
+    finally:event.remove(ai_budget.BudgetEntry,'load',on_load)
+    assert response.status_code==200 and not loaded
+    assert response.headers['content-type'].startswith('text/csv')
+    assert response.headers['content-disposition']=='attachment; filename="mrpatchy-ai-spend-30d.csv"'
+    assert response.headers['cache-control']=='no-store'
+    assert response.headers['x-mrpatchy-spend-history-truncated']=='false'
+    assert response.headers['x-mrpatchy-spend-history-max-windows']=='120'
+    rows=list(csv.reader(io.StringIO(response.text)))
+    assert rows[0]==list(ai_budget.HISTORY_CSV_COLUMNS)
+    body={row[2]:row for row in rows[1:]}
+    assert len(rows)==3
+    utc=body['UTC']
+    assert utc[3:]==['2','0.125','0','0','0.4','0','0.525']
+    from datetime import datetime,timezone
+    assert utc[1]==datetime.fromtimestamp(current,timezone.utc).isoformat().replace('+00:00','Z')
+    assert utc[0].endswith('T00:00:00Z')
+    formula=body["'=HYPERLINK(\"http://x.test\")"]
+    assert formula[0]=='' and formula[9]=='0.2'
+    assert 'private-model-name' not in response.text and 'pricing.example.test' not in response.text
+    json_rows=admin.get('/api/settings/ai-spend-history?days=30').json()['windows']
+    assert sorted(row['counted_usd'] for row in json_rows)==sorted(row[9] for row in rows[1:])
+    filtered=admin.get('/api/settings/ai-spend-history.csv?days=30&timezone=UTC')
+    assert [row[2] for row in csv.reader(io.StringIO(filtered.text))][1:]==['UTC']
+    assert admin.get('/api/settings/ai-spend-history.csv?days=0').status_code==400
+    assert admin.get('/api/settings/ai-spend-history.csv?days=91').status_code==400
+    assert admin.get('/api/settings/ai-spend-history.csv?timezone=Invalid%2FTimezone').status_code==400
+    with Session() as session:session.get(User,'admin').role='viewer';session.commit()
+    assert admin.get('/api/settings/ai-spend-history.csv?days=30').status_code==403
+
+
+def test_spend_history_csv_discloses_truncation(admin):
+    import time
+    now=time.time()
+    with Session() as session:
+        session.add_all([ai_budget.BudgetEntry(id=f'csv-history-{i}',created=now-60,updated=now-30,reset_at=now+i+1,
+            timezone='UTC',model='m',status='reserved',reservation_usd=Decimal('0.01'),
+            pricing_version='v',pricing_source='s') for i in range(6)])
+        session.commit()
+    response=admin.get('/api/settings/ai-spend-history.csv?days=1')
+    assert response.status_code==200
+    assert response.headers['x-mrpatchy-spend-history-truncated']=='true'
+    assert response.headers['x-mrpatchy-spend-history-max-windows']=='4'
+    assert len(response.text.strip().split('\r\n'))==5
+
+
+def test_history_csv_cells_neutralise_every_formula_prefix():
+    for prefix in '=+-@\t\r':
+        assert ai_budget._csv_cell(prefix+'x')=="'"+prefix+'x'
+    assert ai_budget._csv_cell('America/New_York')=='America/New_York'
+    assert ai_budget._csv_cell(None)=='' and ai_budget._csv_time(None)==''
+
+
 DAY=1793404800.0  # 2026-10-31T00:00:00Z
 
 

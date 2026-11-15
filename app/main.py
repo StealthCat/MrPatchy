@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update, case, or_, not_, text, String, LargeBinary, cast
-from sqlalchemy.orm import defer, load_only
+from sqlalchemy.orm import aliased, defer, load_only
 from sqlalchemy.exc import IntegrityError, OperationalError
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.61.1"
+APP_VERSION = "1.61.5"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -592,7 +592,14 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             path='$."%s"'%key
             kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
             cols+=[Host.inventory[key].as_string(),kind]
-        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        # Per-server AI policy is administrator-only (see server_ai_policy), so other roles get no field.
+        # It joins the same bounded host query instead of adding a statement (#147 query budget).
+        admin=user['role']=='admin';ai=aliased(Setting)
+        from . import ai_policy
+        extra=(ai.key,ai.value) if admin else ()
+        query=select(Host,*cols,Setting.value,*extra).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        if admin:query=query.outerjoin(ai,ai.key==ai_policy.PREFIX+Host.id)
+        rows=s.execute(query
             .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
             .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
         def meta(value,kind,default):
@@ -600,7 +607,8 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             return None if str(kind).lower()=='null' else value
         return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
-            for h,a,ak,o,ok,m,mk,saved in rows]
+            |({'ai_paused':ai_policy.stored_paused(policy[1],policy[0] is not None)} if admin else {})
+            for h,a,ak,o,ok,m,mk,saved,*policy in rows]
 
 def saved_query_or_404(s,query_id):
     row=s.get(fleet_queries.SavedFleetQuery,query_id)
@@ -1203,14 +1211,13 @@ def audit_detail(entry_id:int,user=Depends(admin_user)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(admin_user)):
-    from . import ai_budget,ai_provider_backoff,scoring_block_notifications
+    from . import ai_budget,ai_control_preview,ai_provider_backoff,scoring_block_notifications
     with Session() as s:
-        cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
+        cfg=config(s)
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
-            'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
-                'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+            'ai_control_migration':ai_control_preview.legacy_migration(cfg)}
 
 @app.get('/api/settings/ai-connections')
 def ai_connection_inventory(user=Depends(admin_user)):
@@ -1227,6 +1234,18 @@ def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)
     if timezone is not None and not ai_budget.valid_timezone(timezone):
         raise HTTPException(400,'Select a valid IANA budget timezone.')
     with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
+
+@app.get('/api/settings/ai-spend-history.csv')
+def ai_spend_history_csv(days:int=30,timezone:str|None=None,user=Depends(admin_user)):
+    from . import ai_budget
+    if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
+    if timezone is not None and not ai_budget.valid_timezone(timezone):
+        raise HTTPException(400,'Select a valid IANA budget timezone.')
+    with Session() as s:result=ai_budget.history(s,days,timezone_name=timezone)
+    return PlainTextResponse(ai_budget.history_csv(result),media_type='text/csv; charset=utf-8',headers={
+        'Content-Disposition':f'attachment; filename="mrpatchy-ai-spend-{days}d.csv"',
+        'Cache-Control':'no-store','X-MrPatchy-Spend-History-Truncated':'true' if result['truncated'] else 'false',
+        'X-MrPatchy-Spend-History-Max-Windows':str(result['max_windows'])})
 
 @app.get('/api/settings/ai-control-status')
 def ai_control_status(user=Depends(admin_user)):

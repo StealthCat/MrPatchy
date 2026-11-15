@@ -1,4 +1,5 @@
 const assert=require('assert/strict');
+const fs=require('fs');
 module.exports=async(page,capture)=>{
  assert.equal(await page.locator('#ai-settings-form').count(),0,'settings hub must not contain all forms');
  await page.locator('[href="#settings/patching"]').first().click();
@@ -70,6 +71,27 @@ module.exports=async(page,capture)=>{
  await timezoneFilter.press('Enter');
  await page.locator('#ai-spend-history table').getByText('America/New_York',{exact:false}).waitFor();
  assert.deepEqual(spendReads.at(-1),{days:30,timezone:'America/New_York'});
+ // CSV download uses the applied filter, discloses truncation and reports errors in place.
+ const csvReads=[];let csvFail=false;
+ await page.route('**/api/settings/ai-spend-history.csv?*',route=>{
+  const params=new URL(route.request().url()).searchParams;csvReads.push({days:params.get('days'),timezone:params.get('timezone')});
+  if(csvFail)return route.fulfill({status:503,json:{detail:'CSV fixture temporarily unavailable.'}});
+  return route.fulfill({status:200,headers:{'Content-Type':'text/csv; charset=utf-8','X-MrPatchy-Spend-History-Truncated':'true','X-MrPatchy-Spend-History-Max-Windows':'120'},
+   body:'window_start_utc,reset_at_utc,timezone,calls,settled_usd,reserved_usd,sent_usd,uncertain_usd,other_usd,counted_usd\r\n'});
+ });
+ await timezoneFilter.fill('Europe/Paris');// Typed but not applied: the download must keep the applied filter.
+ const csvButton=page.getByRole('button',{name:'Download CSV'});
+ const [csvDownload]=await Promise.all([page.waitForEvent('download'),csvButton.click()]);
+ assert.equal(csvDownload.suggestedFilename(),'mrpatchy-ai-spend-30d-America_New_York.csv');
+ assert.match(fs.readFileSync(await csvDownload.path(),'utf8'),/^window_start_utc,reset_at_utc,timezone,calls/);
+ assert.deepEqual(csvReads.at(-1),{days:'30',timezone:'America/New_York'});
+ await page.locator('#ai-spend-history-download-status').filter({hasText:'newest 120 accounting windows'}).waitFor();
+ assert.equal(await page.locator('#ai-spend-history table').count(),1);
+ csvFail=true;await csvButton.click();
+ await page.locator('#ai-spend-history-download-status').filter({hasText:'Download failed: CSV fixture temporarily unavailable.'}).waitFor();
+ assert.equal(await csvButton.isEnabled(),true);
+ await page.unroute('**/api/settings/ai-spend-history.csv?*');
+ await timezoneFilter.fill('America/New_York');
  assert.equal(await budgetTimezone.inputValue(),'Europe/London');
  await timezoneFilter.fill('');
  await page.getByRole('button',{name:'Apply timezone filter'}).click();

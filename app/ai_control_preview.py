@@ -151,3 +151,25 @@ def expansion_confirmation(stored_revision, expansions):
         return None
     payload = json.dumps([stored_revision, list(expansions)], separators=(',', ':'), ensure_ascii=True)
     return hashlib.sha256(('mrpatchy-ai-expansion-v1:' + payload).encode()).hexdigest()
+
+
+def legacy_migration(values):
+    """Propose a shared smooth rate that replaces legacy allowances without expanding any.
+
+    In the rate mode every purpose draws from one shared rate, so the proposal is the
+    lowest enabled legacy per-purpose hourly ceiling: triage, update scoring (only
+    while enabled) and the fixed automatic incident/startup plan allowance. Disabled
+    update scoring is ignored because it stays off after the change. The proposal is
+    only a suggestion; nothing is saved and the caller still previews and confirms.
+    """
+    current = {key: values[key] for key in FIELDS}
+    legacy = ceilings(current | {'ai_control_mode': 'legacy'})['hourly_starts']
+    enabled = {key: value for key, value in legacy.items() if value}
+    rate = max(1, min(enabled.values())) if enabled else 1
+    proposal = {'ai_control_mode': 'rate', 'ai_rate_per_hour': rate}
+    preview = compare(current, proposal)
+    return {'required': current['ai_control_mode'] == 'legacy', 'suggested_rate_per_hour': rate,
+            'legacy_investigations_per_hour': int(current['ai_hourly_limit']),
+            'legacy_scoring_batches_per_hour': int(current['ai_update_hourly_limit']),
+            'legacy_hourly_starts': legacy, 'proposal': proposal,
+            'proposal_expands': preview['expands'], 'proposal_expansions': preview['expansions']}

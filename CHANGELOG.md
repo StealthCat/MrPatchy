@@ -1,3 +1,19 @@
+## 1.61.5 — 2026-11-14
+
+1. [PR #886](https://github.com/StealthCat/MrPatchy/pull/886): Made the startup-change notification redaction regression test deterministic: it checks the complete fixture hash, so random event or subject IDs containing a short repeated substring no longer cause false failures. A separate leak-injection regression keeps the full-hash redaction check. Test-only change; no runtime or compatibility impact. Fixes #885.
+
+## 1.61.4 — 2026-11-14
+
+1. [PR #880](https://github.com/StealthCat/MrPatchy/pull/880): Settings → AI now proposes a shared rate no higher than any enabled legacy per-purpose hourly allowance, including the fixed 10/hour automatic incident/startup-plan ceiling. Administrators can apply the suggestion to the form; the existing preview, confirmation, revision check and audit flow controls saving. Compatibility: additive fields in the admin-only settings response; no schema, admission, reservation, pause, lifecycle, role or response-authorization change. Saving the conservative proposal can lower throughput for purposes with higher legacy limits; raising the shared rate remains subject to the existing expansion preview and confirmation. Migration remains explicit; no unattended migration is added. Fixes #878 and completes #879.
+
+## 1.61.3 — 2026-11-14
+
+1. [PR #865](https://github.com/StealthCat/MrPatchy/pull/865): The Servers directory now shows administrators a per-server **AI paused** badge and a Server AI filter. The admin-only `GET /api/hosts` response adds `ai_paused`, applying the provider gate's fail-closed stored-policy rule in the existing bounded query (no extra statement). Compatibility: additive admin-only response field; viewers/operators receive no field. No schema, migration, admission, pause/resume, audit or response-authorization changes; rebuild the controller. The badge reports only the stored per-server setting—not global AI enablement/configuration—and older controller replies without the field are treated as not paused.
+
+## 1.61.2 — 2026-11-14
+
+1. [PR #875](https://github.com/StealthCat/MrPatchy/pull/875): Settings → AI → Retained spend history now offers administrators a CSV download of the same bounded aggregate windows for the selected period and applied timezone. Formula-leading text is neutralized and truncation is disclosed. Compatibility: an additive read-only endpoint and UI; no schema, budget-accounting, scheduling, settings or response-authorization changes. Amounts remain local public-price estimates, not provider invoices; provider reconciliation and reports beyond 90 days remain out of scope.
+
 ## 1.61.1 — 2026-11-14
 
 1. [PR #872](https://github.com/StealthCat/MrPatchy/pull/872): Activity → Workers → Endpoint agents now shows validated root-filesystem space and inode use, available memory, and CPU/memory pressure from retained telemetry, with advisory low-resource flags. The existing agents API gains an additive `resources` object; no schema or agent change is required. Older or incomplete telemetry remains unknown, and stale data is labelled. The flags do not change health classification, alerts, repairs or authorization. Endpoint-agent readiness, low-resource notifications, history, time-sync and certificate-expiry signals remain outside this change.
