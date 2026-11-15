@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.64.2"
+APP_VERSION = "1.70.0"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1021,16 +1021,20 @@ def key_upload(host_id:str,body:KeyInput,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'key',body.model_dump())}
 @app.get('/api/investigations')
-def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer_user)):
+def investigations(host_id:str='',offset:int=0,limit:int=500,cached:bool=False,user=Depends(viewer_user)):
     if offset<0 or not 1<=limit<=500:raise HTTPException(400,'Invalid investigation pagination')
     with Session() as s:
-        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
+        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id)
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
         from . import ai_retry,ai_policy,ai_claims,ai_assessments
-        rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
+        # cached=true lists only rows whose current state is an exact known-good reuse:
+        # the same rows that carry the list badge. Pagination counts filtered rows.
+        if cached:rows=ai_assessments.reused_page(s,stmt.where(Behavior.verdict.in_(ai_assessments.COMPLETE)),Behavior.id,offset,limit)
+        else:rows=list(s.scalars(stmt.offset(offset).limit(limit)))
+        signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
         reused=ai_assessments.current_reuse(s,rows,include_source=user.get('role')=='admin')
@@ -1519,6 +1523,17 @@ def blocked_update_scores(user=Depends(admin_user)):
     from . import scoring_block_notifications
     with Session() as s:
         return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
+@app.get('/api/update-scores/status')
+def update_score_queue_status(user=Depends(admin_user)):
+    """Summarize the update-importance scoring queue (#917). Read-only.
+
+    Counts and timestamps only; shared AI start gates and pause still decide
+    when a scoring batch starts.
+    """
+    from . import scoring_queue_status
+    with Session() as s:
+        return scoring_queue_status.status(s,config(s))
 
 @app.post('/api/update-scores/blocked/retry')
 def retry_blocked_update_scores(user=Depends(admin_user)):
@@ -3228,6 +3243,14 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
             audit(s,'security plan approved for manual response',plan.id+' '+user['username']);s.commit()
             return {'ok':True,'expires':plan.expires,'execution':'manual_only'}
 
+@app.get('/api/hosts/{host_id}/security/auto-plan-status')
+def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
+    """Read-only automatic AI plan status and pacing for this server (#922). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        host_or_404(s,host_id)
+        return auto_plan_status.status(s,host_id)
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
@@ -3421,6 +3444,26 @@ def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_us
     except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
     if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
     return value
+
+class MalwarePolicyInput(BaseModel):
+    model_config={'extra':'forbid'}
+    policy:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/settings/malware-response')
+def malware_policy_read(user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:return malware_policy.state(s)
+
+@app.put('/api/settings/malware-response')
+def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
+    # Stores policy only: no detector, executor, provider call or response authorization runs here.
+    from . import malware_policy,malware_response
+    try:return malware_policy.save(body.policy,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid malware response policy: '+str(exc))
+    except malware_policy.EnforcementUnavailable:raise HTTPException(409,'Enforce mode is unavailable until a containment executor exists; choose Disabled or Monitor only')
+    except malware_policy.StalePolicy:raise HTTPException(409,'The malware response policy changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
 
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
