@@ -1,3 +1,7 @@
+## 1.75.11 — 2026-11-16
+
+1. [PR #971](https://github.com/StealthCat/MrPatchy/pull/971): Add an I/O-free dpkg configuration contract that reports command hooks, relocations, behavior-changing options, source locations and fail-closed coverage gaps. Compatibility: no runtime behavior changes; the parser is not wired to a collector or UI. Limits: the option table follows dpkg 1.22.6, and per-user/per-run configuration remains unobserved.
+
 ## 1.75.10 — 2026-11-16
 
 1. [PR #973](https://github.com/StealthCat/MrPatchy/pull/973): Extend MySQL CI shard timeouts from 30 to 45 minutes so slow, still-passing shards can finish. Compatibility: CI only; no application, schema, API or UI change. Limits: 45 minutes is based on observed runtimes and unusually slow runners may still exceed it; the shard matrix and test behavior are unchanged.

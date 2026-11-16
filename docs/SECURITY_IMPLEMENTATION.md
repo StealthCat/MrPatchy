@@ -3995,6 +3995,45 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
 - **Still open:** collector content capture, catalog `entries_parsed` wiring,
   inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
 
+### dpkg configuration commands — worker checkpoint #970
+
+Contract-only; roadmap F remains incomplete. `app/dpkg_hooks.py` lists the
+command-executing and check-changing options in captured `/etc/dpkg/dpkg.cfg.d`
+entries and `/etc/dpkg/dpkg.cfg`. It performs no I/O and runs nothing. It
+complements the APT hook contract above: these options act one level lower, on
+every dpkg run, whichever front end starts it.
+
+- **Files:** a `dpkg.cfg.d` name is read when it does not start with `.` and
+  consists of `[A-Za-z0-9_-]`. Files are read in byte order and `dpkg.cfg`
+  after them. A dangling link is skipped; ignored names are listed.
+- **Syntax:** trailing whitespace is dropped; empty lines and lines starting
+  with `#` are skipped; leading whitespace is an error. The name is the leading
+  run of `[A-Za-z0-9-]`; the next character ends it, one following `=` and
+  leading whitespace are skipped, and a value starting with a quote must end
+  with the same quote. `force-<things>`, `refuse-<things>` and
+  `no-force-<things>` need no separate value.
+- **Reported options:** `commands` (`pre-invoke`, `post-invoke` and
+  `status-logger`, each run through `sh -c`; every occurrence runs, invoke
+  hooks in the order read and status loggers side by side),
+  `relocations` (`root`, `admindir`, `instdir`; every occurrence, dpkg uses the
+  last) and `behavior_changes` (`force`/`refuse` items, `no-debsig`,
+  `ignore-depends`, `no-act`, `no-triggers`, path filters), each with source
+  file and line. Other recognized options are only counted.
+- **Fail closed:** dpkg refuses to run on an unknown option, a missing or
+  unexpected value, unbalanced quotes, an unknown force item, an invalid
+  validated value or an action option; each is a `config_error` gap. A line
+  over dpkg's 1022-byte buffer, a NUL byte, a non-ASCII character directly
+  after the name, a non-regular entry, an unreadable, oversized or uncollected
+  file and over-cap input are gaps too. Any of these makes the result
+  `undetermined`; other commands stay visible. The invoking user's
+  `~/.dpkg.cfg`, per-run options and environment, and the locale collation
+  dpkg sorts the directory with are always disclosed as unobserved or assumed.
+  The option table is dpkg 1.22.6's. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog location and
+  `entries_parsed` wiring, inventory/UI, provenance and AI classification,
+  other dpkg versions' option tables, and DNF/YUM/RPM plugin configuration.
+
+
 ### Dynamic-loader configuration contract — worker checkpoint #960
 
 Contract increment only; the startup-awareness requirement remains incomplete.
