@@ -28,14 +28,16 @@ binary:
   period, so hidden names such as ``.cache~`` are read.
 - A script starts directly after its keyword, on the same line, and ends before
   the first later line whose first word is ``endscript``. A word is a run of
-  letters, so ``endscript;`` and ``endscript}`` end the script too. Parsing
-  continues after that word on the same line. ``endscript`` as the first word
+  letters, so ``endscript;`` and ``endscript}`` end the script too. The one
+  character after that word is skipped, whatever it is, and parsing continues on
+  the same line. ``endscript`` as the first word
   after the script keyword, on the same line, ends the script as well; logrotate
   then keeps the whole rest of the file as that script's text and still reads
   the following lines as directives, and both are listed.
 - One ``=`` directly after a flag such as ``compress`` is skipped and the rest
   of the line is parsed (``compress=include /path``).
-- ``#`` starts a comment only where a directive could start.
+- ``#`` starts a comment only where a directive could start, and on a whole
+  line between log patterns and the opening brace.
 
 It performs no I/O, runs nothing and never authorizes a response action.
 Fail-closed rules:
@@ -151,6 +153,38 @@ def split_patterns(text: str) -> list[str] | None:
         out.append(text[pos:end])
         pos = end
     return out
+
+
+def _pattern_span(text: str, pos: int) -> tuple[int, int, str]:
+    """Find the end of a section header starting at ``pos``.
+
+    Returns the index of the opening brace (or -1), of a closing brace before it
+    (or -1), and the header text with comment lines removed. Like logrotate
+    3.21.0's ``parseGlobString``, a later line whose first non-blank character is
+    ``#`` is a comment, and braces in it are ignored; ``#`` on the header's first
+    line is part of the patterns.
+    """
+    kept: list[str] = []
+    at = pos
+    first = True
+    while at < len(text):
+        end = text.find('\n', at)
+        end = len(text) if end < 0 else end + 1
+        line = text[at:end]
+        if not first and line.lstrip(' \t').startswith('#'):
+            at = end
+            continue
+        first = False
+        brace = line.find('{')
+        closing = line.find('}', 0, len(line) if brace < 0 else brace)
+        if closing >= 0:
+            return -1, at + closing, ''.join(kept)
+        if brace >= 0:
+            kept.append(line[:brace])
+            return at + brace, -1, ''.join(kept)
+        kept.append(line)
+        at = end
+    return -1, -1, ''.join(kept)
 
 
 def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
@@ -273,8 +307,7 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                     continue
                 # A rejected header is skipped as one line and the following lines are parsed as top-level
                 # lines instead of being taken as log patterns, so nothing logrotate still reads is hidden.
-                brace = text.find('{', pos)
-                closing = text.find('}', pos, len(text) if brace < 0 else brace)
+                brace, closing, header = _pattern_span(text, pos)
                 if closing >= 0:
                     rest_of_line()
                     problem('brace_in_patterns', 'A closing brace appears in log patterns before an opening '
@@ -284,7 +317,7 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                     rest_of_line()
                     problem('unterminated_section', 'Log patterns are not followed by an opening brace.', start)
                     continue
-                patterns = split_patterns(text[pos:brace])
+                patterns = split_patterns(header)
                 pos = brace + 1
                 if patterns is None:
                     patterns = []
@@ -318,9 +351,13 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                             'next lines as directives.',
                             start, kind=key)
                 if pos < len(text) and text[pos] not in _SPACE:
-                    # logrotate 3.21.0 still ends the script here; what follows on the line is parsed.
+                    # logrotate 3.21.0 still ends the script here, skips that one character whatever it is
+                    # ("endscript;postrotate" reads postrotate; "endscript}" does not close the section) and
+                    # parses the rest of the line.
                     problem('endscript_not_separated', 'endscript is followed by a character that is neither a '
-                            'blank nor a line end; logrotate ends the script there.', pos, kind=key)
+                            'blank nor a line end; logrotate ends the script there and skips that character.',
+                            pos, kind=key)
+                    pos += 1
                 item = {'kind': key, 'script': body[:MAX_SCRIPT_CHARS], 'truncated': len(body) > MAX_SCRIPT_CHARS,
                         'empty': not body.strip(_SPACE), 'scope': 'global' if section is None else 'section',
                         'patterns': None if section is None else section['patterns'],
@@ -367,7 +404,16 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                 rest_of_line()
                 problem('unknown_directive', 'logrotate ignores or rejects this line.', start)
                 continue
+            raw = pos
+            while raw < len(text) and text[raw] in ' \t':
+                raw += 1
+            su_equals = key == 'su' and raw < len(text) and text[raw] == '='
             value = value_of_line(start)
+            if key == 'su' and (su_equals or len(value.split()) > 2):
+                # logrotate 3.21.0 takes "=root" as the user name or rejects extra arguments, and skips the
+                # section. The value and the section's scripts are still listed as an upper bound.
+                problem('invalid_value', 'logrotate rejects this su value ("=" before it or more than a user '
+                        'and a group) and skips the section.', start, directive=key)
             if key in REPORTED_VALUE_KEYS:
                 record(directives, {'directive': key, 'value': value[:MAX_PATH],
                                     'scope': 'global' if section is None else 'section',

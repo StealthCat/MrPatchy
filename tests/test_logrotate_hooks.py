@@ -233,7 +233,7 @@ def test_hidden_names_are_never_taboo():
 def test_equals_separates_a_directive_from_its_value():
     includes = {'/etc/extra': {'type': 'file', 'content': '/x { postrotate\n echo x\n endscript\n}\n'}}
     text = ('include=/etc/extra\ncompresscmd=/bin/a\n'
-            '/a {\n rotate=1\n compresscmd = /bin/b\n uncompresscmd\t=/bin/c\n su=root adm\n}\n')
+            '/a {\n rotate=1\n compresscmd = /bin/b\n uncompresscmd\t=/bin/c\n su root adm\n}\n')
     result = lh.resolve(main(text), includes)
     assert result['logrotate_reading'] == 'determined'
     assert codes(result) == BASE_GAPS
@@ -345,3 +345,40 @@ def test_closing_brace_in_log_patterns_does_not_swallow_later_lines():
     assert (result['logrotate_reading'], 'brace_in_patterns' in codes(result)) == ('undetermined', True)
     assert [s['path'] for s in result['scripts']] == ['/etc/extra']
     assert [(d['directive'], d['value']) for d in result['directives']] == [('compresscmd', '/bin/evil')]
+
+
+def test_endscript_skips_the_next_character_whatever_it_is():
+    # logrotate 3.21.0 skips the one character after endscript, so "endscript;postrotate" starts a new
+    # script that it runs.
+    text = '/a {\n postrotate\n  echo one\n endscript;postrotate\n  /usr/bin/hidden\n endscript\n}\n'
+    result = lh.resolve(main(text))
+    assert result['logrotate_reading'] == 'undetermined'
+    assert 'endscript_not_separated' in codes(result)
+    assert [(s['kind'], s['script'], s['patterns']) for s in result['scripts']] == [
+        ('postrotate', '\n  echo one\n', ['/a']), ('postrotate', '\n  /usr/bin/hidden\n', ['/a'])]
+    # "endscript}" does not close the section: the next directive stays in it.
+    result = lh.resolve(main('/a {\n postrotate\n x\n endscript}\n compresscmd /bin/x\n}\n'))
+    assert [(d['directive'], d['scope']) for d in result['directives']] == [('compresscmd', 'section')]
+    assert 'unexpected_brace' not in codes(result)
+
+
+def test_comment_lines_between_log_patterns_and_the_brace_are_skipped():
+    # logrotate 3.21.0 skips whole "#" lines while reading log patterns, braces included.
+    text = '/var/log/a\n# hi }\n  # {\n{\n postrotate\n  echo a\n endscript\n}\n'
+    result = lh.resolve(main(text))
+    assert (result['logrotate_reading'], codes(result)) == ('determined', BASE_GAPS)
+    assert [(s['scope'], s['patterns']) for s in result['scripts']] == [('section', ['/var/log/a'])]
+    result = lh.resolve(main('/a.log\n# hi\n/b.log\n{ postrotate\n x\n endscript\n}\n'))
+    assert result['scripts'][0]['patterns'] == ['/a.log', '/b.log']
+
+
+def test_su_value_logrotate_rejects_is_a_gap():
+    # logrotate 3.21.0 reads "su=root root" as user "=root" and rejects "su = root root" as extra
+    # arguments; both skip the section. The script stays listed as an upper bound.
+    for line in ('su=root root', 'su = root root', 'su root root extra'):
+        result = lh.resolve(main('/a.log {\n ' + line + '\n postrotate\n x\n endscript\n}\n'))
+        assert result['logrotate_reading'] == 'undetermined', line
+        assert 'invalid_value' in codes(result), line
+        assert [s['kind'] for s in result['scripts']] == ['postrotate'], line
+    result = lh.resolve(main('/a.log {\n su root adm\n}\n'))
+    assert (result['logrotate_reading'], codes(result)) == ('determined', BASE_GAPS)
