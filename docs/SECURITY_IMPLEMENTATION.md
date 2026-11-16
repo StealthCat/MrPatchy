@@ -3900,19 +3900,40 @@ no I/O.
 - **Commands.** Each `install`/`remove` entry carries its module pattern, bounded
   command text, full-command SHA-256, source and processing order. `/bin/true`
   and `/bin/false` are labelled `disable`. Later entries for an already defined
-  pattern are marked shadowed, following libkmod's first-match rule.
+  pattern are marked shadowed. `commands_for()` returns both the first matching
+  entry and, when it differs, the first exact-name entry, because libkmod
+  chooses between them by where it found the module.
 - **Boot requests.** `modules-load.d` files and Debian's `/etc/modules`
   (including the `modules.conf` link to it) list one module per line. Extra
   tokens are reported and not interpreted.
-- **Boot-time command chains.** `boot_commands()` lists the `install` command
-  each boot-requested module would run. It follows configuration aliases and
+- **Boot-time command chains.** `boot_commands()` lists the `install` commands
+  each boot-requested module could run. It follows configuration aliases and
   `softdep` pre/post modules with depth, chain and step limits, records how each
-  command was reached and flags blacklisted modules without dropping them. A
-  module with a non-empty `softdep` does not run its own command, which is
-  listed as ignored. Only the first matching `softdep` entry is used, and an
-  alias target is not looked up as an alias again. A pattern containing a
-  backslash escape is a blocking gap. These rules were checked against
-  `modprobe -n -v` from kmod 31.
+  command was reached and flags blacklisted modules without dropping them. Only
+  the first matching `softdep` entry is used, and an alias target is not looked
+  up as an alias again. A pattern containing a backslash escape is a blocking
+  gap.
+- **Conditions instead of guesses.** The kernel's module tables are not
+  observed, so a command whose execution depends on them is listed and counted
+  with `conditions`, never dropped or reported as shadowed. An empty list means
+  the command runs whatever the tables hold.
+  - `module_in_kernel_tables`: a wildcard `install` entry, or anything reached
+    through a name the configuration does not define, runs only if that module
+    exists in the kernel tables.
+  - `module_not_in_kernel_tables`: an exact-name entry after an earlier
+    wildcard match runs only if the module is absent from the kernel tables.
+    Both entries are listed.
+  - `softdep_target_unresolved`: a module whose `softdep` names only modules
+    the configuration does not define runs its own command unless one of them
+    is in the kernel tables.
+  A module's own command is listed as ignored only when the configuration
+  itself defines one of its soft dependencies (an alias or an exact-name
+  `install`/`remove` entry). The result's `conditional` field counts the
+  chains that carry a condition.
+- **Checked against libkmod.** The resolver was compared with libkmod 31's
+  dry-run probe (what `modprobe -n -v` prints) on generated configurations,
+  with an empty module tree and with a populated `modules.dep.bin`. Blacklist
+  handling and backslash patterns were excluded from that comparison.
 - **Fail closed.** Unreadable files, unfollowed symlinks (other than `/dev/null`
   masks), invalid UTF-8, NUL bytes and over-limit input mark the result
   incomplete. An unreadable winning file still shadows lower-priority files.

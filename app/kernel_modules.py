@@ -16,15 +16,24 @@ and libkmod):
 - ``modprobe.d`` lines: ``#`` starts a comment only at the start of a line, a
   trailing backslash continues the line, and ``-`` equals ``_`` in module names.
 - ``install``/``remove`` commands are handed to a shell as root whenever the
-  module is requested. libkmod uses the first matching entry in processing
-  order, and the module name of an entry may be a shell wildcard.
+  module is requested, and the module name of an entry may be a shell wildcard.
+  Which entry libkmod uses depends on how it found the module. For a module in
+  the kernel's own tables, or one reached as an alias target, it uses the first
+  matching entry in processing order. For a name it knows only from this
+  configuration it uses the first entry with exactly that name and ignores
+  wildcard entries. The kernel tables are not observed, so when the two rules
+  pick different entries both are reported, each with its condition.
 - A configuration ``alias`` is consulted before the module name itself.
   ``softdep`` ``pre:`` modules are requested before, ``post:`` modules after.
 - Only the first matching ``softdep`` entry for a module is used, and an alias
   target is treated as a module name, not looked up as an alias again.
-- A module whose ``softdep`` is non-empty does not run its own ``install``
-  command; only its soft dependencies' commands run. (The alias, first-match
-  and softdep rules were checked against ``modprobe -n -v`` from kmod 31.)
+- A module does not run its own ``install`` command when at least one module
+  named by its ``softdep`` entry resolves; only the soft dependencies' commands
+  run. A soft dependency that this configuration defines (an alias or an
+  exact-name ``install``/``remove`` entry) always resolves. Any other name
+  resolves only through the unobserved kernel tables, so the module's own
+  command is then reported with the ``softdep_target_unresolved`` condition
+  and is never dropped. (These rules were checked against libkmod 31.)
 - ``modules-load.d`` and Debian's ``/etc/modules`` name one module per line;
   ``#`` and ``;`` start comment lines.
 
@@ -417,25 +426,50 @@ def _entries(result: Any, key: str) -> list[dict[str, Any]]:
 
 
 def commands_for(modprobe: Any, module: str, action: str = 'install') -> dict[str, Any]:
-    """Return the first matching ``install``/``remove`` entry for a module and the later matches it shadows."""
+    """Return the ``install``/``remove`` entries libkmod could use for a module.
+
+    ``selected`` is the first matching entry in processing order, which libkmod uses for a module in
+    the kernel tables or one reached as an alias target. ``exact`` is the first entry with exactly
+    this name when that is a different entry: libkmod uses it instead when the module is known only
+    from the configuration. ``shadowed`` lists the matching entries that neither rule can select.
+    """
     if action not in ('install', 'remove') or not isinstance(module, str):
-        return {'selected': None, 'shadowed': []}
+        return {'selected': None, 'exact': None, 'shadowed': []}
     name = normalize(module)
     matches = [e for e in _entries(modprobe, action)
                if isinstance(e.get('module'), str) and fnmatch.fnmatchcase(name, e['module'])]
-    return {'selected': matches[0] if matches else None, 'shadowed': matches[1:]}
+    selected = matches[0] if matches else None
+    exact = next((e for e in matches if e['module'] == name), None)
+    if exact is selected:
+        exact = None
+    return {'selected': selected, 'exact': exact,
+            'shadowed': [e for e in matches if e is not selected and e is not exact]}
 
 
 def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
-    """List the ``install`` commands that the boot-time module requests would run.
+    """List the ``install`` commands that the boot-time module requests could run.
 
     For each requested module the resolver applies configuration aliases first, then requests
     ``softdep`` ``pre:`` modules, the module itself and ``post:`` modules, to a bounded depth.
     Every step records how it was reached. Entries for blacklisted modules are kept and flagged,
-    because whether a blacklist applies depends on the requesting tool. A module with a non-empty
-    ``softdep`` does not run its own command; that command is listed under ``ignored`` instead.
-    A wildcard ``install`` pattern is matched against every requested name, although kmod applies
-    it only to modules that exist in the unobserved kernel tables, so the list errs toward more.
+    because whether a blacklist applies depends on the requesting tool.
+
+    The kernel's module tables are not observed, so a chain whose command depends on them carries
+    ``conditions`` and is still listed and counted; an empty list means the command runs whatever
+    the tables hold:
+
+    - ``module_in_kernel_tables``: runs only if ``module`` exists in the kernel tables. This marks
+      a wildcard ``install`` entry, or anything reached through a name the configuration does not
+      define. ``softdep`` and wildcard entries for such names are followed, so the list errs
+      toward more.
+    - ``module_not_in_kernel_tables``: an exact-name entry that follows an earlier wildcard match;
+      it runs only if ``module`` is absent from the kernel tables.
+    - ``softdep_target_unresolved``: the module has a ``softdep`` whose ``modules`` are not
+      defined by the configuration; its own command runs only if none of them is in the kernel
+      tables.
+
+    A module's own command is listed under ``ignored`` (``module_has_softdep``) only when the
+    configuration itself defines one of its soft dependencies, so the command cannot run.
     """
     gaps: list[dict[str, Any]] = []
     for name, result in (('modprobe', modprobe), ('modules_load', modules_load)):
@@ -447,13 +481,19 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
                if isinstance(a.get('alias'), str) and isinstance(a.get('module'), str)]
     softdeps = [s for s in _entries(modprobe, 'softdeps') if isinstance(s.get('module'), str)]
     blacklisted = {b['module'] for b in _entries(modprobe, 'blacklist') if isinstance(b.get('module'), str)}
+    # Names libkmod can turn into a module from the configuration alone.
+    defined = {e['module'] for action in ('install', 'remove') for e in _entries(modprobe, action)
+               if isinstance(e.get('module'), str)}
     chains: list[dict[str, Any]] = []
     ignored: list[dict[str, Any]] = []
-    listed: set[tuple[int, str]] = set()
+    listed: set[tuple[Any, ...]] = set()
     visits = 0
 
+    def resolves(name: str) -> bool:
+        return name in defined or any(fnmatch.fnmatchcase(name, a['alias']) for a in aliases)
+
     def visit(name: str, via: list[dict[str, str]], active: frozenset[str], request: dict[str, Any],
-              lookup_alias: bool = True) -> None:
+              inherited: tuple[dict[str, Any], ...] = (), lookup_alias: bool = True) -> None:
         nonlocal visits
         visits += 1
         if visits > MAX_VISITS:
@@ -465,45 +505,76 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
             if not any(g['code'] == 'too_many_chains' for g in gaps):
                 _gap(gaps, 'too_many_chains', detail=f'Only the first {MAX_CHAINS} chains are listed.')
             return
-        if name in active:
-            return  # a dependency loop adds no new command
         if len(via) > MAX_DEPTH:
             if not any(g['code'] == 'chain_depth_exceeded' for g in gaps):  # first occurrence only
                 _gap(gaps, 'chain_depth_exceeded', request['path'], request.get('line'),
                      f'Resolution stopped {MAX_DEPTH} steps after "{request["module"]}".')
             return
-        active = active | {name}
         targets = [a['module'] for a in aliases if fnmatch.fnmatchcase(name, a['alias'])] if lookup_alias else []
         if targets:
             for target in dict.fromkeys(targets):
                 # kmod treats an alias target as a module name; it is not looked up as an alias again.
-                visit(target, via + [{'relation': 'alias', 'module': target}], active - {target}, request,
-                      lookup_alias=False)
+                # A requested name that is an alias is not the module of that name, so the loop
+                # check below applies to the target, not to the name that was looked up.
+                visit(target, via + [{'relation': 'alias', 'module': target}], active, request,
+                      inherited, lookup_alias=False)
             return
+        if name in active:
+            return  # a dependency loop adds no new command
+        active = active | {name}
+        in_tables = {'code': 'module_in_kernel_tables', 'module': name}
+        # An alias target is always a module to kmod. Any other name the configuration does not
+        # define exists only if the kernel tables hold it, and so does everything reached through it.
+        from_config = not lookup_alias or name in defined
+        below = inherited if from_config else inherited + (in_tables,)
         # kmod uses only the first matching softdep entry.
         deps = [s for s in softdeps if fnmatch.fnmatchcase(name, s['module'])][:1]
         for dep in deps:
             for pre in dep.get('pre') or []:
                 if isinstance(pre, str):
-                    visit(pre, via + [{'relation': 'softdep_pre', 'module': pre}], active, request)
+                    visit(pre, via + [{'relation': 'softdep_pre', 'module': pre}], active, request, below)
         found = commands_for(modprobe, name)
-        has_softdeps = any(dep.get('pre') or dep.get('post') for dep in deps)
-        if found['selected'] is not None and (id(request), name) not in listed:
-            listed.add((id(request), name))  # one probe requests each module once
-            command = found['selected']
-            (ignored if has_softdeps else chains).append({'boot_module': request['module'],
-                           'requested_by': {'path': request['path'], 'line': request.get('line')},
-                           'via': via, 'module': name, 'blacklisted': name in blacklisted,
-                           'kind': command.get('kind'), 'command': command.get('command'),
-                           'command_truncated': command.get('command_truncated'),
-                           'command_sha256': command.get('command_sha256'),
-                           'source': {'path': command.get('path'), 'line': command.get('line')},
-                           'shadowed_definitions': len(found['shadowed']),
-                           **({'reason': 'module_has_softdep'} if has_softdeps else {})})
+        dep_names = list(dict.fromkeys(n for dep in deps for key in ('pre', 'post')
+                                       for n in dep.get(key) or [] if isinstance(n, str)))
+        # kmod skips the module's own command only when a soft dependency resolves to a module.
+        suppressed = any(resolves(n) for n in dep_names)
+        if found['selected'] is not None:
+            first, exact = found['selected'], found['exact']
+            if not lookup_alias or first['module'] == name or (exact is None and name in defined):
+                # The same entry whether or not the kernel knows the module. A name defined only by a
+                # ``remove`` entry is a module to kmod, which then applies the first matching entry.
+                candidates = [(first, below)]
+            else:
+                # A wildcard entry applies only to a module in the kernel tables; a later exact-name
+                # entry applies only to one that is not. The tables are not observed.
+                candidates = [(first, inherited + (in_tables,))]
+                if exact is not None:
+                    candidates.append((exact, inherited + ({'code': 'module_not_in_kernel_tables', 'module': name},)))
+            for command, conditions in candidates:
+                if dep_names and not suppressed:
+                    conditions += ({'code': 'softdep_target_unresolved', 'modules': dep_names},)
+                # One probe requests each module once. The same command is listed again only when
+                # it is reached under different conditions, so a conditional route never hides a
+                # definite one.
+                key = (id(request), name, command.get('order'), suppressed, repr(conditions))
+                if key in listed:
+                    continue
+                listed.add(key)
+                (ignored if suppressed else chains).append({
+                    'boot_module': request['module'],
+                    'requested_by': {'path': request['path'], 'line': request.get('line')},
+                    'via': via, 'module': name, 'blacklisted': name in blacklisted,
+                    'kind': command.get('kind'), 'command': command.get('command'),
+                    'command_truncated': command.get('command_truncated'),
+                    'command_sha256': command.get('command_sha256'),
+                    'source': {'path': command.get('path'), 'line': command.get('line')},
+                    'shadowed_definitions': len(found['shadowed']),
+                    'conditions': [dict(c) for c in conditions],
+                    **({'reason': 'module_has_softdep'} if suppressed else {})})
         for dep in deps:
             for post in dep.get('post') or []:
                 if isinstance(post, str):
-                    visit(post, via + [{'relation': 'softdep_post', 'module': post}], active, request)
+                    visit(post, via + [{'relation': 'softdep_post', 'module': post}], active, request, below)
 
     for request in _entries(modules_load, 'modules'):
         if isinstance(request.get('module'), str) and isinstance(request.get('path'), str):
@@ -511,6 +582,7 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
     return {'contract_version': CONTRACT_VERSION, 'complete': _complete(gaps), 'chains': chains,
             'ignored': ignored[:MAX_CHAINS],
             'commands': sum(1 for c in chains if c['kind'] == 'command'),
-            'disabled': sum(1 for c in chains if c['kind'] == 'disable'), 'gaps': gaps,
+            'disabled': sum(1 for c in chains if c['kind'] == 'disable'),
+            'conditional': sum(1 for c in chains if c['conditions']), 'gaps': gaps,
             'unobserved': [dict(u) for u in UNOBSERVED_MODPROBE + UNOBSERVED_MODULES_LOAD],
             'origin': 'not_assessed', 'note': NOT_A_VERDICT}

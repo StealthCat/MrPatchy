@@ -98,9 +98,9 @@ def test_disable_idiom_shadowing_and_first_match_selection():
     assert found['selected']['command'] == '/bin/true'
     assert [e['command'] for e in found['shadowed']] == ['/opt/wild.sh']
     assert km.commands_for(result, 'usb_hid')['selected']['command'] == '/opt/wild.sh'
-    assert km.commands_for(result, 'ext4') == {'selected': None, 'shadowed': []}
+    assert km.commands_for(result, 'ext4') == {'selected': None, 'exact': None, 'shadowed': []}
     assert km.commands_for(result, 'cramfs', 'remove')['selected'] is None
-    assert km.commands_for(result, 'cramfs', 'other') == {'selected': None, 'shadowed': []}
+    assert km.commands_for(result, 'cramfs', 'other') == {'selected': None, 'exact': None, 'shadowed': []}
 
 
 def test_unreadable_winner_shadows_lower_file_and_marks_incomplete():
@@ -280,3 +280,52 @@ def test_backslash_pattern_is_a_blocking_gap():
     modprobe, result = _boot('install b\\* /bin/echo esc\nblacklist c\\d\n', 'b*')
     assert codes(modprobe) == ['pattern_escape_not_interpreted'] and modprobe['complete'] is False
     assert codes(result) == ['dependency_incomplete'] and result['complete'] is False
+
+
+def _listed(result):
+    return [(c['command'], [x['code'] for x in c['conditions']]) for c in result['chains']]
+
+
+def test_unresolved_softdep_keeps_the_modules_own_command():
+    # libkmod 31 runs /bin/payload unless `missing` exists in the kernel tables; review of #954.
+    result = _boot('softdep evil pre: missing\ninstall evil /bin/payload\n', 'evil')[1]
+    assert _listed(result) == [('/bin/payload', ['softdep_target_unresolved'])]
+    assert result['chains'][0]['conditions'] == [{'code': 'softdep_target_unresolved', 'modules': ['missing']}]
+    assert result['ignored'] == [] and result['commands'] == 1 and result['conditional'] == 1
+    assert result['complete'] is True
+    # A soft dependency the configuration defines always resolves, so the own command cannot run.
+    for line in ('install missing /bin/dep', 'remove missing /bin/dep', 'alias missing other'):
+        result = _boot(f'softdep evil pre: missing\ninstall evil /bin/payload\n{line}\n', 'evil')[1]
+        assert '/bin/payload' not in [c['command'] for c in result['chains']]
+        assert [(c['command'], c['reason']) for c in result['ignored']] == [('/bin/payload', 'module_has_softdep')]
+
+
+def test_wildcard_before_exact_install_reports_both_possible_commands():
+    # libkmod 31 runs /bin/exact when a_b is absent from the kernel tables and /bin/wild when it is present.
+    modprobe, result = _boot('install a* /bin/wild\ninstall a_b /bin/exact\n', 'a_b')
+    assert _listed(result) == [('/bin/wild', ['module_in_kernel_tables']),
+                               ('/bin/exact', ['module_not_in_kernel_tables'])]
+    assert all(c['conditions'][0]['module'] == 'a_b' and c['shadowed_definitions'] == 0 for c in result['chains'])
+    assert result['commands'] == 2 and result['conditional'] == 2 and result['complete'] is True
+    found = km.commands_for(modprobe, 'a-b')
+    assert (found['selected']['command'], found['exact']['command'], found['shadowed']) == (
+        '/bin/wild', '/bin/exact', [])
+    # Exact entry first: the same command either way.
+    assert _listed(_boot('install a_b /bin/exact\ninstall a* /bin/wild\n', 'a_b')[1]) == [('/bin/exact', [])]
+    # A wildcard alone applies only to a module the kernel tables hold.
+    assert _listed(_boot('install a* /bin/wild\n', 'a_b')[1]) == [('/bin/wild', ['module_in_kernel_tables'])]
+    # An alias target, or a name with only a `remove` entry, is a module to kmod: first match, no condition.
+    assert _listed(_boot('alias x a_b\ninstall a* /bin/wild\ninstall a_b /bin/exact\n', 'x')[1]) == [
+        ('/bin/wild', [])]
+    assert _listed(_boot('remove a_b /bin/r\ninstall a* /bin/wild\n', 'a_b')[1]) == [('/bin/wild', [])]
+
+
+def test_alias_names_do_not_trip_the_loop_check_and_conditional_routes_do_not_hide_definite_ones():
+    # Both found by comparing with libkmod 31. `bb` the alias is not `bb` the module: kmod runs /bin/c3.
+    text = 'alias * bb\nsoftdep bb pre: a-b c post: bb c\nalias [ab]b c\ninstall c /bin/c3\n'
+    assert _listed(_boot(text, 'a-b')[1]) == [('/bin/c3', [])]
+    # `b` is first reached through the undefined name `a`, then directly: kmod runs /bin/c1.
+    text = ('install a-b /bin/c0\ninstall b /bin/c1\nsoftdep a* pre: a a-b post: b a_b\n')
+    result = _boot(text, 'a-b')[1]
+    assert ('/bin/c1', []) in _listed(result)
+    assert [c['command'] for c in result['ignored']] == ['/bin/c0']
