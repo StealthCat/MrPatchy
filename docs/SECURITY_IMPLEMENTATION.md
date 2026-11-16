@@ -2436,6 +2436,18 @@ Re-triage controls work on the filtered rows. There is no schema, admission,
 spend, pause or authorization change, and filtering makes no provider call.
 Fleet-wide selection across pages remains open.
 
+Worker checkpoint #958 gives that filter its own address:
+`#investigations/cached` on the fleet page and
+`#servers/<id>/investigations/cached` on one server's tab. The address decides
+the filter, so a bookmark, a shared link, a reload and Back/Forward all
+reproduce it, and the bare Investigations address always shows every
+investigation. This replaces the in-memory choice described above: leaving and
+returning to the bare address no longer restores the filter. Changing the
+filter returns to page 1 and keeps keyboard focus on the control. The link back
+from an assessment page returns to the filtered list when the visitor came from
+it. This is frontend-only, with no API, schema, admission, spend, pause,
+approval, role or authorization change. The page offset still has no address.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
@@ -3605,6 +3617,37 @@ provider call or response authorization was added or changed.
 
 Remaining for requirement E: per-server and group overrides, plus every item
 listed under #682 apart from this fleet-level storage and UI.
+
+### Per-server restrict-only malware response overrides — worker checkpoint #940
+
+Status: **bounded backend and UI slice; requirement E remains planned/incomplete.**
+An administrator can store one override per server in the `Setting` row
+`malware-response-server:<host_id>`. Nothing evaluates it at runtime.
+- **Restrict-only:** an override has a `mode_cap` (`inherit`, `monitor_only`
+  or `disabled`) and extra path/hash exclusions. The effective policy is the
+  fleet policy with its mode lowered to the cap and both sets of exclusions
+  combined. Action scopes, the unknown-malware opt-in and thresholds always
+  come from the fleet policy, so an override never adds authority.
+- **Fail closed:** a stored override that no longer validates resolves to
+  `disabled` for that server. Combined exclusions over the contract limit
+  resolve to the disabled default with a reported reason.
+- **API:** admin-only `GET/PUT /api/hosts/{id}/malware-response`. It returns the
+  override, revision, fleet policy and effective policy. A save is a
+  compare-and-set under the existing `malware-response-policy` lock and writes
+  one audit entry naming the cap change and exclusion counts, never the paths
+  or hashes. An unknown server returns 404.
+- **UI:** administrators see an "Automatic malware response for this server"
+  panel on the server's Security tab. It shows the fleet mode, the effective
+  mode and exclusion counts, offers only the restricting caps, explains invalid
+  stored state and keeps entries in the form after a refused or stale save.
+  `tests/ui_server_malware_override.cjs` covers save, refusal, stale saves,
+  escaping, load failure and 320/768/1440 px widths.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization was added, and `enforce` stays unavailable.
+
+Remaining: group overrides,
+fleet-level visibility of overridden servers, and every runtime item under
+#682.
 
 ## Planned: comprehensive startup and scheduled-task awareness
 
@@ -8813,6 +8856,26 @@ threshold. Without this, the first tick after a controller or coordinator outage
 would run before the asynchronous polls refresh `last_seen` and would flag every
 server. An already-active event stays active across a leader change, without a
 new revision, until telemetry resumes.
+
+### Configurable telemetry-loss threshold — worker checkpoint #948
+
+Closes the open item from checkpoint #765: the in-app `telemetry-lost` notice no longer has a fixed 15-minute threshold.
+
+- **Setting:** Settings → Patch policy adds **Telemetry-loss notice after · minutes**, with whole minutes from 5 to 1440 and a default of 15.
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `telemetry_lost_minutes`. Out-of-range or non-integer values return 422, and older clients that omit the field keep the stored value.
+  - A change appends `telemetry-loss notification threshold changed from A to B minutes` to the existing admin-only settings audit row.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 15 (`operations.telemetry_lost_minutes`).
+  - The value lives in the existing `config` setting, so there is no schema change. The legacy `PUT /api/settings` neither sets nor resets it.
+- **Producer:** `operations.collect_alerts` uses the configured threshold for both the silence check and the coordinator-observation guard. A new leader therefore waits a full configured threshold before publishing.
+  - The fixed reason text names the configured minutes. At 15 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of still-qualifying active events once.
+  - Raising the threshold above a server's current silence resolves its active notice through the existing operational resolution path. The notice reopens if the silence later exceeds the new threshold.
+- **Unchanged:** the 120-second `stale` SMTP/webhook alert, the outbox, roles, CSRF, the admin-only audience and response authorization. The notice remains attention-only.
+- **Validation:**
+  - `tests/test_telemetry_lost_threshold.py`: 7 tests, all failing on main `0842ba4` and passing after. They cover the default text, invalid stored values, a shorter threshold, resolution after a raise and reopening, the observation guard, API validation and omission, and audit.
+  - The existing telemetry-loss tests in `tests/test_operational_notifications.py` pass unchanged.
+  - `tests/ui_settings_telemetry.cjs` fails on main and passes after. It covers the settings-finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** deployment-type endpoint-agent readiness and alerting (#737) remain open.
 
 ### Agent event-spool attention notifications — worker checkpoint #108
 
