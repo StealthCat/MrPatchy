@@ -4067,13 +4067,18 @@ each service, the ordered modules it loads, with:
   yields nothing. libpam reads `other` for every service, so a blocking gap
   in `other` is a gap for every service.
 - **Executed commands.** A `pam_exec.so` entry reports its options, its `type=`
-  filter, `seteuid`, `expose_authtok` and the command argv. Modules named by
+  filter, `seteuid`, `expose_authtok` and the command argv. The command is
+  reported as applicable only when every `type=` option matches the entry's
+  type, as `pam_exec` requires. Modules named by
   absolute path are flagged. Values are bounded and carry a SHA-256 of the full
   text.
 
 The contract fails closed. Each of these is a blocking gap for every service
 that reaches it, never a shorter stack: an include target that was not
-captured, an include loop, nesting past libpam's limit, an unfinished
+captured, an include loop, a relative include name containing `/`
+(`include_relative_path`; libpam loads it, the contract does not resolve it),
+`substack` nesting past libpam's 16 levels, an include chain longer than the
+contract's own 32-file bound, an unfinished
 continuation, a line near libpam's 1024-byte buffer, a control character
 (including a carriage return), an unreadable file, invalid UTF-8 and over-limit
 input. An unreadable file still shadows a lower-priority file of the same name.
@@ -4083,7 +4088,12 @@ The rules were read from Linux-PAM 1.4.0 and 1.5.3 (`pam_handlers.c`,
 versions report the blocking `version_unverified` gap; 1.7.0 rewrote the line
 reader and was not compared.
 
-**Not covered:** comparison with a compiled libpam, `/etc/pam.conf`, validation
+Stack resolution for the `debian` family was compared by peer workers with
+compiled Ubuntu `libpam0g 1.5.3-5ubuntu5.7` on generated trees; the method,
+counts and limits are recorded in PR #968. The `upstream` family, Linux-PAM
+1.4.x and a vendor directory were not compared with a compiled library.
+
+**Not covered:** `/etc/pam.conf`, validation
 of bracketed control values, module binaries and the programs they run,
 collection from servers, catalog wiring, persistence, UI, provenance and AI
 classification. No schema, API, UI or authorization change, and nothing is

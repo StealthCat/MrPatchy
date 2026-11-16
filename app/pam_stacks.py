@@ -31,18 +31,21 @@ compiler annotations), Debian's ``031_pam_include`` patch for 1.5.3 and
   too). Debian's ``@include <name>`` takes the place of the type and keeps
   every type the current file was read for. A name starting with ``/`` is used
   as a path. libpam also accepts a relative name containing ``/``; the
-  contract reports it as a missing target.
+  contract does not resolve it and reports ``include_relative_path``.
 - Types for which the service file yields no entry use the ``other`` service.
   A ``substack`` line counts as an entry of its type even when the file it
   names yields nothing. libpam reads ``other`` for every service.
 - ``pam_exec.so`` reads options until the first argument that starts with
   ``/`` or is not an option; the rest is the command, run as root unless
-  ``seteuid`` changes the effective user.
+  ``seteuid`` changes the effective user. It returns at the first ``type=``
+  that differs from the PAM call it serves, so every ``type=`` must match.
 
 Fail-closed rules:
 
-- An include target that was not captured, an include loop, nesting deeper
-  than libpam allows, a continued line that never ends, a line near libpam's
+- An include target that was not captured, an include loop, a relative
+  include name containing ``/``, ``substack`` nesting past libpam's 16 levels,
+  an include chain longer than this contract's own 32-file bound (libpam has
+  no limit for ``include`` and ``@include``), a continued line that never ends, a line near libpam's
   1024-byte buffer and control characters (including a carriage return) are
   blocking gaps for every service that reaches them. A blocking gap in
   ``other`` is a gap for every service. The contract never
@@ -342,7 +345,8 @@ class _Resolver:
                     continue
                 target = self.include_target(name)
                 if target is None:
-                    _gap(gaps, 'include_target_missing', path, number)
+                    relative = '/' in name and not name.startswith('/')
+                    _gap(gaps, 'include_relative_path' if relative else 'include_target_missing', path, number)
                 elif deeper >= MAX_SUBSTACK or len(chain) >= MAX_INCLUDE_DEPTH:
                     _gap(gaps, 'include_too_deep', path, number)
                 elif target == path or any(step['target'] == target for step in chain):

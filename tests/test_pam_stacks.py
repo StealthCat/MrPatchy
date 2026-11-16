@@ -136,7 +136,7 @@ def test_a_relative_include_is_looked_up_like_a_service_in_both_families():
     both = run(files + [f('vendor-auth', 'auth required pam_deny.so\n')])
     assert modules(both, 'sshd') == ['pam_deny.so'] * 3
     slash = run([f('sshd', 'auth include ../pam.d/vendor-auth\n'), files[1]])
-    assert codes(service(slash, 'sshd')) == ['include_target_missing']
+    assert codes(service(slash, 'sshd')) == ['include_relative_path'] and not service(slash, 'sshd')['complete']
 
 
 def test_absolute_include_and_missing_targets():
@@ -145,7 +145,7 @@ def test_absolute_include_and_missing_targets():
     result = run(files)
     item = service(result, 'a')
     assert modules(result, 'a') == ['/opt/lib/pam_x.so'] and item['absolute_modules'] == 1
-    assert codes(item) == ['include_target_missing', 'include_name_missing', 'include_target_missing']
+    assert codes(item) == ['include_relative_path', 'include_name_missing', 'include_target_missing']
     assert [gap['line'] for gap in item['gaps']] == [2, 3, 4]
     assert [s['service'] for s in result['services']] == ['a']
 
