@@ -1119,12 +1119,41 @@ def cron_command(text):
 CRON_DISCLOSED_ENVIRONMENT = ('SHELL','PATH')
 
 
+_CRON_SPACE = ' \t\n\v\f\r'
+
+
 def cron_assignment(text):
-    """Return (name, value) for a crontab NAME=value line. Like cron's load_env, surrounding
-    blanks are trimmed and one pair of matching single or double quotes is removed."""
-    name,value=text.split('=',1);name=name.rstrip(' \t');value=value.strip(' \t')
-    if len(value)>=2 and value[0]==value[-1] and value[0] in '"\'':value=value[1:-1]
-    return name,value
+    """Return (name, value) when cron's load_env would take the line as NAME=value, else None.
+    This follows load_env's state machine: the name and the value may each be wrapped in one
+    pair of single or double quotes, C isspace blanks may surround the equals sign, and an
+    unquoted value loses its trailing blanks. A line load_env refuses (an unclosed quote,
+    text after a closing quote) is not an assignment; cron then reads it as a job entry.
+    NAME= with nothing after it is kept as an empty value, as cronie does; Debian cron
+    refuses that line and with it the whole file."""
+    fields=([],[]);state=0;quote='';index=0  # 0 NAMEI 1 NAME 2 EQ1 3 EQ2 4 VALUEI 5 VALUE 6 FINI 7 ERROR
+    while state<7 and index<len(text):
+        char=text[index]
+        if state in (0,4):
+            if char in '"\'':
+                quote=char;index+=1
+                if index>=len(text):return None
+                char=text[index]
+            state+=1
+        if state in (1,5):
+            if quote and char==quote:state+=1;index+=1
+            elif quote and state==1 and char=='=':state=7
+            elif not quote and state==1 and char in _CRON_SPACE:state+=1;index+=1
+            elif not quote and state==1 and char=='=':state+=1
+            else:fields[state==5].append(char);index+=1
+        elif state==2:
+            if char=='=':state+=1;quote=''
+            elif char not in _CRON_SPACE:state=7
+            index+=1
+        elif char in _CRON_SPACE:index+=1
+        else:state+=1
+    if state not in (3,6) and not (state==5 and not quote):return None
+    name,value=''.join(fields[0]),''.join(fields[1])
+    return name,(value if quote else value.rstrip(_CRON_SPACE))
 
 
 def cron_environment_value(value):
@@ -1146,9 +1175,10 @@ def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
         text=line.rstrip('\r').strip(' \t')
         if not text or text.startswith('#'):continue
         if '\x00' in text:result['unparsed']+=1;continue
-        if re.match(r'[A-Za-z_][A-Za-z0-9_]*[ \t]*=',text):
-            result['environment']+=1;name,value=cron_assignment(text)
-            if name in CRON_DISCLOSED_ENVIRONMENT:assigned[name]=value
+        assignment=cron_assignment(text)
+        if assignment:
+            result['environment']+=1
+            if assignment[0] in CRON_DISCLOSED_ENVIRONMENT:assigned[assignment[0]]=assignment[1]
             continue
         special=re.split(r'[ \t]+',text,maxsplit=1)[0]
         count=(1 if special.startswith('@') else 5)+(1 if form=='system' else 0)

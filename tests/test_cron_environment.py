@@ -21,6 +21,27 @@ def test_quotes_blanks_and_empty_values_follow_cron():
     assert result[1]['path']==''
 
 
+@pytest.mark.parametrize('line,shell,path',[
+    (b'"PATH"=/tmp/evil',None,'/tmp/evil'),
+    (b"'PATH'=/tmp/evil",None,'/tmp/evil'),
+    (b'"PATH" = "/tmp/evil"',None,'/tmp/evil'),
+    (b'"SHELL"=/bin/bash','/bin/bash',None),
+    (b'PATH\x0c=/tmp/evil',None,'/tmp/evil'),
+    (b'1X=/x\nPATH=/tmp/evil',None,'/tmp/evil'),
+])
+def test_quoted_names_and_isspace_blanks_are_assignments_like_cron(line,shell,path):
+    # Debian cron 3.0pl1 and cronie 1.7.1 both run the job with these values.
+    result=agent.parse_cron(line+b'\n* * * * * /bin/x\n','user','alice')
+    assert [(j['shell'],j['path']) for j in result['jobs']]==[(shell,path)] and result['unparsed']==0
+
+
+@pytest.mark.parametrize('line',[b'PATH="/tmp/evil',b'PATH="/tmp/evil"x',b'PATH="/tmp/evil\'',b'\x0bPATH=/tmp/evil',b'"PA=TH"=/x'])
+def test_lines_cron_refuses_as_assignments_set_nothing(line):
+    # cronie logs "bad minute" and runs the job with its default PATH; Debian cron drops the file.
+    result=agent.parse_cron(line+b'\n* * * * * /bin/x\n','user','alice')
+    assert result['environment']==0 and result['unparsed']==1 and result['jobs'][0]['path'] is None
+
+
 def test_other_assignments_are_counted_but_never_disclosed():
     result=agent.parse_cron(b'MAILTO=ops@example.invalid\nAPI_TOKEN=hunter2\nHOME=/srv/secret-home\n* * * * * root /bin/a\n','system')
     text=json.dumps(result)
