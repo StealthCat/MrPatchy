@@ -2436,6 +2436,18 @@ Re-triage controls work on the filtered rows. There is no schema, admission,
 spend, pause or authorization change, and filtering makes no provider call.
 Fleet-wide selection across pages remains open.
 
+Worker checkpoint #958 gives that filter its own address:
+`#investigations/cached` on the fleet page and
+`#servers/<id>/investigations/cached` on one server's tab. The address decides
+the filter, so a bookmark, a shared link, a reload and Back/Forward all
+reproduce it, and the bare Investigations address always shows every
+investigation. This replaces the in-memory choice described above: leaving and
+returning to the bare address no longer restores the filter. Changing the
+filter returns to page 1 and keeps keyboard focus on the control. The link back
+from an assessment page returns to the filtered list when the visitor came from
+it. This is frontend-only, with no API, schema, admission, spend, pause,
+approval, role or authorization change. The page offset still has no address.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
@@ -2450,22 +2462,6 @@ existing Assessment history pages. A page costs one projected assessment query,
 plus one bounded read for administrator source links. Lookup, publication,
 revocation, approval, budget, pause, role, response and schema are unchanged.
 Matched production acceptance remains open.
-
-### Retry blocked process investigations — worker checkpoint #934
-
-Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
-
-- **Change:** the admin-only, CSRF-protected `POST /api/investigations/blocked/retry` re-queues the rows the notification counts: unapproved `pending`/`error` behaviors on active, unpaused servers whose retry state is blocked under the current configuration signature.
-  - Each row gets single-item retry semantics: the retry state is cleared, `attempted=0`, the verdict becomes `pending`, and the analysis records that an administrator requested the retry.
-  - It runs under the existing `ai-triage` lock (non-blocking, 409 when busy) and ordered per-host `queue` activity locks. Rows are re-read and re-checked against the predicate after the locks are taken.
-  - Each request handles at most 200 rows. The response reports the rows retried and those still blocked.
-  - A non-empty retry writes one audit row. AI disabled, or nothing eligible, retries nothing and writes no audit row.
-- **Excluded:** rows with a live claim or an active provider Retry-After are left blocked, as single retry refuses them. So are paused, disabled or deleted servers, approved rows, and rows already eligible because the configuration changed.
-- **UI:** for administrators, fleet Investigations shows **Retry blocked investigations** under the queue notice only when `/api/investigation-status` reports an integer `blocked > 0`. It names the count, says no provider request is sent now, and refreshes the view after it runs. Operators and viewers never see it.
-- **No bypass:** the action sends no provider request. AI enablement, pause, lifecycle, data sharing and shared rate/daily-cap admission and reservations still apply when the scheduler runs each item. A repeat failure blocks again and resurfaces the notification.
-- **Unchanged:** schema, admission, reservations, roles of existing routes, response authorization and SMTP/webhook alerts.
-- **Validation:** `tests/test_triage_blocked_retry.py` (11 of 14 fail on main `68887ce`; all pass after) covers scope, exclusions, batching, lock refusal, roles, audit and notification resolve/resurface. `tests/ui_retry_blocked_investigations.cjs` fails on main and passes after. It covers visibility, the action, a partial batch, malformed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
-- **Remaining:** per-server Investigations tabs do not offer the action, because the status count is fleet-wide. Blocked advisory-plan work is still not covered.
 
 ### Throttling, daily cap and unthrottled operation
 
@@ -3594,6 +3590,37 @@ provider call or response authorization was added or changed.
 Remaining for requirement E: per-server and group overrides, plus every item
 listed under #682 apart from this fleet-level storage and UI.
 
+### Per-server restrict-only malware response overrides — worker checkpoint #940
+
+Status: **bounded backend and UI slice; requirement E remains planned/incomplete.**
+An administrator can store one override per server in the `Setting` row
+`malware-response-server:<host_id>`. Nothing evaluates it at runtime.
+- **Restrict-only:** an override has a `mode_cap` (`inherit`, `monitor_only`
+  or `disabled`) and extra path/hash exclusions. The effective policy is the
+  fleet policy with its mode lowered to the cap and both sets of exclusions
+  combined. Action scopes, the unknown-malware opt-in and thresholds always
+  come from the fleet policy, so an override never adds authority.
+- **Fail closed:** a stored override that no longer validates resolves to
+  `disabled` for that server. Combined exclusions over the contract limit
+  resolve to the disabled default with a reported reason.
+- **API:** admin-only `GET/PUT /api/hosts/{id}/malware-response`. It returns the
+  override, revision, fleet policy and effective policy. A save is a
+  compare-and-set under the existing `malware-response-policy` lock and writes
+  one audit entry naming the cap change and exclusion counts, never the paths
+  or hashes. An unknown server returns 404.
+- **UI:** administrators see an "Automatic malware response for this server"
+  panel on the server's Security tab. It shows the fleet mode, the effective
+  mode and exclusion counts, offers only the restricting caps, explains invalid
+  stored state and keeps entries in the form after a refused or stale save.
+  `tests/ui_server_malware_override.cjs` covers save, refusal, stale saves,
+  escaping, load failure and 320/768/1440 px widths.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization was added, and `enforce` stays unavailable.
+
+Remaining: group overrides,
+fleet-level visibility of overridden servers, and every runtime item under
+#682.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse
@@ -3776,44 +3803,6 @@ environment. It can carry `config_home`, `data_home` and `cache_home`, plus
 - **Still open:** manager-environment collection, lingering/runtime state,
   account enumeration, collection wiring, UI and AI classification.
 
-### Effective APT configuration hooks — worker checkpoint #950
-
-Contract-only; roadmap F remains incomplete. `app/apt_hooks.py` resolves the
-effective command-executing APT options from captured `/etc/apt/apt.conf.d`
-entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
-
-- **Files:** APT `Dir::Etc::Parts` rules decide which files are read: hidden and
-  non-regular entries are skipped; a name needs no extension or `.conf` and only
-  `[A-Za-z0-9_.:-]`; default `Dir::Ignore-Files-Silently` patterns are silent.
-  Files are read in byte order and `apt.conf` last. Ignored files are listed.
-- **Syntax:** `//`, `/* */` and `#` comments, scalar and unquoted values, nested
-  blocks, list items, `#clear` and `#include`; keys are case-insensitive. Later
-  scalars and tagged children override; untagged items append.
-  Inside a block a bare word is an untagged item (`{ /tmp/x; }`), as in apt
-  2.8.3. `#clear`/`#include` inside a block or with more than one argument are
-  syntax errors, and `#clear A::;` clears nothing. A same-line `/* */` comment
-  joins the text around it (`ev/*x*/il` is `evil`), as in apt 2.8.3.
-  Only space, tab, CR and LF separate words; a no-break space or other Unicode
-  space is part of a word. `#clear` empties an option in place, so a tag set
-  again keeps its position. `#x-apt-configure-index` is not a comment.
-- **Reported options:** `command` (Update/DPkg Invoke lists and
-  `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
-  (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
-  `path_override` (`DPkg::Path`) and `dpkg_options`, each with source file and
-  line. `Binary::<program>::` copies carry that scope. A scalar on a hook list
-  node is reported inert because APT never runs it.
-- **Fail closed:** syntax errors (including a quoted value left open at the end
-  of a line, a quoted string touching other text and `*/` directly followed by
-  `/`, a NUL, vertical tab or form feed, and `#x-apt-configure-index` with an
-  argument, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
-  overrides (setting or clearing `RootDir`, `Dir`, `Dir::Etc`, `Dir::Etc::Main`
-  or `Dir::Etc::Parts`, since APT locates `apt.conf` after reading the parts
-  directory), over-cap input and uncollected files make APT behavior
-  `undetermined`. Hooks parsed before an error stay visible. The unobservable
-  `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
-- **Still open:** collector content capture, catalog `entries_parsed` wiring,
-  inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
-
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
 Discovery increment only; the startup-awareness requirement remains incomplete.
@@ -3903,6 +3892,161 @@ exactly one class with its basis, verification strength (`authenticated`,
 **Not covered:** collecting ownership, package-database digests or authenticated
 vendor artifacts from targets; persistence; UI; AI classification; response actions.
 No schema, API, auth or response-authorization change.
+
+### Kernel-module configuration contract — worker checkpoint #952
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/kernel_modules.py` is a pure, versioned contract for the catalog's
+`modprobe` and `modules_load` mechanisms. It parses supplied text and performs
+no I/O.
+
+- **Effective files.** Only `*.conf` files are read. A name in a higher-priority
+  directory (`/etc`, `/run`, `/usr/local/lib`, `/usr/lib`, `/lib`) replaces the
+  same name in a lower one, and the remaining files are processed in name order.
+  Every supplied file is reported as effective, overridden, masked, ignored or
+  unreadable, with its reason.
+- **modprobe.d directives.** `install`, `remove`, `alias`, `blacklist`,
+  `options`, `softdep` and `weakdep` are parsed with line-start `#` comments,
+  backslash continuations and `-`/`_` equivalence. Deprecated `include`/`config`
+  lines and unknown or malformed lines are reported with file and line.
+- **Commands.** Each `install`/`remove` entry carries its module pattern, bounded
+  command text, full-command SHA-256, source and processing order. `/bin/true`
+  and `/bin/false` are labelled `disable`. Later entries for an already defined
+  pattern are marked shadowed. `commands_for()` returns both the first matching
+  entry and, when it differs, the first exact-name entry, because libkmod
+  chooses between them by where it found the module.
+- **Boot requests.** `modules-load.d` files and Debian's `/etc/modules`
+  (including the `modules.conf` link to it) list one module per line. Extra
+  tokens are reported and not interpreted.
+- **Boot-time command chains.** `boot_commands()` lists the `install` commands
+  each boot-requested module could run. It follows configuration aliases and
+  `softdep` pre/post modules with depth, chain and step limits, records how each
+  command was reached and flags blacklisted modules without dropping them. Only
+  the first matching `softdep` entry is used, and an alias target is not looked
+  up as an alias again. A pattern containing a backslash escape is a blocking
+  gap.
+- **Conditions instead of guesses.** The kernel's module tables are not
+  observed, so a command whose execution depends on them is listed and counted
+  with `conditions`, never dropped or reported as shadowed. An empty list means
+  the command runs whatever the tables hold.
+  - `module_in_kernel_tables`: a wildcard `install` entry, or anything reached
+    through a name the configuration does not define, runs only if that module
+    exists in the kernel tables.
+  - `module_not_in_kernel_tables`: an exact-name entry after an earlier
+    wildcard match runs only if the module is absent from the kernel tables.
+    Both entries are listed.
+  - `softdep_target_unresolved`: a module whose `softdep` names only modules
+    the configuration does not define runs its own command unless one of them
+    is in the kernel tables.
+  A module's own command is listed as ignored only when the configuration
+  itself defines one of its soft dependencies (an alias or an exact-name
+  `install`/`remove` entry). The result's `conditional` field counts the
+  chains that carry a condition.
+- **Checked against libkmod.** The resolver was compared with libkmod 31's
+  dry-run probe (what `modprobe -n -v` prints) on generated configurations,
+  with an empty module tree and with a populated `modules.dep.bin`. Blacklist
+  handling and backslash patterns were excluded from that comparison.
+- **Fail closed.** Unreadable files, unfollowed symlinks (other than `/dev/null`
+  masks), invalid UTF-8, NUL bytes and over-limit input mark the result
+  incomplete. An unreadable winning file still shadows lower-priority files.
+  Every result names what it cannot observe: the kernel command line, the
+  kernel's alias and dependency tables, the initramfs copy and tool overrides.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** agent collection of these files' text, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
+### Effective APT configuration hooks — worker checkpoint #950
+
+Contract-only; roadmap F remains incomplete. `app/apt_hooks.py` resolves the
+effective command-executing APT options from captured `/etc/apt/apt.conf.d`
+entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
+
+- **Files:** APT `Dir::Etc::Parts` rules decide which files are read: hidden and
+  non-regular entries are skipped; a name needs no extension or `.conf` and only
+  `[A-Za-z0-9_.:-]`; default `Dir::Ignore-Files-Silently` patterns are silent.
+  Files are read in byte order and `apt.conf` last. Ignored files are listed.
+- **Syntax:** `//`, `/* */` and `#` comments, scalar and unquoted values, nested
+  blocks, list items, `#clear` and `#include`; keys are case-insensitive. Later
+  scalars and tagged children override; untagged items append.
+  Inside a block a bare word is an untagged item (`{ /tmp/x; }`), as in apt
+  2.8.3. `#clear`/`#include` inside a block or with more than one argument are
+  syntax errors, and `#clear A::;` clears nothing. A same-line `/* */` comment
+  joins the text around it (`ev/*x*/il` is `evil`), as in apt 2.8.3.
+  Only space, tab, CR and LF separate words; a no-break space or other Unicode
+  space is part of a word. `#clear` empties an option in place, so a tag set
+  again keeps its position. `#x-apt-configure-index` is not a comment.
+- **Reported options:** `command` (Update/DPkg Invoke lists and
+  `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
+  (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
+  `path_override` (`DPkg::Path`) and `dpkg_options`, each with source file and
+  line. `Binary::<program>::` copies carry that scope. A scalar on a hook list
+  node is reported inert because APT never runs it.
+- **Fail closed:** syntax errors (including a quoted value left open at the end
+  of a line, a quoted string touching other text and `*/` directly followed by
+  `/`, a NUL, vertical tab or form feed, and `#x-apt-configure-index` with an
+  argument, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
+  overrides (setting or clearing `RootDir`, `Dir`, `Dir::Etc`, `Dir::Etc::Main`
+  or `Dir::Etc::Parts`, since APT locates `apt.conf` after reading the parts
+  directory), over-cap input and uncollected files make APT behavior
+  `undetermined`. Hooks parsed before an error stay visible. The unobservable
+  `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog `entries_parsed` wiring,
+  inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
+
+### Dynamic-loader configuration contract — worker checkpoint #960
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/dynamic_loader.py` is a pure, versioned contract for the catalog's
+`loader_preload` and `loader_config` mechanisms. It parses supplied content and
+performs no I/O.
+
+- **Preload entries.** `resolve_preload()` lists the libraries
+  `/etc/ld.so.preload` makes the loader add to every dynamically linked
+  process, including set-user-ID programs. Entries are separated only by a
+  space, tab, newline or colon. Each entry carries its line, order, SHA-256,
+  whether it is a path or a bare library name, any `$ORIGIN`/`$LIB`/`$PLATFORM`
+  token, whether it repeats an earlier entry and whether its bytes are valid
+  UTF-8.
+- **Comments that still load.** glibc removes a `#` comment to the end of its
+  line, but looks for the next `#` inside a window that shrinks with each
+  comment it finds. A `#` outside that window is not a comment, and the words
+  after it are loaded. The contract repeats that search and marks every entry
+  that follows a `#` on its line as `after_comment_marker`, so a library that
+  looks commented out is listed, not hidden.
+- **Search directories.** `resolve_search_paths()` reads `/etc/ld.so.conf` the
+  way `ldconfig` does: `#` ends a line, `hwcap` lines are ignored and every
+  other line is one directory with trailing whitespace removed and then
+  trailing slashes removed, once each, as `ldconfig` does. `/lib /` is the
+  directory `/lib` followed by a space and is reported as such, not as `/lib`.
+  Spaces, colons and commas do not separate directories. Each directory carries
+  its source file, line, order and whether it is absolute or repeated.
+- **Includes.** `include` patterns are resolved relative to the including
+  file, matched in byte order and followed into nested files. Hidden names
+  match only a pattern that starts with a dot. Every supplied file is reported
+  as parsed, absent, a directory, unreadable or not included.
+- **Fail closed.** Unreadable files, unfollowed symlinks, invalid UTF-8, NUL
+  bytes, over-limit input, include loops and budget overruns mark the result
+  incomplete. An `include` pattern the contract does not interpret (`[`, a
+  backslash, `.`/`..` components, a wildcard before the last component, or `?`
+  against a non-ASCII name), or one that points into a directory whose listing
+  was not supplied, is a gap and never an empty match. A directory line holding
+  `=` is reported with both the current and the older-glibc reading and marks
+  the result incomplete.
+- **Checked against glibc.** Both resolvers were compared with glibc 2.39 on
+  generated inputs: the loader's own preload attempts for `ld.so.preload`, and
+  `ldconfig -N -X -v -r <root>` for `ld.so.conf`. Inputs with a blocking gap
+  were excluded from the `ld.so.conf` comparison.
+- **Not observed.** The built `/etc/ld.so.cache`, ldconfig's built-in
+  directories, whether a directory or library exists, the collation locale,
+  environment variables, RPATH/RUNPATH and other C libraries are named in
+  every result. `origin` is always `not_assessed` and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of these files' content, catalog
+`entries_parsed` wiring, persistence, baselines and alerts, UI, provenance and
+AI classification. No schema, API, auth or response-authorization change.
 
 ### Individual queued at jobs — worker checkpoint #831
 
@@ -4186,6 +4330,32 @@ its commands are unchanged.
 No runtime code, schema, role or response-authorization change. Join-worker
 installer mode, remote-machine workers with shared secrets/state and the dedicated
 gcp-integration node remain open.
+
+### Same-host join-worker GCP installer mode — worker checkpoint #943
+
+`install-gcp.sh --mode worker [--workers N]` (1–16, default 1) joins worker replicas
+on the same Docker host to a controller installed with `--mode controller` in the
+same checkout.
+- **Refusals before writing:** a fresh checkout, complete or legacy installations, a
+  different project or zone, `--public-url` and `--credential-dir`. A controller
+  using WIF without `compose.worker.gcp-auth.json` is also refused.
+- **Shared state:** the controller's `app-data` volume name and effective
+  `DATABASE_URL` come from `./gcp-compose.sh config`. The volume must exist.
+- **`.env.worker`:** a new file (mode 0600) records `<controller project>-workers`,
+  the volume and the single-quoted literal `DATABASE_URL`. An existing file is kept,
+  but it must name a different project and render the same volume and database as
+  the controller.
+- **Run:** it builds only `worker`, runs the gcloud checks in one-off worker
+  containers (token discarded) and runs `up -d --wait --scale worker=N` in the worker
+  project. `.env`, `.env.gcp` and the controller project are never modified, stopped
+  or recreated.
+- **Wrapper:** `gcp-compose.sh --workers` selects the worker project and files.
+- **Validation:** mock-Docker tests and a real `docker compose config` render of the
+  recorded worker files.
+
+No runtime code, schema, role or response-authorization change. Remote-machine
+workers with provisioned keys, SSH identities and locking state, non-GCP installer
+modes, the dedicated gcp-integration node and multi-host acceptance remain open.
 
 ### Deployment files and runtime roles
 
@@ -8813,6 +8983,26 @@ threshold. Without this, the first tick after a controller or coordinator outage
 would run before the asynchronous polls refresh `last_seen` and would flag every
 server. An already-active event stays active across a leader change, without a
 new revision, until telemetry resumes.
+
+### Configurable telemetry-loss threshold — worker checkpoint #948
+
+Closes the open item from checkpoint #765: the in-app `telemetry-lost` notice no longer has a fixed 15-minute threshold.
+
+- **Setting:** Settings → Patch policy adds **Telemetry-loss notice after · minutes**, with whole minutes from 5 to 1440 and a default of 15.
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `telemetry_lost_minutes`. Out-of-range or non-integer values return 422, and older clients that omit the field keep the stored value.
+  - A change appends `telemetry-loss notification threshold changed from A to B minutes` to the existing admin-only settings audit row.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 15 (`operations.telemetry_lost_minutes`).
+  - The value lives in the existing `config` setting, so there is no schema change. The legacy `PUT /api/settings` neither sets nor resets it.
+- **Producer:** `operations.collect_alerts` uses the configured threshold for both the silence check and the coordinator-observation guard. A new leader therefore waits a full configured threshold before publishing.
+  - The fixed reason text names the configured minutes. At 15 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of still-qualifying active events once.
+  - Raising the threshold above a server's current silence resolves its active notice through the existing operational resolution path. The notice reopens if the silence later exceeds the new threshold.
+- **Unchanged:** the 120-second `stale` SMTP/webhook alert, the outbox, roles, CSRF, the admin-only audience and response authorization. The notice remains attention-only.
+- **Validation:**
+  - `tests/test_telemetry_lost_threshold.py`: 7 tests, all failing on main `0842ba4` and passing after. They cover the default text, invalid stored values, a shorter threshold, resolution after a raise and reopening, the observation guard, API validation and omission, and audit.
+  - The existing telemetry-loss tests in `tests/test_operational_notifications.py` pass unchanged.
+  - `tests/ui_settings_telemetry.cjs` fails on main and passes after. It covers the settings-finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** deployment-type endpoint-agent readiness and alerting (#737) remain open.
 
 ### Agent event-spool attention notifications — worker checkpoint #108
 
