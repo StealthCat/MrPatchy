@@ -173,8 +173,9 @@ HISTORY_COVERAGE=('Exposure history records when a manual advisory scan first an
     'unaffected version, or the advisory was no longer listed for the installed version. Times between scans are '
     'telemetry gaps: exposure may have started before the first affected scan and ended at any point before the '
     'resolving scan. The publication date comes from the advisory record fetched by this server\'s latest scan and is '
-    'omitted when that scan did not include the advisory or its records disagree; the unmonitored period from '
-    'publication to the first affected scan is a gap in coverage, not proof the server was exposed for all of it. '
+    'omitted when that scan did not include the advisory or its records disagree. The period from publication to '
+    'the first affected scan was not measured: it may include scans that found the package fixed, unaffected or '
+    'not installed, which this history does not record, and it is not proof the server was exposed for all of it. '
     'Version resolution is not verified effective installation: '
     'required service restarts or reboots are not confirmed. "uncertain" never resolves an exposure, and packages not '
     'included in a scan are never resolved by it. This is version applicability, not evidence of exploitation.')
@@ -294,7 +295,7 @@ def publication_dates(result):
     return dates
 
 
-def _unmonitored(published,first_affected):
+def _publication_to_first_affected(published,first_affected):
     if published is None or not first_affected or published>first_affected:return None
     return first_affected-published
 
@@ -316,7 +317,8 @@ def history(session,host_id,limit=HISTORY_LIMIT,latest=None):
             'resolved_at':row.resolved_at or None,'resolved_version':row.resolved_version or None,
             'resolved_status':row.resolved_status or None,'reopened':row.reopened or 0,
             'published_at':published.get(row.advisory_id),
-            'unmonitored_before_first_scan':_unmonitored(published.get(row.advisory_id),row.first_affected_at)}
+            'publication_to_first_affected':_publication_to_first_affected(published.get(row.advisory_id),
+                row.first_affected_at)}
             for row in rows[:limit]]
     return {'items':items,'truncated':len(rows)>limit,'open':int(open_count),
             'coverage':HISTORY_COVERAGE}
