@@ -1,3 +1,7 @@
+## 1.75.2 — 2026-11-16
+
+1. [PR #955](https://github.com/StealthCat/MrPatchy/pull/955): Give the serial SQLite suite its own 60-minute step limit within a 75-minute CI job, leaving 15 minutes for the Docker, Caddy and Compose smoke checks; report the 25 slowest tests and update the measured-runtime comment. Compatibility: no application behavior or compatibility change. Limits: a hung test job can occupy a runner for up to 75 minutes (was 45); the suite remains serial and unsharded.
+
 ## 1.75.1 — 2026-11-15
 
 1. [PR #954](https://github.com/StealthCat/MrPatchy/pull/954): Add a bounded, pure parser and resolver for captured `modprobe.d`, `modules-load.d` and `/etc/modules` text, including effective-file precedence and potential boot-time install commands. It performs no I/O, runs no commands and authorizes nothing. Compatibility: no schema, API, UI, agent or runtime behavior change; no existing module is modified. Limits: file collection, catalog wiring, persistence, UI and runtime coverage remain out of scope; kernel aliases/dependencies, command-line settings and initramfs copies are unobserved, and requirement F remains incomplete.
