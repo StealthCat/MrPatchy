@@ -2789,6 +2789,35 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Server AI pause and global AI disable under a daily cap — worker checkpoint #998
+
+`tests/test_ai_budget_pause_acceptance.py` covers part of milestone 4's
+disabled/paused/role/CSRF item. The tests drive the real claim → reservation →
+provider → reconciliation path and the real administrator pause route in
+`daily_cap` mode. Only the provider transport and SSH are fixtures.
+
+- A paused server's queued subject is not claimed, reserved or sent, and takes no
+  cap headroom: with room for one call, another server's subject is admitted.
+  After resume, the subject waits while today's cap has no room. It does not borrow
+  headroom, and when admitted it runs with its own fresh reservation.
+- A pause request made while that server's capped call is in flight returns 409.
+  The policy revision is unchanged, no pause is audited and the `sent` ledger row
+  stays counted. When the call finishes the same pause is accepted, and later
+  work on that server is not admitted.
+- Disabling AI globally between the first call and a requested follow-up stops the
+  second call at the provider gate. It is never reserved. The first call settles
+  and stays counted, the run is `deferred` with a policy-wait retry, and no
+  assessment is accepted. After re-enabling, the retry reserves and sends its own
+  call. That call carries the follow-up evidence collected before the disable.
+- Without CSRF, or as operator/viewer, the pause route is refused and the capped
+  ledger is unchanged.
+
+No runtime change was needed. During the policy wait the subject's verdict shows
+`error` with an "Investigation failed. Waiting for AI policy resume" analysis while
+its run is `deferred`. That wording predates this checkpoint and is unchanged
+here. MySQL-native runs, data-sharing controls, contention/fairness and measured
+performance remain open milestone-4 items.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
